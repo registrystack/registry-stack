@@ -70,26 +70,26 @@ common:
       (licence_id, registrant_id, status_code, valid_from, valid_until, issuing_office)
     VALUES
       ('LIC-0001', 'REG-0001', 'ACTIVE',
-       '2026-01-15T00:00:00.000Z', '2027-01-15T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+       '2026-01-15T00:00:00Z', '2027-01-15T00:00:00Z', 'SOURCE-UNRELATED-CANARY'),
       ('LIC-0002', 'REG-0002', 'ACTIVE',
-       '2026-02-01T00:00:00.000Z', '2027-02-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+       '2026-02-01T00:00:00Z', '2027-02-01T00:00:00Z', 'SOURCE-UNRELATED-CANARY'),
       ('LIC-0003', 'REG-0002', 'ACTIVE',
-       '2026-03-01T00:00:00.000Z', '2027-03-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+       '2026-03-01T00:00:00Z', '2027-03-01T00:00:00Z', 'SOURCE-UNRELATED-CANARY'),
       ('LIC-0004', 'REG-0003', 'SUSPENDED',
-       '2026-01-15T00:00:00.000Z', '2027-01-15T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+       '2026-01-15T00:00:00Z', '2027-01-15T00:00:00Z', 'SOURCE-UNRELATED-CANARY'),
       ('LIC-0005', 'REG-0004', 'ACTIVE',
-       '2025-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+       '2025-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'SOURCE-UNRELATED-CANARY'),
       ('LIC-0006', 'REG-0005', 'ACTIVE',
-       '2026-12-01T00:00:00.000Z', '2027-12-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+       '2026-12-01T00:00:00Z', '2027-12-01T00:00:00Z', 'SOURCE-UNRELATED-CANARY'),
       ('LIC-0007', 'REG-0006', 'ACTIVE',
-       '2026-01-15T00:00:00.000Z', '2027-01-15T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+       '2026-01-15T00:00:00Z', '2027-01-15T00:00:00Z', 'SOURCE-UNRELATED-CANARY'),
       -- Ends exactly at the evaluation instant, and the window is half-open, so
       -- this registrant holds no current licence.
       ('LIC-0008', 'REG-0011', 'ACTIVE',
-       '2026-01-15T00:00:00.000Z', '2026-08-02T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY'),
+       '2026-01-15T00:00:00Z', '2026-08-02T00:00:00Z', 'SOURCE-UNRELATED-CANARY'),
       -- Starts exactly at it, and is therefore current.
       ('LIC-0009', 'REG-0012', 'ACTIVE',
-       '2026-08-02T00:00:00.000Z', '2027-01-01T00:00:00.000Z', 'SOURCE-UNRELATED-CANARY');
+       '2026-08-02T00:00:00Z', '2027-01-01T00:00:00Z', 'SOURCE-UNRELATED-CANARY');
   # A statement source with no preparation script prepares nothing: every
   # parameter it binds comes from a declared binding. Stating the empty map is
   # what proves no script added a parameter of its own.
@@ -260,23 +260,25 @@ cases:
       signed: false
       sourceRequestCount: 1
 
-  # A bound extract that is not there at request time. It is the local-file
-  # equivalent of a refused connection, and it collapses into the same public
-  # class as every other source that did not complete.
+  # This injected failure proves only the closed dependency-error mapping. The
+  # serving runtime opens extracts at startup, so the real lifecycle case is a
+  # startup rejection and must be proved by the source contract suite.
   - id: source-failure
     sourceFailure: extract-unavailable
     expected:
       publicProblem: dependency_unavailable
       signed: false
+      sourceRequestCount: 1
 
-  # The statement names a parameter nothing bound. A missing input is settled
-  # before the statement runs, so it is a dependency that did not answer rather
-  # than a lookup that found nothing.
+  # This is likewise mapping-only coverage. The production compiler settles
+  # static parameter agreement before serving, so it is not evidence that the
+  # request-time acquisition path produced this fault.
   - id: missing-statement-parameter
     sourceFailure: statement-parameter
     expected:
       publicProblem: dependency_unavailable
       signed: false
+      sourceRequestCount: 1
 
   # A statement that reaches for a second database is refused while the source
   # is compiled, before a listener binds and before any request arrives. The

@@ -1,6 +1,6 @@
 # Evidence Version 1 operator contract
 
-Status: Implemented Version 1 operator contract
+Status: Partially implemented Version 1 operator contract
 
 This document defines the supported native deployment and operator duties for
 the Evidence Version 1 `evidence` binary.
@@ -26,6 +26,10 @@ The supported native deployment has:
   JWT assertion;
 - optional credential-free source access only for `assuranceProfile: local`
   at a canonical numeric-loopback HTTP origin with an explicit non-zero port;
+- fixed reviewed SQL statements over regular, checkpointed, read-only SQLite
+  extracts bound by logical profile, with publisher metadata, bundle-declared
+  maximum age, exact parameter and result contracts, and row, cell,
+  statement-step, elapsed-time, response-size, and concurrency bounds;
 - one active ES256/P-256 service signing key whose `kid` is its RFC 7638
   thumbprint, explicit published and revoked key sets, flattened JWS JSON
   success responses, and public key discovery at
@@ -478,6 +482,12 @@ describes the pre-projection wire response. The fixed request mock must prove
 provider-specific field selection where claimed. A provider whose wire response
 cannot be closed at that boundary must use `record-transformed`, even when
 local projection and Rhai emit only narrow facts.
+
+`source-derived` means the value crossing the source boundary is already the
+final declared concept fact. A statement returning a count that Rhai later
+reduces to a boolean is `field-projected`, even when the count is much narrower
+than the underlying rows. Aggregating in SQL remains the right minimization
+choice; it does not change the name of the posture.
 
 Bundle-fixed headers cannot set authentication, routing, cookies, framing,
 forwarding, proxy, or tracing fields. Tagged path placeholders occupy complete
@@ -1046,11 +1056,14 @@ evaluation that reads it, with `dependency_unavailable` at the boundary and the
 requirements on other sources keep being served. This is the same standing an
 unreachable `jwksUri` has, and for the same reason: every replica mounts the
 same file, so removing one from rotation cures nothing and removing all of them
-turns one stale file into a full outage. Startup names a source whose extract is
-already too old in the log, so alert on that line and on the audit category, not
-on readiness. The cure is to publish a fresh extract and restart, which is also
-why an already-stale extract does not refuse startup: a restart racing a
-republish would otherwise crashloop.
+turns one stale file into a full outage. The current startup warning identifies
+the governed source. Version 1 operator conformance additionally requires every
+stale-extract fault to identify only the governed source or extract profile,
+never the publisher's `extractId`, filesystem path, or another metadata value.
+Alert on the safe startup line and audit category, not on readiness. The cure is
+to publish a fresh extract and restart. This is also why an already-stale extract
+does not refuse startup: a restart racing a republish would otherwise
+crashloop.
 
 The access-token issuer's `jwksUri` is retrieved once at startup and again on
 each readiness check, subject to the verifier cache lifecycle and a short

@@ -1,21 +1,22 @@
 # Evidence Source Testing
 
 Status: Approved Version 1 source-testing contract
-Date: 2026-08-02
+Date: 2026-08-09
 
 ## Purpose
 
 Evidence must prove that its source boundary is generic without building a
 connector framework or emulating entire source products. Testing therefore has
-three ordered layers:
+four ordered layers:
 
 1. offline requirement fixtures for extraction and derivation semantics;
 2. deterministic local HTTP mocks for materially different source contracts;
-3. explicit, read-only local smoke tests against public demo systems.
+3. deterministic local SQLite extracts that execute each reviewed statement;
+4. explicit, read-only local smoke tests against public demo systems.
 
-Only the first two layers run in ordinary CI. A live smoke test supplements the
-mock contract. It never replaces it and never decides whether a commit is
-correct.
+Only the first three layers run in ordinary CI. A live smoke test supplements
+the deterministic contracts. It never replaces them and never decides whether
+a commit is correct.
 
 ## Compatibility matrix
 
@@ -25,6 +26,7 @@ correct.
 | `dhis2-tracker` | `GET` with prepared filters, fixed `fields`, and `pageSize` | Pager, `trackedEntities` collection, nested attributes | HTTP Basic | Query rendering, encoding, cardinality, collection handling, and controlled codes |
 | `opencrvs-event-search` | Prepared bounded JSON `POST` for one tracking ID | Nested event index and country-configured declaration | OAuth 2.0 client credentials, then Bearer | Credential bootstrap, exact event lookup, nested extraction, and relational derivation |
 | `search-chain` | One fixed JSON `POST` search, then two declared members in declared order: one path-bound dereference, one filtered search in a JSON body | Flat dotted response keys, a provider count, and a bounded result page per stage | Static Authorization header per stage, and per-source OAuth 2.0 client credentials for the dereference member | Ordered multi-stage acquisition, per-member allowlisted projection, a provider count consumed as a value, and silently widened queries |
+| `sqlite-extract` | One reviewed statement with exact bound parameters over a sanitized published extract | Declared rows plus publication metadata | None by construction | Prepare-time authorizer, exact column and parameter agreement, strict typing, publication age, statement/result bounds, one clock, and final-fact minimization |
 
 A single-stage row and a multi-stage row are different claims about the same
 product. The first says one bounded request shape still works. The second says
@@ -63,6 +65,30 @@ data rather than as a path separator. One member takes its whole input through a
 path binding, the other through the JSON body its own preparation builds, and
 one response carries a provider count consumed as a value rather than as a
 cardinality guard.
+
+The `sqlite-extract` profile is also named for its shape. Its fixture builds a
+small invented database in a temporary directory, adds the reserved publication
+row, makes the completed file read-only, and runs the bundle's reviewed
+statement. The result is never prerecorded. Replaying rows would test the
+extraction script while leaving the SQL, its parameter bindings, and its time
+boundaries unproved.
+
+Fixture seed SQL is trusted executable project input. Run only reviewed seed
+SQL in an isolated local environment; fixture evaluation is not an
+untrusted-code boundary. Before a seed-bearing fixture can count as safely
+importable ordinary-CI or deployable assurance, the harness must confine seed
+effects to the new temporary extract and apply explicit CPU, disk, and
+elapsed-time bounds.
+
+Transport mixing is part of the compatibility matrix, not an implementation
+detail. The current evaluator executes a SQLite statement only when it is the
+initial source and refuses later SQLite stages; it therefore cannot prove every
+order the serving runtime accepts. Such a project cannot complete the supported
+production/evidence-grade build journey and must not be presented as deployable
+assurance through a manual bypass. Version 1 completion requires deterministic
+HTTP to HTTP, HTTP to SQLite, SQLite to HTTP, and SQLite to SQLite coverage, a
+mixed-transport gated member set, real statement execution at every SQLite
+stage, and a build/serving gate for any acquisition the harness cannot execute.
 
 A multi-stage shape has more than one way to be right, so the profile states
 which cell of this table it occupies. Naming an uncovered cell is worth more
@@ -113,11 +139,13 @@ name, civil identifier, licence number, or birth date means. Alternative
 sufficient field sets use separate named profiles instead of caller-selected
 field combinations.
 
-## What the mocks contain
+## What the deterministic tests contain
 
-Each profile uses a small local HTTP mock and invented, obviously synthetic raw
-provider responses. Rust applies the same configured extended JSON Pointer
-projection used in production before extraction. A `field-projected` fixture
+The HTTP profiles use small local mocks and invented, obviously synthetic raw
+provider responses. The SQLite profile builds an invented extract from
+reviewable seed SQL and executes the reviewed statement. Rust applies the same
+configured extended JSON Pointer projection used in production before
+extraction. A `field-projected` fixture
 models a wire response containing only requested fields. A
 `record-transformed` fixture may contain additional fields before local
 projection.
@@ -173,11 +201,24 @@ Profile-specific cases include:
   projection conflicts, and proof that ambient proxy variables are ignored.
 - the explicit local credential-free boundary, including exact numeric-
   loopback origin validation and absence of an authentication header.
+- SQLite refusal of multiple statements, writes, DDL, `ATTACH`, `DETACH`,
+  pragmas, extension loading, transaction control, ambient-time functions, and
+  unknown authorizer actions; exact selector and prepared-parameter origins;
+  exact result-column names and types; missing or malformed publication
+  metadata; stale extracts; row, cell, engine-value, statement-step,
+  elapsed-time, response-size, and concurrency bounds; and no source value in
+  diagnostics.
+- nonzero fractional-second validity boundaries. A statement may compare RFC
+  3339 text lexically only when the extract contract requires the exact
+  whole-second UTC form `YYYY-MM-DDTHH:MM:SSZ`; otherwise the statement must
+  normalize both operands before comparison.
 
-The mocks assert every received wire request. Preparation Rhai sees only the
-source-required authorized selectors and the exact context containing closed
-parameters and `prior_facts`. Extraction Rhai sees only the bounded projected
-JSON response and that same context. `prior_facts` is empty for a single or
+The HTTP mocks assert every received wire request, and the SQLite tests assert
+the statement artifact, exact bound parameter map, and resulting declared
+columns. Preparation Rhai sees only the source-required authorized selectors
+and the exact context containing closed parameters and `prior_facts`.
+Extraction Rhai sees only the bounded projected JSON response and that same
+context. `prior_facts` is empty for a single or
 search call and is exactly the validated search FactSet for a fetch. Under a
 declared member set it is instead the projection of that validated search
 FactSet onto the member's own allowlist, so no member sees a search fact it did
@@ -198,9 +239,9 @@ execution is always a prefix of the declared sequence because a stage that does
 not resolve stops the acquisition.
 
 The same suite runs every initial assertion case from `CONCEPT.md` through the
-complete Evidence service. At least one case runs against two mock source
-shapes with only YAML and Rhai changes, proving that a source swap does not
-require Rust changes.
+complete Evidence service. At least one case runs against both transports with
+only bundle, runtime binding, fixture, and Rhai changes, proving that a source
+swap does not require Rust changes.
 
 Across those cases, adult status uses a no-identifier compound selector,
 residence uses an identifier profile, professional licence uses a compound

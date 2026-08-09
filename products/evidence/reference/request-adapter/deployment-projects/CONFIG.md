@@ -650,7 +650,9 @@ checked against the evaluation instant before any row is read.
 sources:
   source-b:
     transport: sqlite-extract
-    posture: source-derived
+    # The statement returns a count which extraction or derivation interprets,
+    # rather than the final declared concept fact.
+    posture: field-projected
     extractProfile: reference-extract
     maximumExtractAgeSeconds: 604800
     request:
@@ -757,15 +759,22 @@ This is the `request` a `sqlite-extract` source declares.
 | `maximumRows` | yes | 1 through 256 rows. A statement matching more broadly than intended fails here rather than moving a bulk result into the runtime. |
 | `maximumCellBytes` | yes | 1 through 65,536 bytes for one returned value. |
 | `maximumStatementSteps` | yes | 1 through 1,000,000 virtual-machine steps. |
-| `timeoutMilliseconds` | yes | 1 through 30,000 milliseconds, covering concurrency admission and statement execution. |
+| `timeoutMilliseconds` | yes | 1 through 30,000 milliseconds. The current runtime applies this ceiling independently to concurrency admission and statement execution; it is not one end-to-end source deadline. |
 | `maximumResponseBytes` | yes | 1 through 1,048,576 bytes for the assembled result before projection. |
 | `concurrencyLimit` | yes | 1 through 256 statements held against this extract at once. |
 
 `maximumStatementSteps` and `timeoutMilliseconds` bound different things. The
-timeout bounds elapsed time, which a loaded host inflates; the step budget
-bounds the work itself, so a statement that is slow because it scans more than
-the author expected is stopped by the step budget on a fast host as well as a
-slow one. Set both.
+timeout bounds elapsed time separately while waiting for admission and while
+executing. Statement execution receives a fresh window, and blocking-worker
+queue time is not covered, so total source latency may exceed the configured
+number. The step budget bounds work itself, so a statement that scans more than
+the author expected is stopped on a fast host as well as a slow one. Set both,
+and size the outer request and acquisition ceilings for the current semantics.
+
+`maximumCellBytes`, `maximumResponseBytes`, and `concurrencyLimit` are one
+process-capacity decision, not independent validation knobs. Set them
+conservatively against both publisher capacity and the Evidence process memory
+budget.
 
 Each `parameterBindings` entry is keyed by the parameter name as the statement
 writes it, without its sigil, and Rust accepts `:name`, `@name`, and `$name`.
@@ -821,6 +830,11 @@ number across the source boundary, where fetching 500 rows so the extraction
 script can count them moves 500 records. Declare the aggregate as the only
 column, project it, and the script never observes a record at all.
 
+That aggregate is `source-derived` only when it is itself the final declared
+concept fact. If Rhai converts a count into a boolean, the honest posture is
+`field-projected`: the source returned only the fact needed for derivation, but
+it did not return the final fact.
+
 Everything else is refused by the authorizer while the statement is prepared,
 before a row is read: every write and every DDL statement, `ATTACH`, `DETACH`,
 every `PRAGMA`, extension loading, transaction and savepoint control, and any
@@ -841,11 +855,15 @@ The time functions in that list are denied for one reason: the deployment has
 exactly one clock, and it is the runtime's evaluation instant. Where the
 statement names the reserved parameter `evidence_now`, Rust binds that instant
 as fixed-width RFC 3339 UTC text in whole seconds, the same rendering the
-assertion reports, so `WHERE valid_until >= :evidence_now` against text stored
-as `2026-08-08T03:00:00Z` compares the way it reads. A bundle cannot bind the name
+assertion reports. A direct lexical comparison is correct only when the stored
+column is restricted to that exact `YYYY-MM-DDTHH:MM:SSZ` form. General RFC
+3339 text may contain fractional seconds, and a value such as
+`2026-08-08T03:00:00.500Z` does not sort chronologically against the shorter
+whole-second form. A publisher that retains fractional precision must normalize
+both operands in the statement instead. A bundle cannot bind the reserved name
 itself; startup rejects a `parameterBindings` entry that uses it. One clock is
-what makes a pinned fixture run reproduce exactly: the same extract and the same
-pinned instant give the same rows on every run and on every host.
+what makes a pinned fixture run reproduce exactly: the same extract and the
+same pinned instant give the same rows on every run and on every host.
 
 ### Building an extract
 
@@ -876,6 +894,32 @@ the table above is already there; copying a directory, or globbing
 `registry.db*`, is what lands in the refusal. Copying the main file alone out of
 a database that is still being written leaves nothing beside it to find, which is
 why this is an obligation on the publisher and not only a check.
+
+The supported publication handoff is deliberately explicit because
+`evidencectl` does not create, convert, approve, or publish extracts:
+
+1. Build a new file on the publisher side. Do not edit the file currently
+   mounted by Evidence.
+2. Select only the columns the reviewed statements need. Where a statement
+   compares timestamp text lexically with `evidence_now`, write the exact
+   whole-second UTC form `YYYY-MM-DDTHH:MM:SSZ`; otherwise normalize time in the
+   reviewed statement and pin fractional-second boundary fixtures.
+3. Insert exactly one `evidence_extract` row with the publisher's publication
+   instant, publisher identifier, and snapshot identifier.
+4. Checkpoint into one main file with no `-wal` or `-journal`, using `VACUUM
+   INTO`, or replay a `.dump` SQL script into a newly created database and then
+   validate the resulting file and absence of sidecars. An equivalent
+   publisher-controlled export is also valid.
+5. Run the deployment project's fixtures against the same schema and statement
+   contract. A source claiming `source-derived` must return the final concept
+   fact, not a count or record that Rhai later interprets.
+6. Transfer the new file under a new versioned path, make it non-writable to the
+   Evidence identity, update only the matching `runtime.yaml` binding, and
+   restart. Never replace the bytes behind an open immutable connection.
+7. Run `evidence check`, every referenced fixture, real startup, and `/ready`
+   before routing traffic. Retain the runtime revision and governed extract
+   profile in the deployment record. Do not copy publisher-controlled metadata
+   values into logs, audit, or error tickets.
 
 ### Requirement derivation selector inputs
 
