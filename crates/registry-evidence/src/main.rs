@@ -3208,29 +3208,29 @@ fn reference_source_selectors(
 /// than passing a case that cannot happen. A timeout and an oversized result
 /// belong to both, because both admit under a concurrency bound and both hold
 /// the assembled result to a declared size.
-fn validate_reference_source_failure(
+///
+/// Every symbol also has to be a failure a served request can reach. An extract
+/// that cannot be opened, unusable extract metadata, and a statement the
+/// authorizer refuses are all settled while the source is compiled, before a
+/// listener binds, so they are startup failures with no request-time symbol
+/// here: a case stating one would teach a served behaviour the runtime does not
+/// have.
+fn reference_source_failure_error(
     source: &registry_evidence::config::SourceConfig,
     failure: &str,
-    expected: &JsonMap<String, Value>,
-) -> Result<(), CliError> {
+) -> Result<SourceError, CliError> {
     let statement = source.statement().map(ArtifactPath::as_str);
     let fault = |cause: &'static str| {
         ArtifactFault::new(statement.unwrap_or_default(), SchemaFault::because(cause))
     };
-    let error = match (failure, statement) {
+    Ok(match (failure, statement) {
         ("timeout", _) => SourceError::Timeout,
         ("oversized", _) => SourceError::ResponseTooLarge,
         ("connection-refused", None) => SourceError::Transport,
         ("invalid-media-type", None) => SourceError::WrongMediaType,
         ("malformed-json", None) => SourceError::InvalidJson,
-        ("extract-unavailable", Some(_)) => {
-            SourceError::ExtractUnavailable(fault(sqlite_cause::EXTRACT_UNAVAILABLE))
-        }
         ("extract-too-old", Some(_)) => {
             SourceError::ExtractTooOld(fault(sqlite_cause::EXTRACT_TOO_OLD))
-        }
-        ("statement-refused", Some(_)) => {
-            SourceError::StatementRefused(fault(sqlite_cause::AUTHORIZER_REFUSED))
         }
         ("statement-parameter", Some(_)) => {
             SourceError::StatementParameter(fault(sqlite_cause::MISSING_PARAMETER))
@@ -3243,7 +3243,15 @@ fn validate_reference_source_failure(
         }
         ("statement-unavailable", Some(_)) => SourceError::StatementUnavailable,
         _ => return Err(CliError("reference source-failure name is invalid")),
-    };
+    })
+}
+
+fn validate_reference_source_failure(
+    source: &registry_evidence::config::SourceConfig,
+    failure: &str,
+    expected: &JsonMap<String, Value>,
+) -> Result<(), CliError> {
+    let error = reference_source_failure_error(source, failure)?;
     validate_reference_source_error(expected, &error)?;
     require_reference_request_count(expected, 1)
 }
@@ -4871,6 +4879,25 @@ mod tests {
 
     const STATEMENT_REQUIREMENT: &str = "urn:gov:example:requirement:licence-register-status:v1";
     const STATEMENT_SOURCE: &str = "licence-register";
+
+    #[test]
+    fn statement_fixture_vocabulary_excludes_startup_only_failures() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence/bundle/evidence.yaml"
+        ))
+        .expect("the reference configuration parses");
+        let source = config
+            .sources
+            .get(STATEMENT_SOURCE)
+            .expect("the statement source exists");
+
+        for symbol in ["extract-unavailable", "statement-refused"] {
+            assert_eq!(
+                reference_source_failure_error(source, symbol),
+                Err(CliError("reference source-failure name is invalid"))
+            );
+        }
+    }
 
     #[test]
     fn privacy_expectations_check_exact_projected_strings() {

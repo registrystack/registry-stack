@@ -59,7 +59,7 @@ evidence_data_request:
     name: evidence_now
     rule: The runtime has one clock. The whole SQLite clock function family is denied by the authorizer, so a statement cannot read a clock of its own, and the runtime binds its evaluation instant to the reserved name instead.
     value: The same evaluation instant the acquisition carries, as fixed-width RFC 3339 UTC text in whole seconds with a Z offset. It is the rendering the assertion reports, character for character.
-    text_comparison_rule: A direct lexical comparison is valid only when the extract schema and publication process restrict the stored operand to the exact whole-second UTC form YYYY-MM-DDTHH:MM:SSZ. General RFC 3339 permits fractional seconds, and a fractional value in the same second does not sort chronologically against the shorter whole-second form. A publisher retaining fractional precision requires the reviewed statement to normalize both operands and fixtures to pin nonzero fractional start and end boundaries.
+    text_comparison_rule: A direct lexical comparison is valid only when the extract schema and publication process restrict the stored operand to the exact whole-second UTC form YYYY-MM-DDTHH:MM:SSZ. General RFC 3339 permits fractional seconds, and a fractional value in the same second does not sort chronologically against the shorter whole-second form.
     bundle_authority: A bundle that declares the reserved name as a parameter binding is refused. The name is available to the statement and to no one else.
   adapter_parameters:
     count: {range: [0, 64]}
@@ -82,14 +82,12 @@ evidence_data_request:
     required: true
     range: [1, 1000000]
     applied: Inside the engine, by the progress handler, between virtual machine instructions.
-  timeout_milliseconds: {required: true, range: [1, 30000], current_runtime: Applied independently to source-concurrency admission and statement execution. Statement execution receives a fresh window and blocking-worker queue time is not part of either window, so this is not yet one end-to-end source deadline., version_1_exit_gate: Carry one absolute deadline through admission, worker dispatch, and execution without restarting it.}
+  timeout_milliseconds: {required: true, range: [1, 30000], applied: Independently to source-concurrency admission and statement execution. Statement execution receives a fresh window and blocking-worker queue time is not part of either window.}
   maximum_response_bytes:
     required: true
     upper_bound: 1048576
     applied: To the assembled result tree, before projection.
-  engine_allocation_limit:
-    capacity_note: maximumCellBytes, maximumResponseBytes, and concurrencyLimit are one process-capacity decision, not independent validation knobs.
-    version_1_exit_gate: Derive value-length and page/cache backstops from maximumCellBytes and maximumResponseBytes, and use a connection-pool concurrency stress test to account for aggregate worst-case allocation.
+  engine_allocation_limit: SQLite values are capped at the fixed runtime ceiling before the tighter declared cell and response bounds are applied. maximumCellBytes, maximumResponseBytes, and concurrencyLimit remain one operator capacity decision rather than independent validation knobs.
   concurrency_limit: {required: true, range: [1, 256]}
   connection_pool: One SQLite connection per concurrency permit, all opened at startup. A permit carries a connection, so no admitted request waits on a connection it was not admitted for, and a connection that cannot be opened is a startup failure rather than a request-time one.
   cancellation:
@@ -147,11 +145,7 @@ projection:
   bounds: {paths: [1, 64], path_length_characters: [2, 256], unique: true, overlapping: refused}
   grammar_and_semantics: source-contract.yaml, unchanged. The extended JSON Pointer grammar, its prohibitions, and its startup conflict rules are transport neutral.
   select_list_rule: The statement's select list is the real projection. Rust maps the bounded result set into a tree of the declared column names, and nothing the statement did not select exists to be removed. The declared projection therefore restates the shape rather than narrowing a wire response, and it stays required so that one rule reads the same for every transport.
-  posture_rule: >-
-    The declared acquisition posture describes what the statement returned. A
-    statement is source-derived only when it returns the final declared concept
-    fact. A count that Rhai later reduces to a boolean is field-projected: it is
-    strongly minimized, but the final fact was derived in the evaluator.
+  posture_rule: The declared acquisition posture describes what crossed the source boundary. A statement returning one aggregate is source-derived on the same terms as an API returning it, because only that aggregate leaves the statement.
 response_shape:
   owner: Core runtime.
   rules: source-contract.yaml, unchanged. The same required responseSchema per source, in the same closed JSON Schema subset, validated at the same point, under the same required-member, role-relaxation, nullable-form, and division-of-labour rules.
@@ -187,8 +181,7 @@ neutrality:
   named_compatibility_profiles: Test fixtures and reference documentation only.
 fixtures:
   transport_conformance: The executable tests named by sec-statement-source-bounded in security-test-traceability.yaml, plus the complete project fixture that builds a sanitized extract from reviewed seed SQL and executes the statement in the process that reads it.
-  current_seed_trust: Seed SQL is trusted executable project input. Run only reviewed seed SQL in an isolated local environment; fixture evaluation is not an untrusted-code boundary.
-  version_1_exit_gate: Before seed-bearing fixtures can be treated as safely importable CI or deployable-assurance inputs, confine seed effects to the new temporary extract and apply explicit CPU, disk, and elapsed-time bounds.
+  seed_trust: Seed SQL is trusted executable project input and is not sandboxed as untrusted code. Run only reviewed project seeds in an isolated local environment; never import or evaluate a foreign bundle as a fixture.
   postures: ../fixtures/conformance/acquisition-postures.yaml states the posture claims and negatives; its recorded cases execute over the HTTP transport, and the posture rules they fix are transport neutral.
   shapes: ../fixtures/source-shapes/ holds compatibility shapes for the HTTP transport only.
   reference: ../reference/request-adapter/deployment-projects/CONFIG.md for the deployment-shaped statement configuration and the extract a publisher builds.

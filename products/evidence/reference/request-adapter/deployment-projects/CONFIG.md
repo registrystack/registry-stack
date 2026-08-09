@@ -650,9 +650,8 @@ checked against the evaluation instant before any row is read.
 sources:
   source-b:
     transport: sqlite-extract
-    # The statement returns a count which extraction or derivation interprets,
-    # rather than the final declared concept fact.
-    posture: field-projected
+    # Only this aggregate crosses the source boundary.
+    posture: source-derived
     extractProfile: reference-extract
     maximumExtractAgeSeconds: 604800
     request:
@@ -830,10 +829,9 @@ number across the source boundary, where fetching 500 rows so the extraction
 script can count them moves 500 records. Declare the aggregate as the only
 column, project it, and the script never observes a record at all.
 
-That aggregate is `source-derived` only when it is itself the final declared
-concept fact. If Rhai converts a count into a boolean, the honest posture is
-`field-projected`: the source returned only the fact needed for derivation, but
-it did not return the final fact.
+That aggregate is `source-derived` on the same terms as an aggregate returned
+by an API: it is the only fact that crossed the source boundary. Rhai may still
+map it to the asserted concept.
 
 Everything else is refused by the authorizer while the statement is prepared,
 before a row is read: every write and every DDL statement, `ATTACH`, `DETACH`,
@@ -859,9 +857,8 @@ assertion reports. A direct lexical comparison is correct only when the stored
 column is restricted to that exact `YYYY-MM-DDTHH:MM:SSZ` form. General RFC
 3339 text may contain fractional seconds, and a value such as
 `2026-08-08T03:00:00.500Z` does not sort chronologically against the shorter
-whole-second form. A publisher that retains fractional precision must normalize
-both operands in the statement instead. A bundle cannot bind the reserved name
-itself; startup rejects a `parameterBindings` entry that uses it. One clock is
+whole-second form. A bundle cannot bind the reserved name itself; startup
+rejects a `parameterBindings` entry that uses it. One clock is
 what makes a pinned fixture run reproduce exactly: the same extract and the
 same pinned instant give the same rows on every run and on every host.
 
@@ -902,8 +899,7 @@ The supported publication handoff is deliberately explicit because
    mounted by Evidence.
 2. Select only the columns the reviewed statements need. Where a statement
    compares timestamp text lexically with `evidence_now`, write the exact
-   whole-second UTC form `YYYY-MM-DDTHH:MM:SSZ`; otherwise normalize time in the
-   reviewed statement and pin fractional-second boundary fixtures.
+   whole-second UTC form `YYYY-MM-DDTHH:MM:SSZ`.
 3. Insert exactly one `evidence_extract` row with the publisher's publication
    instant, publisher identifier, and snapshot identifier.
 4. Checkpoint into one main file with no `-wal` or `-journal`, using `VACUUM
@@ -911,8 +907,8 @@ The supported publication handoff is deliberately explicit because
    validate the resulting file and absence of sidecars. An equivalent
    publisher-controlled export is also valid.
 5. Run the deployment project's fixtures against the same schema and statement
-   contract. A source claiming `source-derived` must return the final concept
-   fact, not a count or record that Rhai later interprets.
+   contract. A source claiming `source-derived` must return only the narrow fact
+   it declares, such as an aggregate rather than the records behind it.
 6. Transfer the new file under a new versioned path, make it non-writable to the
    Evidence identity, update only the matching `runtime.yaml` binding, and
    restart. Never replace the bytes behind an open immutable connection.

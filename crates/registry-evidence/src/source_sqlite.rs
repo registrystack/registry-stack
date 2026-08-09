@@ -150,8 +150,8 @@ impl SqliteSourceError {
     /// The artifact a caller should point an adopter at, where there is one.
     ///
     /// Statement faults name the bundle-relative statement artifact. Extract
-    /// faults name the extract itself: its file name before its metadata has
-    /// been read, and the publisher's own extract identifier afterwards.
+    /// faults name the bundle-governed logical extract profile, never its
+    /// operator path or publisher-controlled metadata.
     pub fn artifact_fault(&self) -> Option<&ArtifactFault> {
         match self {
             Self::Statement(fault) | Self::Extract(fault) => Some(fault),
@@ -264,11 +264,12 @@ pub fn extract_age_within_bound(
     metadata: &ExtractMetadata,
     evaluation_instant: DateTime<Utc>,
     maximum_age_seconds: u64,
+    extract_profile: &str,
 ) -> Result<(), SqliteSourceError> {
     let age = (evaluation_instant - metadata.published_at).num_seconds();
     let bound = i64::try_from(maximum_age_seconds).unwrap_or(i64::MAX);
     if age > bound {
-        return Err(extract_fault(&metadata.extract_id, cause::EXTRACT_TOO_OLD));
+        return Err(extract_fault(extract_profile, cause::EXTRACT_TOO_OLD));
     }
     Ok(())
 }
@@ -298,7 +299,7 @@ pub fn check_statement_offline(
     source: &SourceConfig,
     statement_sql: &str,
 ) -> Result<(), SqliteSourceError> {
-    let (request, _) = statement_source(source)?;
+    let (request, _, _) = statement_source(source)?;
     let artifact = request.statement.as_str();
     let connection = Connection::open_in_memory()
         .map_err(|_| statement_fault(artifact, cause::EXECUTION_FAILED))?;
@@ -319,13 +320,16 @@ pub fn check_statement_offline(
     }
 }
 
-fn statement_source(source: &SourceConfig) -> Result<(&SqliteRequest, u64), SqliteSourceError> {
+fn statement_source(
+    source: &SourceConfig,
+) -> Result<(&SqliteRequest, u64, &str), SqliteSourceError> {
     match source {
         SourceConfig::SqliteExtract {
             request,
             maximum_extract_age_seconds,
+            extract_profile,
             ..
-        } => Ok((request, *maximum_extract_age_seconds)),
+        } => Ok((request, *maximum_extract_age_seconds, extract_profile)),
         SourceConfig::HttpJson { .. } => Err(SqliteSourceError::InvalidPlan),
     }
 }
@@ -363,6 +367,7 @@ struct StatementPlan {
     maximum_statement_steps: u64,
     timeout: Duration,
     maximum_extract_age_seconds: u64,
+    extract_profile: String,
 }
 
 impl StatementPlan {
@@ -400,22 +405,25 @@ impl SqliteExtractSource {
         statement_sql: &str,
         extract_path: &Path,
     ) -> Result<Self, SqliteSourceError> {
-        let (request, maximum_extract_age_seconds) = statement_source(source)?;
+        let (request, maximum_extract_age_seconds, extract_profile) = statement_source(source)?;
         let artifact = request.statement.as_str();
-        let subject = extract_subject(extract_path);
         let uri = extract_uri(extract_path)
-            .ok_or_else(|| extract_fault(&subject, cause::EXTRACT_UNAVAILABLE))?;
+            .ok_or_else(|| extract_fault(extract_profile, cause::EXTRACT_UNAVAILABLE))?;
 
         let permits = usize::from(request.concurrency_limit);
         let mut connections = Vec::with_capacity(permits);
         for _ in 0..permits {
-            connections.push(open_extract(&uri, &subject)?);
+            connections.push(open_extract(&uri, extract_profile)?);
         }
         let first = connections.first().ok_or(SqliteSourceError::InvalidPlan)?;
 
         let timeout = Duration::from_millis(request.timeout_milliseconds);
-        let metadata =
-            read_extract_metadata(first, &subject, request.maximum_statement_steps, timeout)?;
+        let metadata = read_extract_metadata(
+            first,
+            extract_profile,
+            request.maximum_statement_steps,
+            timeout,
+        )?;
         let parameters = verify_statement(first, request, statement_sql)?;
 
         let plan = StatementPlan {
@@ -431,6 +439,7 @@ impl SqliteExtractSource {
             maximum_statement_steps: request.maximum_statement_steps,
             timeout,
             maximum_extract_age_seconds,
+            extract_profile: extract_profile.to_owned(),
         };
         Ok(Self {
             plan: Arc::new(plan),
@@ -458,6 +467,7 @@ impl SqliteExtractSource {
             &self.metadata,
             evaluation_instant,
             self.plan.maximum_extract_age_seconds,
+            &self.plan.extract_profile,
         )
     }
 
@@ -606,8 +616,9 @@ pub fn materialize_seed_extract(target: &Path, seed_sql: &str) -> Result<(), Sql
         .map_err(|_| unavailable())
 }
 
-/// The extract's file name, which is what an extract fault names before the
-/// extract has told us its own identifier.
+/// A fixture-only extract name used internally while its seed is materialized.
+/// Fixture materialization collapses its errors before displaying them, so this
+/// value never crosses the diagnostic boundary.
 fn extract_subject(extract_path: &Path) -> String {
     extract_path.file_name().map_or_else(
         || "extract".to_owned(),
@@ -1872,10 +1883,16 @@ factSchema: schemas/facts.schema.yaml
     fn an_extract_without_its_metadata_table_is_refused() {
         let directory = TempDir::new().expect("a temporary directory");
         let path = extract_without_metadata(&directory);
-        assert_eq!(
-            open_error(&Plan::default(), "SELECT id FROM person", &path),
-            cause::NO_METADATA_TABLE
-        );
+        let Err(error) =
+            SqliteExtractSource::open(&Plan::default().build(), "SELECT id FROM person", &path)
+        else {
+            panic!("the extract without metadata was accepted");
+        };
+        let fault = error
+            .artifact_fault()
+            .expect("the startup failure names the governed extract profile");
+        assert_eq!(fault.artifact(), "residence-register");
+        assert_eq!(fault.fault().cause(), cause::NO_METADATA_TABLE);
     }
 
     #[test]
@@ -2005,12 +2022,29 @@ factSchema: schemas/facts.schema.yaml
             "2026-08-07-full",
         );
         assert_eq!(
-            extract_age_within_bound(&metadata, instant("2026-08-07T03:00:00Z"), 3_600),
+            extract_age_within_bound(
+                &metadata,
+                instant("2026-08-07T03:00:00Z"),
+                3_600,
+                "residence-register",
+            ),
             Ok(())
         );
-        let refused = extract_age_within_bound(&metadata, instant("2026-08-07T03:00:01Z"), 3_600)
-            .expect_err("a stale extract was accepted");
+        let refused = extract_age_within_bound(
+            &metadata,
+            instant("2026-08-07T03:00:01Z"),
+            3_600,
+            "residence-register",
+        )
+        .expect_err("a stale extract was accepted");
         assert_eq!(refused.cause(), Some(cause::EXTRACT_TOO_OLD));
+        assert_eq!(
+            refused
+                .artifact_fault()
+                .expect("the stale fault names the governed binding")
+                .artifact(),
+            "residence-register"
+        );
     }
 
     #[test]

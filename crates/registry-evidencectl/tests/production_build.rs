@@ -160,6 +160,34 @@ fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_sec
 }
 
 #[test]
+fn sqlite_extract_build_copies_the_statement_without_http_only_artifacts() {
+    let fixture = Fixture::new();
+    fixture.use_sqlite_source();
+
+    let output = fixture.build();
+
+    assert_success(&output, "SQLite extract production build");
+    assert_eq!(
+        fs::read_to_string(fixture.output.join("bundle/queries/source.sql")).unwrap(),
+        "SELECT :reference <> '' AS allowed;\n"
+    );
+    assert!(fixture
+        .output
+        .join("bundle/adapters/source-extract.rhai")
+        .is_file());
+    assert!(!fixture
+        .output
+        .join("bundle/adapters/source-prepare.rhai")
+        .exists());
+    assert!(!fixture
+        .output
+        .join("bundle/schemas/parameters.schema.yaml")
+        .exists());
+    assert_eq!(fixture.steps(), ["check", "evaluate:fixtures/answer.yaml"]);
+    fixture.assert_no_staging_residue();
+}
+
+#[test]
 fn governed_public_keys_are_owned_by_the_complete_deployment_target() {
     let fixture = Fixture::new();
     let relative = Path::new("public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json");
@@ -582,6 +610,32 @@ impl Fixture {
         replace(&self.project.join("sources/registry.yaml"), from, to);
     }
 
+    fn use_sqlite_source(&self) {
+        fs::create_dir(self.project.join("queries")).expect("query directory");
+        fs::write(
+            self.project.join("queries/source.sql"),
+            "SELECT :reference <> '' AS allowed;\n",
+        )
+        .expect("statement");
+        fs::write(self.project.join("sources/registry.yaml"), SQLITE_SOURCE)
+            .expect("SQLite source");
+        fs::write(
+            self.project.join("adapters/source-extract.rhai"),
+            "fn extract(source_response, context) { #{outcome: \"match\", facts: #{allowed: source_response[\"rows\"][0][\"allowed\"]}} }\n",
+        )
+        .expect("SQLite extract script");
+        fs::write(
+            self.project.join("schemas/response.schema.yaml"),
+            "type: object\nadditionalProperties: false\nrequired: [rows]\nproperties:\n  rows:\n    type: array\n    minItems: 1\n    maxItems: 1\n    items:\n      type: object\n      additionalProperties: false\n      required: [allowed]\n      properties:\n        allowed: {type: boolean}\n",
+        )
+        .expect("SQLite response schema");
+        let mut runtime = fs::read_to_string(&self.runtime).expect("target runtime");
+        runtime.push_str(
+            "sourceExtracts:\n  registry-snapshot:\n    path: /var/lib/evidence/registry.sqlite\n",
+        );
+        fs::write(&self.runtime, runtime).expect("runtime extract binding");
+    }
+
     fn remove_governance(&self) {
         let path = self.project.join("questions/answer.yaml");
         let mut contents = fs::read_to_string(&path).expect("question reads");
@@ -781,6 +835,31 @@ request:
   preparationLimits: {query: forbidden, jsonBody: required, maximumJsonDepth: 4, maximumCollectionItems: 8, maximumStringBytes: 128, maximumNormalizedBytes: 1024}
   projection: [/allowed]
   redirects: deny
+  timeoutMilliseconds: 1000
+  maximumResponseBytes: 4096
+  concurrencyLimit: 1
+responseSchema: schemas/response.schema.yaml
+extractScript: adapters/source-extract.rhai
+factSchema: schemas/facts.schema.yaml
+"#;
+
+const SQLITE_SOURCE: &str = r#"transport: sqlite-extract
+posture: source-derived
+extractProfile: registry-snapshot
+maximumExtractAgeSeconds: 86400
+request:
+  statement: queries/source.sql
+  columns: [{name: allowed, type: boolean}]
+  selectorInputs:
+    - role: subject
+      alternatives:
+        - {profile: subject-reference-v1, fields: [reference]}
+  parameterBindings:
+    reference: {kind: selector, role: subject, profile: subject-reference-v1, field: reference}
+  projection: [/rows/*/allowed]
+  maximumRows: 1
+  maximumCellBytes: 8
+  maximumStatementSteps: 10000
   timeoutMilliseconds: 1000
   maximumResponseBytes: 4096
   concurrencyLimit: 1

@@ -148,8 +148,9 @@ must use them:
 | Subject authority | Configured statutory-agency profile permits an authorized requester to use only named selector profiles and approved value origins |
 | Subject selector | Closed identifier or compound field set with deployment-defined names, scalar types, bounds, and fixed source placements |
 | Lookup outcome | Provider-owned `match`, `no_match`, or `ambiguous`; facts exist only on `match` |
-| Source | One fixed HTTP JSON data request using field projection and denied redirects, or one reviewed SQL statement over a read-only published SQLite extract |
-| Source authentication | HTTP uses secret-referenced Basic, static Authorization header, static API-key header, or OAuth 2.0 client credentials by client secret or private-key JWT assertion; explicit local HTTP authoring may use no credential only at a canonical numeric-loopback origin. A SQLite extract has no source credential. |
+| Source | One fixed HTTP JSON data request using field projection and denied redirects, or one reviewed SQL statement over a read-only SQLite extract the runtime mounts |
+| Statement source | A reviewed statement artifact covered by the bundle hash, a prepare-time authorizer verdict, required extract publication metadata, a bundle-declared maximum extract age, and declared row, statement-step, cell, and time bounds |
+| Source authentication | Secret-referenced Basic, static Authorization header, static API-key header, or OAuth 2.0 client credentials by client secret or private-key JWT assertion; explicit local authoring may use no credential only at a canonical numeric-loopback HTTP origin. A statement source presents no credential at all |
 | Audit | `registry-platform-audit` JSONL sink on explicitly durable storage, fail-closed |
 | Signing | Flattened JWS JSON with one active ES256/P-256 key, RFC 7638 `kid`, explicit published and revoked sets, and a public JWKS endpoint |
 | Response format | Signed JWS by default; exact `Accept: application/vnd.registrystack.evidence-unsigned+json` only when the bundle and complete matched grant permit it |
@@ -287,10 +288,11 @@ SD-JWT VC, discovery, audit, and strict verification policy.
 
 ## Source and credential boundary
 
-Version one implements two coequal generic source executors: fixed HTTP JSON
-and one reviewed SQL statement over a read-only SQLite extract. Product-specific
-source crates, clients, and domain types are out of scope. An HTTP source
-declares a fixed request and selects one generic authentication profile:
+Version one implements two coequal generic source executors: a fixed HTTP JSON
+request executor, and a reviewed-statement executor over a read-only mounted
+SQLite extract. Product-specific source crates, clients, and domain types are
+out of scope for both. An `http-json` source definition declares a fixed
+request and selects one generic authentication profile:
 
 - no credential only under `assuranceProfile: local`, at a canonical numeric-
   loopback HTTP origin with an explicit non-zero port;
@@ -314,11 +316,11 @@ identifier, or secret. A provider that requires credentials in query
 parameters is supported only by an explicit credential-placement setting and
 the same redaction rule.
 
-Every configured source stage has one Rust-fixed host, method, fixed path or
-closed Rust-expanded complete-segment path template, fixed non-secret headers,
-permitted query and body channels, response projection, TLS trust profile,
-timeout, redirect denial, maximum response size, concurrency limit, and one
-request ceiling.
+Every configured `http-json` source stage has one Rust-fixed host, method,
+fixed path or closed Rust-expanded complete-segment path template, fixed
+non-secret headers, permitted query and body channels, response projection,
+TLS trust profile, timeout, redirect denial, maximum response size,
+concurrency limit, and one request ceiling.
 After authorization and durable access-attempt audit, a reviewed preparation
 script renders ordered logical query pairs and at most one JSON body from only
 the source-required authorized selectors and the exact closed adapter context
@@ -333,6 +335,42 @@ The core does not normalize names or implement source matching semantics.
 Private-CA files are runtime bindings for logical bundle trust-profile names.
 Hostname and fixed-origin verification remain mandatory. Version 1 has no
 application-level proxy and ignores ambient HTTP proxy environment variables.
+
+A `sqlite-extract` source has no origin, no credential, and no transport
+security, because it opens one local file. Its Rust-fixed boundary is the
+reviewed statement artifact under `queries/`, covered by the bundle hash and
+holding exactly one statement; the declared result columns in result order; the
+declared parameter bindings, each with exactly one origin, either an authorized
+selector or the optional preparation script; and its `maximumRows`,
+`maximumCellBytes`, `maximumStatementSteps`, timeout, response-byte, and
+concurrency bounds. Rust binds every value into the prepared statement by
+index, so no value is rendered into statement text and a statement's shape is
+identical for every request it serves. A statement takes no query string and no
+request body, so the optional preparation script's whole channel is one bounded
+map of scalar parameter values, validated for shape, entry count, value kinds,
+and sizes before any row is read.
+
+SQLite's authorizer decides every action the compiled statement would take
+while the statement is prepared. It permits reads and refuses every write,
+schema, and control action, including `ATTACH`, `DETACH`, `PRAGMA`, and
+extension loading, along with a closed denied-function list covering the whole
+clock family. A denied action fails the bundle at load and is never a
+request-time failure. Rust binds its one evaluation instant to the reserved
+`evidence_now` parameter, which a bundle may not declare, so a statement
+needing the current time reads it there and a fixture run pinned to an instant
+reproduces exactly.
+
+The bundle names a logical `extractProfile` and the closed runtime file binds
+it to one absolute path under `sourceExtracts`, exactly as it binds a private
+certificate authority. Startup refuses a profile the runtime did not bind and a
+binding no source names. The bound file must be a regular, non-symlink file
+this process cannot write; it is digested into the computed runtime revision
+and opened read-only and immutable. Its reserved `evidence_extract` table must
+carry exactly one publication row, and the source's `maximumExtractAgeSeconds`
+is compared against the evaluation instant before a single row is read. The
+statement's select list is its projection, so Rust maps the bounded result set
+into a tree of the declared column names and nothing the statement did not
+select exists to be removed.
 
 The request asks the provider for only enough information to distinguish no
 match, one match, or ambiguity and to produce the declared facts. Prefer a
@@ -352,13 +390,6 @@ prepared scalars, and the reserved evaluation instant. This phase is complete
 only when SQL text, extract paths, and source values never enter diagnostics,
 logs, or audit.
 
-This phase is complete only when the statement executor carries one absolute
-elapsed-time deadline across concurrency admission, worker dispatch, and
-statement execution. Engine limits must be derived from the configured cell and
-response bounds so SQLite cannot materialize a value far larger than the adopter
-declared, and concurrent worst-case allocations must stay inside the process
-resource envelope.
-
 A source that cannot expose this bounded lookup directly, or through a
 publisher-produced extract, is not compatible with Version 1. It requires an
 external governed integration service. Do not add a bulk read, local matching
@@ -367,9 +398,10 @@ workaround.
 
 ## Source-shape contract suite
 
-The suite is five minimal local profiles. Four use deterministic HTTP mocks and
-one builds a sanitized SQLite extract and executes the reviewed statement. They
-use the same evaluator, output gate, signer, and audit path after acquisition.
+The suite is five minimal local profiles. The four HTTP profiles exercise
+different wire contracts through the same HTTP source executor; the statement
+profile exercises the other transport. All five use the same evaluator, output
+gate, signer, and audit path.
 
 | Profile | Boundary shape | What it proves |
 |---|---|---|
@@ -377,7 +409,7 @@ use the same evaluator, output gate, signer, and audit path after acquisition.
 | `dhis2-tracker` | `GET` query, selected fields, pager, collection, nested attribute array, Basic auth | REST query encoding, compound selectors, cardinality, pagination refusal, and code-based extraction |
 | `opencrvs-event-search` | OAuth client token, bounded JSON `POST`, nested event index, and country-configured declaration | Credential bootstrap, exact tracking-ID lookup, nested extraction, and selector-aware relational derivation |
 | `search-chain` | Fixed JSON `POST` search, then a path-bound dereference member and a body-filtered search member in declared order | Ordered multi-stage acquisition, per-member fact-input projection through both the path and the body channel, a provider count read as a value rather than a cardinality guard, and a silently widened query reaching ambiguity |
-| `sqlite-extract` | Reviewed statement over a sanitized published extract | Authorizer refusal, exact parameter and column agreement, publication metadata and age, strict result typing, row/cell/step/time/response bounds, one runtime clock, and final-fact minimization |
+| `sqlite-extract` | One reviewed SQL statement with declared result columns and named parameter bindings, over a read-only extract file materialized from a committed text seed | Bundle-fixed statement authority, the prepare-time authorizer verdict, one declared origin per parameter, the reserved evaluation instant, publication metadata and staleness refusal, and row, cell, statement-step, and time bounds |
 
 These are compatibility-shaped mocks, not whole-product emulators or claims of
 certified DHIS2 or OpenCRVS support. Fixtures are small, invented, and
@@ -390,6 +422,16 @@ generic HTTP request material or a generic reviewed statement and bound extract,
 plus transport-neutral bounded JSON. Basic, Bearer, and OAuth
 client-credentials support must each have a generic contract and tests
 independent of either named product.
+
+`sqlite-extract` is the one row that is a runtime identifier, deliberately so:
+it names the second transport as configuration names it rather than a mock wire
+shape. Its cases build a real extract file from a committed text seed inside
+the process that reads it, so the reviewed statement executes for real and
+nothing is replayed. Version 1 ships no recorded source-shape fixture for it,
+because such a fixture would carry a binary file rather than a readable
+response. Production code still sees only generic SQL over a generic SQLite
+file, generic publication metadata, and parsed values; no table or column name
+is known to the runtime beyond the reserved `evidence_extract` metadata table.
 
 The suite must prove at least:
 
@@ -411,9 +453,6 @@ The suite must prove at least:
   absent from logs, audit, errors, snapshots, and assertion messages;
 - `401`, `403`, `429`, `5xx`, timeout, redirect, invalid JSON, wrong media type,
   oversized response, missing fact, zero matches, and multiple matches;
-- every supported stage order, including HTTP to SQLite and SQLite to HTTP,
-  has an executable offline fixture that runs each reviewed statement rather
-  than replaying a recorded statement result;
 - switching among source profiles and transports requires bundle, runtime
   binding, fixture, and Rhai changes only, with no domain branch in Rust.
 
@@ -616,10 +655,6 @@ fixtures, and production Rust contains no case-specific branch or type.
   deny-by-default prepare-time authorizer, publication metadata and maximum
   age, strict value typing, a runtime-bound evaluation instant, and row, cell,
   statement-step, elapsed-time, response-size, and concurrency bounds.
-- Use one absolute SQLite deadline across concurrency admission, worker
-  dispatch, and execution. Derive SQLite engine allocation limits from the
-  configured result bounds and prove the configured maximum concurrency cannot
-  turn bounded requests into an unbounded aggregate allocation.
 - Implement the closed `single` and `search-then-fetch` acquisitions. The
   latter fixes two source identifiers, validates the search FactSet before the
   fetch, audits each call, and exposes no third-call or response-led routing
@@ -634,9 +669,6 @@ fixtures, and production Rust contains no case-specific branch or type.
 - Run flat REST, paged nested REST, and Event Search-shaped local mocks through
   the HTTP executor, and a sanitized published extract through the statement
   executor.
-- Exercise every supported two-stage transport order in deterministic tests:
-  HTTP to HTTP, HTTP to SQLite, SQLite to HTTP, and SQLite to SQLite. Every
-  SQLite stage executes its reviewed statement in the fixture harness.
 - Cover all four acceptance definitions across the source-shape matrix and run
   at least one definition against two different shapes using only YAML and
   Rhai changes.
@@ -648,12 +680,34 @@ fixtures, and production Rust contains no case-specific branch or type.
   and generated public contracts.
 - Prove ambient proxy variables cannot redirect either evidence-data or OAuth
   requests, and prove unbound, malformed, mutable, or insecure private-CA files
-  prevent readiness. Prove missing, unbound, writable, uncheckpointed, or
-  metadata-invalid extracts prevent serving before any request reaches them.
+  prevent readiness.
+- Implement the reviewed-statement executor over a read-only mounted SQLite
+  extract: one bundle-fixed statement artifact holding exactly one statement,
+  a prepare-time authorizer verdict, declarative parameter bindings with one
+  origin each, an optional bounded preparation map, the reserved evaluation
+  instant, and declared row, cell, statement-step, timeout, response-byte, and
+  concurrency bounds.
+- Bind each logical extract profile to one runtime-named file, refuse an
+  unbound profile and a binding no source names, refuse a symlinked,
+  non-regular, or writable file, digest the bound file into the computed
+  runtime revision, and prove the statement's result columns and parameters
+  against the real extract at startup.
+- Require the reserved publication-metadata row and refuse an extract past its
+  bundle-declared maximum age against the evaluation instant, before any row is
+  read.
+- Run one acceptance definition over the statement transport against a real
+  extract materialized from a committed text seed, and keep statement text,
+  bound parameter values, result values, the extract path, and engine message
+  text out of every diagnostic, log, snapshot, and audit record.
+- Prove missing, unbound, writable, uncheckpointed, or metadata-invalid
+  extracts prevent serving before any request reaches them.
 
-Exit gate: all source contract tests pass, no product-specific source code
-exists, and no source value, raw selector value, credential, token, or response
-reaches logs, audit, errors, or disk.
+Exit gate: all source contract tests pass on both transports, no
+product-specific source code exists, and no source value, raw selector value,
+credential, token, or response reaches logs, audit, errors, or disk. A denied
+statement action, an unbound or unusable extract, and a disagreement between a
+statement and the extract it reads fail before the deployment serves, and no
+statement text, bound value, or extract path reaches a diagnostic.
 
 ### Phase 3: trust, authorization, audit, and signing
 
@@ -783,7 +837,8 @@ follow-up issue.
 | Bundle and Rhai | Startup rejects incomplete, inconsistent, mutable, or uncompilable governed bundles and runtime files and serves only their one immutable revision. Runtime bindings cannot override governed fields. Every role and authority path has a complete selector-profile and source binding. Rhai preparation, extraction, and derivation are deterministic, bounded, and fresh per invocation. Preparation receives only source-required authorized selectors and the exact adapter context `{parameters, prior_facts}`; extraction sees only the bounded projected response and that same context; `prior_facts` is empty except for the schema-validated search FactSet supplied to a fixed fetch, whole or projected onto the allowlist that stage declares. Derivation sees only the final matched facts, its declared authorized selector inputs, and the closed evaluation context. No script receives network, filesystem, environment, ambient clock, randomness, credentials, authorization objects, logs, audit, signing material, or source-selection authority. Extraction returns only `match(FactSet)`, `no_match`, or `ambiguous`; derivation runs only on a final `match`. |
 | Values and validation | Every Version 1 Supported Value form declared in `CONCEPT.md` passes positive, negative, boundary, size, cardinality, Evidence construction, JWS serialization, and verification tests. The four initial assertion cases exercise boolean, controlled-code, time-bucket, multiple-concept, and multi-subject behavior through the full service. |
 | Selector and matching boundary | Identifier-only, compound no-identifier, additional-disambiguator, and multi-role selector profiles pass the complete service. Each profile has one exact field set. Missing, extra, unknown, mistyped, oversized, unauthorized, or wrong-origin values fail before credential acquisition and source access. Provider results are limited to `match`, `no_match`, and `ambiguous`; Evidence never performs broad candidate retrieval, scoring, or selection. Reviewed deterministic derivation may compare authorized selectors with facts from one unique authoritative record. Explicit false relationship evidence requires a complete valid relationship set. A source that lacks count metadata may return at most two minimally projected results solely to distinguish ambiguity. |
-| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, one durable pre-access audit, bounded transport input and output, and no retry. HTTP fixes its origin, path, headers, reviewed query/body rendering, response projection, credential, TLS, and redirect policy. SQLite fixes its reviewed statement, parameter origins, result columns, extract profile, publication-age policy, and row, cell, statement-step, elapsed-time, response-size, and concurrency bounds. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. The effective posture is the weakest among the acquisition's sources. All three postures pass through both transports without overclaiming: `source-derived` means the statement or HTTP source returned the final declared concept fact. Credential-free HTTP is a separate local-only exception pinned to an exact numeric-loopback origin; SQLite has no credential by construction. |
+| Source minimization | Rust executes only the requirement's closed `single` or `search-then-fetch` acquisition, or a kind added after that surface froze where the bundle declares it and the operator separately enabled it. Each stage has fixed transport authority, a fixed or closed selector/prior-fact-bound path, fixed non-secret headers, bounded reviewed query/body rendering, explicit response projection, one durable pre-access audit, and no retry. Search facts are schema-validated before every fixed fetch and never persist; a fetch reads only the prior facts its acquisition gives that stage; no response can choose transport or add a call the configuration did not fix. The effective posture is the weakest among the acquisition's sources. Basic, static Authorization header, static API-key, and OAuth client-credentials authentication and all three postures pass generic contract tests through the same HTTP executor. Credential-free execution is a separate local-only exception pinned to an exact numeric-loopback HTTP origin. |
+| Statement source minimization | A `sqlite-extract` source executes exactly one bundle-fixed reviewed statement, held to one statement per artifact and covered by the bundle hash, against the one extract file the runtime bound, and Rust binds every value into it by index so no value is ever rendered into statement text. SQLite's authorizer decides every action the compiled statement would take while it is prepared, permitting reads and refusing every write, schema, and control action, `ATTACH`, `DETACH`, `PRAGMA`, extension loading, non-deterministic functions, and the whole clock family; a denied action fails the bundle at load rather than at request time. The reserved `evidence_now` parameter carries the same evaluation instant the assertion reports, and a bundle declaring that name is refused. Every declared parameter has exactly one origin, so a preparation script cannot fill a selector parameter, return a name the source never declared, reach the reserved name, or leave a declared prepared parameter unfilled, and a preparation script and a prepared parameter are refused unless declared together. Startup proves the statement's real result columns and parameters against the bundle over the extract it will read, refuses an extract profile the runtime did not bind and a binding no source names, and refuses a symbolic link, a non-regular file, a file this process could write, and a path replaced before it was opened; the bound file's digest enters the computed runtime revision. The reserved `evidence_extract` table must carry exactly one publication row, and the declared `maximumExtractAgeSeconds` is compared against the evaluation instant before a single row is read. Row, cell, and response-byte bounds are enforced as the result is read, the statement-step and time bounds by the progress handler inside the engine, and a cancelled request returns its connection and its permit. The transport holds no credential of any kind, and no diagnostic, log, snapshot, or audit record carries statement text, a bound or result value, the extract path, or engine message text. |
 | Authentication and authority | Strict OIDC verification and the configured principal claim fail closed. One authorization decision binds requester, optional actor, requirement revision, purpose, every role's selector profile and value origin, subject authority path, audience, and requested response format. Possessing selector values or discovery metadata, or choosing an API media type, creates no authority. Authenticated discovery lists only complete shapes matching exactly one authority path and valid token-owned selector material; unentitled, ambiguous, and invalid-context shapes are absent. Every denial occurs before credential acquisition or source access. |
 | Privacy and audit | After successful authentication, every authorization refusal is durably accepted as a standalone minimal denial event before the generic `403`; sink failure returns the generic `503`. The event contains only the operation and event identifiers, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, closed denial category and decision, timestamp, and duration. The pseudonym scope binds operator trust domain, requested purpose, and authenticated audience while omitting those inputs. The event omits untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, source, and evaluation material. Authentication, malformed-request, and invalid-selector failures remain operational-only. One access-attempt audit is durably accepted before every actual source stage. Rust serializes the final immutable signed or unsigned response bytes, durably accepts disclosure-release audit, then releases those exact bytes. Sink failure blocks the applicable step. Audit records stage source identity but never prior facts or intermediate identifiers, records the closed response-protection mode and a signing key only for cryptographically protected disclosure release, and uses at most one scoped keyed pseudonym over each complete canonical role and selector bundle. Neither audit, logs, errors, metrics, nor traces contain credentials, tokens, request nonces, raw selector values, per-field quasi-identifier hashes, source values, Supported Values, or raw subject identifiers. |
 | Evidence and response integrity | Rust alone constructs Evidence, signed flattened JWS, and the unsigned envelope. Signed JWS is mandatory and default, uses ES256/P-256, RFC 7638 service key identifiers, allowlisted protected headers and trusted key resolution, has verifiable nonce, independently expected subjects and output contract, audience, policy, and validity, and publishes usable active and planned-rotation public keys while revoked identifiers override cached selection. Deployable assurance uses a pinned non-exportable Transit signer whose public key matches the governed active JWK and passes startup sign-and-verify. Unsigned JSON is self-identifying, requires bundle and complete matched grant permission plus exact API selection, and makes no later-verification claim. Signed failure never falls back to unsigned. |
@@ -1011,35 +1066,64 @@ At minimum, pin these acceptance and negative cases:
     `evidencectl doctor`. The declared acquisition ceiling bounds the source
     exchanges and the transitions between stages as a dependency failure under
     its own safe category, without ever cancelling a durable audit append.
-67. A statement artifact containing multiple statements, a write, DDL,
-    `ATTACH`, `DETACH`, a pragma, extension loading, transaction control, an
-    ambient-time function, or an unknown authorizer action is refused before
-    serving. The same check runs against the real extract schema at startup.
-68. Missing, unbound, writable, symlinked, uncheckpointed, or metadata-invalid
-    extract files fail before serving. Staleness is checked before every row,
-    and the safe diagnostic names only the governed extract profile, never a
-    publisher-controlled metadata value or filesystem path.
-69. SQLite parameter names and origins, declared result columns and types, and
-    prepared values agree exactly. Statement text, bound values, result values,
-    extract paths, SQLite message text, and extract metadata values are absent
-    from errors, logs, audit, snapshots, and failed-test output.
-70. One absolute deadline covers SQLite concurrency admission, worker dispatch,
-    and execution. Queueing never grants a fresh timeout, and timeout and step
-    exhaustion map to their documented safe categories.
-71. Row, cell, engine-value, statement-step, response-size, and concurrency
-    limits fail closed. Engine allocation limits are derived from the declared
-    result bounds, and a concurrency stress test proves worst-case statements
-    cannot multiply individually bounded values into an unbounded process
-    allocation.
-72. A statement comparing RFC 3339 text lexically against `evidence_now` either
-    requires the exact whole-second UTC storage form `YYYY-MM-DDTHH:MM:SSZ` or
-    normalizes both operands before comparison. Nonzero fractional-second
-    start and end boundary fixtures prove chronological behavior.
-73. Every supported two-stage transport order has an executable fixture: HTTP
-    to HTTP, HTTP to SQLite, SQLite to HTTP, and SQLite to SQLite. Every SQLite
-    stage executes its reviewed statement, and production or evidence-grade
-    build and serving reject a requirement whose complete acquisition cannot
-    be exercised offline.
+67. A `sqlite-extract` source executes one bundle-fixed reviewed statement
+    against the extract the runtime bound, returns the declared columns in
+    result order beside the extract's own publication row, and presents no
+    credential of any kind.
+68. The prepare-time authorizer refuses every write, schema, and control
+    action, `ATTACH`, `DETACH`, `PRAGMA`, extension loading, non-deterministic
+    functions, and the whole clock family. A denied action fails the bundle at
+    load and never at request time.
+69. A second statement in the artifact, declared columns disagreeing with the
+    real result columns, and statement parameters disagreeing with the declared
+    bindings each fail at startup naming the statement artifact. The offline
+    check settles everything a statement alone can settle and never reports a
+    false failure; opening the bound extract settles the rest, and a source
+    compiled without an extract materializes but refuses to run.
+70. The reserved `evidence_now` parameter carries the one evaluation instant
+    the assertion reports, in the rendering the assertion reports it. A bundle
+    declaring that name is refused, and a fixture run pinned to an instant
+    reproduces the same result.
+71. Every statement parameter is filled from its one declared origin. A
+    preparation script cannot fill a selector parameter, return a name the
+    source never declared, reach the reserved name, or leave a declared
+    prepared parameter unfilled, and a preparation script and a prepared
+    parameter are refused unless declared together. The prepared parameter map
+    is held to its declared entry count, value kinds, and sizes before any row
+    is read.
+72. The declared row, cell, statement-step, time, and response-byte bounds each
+    refuse under their own closed cause, with the step and time bounds enforced
+    inside the engine by the progress handler and a cell refused before an
+    owned value is built. A cancelled request gives back its connection and its
+    permit.
+73. A bound extract must be a regular, non-symlink file this process cannot
+    write, and its digest enters the computed runtime revision. An extract
+    profile the runtime did not bind, a binding no source names, and a path
+    replaced between its digest and its opening each fail at startup by name
+    and cause.
+74. An extract with no reserved metadata table, with other than exactly one
+    row, missing a column, or carrying a malformed field is refused at startup.
+    The declared `maximumExtractAgeSeconds` is compared against the evaluation
+    instant before any row is read, is inclusive at the bound, and refuses a
+    stale extract as a dependency failure naming only its governed extract
+    profile.
+75. No rendering, diagnostic, log, snapshot, or audit record carries statement
+    text, a bound parameter value, a result value, the extract path, or engine
+    message text. A genuine syntax fault carries a line and a column counted in
+    characters and no text, and an unknown table, an unknown column, and a
+    refused statement are told apart without one.
+76. Professional licence status passes over the statement transport through
+    offline fixture evaluation against a real extract materialized from a
+    committed text seed, using the same concept, derivation, output gate, and
+    signing path the HTTP transport uses. No match, ambiguity, the row bound,
+    staleness, and a missing parameter reach their request outcomes; the source
+    contract suite proves a refused statement fails at startup. Extract columns
+    the statement never selects are absent from every assertion and diagnostic.
+
+Cases 67 through 76 are traced to their executable tests by the
+`sec-statement-source-bounded` entry in
+`contracts/security-test-traceability.yaml`, under invariant `V1-I43` of
+`contracts/security-invariant-matrix.yaml`.
 
 ## Verification gates
 
@@ -1059,6 +1143,7 @@ after the package suite succeeds:
 
 ```text
 cargo test --locked -p registry-evidence --test source_contracts
+cargo test --locked -p registry-evidence --test statement_source
 cargo test --locked -p registry-evidence --test live_sources dhis2 -- --ignored
 cargo test --locked -p registry-evidence --test live_sources opencrvs -- --ignored
 ```

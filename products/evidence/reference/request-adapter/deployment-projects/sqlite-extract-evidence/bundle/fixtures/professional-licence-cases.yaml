@@ -14,9 +14,11 @@ common:
   # `selectors`, because that is what a real extract is: one published snapshot
   # holding many registrants, not one file per outcome.
   #
-  # The validity bounds are written fixed-width in UTC so they compare lexically
-  # against the evaluation instant the runtime binds, which is the only clock
-  # the statement has.
+  # The validity bounds are written as fixed-width RFC 3339 UTC in whole
+  # seconds, which is the form the runtime binds the evaluation instant in. The
+  # comparison is lexical, so a bound carrying a fraction would share its first
+  # nineteen characters with the instant and then sort on `.` against `Z`,
+  # placing every sub-second value inside a second before that second.
   extract: |
     CREATE TABLE evidence_extract (
       published_at TEXT NOT NULL,
@@ -264,7 +266,7 @@ cases:
   # serving runtime opens extracts at startup, so the real lifecycle case is a
   # startup rejection and must be proved by the source contract suite.
   - id: source-failure
-    sourceFailure: extract-unavailable
+    sourceFailure: timeout
     expected:
       publicProblem: dependency_unavailable
       signed: false

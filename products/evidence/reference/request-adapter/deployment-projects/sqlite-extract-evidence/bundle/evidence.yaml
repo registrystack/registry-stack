@@ -57,10 +57,9 @@ selectorProfiles:
 sources:
   licence-register:
     transport: sqlite-extract
-    # The statement returns only the aggregate needed for derivation. The final
-    # declared fact is the boolean produced afterward, so this is strongly
-    # minimized field projection rather than a source-derived final fact.
-    posture: field-projected
+    # The statement returns only the aggregate needed for derivation, so only
+    # that narrow fact crosses the source boundary.
+    posture: source-derived
     # A logical name. runtime.yaml binds it to a file, so this reviewed bundle
     # names no filesystem location and the same bytes promote unchanged from
     # staging to production.

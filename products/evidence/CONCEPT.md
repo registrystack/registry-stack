@@ -769,10 +769,10 @@ whatever a later defect exposes. A join behaves the same way: the narrow answer
 computed inside the extract is smaller than the two wide inputs that would
 otherwise have to cross.
 
-Aggregation and acquisition posture are separate judgements. A statement that
-returns the final declared concept fact is `source-derived`. A statement that
-returns a count which Rhai later reduces to a boolean is `field-projected`: it
-is strongly minimized, but the final fact was still derived in the evaluator.
+A statement that returns one aggregate is `source-derived` on the same terms as
+an API returning that aggregate: the narrow fact is what crossed the source
+boundary. A later derivation may map that fact to the asserted concept without
+changing what the source returned.
 
 #### The authorizer is a safety boundary, not a disclosure declaration
 
@@ -801,13 +801,11 @@ in the morning and fail at midnight with nothing having changed. This is the
 rule that already keeps ambient time out of Rhai, applied to the transport that
 would otherwise reintroduce it.
 
-The reserved value is canonical whole-second UTC text. Direct lexical
-comparison is correct only when the stored column is contractually restricted
-to that exact `YYYY-MM-DDTHH:MM:SSZ` form. General RFC 3339 text permits
-fractional seconds, and a fractional value in the same second does not sort
-chronologically against the shorter whole-second form. A publisher that keeps
-fractional precision must normalize both operands in the reviewed statement,
-and boundary fixtures must include nonzero fractional start and end instants.
+The reserved value is canonical whole-second UTC text. A statement comparing it
+lexically with stored timestamps must require those stored values in the same
+exact `YYYY-MM-DDTHH:MM:SSZ` form. General RFC 3339 text permits fractional
+seconds, and a fractional value in the same second does not sort
+chronologically against the shorter whole-second form.
 
 #### An extract is a published snapshot
 

@@ -82,11 +82,9 @@ runtime document loads. It carries the reserved `evidence_extract` metadata row
 that `CONFIG.md` requires of any extract, because the fixture builds a real one
 and startup refuses a file without it.
 
-The seed is trusted executable project input. Run only reviewed seed SQL in an
-isolated local environment; fixture evaluation is not an untrusted-code
-boundary. Before seed-bearing fixtures can count as safely importable CI or
-deployable-assurance inputs, the harness must confine seed effects to the new
-temporary extract and apply explicit CPU, disk, and elapsed-time bounds.
+The seed is trusted executable project input and is not sandboxed as untrusted
+code. Run only reviewed project seeds in an isolated local environment. Never
+import or evaluate a foreign bundle as a fixture.
 
 ```yaml
 common:
