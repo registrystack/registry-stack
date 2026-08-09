@@ -606,22 +606,49 @@ fn reject_local_production_values(bundle: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Hold every production source to the conditions its own transport carries.
+/// A transport that opens a network channel must reach the registry over an
+/// encrypted, authenticated connection, so its origin and its authentication
+/// kind are both read here. A transport carrying no network channel is judged
+/// by neither, and a transport this gate has no stated conditions for is
+/// refused rather than waved through under another transport's rules.
 fn validate_production_sources(bundle: &Value) -> Result<()> {
     let sources = bundle
         .get("sources")
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("the deployment bundle has no sources object"))?;
     for source in sources.values() {
-        let https = source
-            .get("baseUrl")
+        let transport = source
+            .get("transport")
             .and_then(Value::as_str)
-            .is_some_and(|value| value.starts_with("https://"));
-        let authenticated = source
-            .pointer("/authentication/kind")
-            .and_then(Value::as_str)
-            .is_some_and(|kind| kind != "none" && kind != "review-required");
-        if !https || !authenticated {
-            bail!("every production source must use authenticated HTTPS");
+            .ok_or_else(|| anyhow!("every production source must declare its transport"))?;
+        match transport {
+            "http-json" => {
+                let https = source
+                    .get("baseUrl")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value.starts_with("https://"));
+                let authenticated = source
+                    .pointer("/authentication/kind")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind != "none" && kind != "review-required");
+                if !https || !authenticated {
+                    bail!("every production source must use authenticated HTTPS");
+                }
+            }
+            // A statement source reads one extract file the operator mounted
+            // read-only. It names no origin, opens no connection, and holds no
+            // credential, so there is no channel for a scheme or an
+            // authentication kind to govern. The conditions it does carry, a
+            // bound extract profile and a stated maximum extract age, are
+            // closed bundle fields the Evidence loader settles for every
+            // assurance profile, and the runtime binds the profile to a path.
+            // Restating them here would duplicate `evidence bundle-check`
+            // rather than add a production condition.
+            "sqlite-extract" => {}
+            other => {
+                bail!("production source transport `{other}` has no stated production conditions")
+            }
         }
     }
     Ok(())
@@ -1318,23 +1345,42 @@ fn referenced_selector_profile(source: &Value, role: &str, field: &str) -> Resul
 }
 
 fn referenced_source_artifacts(source: &Value) -> Result<Vec<String>> {
-    [
-        "/request/prepareScript",
-        "/request/adapterParametersSchema",
-        "/responseSchema",
-        "/extractScript",
-        "/factSchema",
-    ]
-    .iter()
-    .map(|pointer| {
+    fn required(source: &Value, pointer: &str, artifacts: &mut Vec<String>) -> Result<()> {
         let path = source
             .pointer(pointer)
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("referenced source is missing `{pointer}`"))?;
         validate_bundle_relative_artifact(path)?;
-        Ok(path.to_owned())
-    })
-    .collect()
+        artifacts.push(path.to_owned());
+        Ok(())
+    }
+
+    fn optional(source: &Value, pointer: &str, artifacts: &mut Vec<String>) -> Result<()> {
+        if let Some(path) = source.pointer(pointer).and_then(Value::as_str) {
+            validate_bundle_relative_artifact(path)?;
+            artifacts.push(path.to_owned());
+        }
+        Ok(())
+    }
+
+    let mut artifacts = Vec::new();
+    for pointer in ["/responseSchema", "/extractScript", "/factSchema"] {
+        required(source, pointer, &mut artifacts)?;
+    }
+    match source.get("transport").and_then(Value::as_str) {
+        Some("http-json") => {
+            required(source, "/request/prepareScript", &mut artifacts)?;
+            required(source, "/request/adapterParametersSchema", &mut artifacts)?;
+        }
+        Some("sqlite-extract") => {
+            required(source, "/request/statement", &mut artifacts)?;
+            optional(source, "/request/prepareScript", &mut artifacts)?;
+            optional(source, "/request/adapterParametersSchema", &mut artifacts)?;
+        }
+        Some(other) => bail!("referenced source transport `{other}` is unsupported"),
+        None => bail!("referenced source must declare its transport"),
+    }
+    Ok(artifacts)
 }
 
 fn validate_bundle_relative_artifact(value: &str) -> Result<()> {
@@ -1347,10 +1393,12 @@ fn validate_bundle_relative_artifact(value: &str) -> Result<()> {
         || !matches!(
             path.components().next(),
             Some(Component::Normal(directory))
-                if directory == "adapters" || directory == "schemas"
+                if directory == "adapters" || directory == "queries" || directory == "schemas"
         )
     {
-        bail!("referenced source artifacts must be adapters/<file> or schemas/<file>");
+        bail!(
+            "referenced source artifacts must be adapters/<file>, queries/<file>, or schemas/<file>"
+        );
     }
     Ok(())
 }
@@ -2590,6 +2638,7 @@ fn write_bundle(
                     if !written_paths.insert(artifact.clone()) {
                         continue;
                     }
+                    ensure_generated_parent(&bundle, artifact)?;
                     write_private_file(&bundle.join(artifact), &bytes)?;
                 }
             } else {
@@ -3815,6 +3864,97 @@ factSchema: schemas/source-facts.schema.yaml
         assert!(!serde_json::to_string(&bundle)
             .expect("bundle JSON")
             .contains(LOCAL_URI_PREFIX));
+    }
+
+    fn production_http_source() -> Value {
+        json!({
+            "transport": "http-json",
+            "baseUrl": "https://records.example.test",
+            "authentication": {
+                "kind": "static-authorization",
+                "tokenRef": "secret:file/records-token",
+            },
+        })
+    }
+
+    fn production_statement_source() -> Value {
+        json!({
+            "transport": "sqlite-extract",
+            "extractProfile": "licence-register-extract",
+            "maximumExtractAgeSeconds": 604800,
+        })
+    }
+
+    #[test]
+    fn production_statement_source_carries_no_channel_to_hold_conditions_over() {
+        let bundle = json!({"sources": {"licence-register": production_statement_source()}});
+        validate_production_sources(&bundle).expect("a statement source opens no channel");
+    }
+
+    #[test]
+    fn production_statement_source_does_not_relax_a_transport_beside_it() {
+        let mut plaintext = production_http_source();
+        plaintext["baseUrl"] = json!("http://records.example.test");
+        let mut unauthenticated = production_http_source();
+        unauthenticated["authentication"] = json!({"kind": "none"});
+        for broken in [plaintext, unauthenticated] {
+            let bundle = json!({
+                "sources": {
+                    "licence-register": production_statement_source(),
+                    "people": broken,
+                },
+            });
+            assert_eq!(
+                validate_production_sources(&bundle)
+                    .expect_err("the HTTP source is still held to its own conditions")
+                    .to_string(),
+                "every production source must use authenticated HTTPS"
+            );
+        }
+        let bundle = json!({
+            "sources": {
+                "licence-register": production_statement_source(),
+                "people": production_http_source(),
+            },
+        });
+        validate_production_sources(&bundle).expect("both transports meet their own conditions");
+    }
+
+    #[test]
+    fn production_http_source_still_requires_an_authenticated_https_channel() {
+        let mut plaintext = production_http_source();
+        plaintext["baseUrl"] = json!("http://records.example.test");
+        let mut unauthenticated = production_http_source();
+        unauthenticated["authentication"] = json!({"kind": "none"});
+        let mut unreviewed = production_http_source();
+        unreviewed["authentication"] = json!({"kind": "review-required"});
+        for broken in [plaintext, unauthenticated, unreviewed] {
+            let bundle = json!({"sources": {"people": broken}});
+            assert_eq!(
+                validate_production_sources(&bundle)
+                    .expect_err("an unauthenticated or plaintext channel is refused")
+                    .to_string(),
+                "every production source must use authenticated HTTPS"
+            );
+        }
+    }
+
+    #[test]
+    fn production_source_transport_without_stated_conditions_is_refused() {
+        let bundle = json!({"sources": {"people": {"transport": "carrier-pigeon"}}});
+        assert_eq!(
+            validate_production_sources(&bundle)
+                .expect_err("an ungoverned transport is refused rather than waved through")
+                .to_string(),
+            "production source transport `carrier-pigeon` has no stated production conditions"
+        );
+        let bundle = json!({"sources": {"people": {"baseUrl": "https://records.example.test"}}});
+        assert_eq!(
+            validate_production_sources(&bundle)
+                .expect_err("a source naming no transport is refused")
+                .to_string(),
+            "every production source must declare its transport"
+        );
     }
 
     #[test]

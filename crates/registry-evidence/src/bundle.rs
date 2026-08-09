@@ -110,11 +110,12 @@ impl BundleError {
     }
 }
 
-/// A value-free deployment diagnostic bound to one bundle-relative artifact.
+/// A value-free deployment diagnostic bound to one governed artifact.
 ///
-/// The artifact name comes from the reviewed bundle layout or from the
-/// operator's runtime file name. It is never taken from document content, and
-/// the fault it carries is value-free by construction.
+/// The artifact name comes from the reviewed bundle layout or from a logical
+/// runtime binding such as an extract profile. It is never taken from source
+/// content or an operator filesystem path, and the fault it carries is
+/// value-free by construction.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ArtifactFault {
     artifact: String,
@@ -146,7 +147,7 @@ impl ArtifactFault {
         }
     }
 
-    /// The bundle-relative artifact, empty when no loader claimed the failure.
+    /// The governed artifact, empty when no loader claimed the failure.
     pub fn artifact(&self) -> &str {
         &self.artifact
     }

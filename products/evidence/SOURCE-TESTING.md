@@ -26,7 +26,7 @@ a commit is correct.
 | `dhis2-tracker` | `GET` with prepared filters, fixed `fields`, and `pageSize` | Pager, `trackedEntities` collection, nested attributes | HTTP Basic | Query rendering, encoding, cardinality, collection handling, and controlled codes |
 | `opencrvs-event-search` | Prepared bounded JSON `POST` for one tracking ID | Nested event index and country-configured declaration | OAuth 2.0 client credentials, then Bearer | Credential bootstrap, exact event lookup, nested extraction, and relational derivation |
 | `search-chain` | One fixed JSON `POST` search, then two declared members in declared order: one path-bound dereference, one filtered search in a JSON body | Flat dotted response keys, a provider count, and a bounded result page per stage | Static Authorization header per stage, and per-source OAuth 2.0 client credentials for the dereference member | Ordered multi-stage acquisition, per-member allowlisted projection, a provider count consumed as a value, and silently widened queries |
-| `sqlite-extract` | One reviewed statement with exact bound parameters over a sanitized published extract | Declared rows plus publication metadata | None by construction | Prepare-time authorizer, exact column and parameter agreement, strict typing, publication age, statement/result bounds, one clock, and final-fact minimization |
+| `sqlite-extract` | One reviewed SQL statement with declared named parameter bindings, bound by index | One result tree of the declared columns in result order, beside the extract's own publication row | None; the transport holds no credential | Bundle-fixed statement authority, the prepare-time authorizer verdict, the reserved evaluation instant, publication metadata and staleness, and row, cell, statement-step, and time bounds |
 
 A single-stage row and a multi-stage row are different claims about the same
 product. The first says one bounded request shape still works. The second says
@@ -34,6 +34,12 @@ an ordered chain still works, that each later stage receives only its own
 allowlisted projection of the validated search FactSet, and that a stage which
 does not resolve stops the acquisition. Passing either never implies the other,
 and neither may be reported as the other.
+
+Four of these rows are HTTP wire shapes. `sqlite-extract` is the second
+transport rather than a wire shape, so it is the transport's own configuration
+name rather than a test-only one. Its cases execute one reviewed statement
+against a real extract file instead of replaying a mocked response, so it makes
+no claim about any HTTP row and no HTTP row makes a claim about it.
 
 The product names identify compatibility-shaped test profiles. They do not
 promise a maintained vendor connector, reproduce a whole server, or certify
@@ -73,12 +79,9 @@ statement. The result is never prerecorded. Replaying rows would test the
 extraction script while leaving the SQL, its parameter bindings, and its time
 boundaries unproved.
 
-Fixture seed SQL is trusted executable project input. Run only reviewed seed
-SQL in an isolated local environment; fixture evaluation is not an
-untrusted-code boundary. Before a seed-bearing fixture can count as safely
-importable ordinary-CI or deployable assurance, the harness must confine seed
-effects to the new temporary extract and apply explicit CPU, disk, and
-elapsed-time bounds.
+Fixture seed SQL is trusted executable project input and is not sandboxed as
+untrusted code. Run only reviewed project seeds in an isolated local
+environment. Never import or evaluate a foreign bundle as a fixture.
 
 Transport mixing is part of the compatibility matrix, not an implementation
 detail. The current evaluator executes a SQLite statement only when it is the
@@ -201,17 +204,44 @@ Profile-specific cases include:
   projection conflicts, and proof that ambient proxy variables are ignored.
 - the explicit local credential-free boundary, including exact numeric-
   loopback origin validation and absence of an authentication header.
-- SQLite refusal of multiple statements, writes, DDL, `ATTACH`, `DETACH`,
-  pragmas, extension loading, transaction control, ambient-time functions, and
-  unknown authorizer actions; exact selector and prepared-parameter origins;
-  exact result-column names and types; missing or malformed publication
-  metadata; stale extracts; row, cell, engine-value, statement-step,
-  elapsed-time, response-size, and concurrency bounds; and no source value in
-  diagnostics.
-- nonzero fractional-second validity boundaries. A statement may compare RFC
-  3339 text lexically only when the extract contract requires the exact
-  whole-second UTC form `YYYY-MM-DDTHH:MM:SSZ`; otherwise the statement must
-  normalize both operands before comparison.
+The `sqlite-extract` profile has no mock, because it has no wire to mock. Its
+cases commit a text seed of SQL and materialize it into a temporary extract
+file inside the process that reads it, so the reviewed statement executes for
+real against a real SQLite file and nothing is replayed. A seed is reviewable
+in a diff and no table name arrives inside an opaque binary. The materialized
+file is made unwritable before it is opened, because the runtime refuses a
+writable extract rather than warning about one.
+
+Statement cases include:
+
+- one exact match, no match, two rows reaching `ambiguous`, and one row past
+  the declared row bound failing as a dependency rather than as ambiguity;
+- write, `ATTACH`, `DETACH`, `PRAGMA`, extension-loading, non-deterministic,
+  and clock actions refused by the prepare-time authorizer;
+- a second statement in the artifact, declared columns disagreeing with the
+  real result columns, and statement parameters disagreeing with the declared
+  bindings;
+- the reserved evaluation instant reaching the statement, a pinned instant
+  reproducing the same result, and a bundle declaring the reserved name refused;
+- a selector parameter a preparation script tried to fill, a parameter name the
+  source never declared, and a declared prepared parameter left unfilled;
+- the row, cell, statement-step, time, and response-byte bounds, and a
+  cancelled request giving back its connection and its permit;
+- an extract with no metadata table, with other than exactly one row, missing a
+  column, or carrying a malformed field;
+- an extract published exactly at the declared bound, one past it, and one
+  dated after the evaluation instant;
+- a bound path that is a symbolic link, a non-regular file, a writable file, or
+  a file replaced between its digest and its opening;
+- statement text, bound values, result values, the extract path, and engine
+  message text absent from every rendering, diagnostic, and audit record, with
+  a genuine syntax fault carrying a line and column and no text.
+
+Extract columns no statement selects carry the same kind of unrelated synthetic
+canary a `record-transformed` fixture carries, and the reference project's
+privacy expectation forbids that value in any assertion or diagnostic. The
+statement is what keeps it true: a column that was never selected cannot reach
+a fact, a derivation, or a later defect.
 
 The HTTP mocks assert every received wire request, and the SQLite tests assert
 the statement artifact, exact bound parameter map, and resulting declared
@@ -268,9 +298,16 @@ cargo test --locked -p registry-evidence --test live_sources opencrvs -- --ignor
 cargo test --locked -p registry-evidence --test live_sources opencrvs_chain -- --ignored
 ```
 
-The package test includes `source_contracts`; it must be green before any live
-command is run. The `opencrvs` filter is a substring and therefore also selects
-`opencrvs_chain`; append `--exact` to run only the single-stage check.
+The package test includes `source_contracts` and `statement_source`; it must be
+green before any live command is run. The `opencrvs` filter is a substring and
+therefore also selects `opencrvs_chain`; append `--exact` to run only the
+single-stage check.
+
+The statement transport adds no command to that sequence and has no live
+counterpart. Its extract is a local file the tests build for themselves, so
+`statement_source` and the reference project's fixture run are the whole proof,
+and there is no public demo whose availability could make the result
+inconclusive.
 
 The live target requires an explicit profile name and local configuration. It
 must skip, rather than improvise, when required values or an approved synthetic

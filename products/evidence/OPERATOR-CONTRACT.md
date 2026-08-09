@@ -483,11 +483,10 @@ provider-specific field selection where claimed. A provider whose wire response
 cannot be closed at that boundary must use `record-transformed`, even when
 local projection and Rhai emit only narrow facts.
 
-`source-derived` means the value crossing the source boundary is already the
-final declared concept fact. A statement returning a count that Rhai later
-reduces to a boolean is `field-projected`, even when the count is much narrower
-than the underlying rows. Aggregating in SQL remains the right minimization
-choice; it does not change the name of the posture.
+A statement returning one aggregate is `source-derived` on the same terms as an
+API returning that aggregate, because the narrow fact is what crossed the source
+boundary. A later derivation may map that fact to the asserted concept without
+changing the acquisition posture.
 
 Bundle-fixed headers cannot set authentication, routing, cookies, framing,
 forwarding, proxy, or tracing fields. Tagged path placeholders occupy complete

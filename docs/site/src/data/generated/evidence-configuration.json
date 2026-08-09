@@ -3956,7 +3956,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Bounds one attempt at this source end to end, covering concurrency admission, any wait on the token single-flight boundary, and the HTTP exchange.",
+          "description": "Bounds each phase of one attempt at this source separately, carrying its whole value into every one: concurrency admission, any wait on the token single-flight boundary, and the HTTP exchange. It is not one deadline across the attempt, so an attempt that waits at one phase and then runs the next spends the bound again, and its worst-case wall clock is a multiple of this value rather than this value.",
           "runtime_validation": null
         },
         {

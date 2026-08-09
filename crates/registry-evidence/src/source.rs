@@ -940,6 +940,7 @@ impl StatementTransport {
     ) -> Result<Self, SourceError> {
         let SourceConfig::SqliteExtract {
             request: configured_request,
+            extract_profile,
             ..
         } = source
         else {
@@ -988,7 +989,7 @@ impl StatementTransport {
                             .artifact_fault()
                             .map_or(STATEMENT_EXTRACT_REBOUND, |fault| fault.fault().cause());
                         SourceError::ExtractUnavailable(ArtifactFault::new(
-                            configured_request.statement.as_str(),
+                            extract_profile,
                             SchemaFault::because(cause),
                         ))
                     })?;

@@ -26,6 +26,7 @@ use tempfile::TempDir;
 
 /// The bundle artifact every plan below names for its statement.
 const STATEMENT_ARTIFACT: &str = "queries/residence-region.sql";
+const EXTRACT_PROFILE: &str = "residence-register";
 const SUBJECT_PROFILE: &str = "person-demographics-v1";
 const PUBLISHED_AT: &str = "2026-08-07T02:00:00Z";
 const EVALUATED_AT: &str = "2026-08-07T03:00:00Z";
@@ -409,6 +410,45 @@ async fn an_extract_older_than_the_source_allows_fails_before_a_row_is_read() {
     // not consult either.
     assert!(!executor.extract_is_stale(instant(EVALUATED_AT)));
     assert!(executor.extract_is_stale(instant("2026-08-07T04:00:01Z")));
+}
+
+/// A stale-extract diagnostic names the governed runtime binding an adopter can
+/// act on, not publisher-controlled metadata read from the source.
+#[tokio::test]
+async fn a_stale_extract_names_only_its_governed_profile() {
+    let directory = TempDir::new().expect("a temporary directory");
+    let path = extract(&directory, PUBLISHED_AT);
+    let plan = Plan::default().extract_age(3_600);
+    let executor = executor(
+        &directory,
+        &plan,
+        "SELECT id FROM person ORDER BY id",
+        Some(&path),
+    );
+
+    let stale = run(
+        &executor,
+        &subject(&[("region_code", text("nw"))]),
+        &prepared(&[]),
+        "2026-08-07T04:00:01Z",
+    )
+    .await
+    .expect_err("a stale extract is refused");
+
+    let fault = stale
+        .artifact_fault()
+        .expect("the failure names an artifact");
+    assert_eq!(fault.artifact(), EXTRACT_PROFILE);
+    assert_eq!(fault.fault().cause(), cause::EXTRACT_TOO_OLD);
+    let rendered = fault.to_string();
+    assert!(
+        !rendered.contains(&path.display().to_string()),
+        "the diagnostic carried the extract path: {rendered}"
+    );
+    assert!(
+        !rendered.contains("2026-08-07-full"),
+        "the diagnostic carried publisher metadata: {rendered}"
+    );
 }
 
 #[tokio::test]

@@ -1248,8 +1248,11 @@ $defs:
         const: deny
       timeoutMilliseconds:
         description: >-
-          Bounds one attempt at this source end to end, covering concurrency admission, any
-          wait on the token single-flight boundary, and the HTTP exchange.
+          Bounds each phase of one attempt at this source separately, carrying its whole value
+          into every one: concurrency admission, any wait on the token single-flight boundary,
+          and the HTTP exchange. It is not one deadline across the attempt, so an attempt that
+          waits at one phase and then runs the next spends the bound again, and its worst-case
+          wall clock is a multiple of this value rather than this value.
         type: integer
         minimum: 1
         maximum: 30000
@@ -1436,8 +1439,11 @@ $defs:
         maximum: 1000000
       timeoutMilliseconds:
         description: >-
-          Bounds one attempt at this source end to end, covering concurrency admission and
-          statement execution.
+          Bounds each phase of one attempt at this source separately, carrying its whole value
+          into both: concurrency admission, and statement execution measured from the moment
+          the statement's own thread starts. It is not one deadline across the attempt, so an
+          attempt that waits for admission and then executes can occupy up to twice this value
+          in wall clock before it fails.
         type: integer
         minimum: 1
         maximum: 30000
