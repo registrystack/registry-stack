@@ -674,6 +674,41 @@ class RegistryReleaseTest(TestCase):
             self.assertIn("dist/image-bin", text)
         self.assertIn("release/scripts/build-release-image.sh", workflow)
 
+    def test_release_builds_and_packages_evidence_oid4vci_on_every_platform(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        platform_job = workflow[
+            workflow.index("\n  build-platforms:") : workflow.index("\n  clients:")
+        ]
+        linux_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        installer = (ROOT / "crates/registry-evidencectl/install.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("-p registry-evidence-oid4vci", platform_job)
+        self.assertIn(
+            "for evidence_binary in evidence evidencectl mint evidence-oid4vci",
+            platform_job,
+        )
+        self.assertIn("-p registry-evidence-oid4vci", linux_recipe)
+        self.assertIn(
+            '"evidence-oid4vci-${tag}-linux-amd64"',
+            linux_recipe,
+        )
+        self.assertIn(
+            "binaries=(evidence evidencectl mint evidence-oid4vci)", installer
+        )
+        self.assertIn(
+            'EVIDENCECTL_INSTALL_DIR="${evidence_install_dir}"', workflow
+        )
+        self.assertIn(
+            "for binary in evidence evidencectl mint evidence-oid4vci",
+            workflow,
+        )
+
     def legacy_candidate_workflow_explicitly_binds_dispatch_action(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
@@ -2296,6 +2331,22 @@ class RegistryReleaseTest(TestCase):
             result = run_tool("validate", str(manifest))
 
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_requires_evidence_oid4vci_for_v0_18_and_later(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = write_manifest(
+                root,
+                version="0.18.0",
+                include_evidence_oid4vci=False,
+            )
+            rejected = run_tool("validate", str(missing))
+            included = write_manifest(root, version="0.18.0")
+            accepted = run_tool("validate", str(included))
+
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("missing evidence-oid4vci", rejected.stderr)
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
 
     def test_validate_requires_evidence_client_packages_for_v0_17(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4078,6 +4129,7 @@ def write_manifest(
     include_registryctl_installer: bool | None = None,
     include_evidence_toolset: bool | None = None,
     include_evidence_clients: bool | None = None,
+    include_evidence_oid4vci: bool | None = None,
     include_retired_notary: bool | None = None,
 ) -> Path:
     if source_tag is None:
@@ -4121,6 +4173,10 @@ def write_manifest(
     if include_evidence_clients:
         artifacts["evidence-client-node"] = version
         artifacts["evidence-client-python"] = version
+    if include_evidence_oid4vci is None:
+        include_evidence_oid4vci = version_tuple >= (0, 18, 0)
+    if include_evidence_oid4vci:
+        artifacts["evidence-oid4vci"] = version
     if include_retired_notary is None:
         include_retired_notary = version_tuple < (0, 17, 0)
     if not include_retired_notary:

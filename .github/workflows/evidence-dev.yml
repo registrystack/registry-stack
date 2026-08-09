@@ -175,9 +175,10 @@ jobs:
             -p registry-evidence \
             -p registry-evidencectl \
             -p registry-mint \
+            -p registry-evidence-oid4vci \
             --target "${{ matrix.target }}"
           mkdir -p development-platform
-          for binary in evidence evidencectl mint; do
+          for binary in evidence evidencectl mint evidence-oid4vci; do
             asset="${binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${binary}" \
               "development-platform/${asset}"
@@ -570,7 +571,7 @@ jobs:
           EVIDENCECTL_ASSET_DIR="${GITHUB_WORKSPACE}/development-assets" \
           EVIDENCECTL_INSTALL_DIR="${install_dir}" \
             bash development-assets/evidencectl-install.sh
-          for binary in evidence evidencectl mint; do
+          for binary in evidence evidencectl mint evidence-oid4vci; do
             observed="$("${install_dir}/${binary}" --version)"
             test "${observed}" = "${binary} ${{ needs.validate.outputs.version }}-dev"
           done
@@ -606,7 +607,7 @@ jobs:
           set -euo pipefail
           tag="${{ needs.validate.outputs.tag }}"
           for platform in linux-amd64 linux-arm64 macos-arm64; do
-            for binary in evidence evidencectl mint; do
+            for binary in evidence evidencectl mint evidence-oid4vci; do
               echo "${binary}-${tag}-${platform}"
             done
             echo "evidence-client-node-${tag}-${platform}.tgz"

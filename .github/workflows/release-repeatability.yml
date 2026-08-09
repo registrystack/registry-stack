@@ -149,6 +149,7 @@ jobs:
           binary_names = {
               "evidence": "evidence",
               "evidencectl": "evidencectl",
+              "evidence-oid4vci": "evidence-oid4vci",
               "mint": "mint",
               "registry-manifest-cli": "registry-manifest",
               "registry-notary": "registry-notary",
