@@ -315,11 +315,14 @@ top-level `vocabularies` map holds an open set of prefix expansions. A field tha
 not one of these must be added to the struct in `registry-manifest-core` before a
 producer can send it; the schema no longer tolerates a key it does not model.
 
-Breaking changes require a new schema version. Breaking changes include removing or
-renaming required fields, changing the meaning of an existing field, changing an existing
-field to an incompatible type, or making previously valid V1 manifests invalid except
-for validation bugs, security fixes, or the unknown-key rejection this section
-describes.
+Before Registry Stack v1.0.0, a minor release may make a breaking Manifest
+change while retaining `registry-manifest/v1`. The affected Manifest changelog
+must mark it `BREAKING:`, give concrete migration steps, and the specification
+version history must record it. Breaking changes include removing or renaming
+required fields, changing the meaning or type of an existing field, or making
+previously valid V1 manifests invalid except for validation bugs and security
+fixes. From Registry Stack v1.0.0, such a change requires a new manifest schema
+version.
 
 ## Publish output artifacts
 

@@ -124,18 +124,22 @@ EVIDENCE_BINDING_PACKAGES = frozenset(
     {"registry-evidence-client-node", "registry-evidence-client-py"}
 )
 
-# A binding is exempt from the tutorial trigger only while no tutorial runs it.
+# A package is exempt from the tutorial trigger only while no tutorial runs it.
 # The Python binding is what `request-evidence-from-an-application` imports, so
 # a change to it has to replay that tutorial and is not listed here. Move a
-# binding out of this set as soon as a registered tutorial exercises it, or its
-# regressions reach readers before they reach CI. Exemption is from the tutorial
-# trigger alone, never from EVIDENCE_BINDING_PACKAGES above.
-EVIDENCE_TUTORIAL_EXEMPT_BINDINGS = frozenset({"registry-evidence-client-node"})
+# package out of this set as soon as a registered tutorial exercises it, or its
+# regressions reach readers before they reach CI. Evidence OID4VCI has its own
+# Rust and frozen-profile contract coverage; the current tutorial gate neither
+# builds the adapter nor executes a wallet flow. Exemption is from the tutorial
+# trigger alone, never from Evidence contracts or package tests.
+EVIDENCE_TUTORIAL_EXEMPT_PACKAGES = frozenset(
+    {"registry-evidence-client-node", "registry-evidence-oid4vci"}
+)
 
 # The gate also builds and runs `mint`, because one tutorial serves assertions
 # to a caller holding a real Mint-issued token.
 EVIDENCE_TUTORIAL_PACKAGES = (
-    EVIDENCE_PACKAGES - EVIDENCE_TUTORIAL_EXEMPT_BINDINGS
+    EVIDENCE_PACKAGES - EVIDENCE_TUTORIAL_EXEMPT_PACKAGES
 ) | frozenset(SHARDS["mint"])
 
 ROOT_RUST_INPUTS = {

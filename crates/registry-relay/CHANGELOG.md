@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.18.0 - 2026-08-09
+
+- No user-visible Registry Relay changes.
+
 ## 0.17.0 - 2026-08-07
 
 - SP DCI `response_schema_path` schemas compile under a schema compiler that

@@ -476,6 +476,19 @@ class CiChangesTest(unittest.TestCase):
             {"evidence"},
         )
 
+    def test_oid4vci_change_runs_rust_and_contracts_without_unrelated_tutorial(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-oid4vci/src/lib.rs",),
+        )
+        self.assertIn("registry-evidence-oid4vci", outputs["rust_packages"])
+        self.assertTrue(outputs["evidence_contracts"])
+        self.assertFalse(outputs["evidence_tutorial"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"evidence"},
+        )
+
     def test_the_python_binding_and_its_sdk_replay_the_tutorial_that_imports_them(
         self,
     ) -> None:

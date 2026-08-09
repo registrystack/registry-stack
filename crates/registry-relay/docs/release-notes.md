@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.18.0
+
+- Registry Relay has no user-visible changes in this release.
+
 ## 0.17.0
 
 - Attribute-release claims now accept scalar values only. A required object or

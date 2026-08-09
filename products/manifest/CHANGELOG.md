@@ -7,9 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [0.17.0] - 2026-08-07
+## [0.18.0] - 2026-08-09
 
 - No user-visible Registry Manifest changes.
+
+## [0.17.0] - 2026-08-07
+
+- BREAKING: `registry-manifest/v1` no longer accepts the top-level
+  `federation` block after Registry Notary's retirement. Remove that block
+  before validating with v0.17.0 or later. `access.kind` is now an open
+  vocabulary, and the retired `registry-notary` kind no longer receives
+  product-specific validation.
 
 ## [0.16.3] - 2026-08-01
 

@@ -23,7 +23,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [openapi, ogc-api-records, ogc-api-features, ogc-api-edr, odrl, sp-dci]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [openapi, ogc-api-records, ogc-api-features, ogc-api-edr, odrl, sp-dci]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
@@ -39,7 +39,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [openapi, sdmx, w3c-did]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [openapi, sdmx, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
@@ -54,7 +54,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [openapi, ogc-api-features, ogc-api-edr, odrl, sp-dci, w3c-did]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [openapi, ogc-api-features, ogc-api-edr, odrl, sp-dci, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
@@ -68,7 +68,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [dcat, bregdcat-ap, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, json-schema, sdmx, sp-dci, w3c-did]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [dcat, bregdcat-ap, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, json-schema, sdmx, sp-dci, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -84,7 +84,7 @@ repos:
         standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, ogc-api-features, shacl, json-schema, json-ld, odrl, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, ogc-api-features, shacl, json-schema, json-ld, odrl, sp-dci, w3c-did]
             last_reviewed: unreviewed
       - src: crates/registry-relay/docs/ops.md
@@ -95,7 +95,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [dcat, bregdcat-ap, ogc-api-edr, sp-dci, w3c-did]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [dcat, bregdcat-ap, ogc-api-edr, sp-dci, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -110,7 +110,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [json-ld, w3c-did]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [json-ld, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -126,7 +126,7 @@ repos:
         standards_referenced: []
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: []
             last_reviewed: unreviewed
       - src: crates/registry-relay/docs/standards-adapter-operator-guide.md
@@ -137,7 +137,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [ogc-api-records, ogc-api-features, ogc-api-edr, sp-dci]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [ogc-api-records, ogc-api-features, ogc-api-edr, sp-dci]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -153,7 +153,7 @@ repos:
         standards_referenced: []
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: []
             last_reviewed: unreviewed
       - src: crates/registry-relay/STANDARDS_ASSUMPTIONS.md
@@ -165,7 +165,7 @@ repos:
         standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, odrl, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, odrl, sp-dci, w3c-did]
             last_reviewed: unreviewed
       - src: crates/registry-relay/docs/relay-scenario-catalog.md
@@ -177,7 +177,7 @@ repos:
         standards_referenced: [dcat, ogc-api-records, ogc-api-features, openapi, shacl, sp-dci]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, ogc-api-records, ogc-api-features, openapi, shacl, sp-dci]
             last_reviewed: unreviewed
       - src: crates/registry-relay/docs/release-notes.md
@@ -188,7 +188,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [dcat, ogc-api-edr, openapi, shacl, json-ld, sdmx, sp-dci, w3c-did]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [dcat, ogc-api-edr, openapi, shacl, json-ld, sdmx, sp-dci, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -212,7 +212,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl, sp-dci, w3c-did, prov-o, govstack-digital-registries]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl, sp-dci, w3c-did, prov-o, govstack-digital-registries]
             last_reviewed: unreviewed
           - docsets: [beta-2026-06-12]
@@ -231,7 +231,7 @@ repos:
           - docsets: [beta-2026-06-12]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, json-ld, odrl]
             last_reviewed: unreviewed
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl]
             last_reviewed: unreviewed
       - src: products/manifest/docs/profile-fixtures.md
@@ -243,7 +243,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [sp-dci]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sp-dci]
             last_reviewed: unreviewed
       - src: products/manifest/docs/reference.md
@@ -258,7 +258,7 @@ repos:
           - docsets: [beta-2026-06-12]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, json-ld, cccev, odrl, w3c-did]
             last_reviewed: unreviewed
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, cccev, odrl, w3c-did]
             last_reviewed: unreviewed
       - src: products/manifest/docs/itb-semic-validation.md
@@ -270,7 +270,7 @@ repos:
         standards_referenced: [dcat, bregdcat-ap, shacl, skos, json-schema, json-ld]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, bregdcat-ap, shacl, skos, json-schema, json-ld]
             last_reviewed: unreviewed
   registry-evidence:
@@ -290,7 +290,7 @@ repos:
         standards_referenced: [openapi, json-schema, sd-jwt-vc]
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0]
+          - docsets: [v0.18.0, v0.17.0]
             standards_referenced: [openapi, json-schema, sd-jwt-vc]
             last_reviewed: unreviewed
         description: Operator and integrator documentation for Evidence Gateway, the minimum-disclosure assertion service.
@@ -303,7 +303,7 @@ repos:
         standards_referenced: [cccev, json-schema, openapi, sd-jwt-vc]
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0]
+          - docsets: [v0.18.0, v0.17.0]
             standards_referenced: [cccev, json-schema, openapi, sd-jwt-vc]
             last_reviewed: unreviewed
         description: Approved Version 1 product concept covering the boundary, data model, trust and privacy invariants, native API, and acceptance set.
@@ -315,6 +315,10 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [json-schema, openapi, sd-jwt-vc]
         exclude_docsets: [v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+        docset_overrides:
+          - docsets: [v0.18.0]
+            standards_referenced: [json-schema, openapi, sd-jwt-vc]
+            last_reviewed: unreviewed
         description: Complete reference for the editable Evidence authoring project, its validation layers, local key material, and access policies.
       - src: products/evidence/FIRST-CURL-TEST.md
         dest: products/registry-evidence/first-curl-test
@@ -325,7 +329,7 @@ repos:
         standards_referenced: []
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0]
+          - docsets: [v0.18.0, v0.17.0]
             standards_referenced: []
             last_reviewed: unreviewed
         description: Deterministic local curl checkpoint against the Evidence Gateway server with a mock source and an in-memory test JWKS.
@@ -338,7 +342,7 @@ repos:
         standards_referenced: [sd-jwt-vc]
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0]
+          - docsets: [v0.18.0, v0.17.0]
             standards_referenced: [sd-jwt-vc]
             last_reviewed: unreviewed
         description: Source-testing contract with the deterministic mock matrix, opt-in public demo smoke tests, and credential handling rules.
@@ -351,7 +355,7 @@ repos:
         standards_referenced: [sd-jwt-vc]
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0]
+          - docsets: [v0.18.0, v0.17.0]
             standards_referenced: [sd-jwt-vc]
             last_reviewed: unreviewed
         description: Deterministic local demo that issues one assertion in both later-verifiable formats and re-verifies the credential offline.
@@ -364,7 +368,7 @@ repos:
         standards_referenced: [openapi, sd-jwt-vc]
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0]
+          - docsets: [v0.18.0, v0.17.0]
             standards_referenced: [openapi, sd-jwt-vc]
             last_reviewed: unreviewed
         description: Supported deployment shape, requester authority and purpose duties, required configuration and secrets, and readiness, audit, and key obligations.
@@ -377,7 +381,7 @@ repos:
         standards_referenced: []
         exclude_docsets: [v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.17.0]
+          - docsets: [v0.18.0, v0.17.0]
             standards_referenced: []
             last_reviewed: unreviewed
         description: Measured baseline of the audit-durability throughput trade and the deferred work that would recover most of the cost.
