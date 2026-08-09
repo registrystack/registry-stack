@@ -1,4 +1,4 @@
-//! The checks an authored question must pass.
+//! The checks authored Evidence documents must pass.
 //!
 //! Each check reports through [`Finding`] rather than an error type, and the
 //! sentences it produces are the ones adopters have been reading: the
@@ -20,13 +20,50 @@ use crate::{
     finding::{FieldPath, Finding},
     layout::{MAX_CATEGORIES, MAX_CATEGORY_BYTES, MAX_CONCEPTS, SCHEMAS_DIRECTORY},
     model::{
-        AnswerType, FactCombination, Question, QuestionAnswer, QuestionResponseFormat,
-        QuestionSubject,
+        AccessPolicy, AnswerType, FactCombination, Question, QuestionAnswer,
+        QuestionResponseFormat, QuestionSubject,
     },
 };
 
 fn one(field: FieldPath, code: &'static str, message: impl Into<String>) -> Vec<Finding> {
     vec![Finding::new(field, code, message)]
+}
+
+/// Check one authored access policy before any project-level name resolution.
+#[must_use]
+pub fn validate_access_policy(policy: &AccessPolicy) -> Vec<Finding> {
+    if policy.version != 1 {
+        return one(
+            FieldPath::root().key("version"),
+            "access-policy-version",
+            "access policy version must be 1",
+        );
+    }
+    if !valid_local_identifier(&policy.id) {
+        return one(
+            FieldPath::root().key("id"),
+            "access-policy-identifier",
+            "access policy id must be a lowercase local identifier",
+        );
+    }
+    if !(1..=crate::layout::MAX_QUESTIONS).contains(&policy.questions.len()) {
+        return one(
+            FieldPath::root().key("questions"),
+            "access-policy-question-count",
+            format!(
+                "an access policy must name 1..={} questions",
+                crate::layout::MAX_QUESTIONS
+            ),
+        );
+    }
+    if !policy.questions.windows(2).all(|pair| pair[0] < pair[1]) {
+        return one(
+            FieldPath::root().key("questions"),
+            "access-policy-question-order",
+            "access policy questions must be sorted and unique",
+        );
+    }
+    Vec::new()
 }
 
 /// Check one authored question against the authoring form.

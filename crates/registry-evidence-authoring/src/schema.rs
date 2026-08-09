@@ -8,8 +8,8 @@
 //! drift apart.
 //!
 //! Only a document with a Rust type behind it appears here. Sources, selectors,
-//! derivations, schemas, fixtures, and access policies are authored too, but
-//! this crate holds no closed model of them yet, and a schema written by hand
+//! derivations, schemas, fixtures, and sources are authored too, but this crate
+//! holds no closed model of them yet, and a schema written by hand
 //! for one of them would be the drift this module exists to prevent.
 //!
 //! What the derived schema describes is shape: which keys exist, which are

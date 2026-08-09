@@ -39,11 +39,11 @@ pub use marker::{
     PROJECT_MARKER_FILE,
 };
 pub use model::{
-    default_response_formats, AnswerType, FactCombination, Question, QuestionAnswer,
+    default_response_formats, AccessPolicy, AnswerType, FactCombination, Question, QuestionAnswer,
     QuestionDisclosure, QuestionFact, QuestionGovernance, QuestionResponseFormat, QuestionSdJwtVc,
     QuestionSdJwtVcDisclosure, QuestionSource, QuestionSubject, RequirementKind,
 };
 pub use validate::{
     collection_pointers, question_subjects, valid_field_name, valid_local_identifier,
-    validate_answer, validate_question,
+    validate_access_policy, validate_answer, validate_question,
 };

@@ -15,7 +15,6 @@ use std::{
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use registry_platform_crypto::{canonicalize_json, domain_separated_sha256};
-use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use url::{Host, Url};
 
@@ -38,10 +37,13 @@ pub(crate) use registry_evidence_authoring::{
         SOURCES_DIRECTORY,
     },
     model::{
-        AnswerType, FactCombination, Question, QuestionAnswer, QuestionFact,
+        AccessPolicy, AnswerType, FactCombination, Question, QuestionAnswer, QuestionFact,
         QuestionResponseFormat, QuestionSdJwtVcDisclosure, QuestionSource,
     },
-    validate::{collection_pointers, question_subjects, valid_local_identifier, validate_question},
+    validate::{
+        collection_pointers, question_subjects, valid_local_identifier, validate_access_policy,
+        validate_question,
+    },
     validate_authored_answer, Finding,
 };
 
@@ -253,14 +255,6 @@ struct Inputs {
     schemas: BTreeMap<String, Value>,
     questions: Vec<AuthoredQuestion>,
     access_policies: Vec<AuthoredAccessPolicy>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AccessPolicyDocument {
-    version: u8,
-    id: String,
-    questions: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -683,25 +677,14 @@ fn read_access_policies(
             bail!("access-policies may contain only <id>.yaml files");
         }
         let bytes = read_regular_file(&path, MAX_ACCESS_POLICY_BYTES, "access policy")?;
-        let policy: AccessPolicyDocument = serde_norway::from_slice(&bytes)
+        let policy: AccessPolicy = serde_norway::from_slice(&bytes)
             .with_context(|| format!("parsing access policy {}", path.display()))?;
-        if policy.version != 1 {
-            bail!("access policy version must be 1");
-        }
-        if !valid_local_identifier(&policy.id) {
-            bail!("access policy id must be a lowercase local identifier");
-        }
+        first_finding(validate_access_policy(&policy))?;
         if path.file_stem().and_then(|value| value.to_str()) != Some(&policy.id) {
             bail!("access policy id must match its access/policies/<id>.yaml filename");
         }
         if !ids.insert(policy.id.clone()) {
             bail!("access policy ids must be unique");
-        }
-        if !(1..=MAX_QUESTIONS).contains(&policy.questions.len()) {
-            bail!("an access policy must name 1..={MAX_QUESTIONS} questions");
-        }
-        if !policy.questions.windows(2).all(|pair| pair[0] < pair[1]) {
-            bail!("access policy questions must be sorted and unique");
         }
         if policy
             .questions

@@ -539,7 +539,7 @@ async fn a_deleted_source_stops_being_offered_with_and_without_a_tab_over_it() {
 fn accepting_a_candidate_beside_multibyte_text_leaves_the_document_the_author_meant() {
     let unquoted = QUESTION.replace("<|source-ref|>people", "<|source-ref|>\u{1d51e}ledger");
     let quoted = QUESTION.replace("<|source-ref|>people", "'<|source-ref|>\u{1d51e}ledger'");
-    let policy = "version: 1\nid: adult-checks\nquestions: [\u{1d51e}dult-status, \
+    let policy = "version: 1\nid: adult-checks\nquestions: [a-\u{1d51e}dult-status, \
                   <|policy-question|>adult-statu]\n";
 
     for (relative, cursor, written, label, expected) in [
@@ -562,7 +562,7 @@ fn accepting_a_candidate_beside_multibyte_text_leaves_the_document_the_author_me
             "policy-question",
             policy,
             "adult-status",
-            "questions: [\u{1d51e}dult-status, adult-status]\n",
+            "questions: [a-\u{1d51e}dult-status, adult-status]\n",
         ),
     ] {
         let project =

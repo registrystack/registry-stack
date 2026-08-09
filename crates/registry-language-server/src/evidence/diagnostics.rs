@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The authoring form's own checks, reported at the field each one names.
 //!
-//! Nothing here decides whether a question is well formed. `registry-evidence-authoring` holds the
-//! single implementation of that judgement, and this module deserializes the document, hands it
-//! over, and translates the position-free [`Finding`](registry_evidence_authoring::finding::Finding)
-//! it gets back into a place in the text. An editor that restated those rules would be a second
-//! implementation of the authoring form, and the first day the two disagreed the author would
-//! believe the wrong one.
+//! Nothing here decides whether a marker, question, or access policy is well formed.
+//! `registry-evidence-authoring` holds those judgements, and this module translates its
+//! position-free [`Finding`](registry_evidence_authoring::finding::Finding) into a place in the
+//! text. An editor that restated those rules would be a second implementation of the authoring
+//! form, and the first day the two disagreed the author would believe the wrong one.
 
 use std::path::Path;
 
 use registry_evidence_authoring::{
     finding::{FieldPath, FieldStep},
-    model::Question,
-    validate::validate_question,
+    model::{AccessPolicy, Question},
+    parse_project_marker,
+    validate::{validate_access_policy, validate_question},
 };
 use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range};
 
@@ -34,6 +34,59 @@ use crate::{
 pub(crate) struct QuestionReading {
     pub(crate) diagnostics: Vec<IndexedDiagnostic>,
     pub(crate) validated: Option<Question>,
+}
+
+/// What one reading of an access policy found.
+pub(crate) struct AccessPolicyReading {
+    pub(crate) diagnostics: Vec<IndexedDiagnostic>,
+    pub(crate) validated: Option<AccessPolicy>,
+}
+
+/// Validate a present project marker before any dependent document is walked.
+pub(crate) fn read_project_marker(
+    path: &Path,
+    source: &str,
+    document: &ParsedDocument,
+) -> Vec<IndexedDiagnostic> {
+    parse_project_marker(source.as_bytes())
+        .err()
+        .map(|finding| finding_diagnostic(path, document, finding))
+        .into_iter()
+        .collect()
+}
+
+/// Read one access policy with the same closed model and intrinsic checks as the compiler.
+pub(crate) fn read_access_policy(
+    path: &Path,
+    source: &str,
+    document: &ParsedDocument,
+) -> AccessPolicyReading {
+    let policy = match serde_norway::from_str::<AccessPolicy>(source) {
+        Ok(policy) => policy,
+        Err(error) => {
+            return AccessPolicyReading {
+                diagnostics: vec![IndexedDiagnostic {
+                    path: path.to_path_buf(),
+                    range: deserializer_range(source, &error),
+                    severity: DiagnosticSeverity::ERROR,
+                    code: Some("evidence/access-policy-shape".to_owned()),
+                    message: format!(
+                        "This is not the shape of an access policy: {}",
+                        bounded_message(&error.to_string())
+                    ),
+                }],
+                validated: None,
+            };
+        }
+    };
+    let diagnostics = validate_access_policy(&policy)
+        .into_iter()
+        .map(|finding| finding_diagnostic(path, document, finding))
+        .collect::<Vec<_>>();
+    AccessPolicyReading {
+        validated: diagnostics.is_empty().then_some(policy),
+        diagnostics,
+    }
 }
 
 /// Every way one question departs from the authoring form, at the field that holds each departure,
@@ -67,22 +120,28 @@ pub(crate) fn read_question(
 
     let diagnostics = validate_question(&question)
         .into_iter()
-        .map(|finding| IndexedDiagnostic {
-            path: path.to_path_buf(),
-            range: range_at_field_path(document, &finding.field).unwrap_or(DOCUMENT_START),
-            severity: DiagnosticSeverity::ERROR,
-            code: Some(format!("evidence/{}", finding.code)),
-            // The sentence is the authoring library's, so the editor and the compiler say the same
-            // thing about the same document. It is bounded like any other text that reaches a
-            // message, because some of those sentences quote a name the author wrote, and bounded as
-            // a sentence rather than as a name so the instruction that follows the name survives.
-            message: bounded_message(&finding.message),
-        })
+        .map(|finding| finding_diagnostic(path, document, finding))
         .collect::<Vec<_>>();
 
     QuestionReading {
         validated: diagnostics.is_empty().then_some(question),
         diagnostics,
+    }
+}
+
+fn finding_diagnostic(
+    path: &Path,
+    document: &ParsedDocument,
+    finding: registry_evidence_authoring::Finding,
+) -> IndexedDiagnostic {
+    IndexedDiagnostic {
+        path: path.to_path_buf(),
+        range: range_at_field_path(document, &finding.field).unwrap_or(DOCUMENT_START),
+        severity: DiagnosticSeverity::ERROR,
+        code: Some(format!("evidence/{}", finding.code)),
+        // The sentence is the authoring library's, so the editor and the compiler say the same
+        // thing about the same document. Bound it because some findings quote authored names.
+        message: bounded_message(&finding.message),
     }
 }
 

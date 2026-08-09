@@ -20,10 +20,14 @@
 
 mod support;
 
-use registry_evidence_authoring::{model::Question, validate::validate_question};
+use registry_evidence_authoring::{
+    model::{AccessPolicy, Question},
+    validate::{validate_access_policy, validate_question},
+};
 use registry_language_server::IndexedDiagnostic;
 use support::{
-    adult_status_project, replacing, EvidenceProject, ACCESS_POLICY_PATH, QUESTION, QUESTION_PATH,
+    adult_status_project, replacing, EvidenceProject, ACCESS_POLICY, ACCESS_POLICY_PATH, OPENAPI,
+    OPENAPI_PATH, QUESTION, QUESTION_PATH,
 };
 use tower_lsp_server::ls_types::DiagnosticSeverity;
 
@@ -61,6 +65,90 @@ fn without_cursors(text: &str) -> String {
         stripped.replace_range(start..start + end + "|>".len(), "");
     }
     stripped
+}
+
+#[test]
+fn an_invalid_marker_stops_dependent_diagnostics() {
+    let files = replacing(
+        &replacing(
+            &adult_status_project(),
+            "evidence-project.yaml",
+            "version: 2\nproject: evidence-authoring\n",
+        ),
+        QUESTION_PATH,
+        &QUESTION.replace("<|source-ref|>people", "missing"),
+    );
+    let project = EvidenceProject::new(&files);
+    let reported = project.index().diagnostics().to_vec();
+
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(reported[0].path, project.path("evidence-project.yaml"));
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/project-marker-version")
+    );
+    assert_eq!(
+        reported[0].message,
+        "evidence-project.yaml version must be 1"
+    );
+}
+
+#[test]
+fn an_invalid_openapi_prerequisite_stops_dependent_diagnostics() {
+    let files = replacing(
+        &replacing(
+            &adult_status_project(),
+            OPENAPI_PATH,
+            &OPENAPI.replace("openapi: 3.1.0", "openapi: '2.0.0'"),
+        ),
+        QUESTION_PATH,
+        &QUESTION.replace("<|source-ref|>people", "missing"),
+    );
+    let project = EvidenceProject::new(&files);
+    let reported = project.index().diagnostics().to_vec();
+
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(reported[0].path, project.path(OPENAPI_PATH));
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/openapi-prerequisite")
+    );
+    assert!(
+        reported[0]
+            .message
+            .contains("only OpenAPI 3.0.x and 3.1.x are supported"),
+        "{}",
+        reported[0].message
+    );
+}
+
+#[test]
+fn an_invalid_access_policy_stops_filename_and_question_resolution() {
+    let policy = ACCESS_POLICY
+        .replace("version: 1", "version: 2")
+        .replace("adult-checks", "wrong-name")
+        .replace("adult-status", "missing");
+    let parsed = serde_norway::from_str::<AccessPolicy>(&without_cursors(&policy))
+        .expect("the policy has the closed shape");
+    assert_eq!(
+        validate_access_policy(&parsed)[0].code,
+        "access-policy-version"
+    );
+
+    let project = EvidenceProject::new(&replacing(
+        &adult_status_project(),
+        ACCESS_POLICY_PATH,
+        &policy,
+    ));
+    let reported = project.index().diagnostics().to_vec();
+
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(reported[0].path, project.path(ACCESS_POLICY_PATH));
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/access-policy-version")
+    );
+    assert_eq!(reported[0].message, "access policy version must be 1");
 }
 
 #[test]

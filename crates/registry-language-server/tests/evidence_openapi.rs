@@ -573,15 +573,14 @@ fn a_question_written_in_the_referenced_form_draws_no_operation_edge() {
     assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
 }
 
-/// A project the editor cannot analyse a description for is one it says nothing about.
+/// A project whose description passes the compiler's prerequisite checks but cannot safely publish
+/// operations is one the editor says nothing about.
 ///
-/// Each of these is a project `registry-evidencectl` refuses: two inside `unique_operation`
-/// (`crates/registry-evidencectl/src/authoring.rs:1536-1547`), the version at `Spec::from_value`
-/// (`crates/registry-evidencectl/src/authoring.rs:915`), and a description that is not YAML before
-/// any of that. The editor's answer to all of them is the same: with no reading of the description
-/// there is nothing to resolve an operation against, and a sentence drawn without one is a guess.
+/// These two are refused later inside `unique_operation`
+/// (`crates/registry-evidencectl/src/authoring.rs:1536-1547`). Unlike a missing or invalid retained
+/// document, they are not reasons to stop the earlier authoring diagnostics.
 #[test]
-fn a_description_the_editor_cannot_analyse_leaves_every_edge_alone() {
+fn a_description_unavailable_after_prerequisites_leaves_every_edge_alone() {
     let unreadable = [
         (
             "paths that is not an object",
@@ -593,14 +592,6 @@ fn a_description_the_editor_cannot_analyse_leaves_every_edge_alone() {
                 "  /people/{person_id}:\n",
                 "  /elsewhere:\n    $ref: '#/components/pathItems/elsewhere'\n  /people/{person_id}:\n",
             ),
-        ),
-        (
-            "an unsupported version",
-            OPERATION_OPENAPI.replace("openapi: 3.1.0", "openapi: 2.0"),
-        ),
-        (
-            "text that is not YAML",
-            "openapi: 3.1.0\npaths: {\n".to_owned(),
         ),
     ];
 
@@ -629,12 +620,16 @@ fn a_project_with_no_description_leaves_every_edge_alone() {
     ));
     let index = project.index();
 
-    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    let reported = index.diagnostics();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/openapi-prerequisite")
+    );
 }
 
-/// A description past the authoring form's own ceiling on it is not analysed at all, which is what
-/// `registry-evidencectl` does with the same file: it refuses to read one this large rather than
-/// reading part of it.
+/// A description past the authoring form's own ceiling is the one prerequisite diagnostic, which
+/// is what `registry-evidencectl` does with the same file before reading dependent inputs.
 #[test]
 fn a_description_past_the_ceiling_the_authoring_form_sets_leaves_every_edge_alone() {
     let padding = "#".repeat(usize::try_from(MAX_OPENAPI_BYTES).expect("the ceiling fits a usize"));
@@ -645,7 +640,12 @@ fn a_description_past_the_ceiling_the_authoring_form_sets_leaves_every_edge_alon
     ));
     let index = project.index();
 
-    assert!(index.diagnostics().is_empty(), "{:?}", index.diagnostics());
+    let reported = index.diagnostics();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/openapi-prerequisite")
+    );
     assert!(index
         .definitions_at(
             &project.path(QUESTION_PATH),

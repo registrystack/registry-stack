@@ -94,6 +94,22 @@ pub(crate) struct Description {
     leaves: BTreeMap<(String, String), Option<Arc<BTreeSet<String>>>>,
 }
 
+/// A required retained description that the compiler cannot read or version-check.
+pub(crate) struct DescriptionFailure {
+    path: PathBuf,
+    message: String,
+}
+
+impl DescriptionFailure {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
 /// The part of a reading that depends only on the text, so it can be kept between builds.
 #[derive(Debug)]
 struct Analysis {
@@ -105,30 +121,61 @@ struct Analysis {
 impl Description {
     /// The description of the project at `root`, when there is one this module can read.
     ///
-    /// Every `None` below is a decision, not a swallowed error, and each one leaves the editor
-    /// knowing less than the compiler rather than more: no file, a file the containment gate will
-    /// not open, a file past the semantic ceiling, a file that is not UTF-8 or could not be read,
-    /// and a file whose text does not analyse. In all of them the caller draws no edge at all,
-    /// which is the only honest answer when the project's own description is unavailable.
-    pub(crate) fn read(root: &Path) -> Option<Self> {
+    /// An unreadable document or one without a supported OpenAPI version is an error because the
+    /// compiler stops there before reading dependent inputs. `Ok(None)` is reserved for later
+    /// structural analysis that cannot safely publish operations.
+    pub(crate) fn read(root: &Path) -> Result<Option<Self>, DescriptionFailure> {
         let path = root.join(OPENAPI_FILE);
         // The gate every read in this server goes through. A path it refuses and a path it could
         // not decide are both paths this module does not open.
-        let file = secure_regular_file(root, &path).ok().flatten()?;
+        let file =
+            match secure_regular_file(root, &path) {
+                Ok(Some(file)) => file,
+                Ok(None) => return Err(description_failure(
+                    path,
+                    "The required source.openapi.yaml is missing or is not a regular project file",
+                )),
+                Err(_) => {
+                    return Err(description_failure(
+                        path,
+                        "The required source.openapi.yaml could not be read; check its permissions",
+                    ))
+                }
+            };
         // Both ceilings begin with the descriptor's size before its bytes are read. The bounded
         // read and the actual byte count still check growth after the descriptor was opened.
         let index_positions = file.len() <= MAX_POSITION_BYTES;
-        let SecureFileRead::Bytes(bytes) = file.read_bounded(MAX_OPENAPI_BYTES).ok()? else {
-            return None;
+        let bytes = match file.read_bounded(MAX_OPENAPI_BYTES) {
+            Ok(SecureFileRead::Bytes(bytes)) => bytes,
+            Ok(SecureFileRead::TooLarge) => {
+                return Err(description_failure(
+                    path,
+                    format!(
+                    "The retained OpenAPI description exceeds its {MAX_OPENAPI_BYTES}-byte limit"
+                ),
+                ))
+            }
+            Err(_) => {
+                return Err(description_failure(
+                    path,
+                    "The retained OpenAPI description could not be read; check its permissions",
+                ))
+            }
         };
         let index_positions = index_positions
             && u64::try_from(bytes.len()).is_ok_and(|bytes| bytes <= MAX_POSITION_BYTES);
-        let text = String::from_utf8(bytes).ok()?;
-        let analysis = analysis_for(&path, &text, index_positions)?;
-        Some(Self {
+        let text = String::from_utf8(bytes).map_err(|_| {
+            description_failure(
+                path.clone(),
+                "The retained OpenAPI description is not valid UTF-8",
+            )
+        })?;
+        let analysis = analysis_for(&path, &text, index_positions)
+            .map_err(|message| description_failure(path, message))?;
+        Ok(analysis.map(|analysis| Self {
             analysis,
             leaves: BTreeMap::new(),
-        })
+        }))
     }
 
     /// The file the description was read from, which is where its operations are defined.
@@ -209,12 +256,23 @@ static MEMO: Mutex<Option<Memo>> = Mutex::new(None);
 struct Memo {
     path: PathBuf,
     text: String,
-    /// Kept even when it is `None`, so a description that does not analyse is not re-parsed on
-    /// every keystroke elsewhere in the project.
-    analysis: Option<Arc<Analysis>>,
+    /// Kept even when it is unavailable or invalid, so a description that does not analyse is not
+    /// re-parsed on every keystroke elsewhere in the project.
+    analysis: Result<Option<Arc<Analysis>>, String>,
 }
 
-fn analysis_for(path: &Path, text: &str, index_positions: bool) -> Option<Arc<Analysis>> {
+fn description_failure(path: PathBuf, message: impl Into<String>) -> DescriptionFailure {
+    DescriptionFailure {
+        path,
+        message: message.into(),
+    }
+}
+
+fn analysis_for(
+    path: &Path,
+    text: &str,
+    index_positions: bool,
+) -> Result<Option<Arc<Analysis>>, String> {
     let mut memo = MEMO.lock().unwrap_or_else(PoisonError::into_inner);
     reuse_or_parse(&mut memo, path, text, index_positions)
 }
@@ -225,14 +283,15 @@ fn reuse_or_parse(
     path: &Path,
     text: &str,
     index_positions: bool,
-) -> Option<Arc<Analysis>> {
+) -> Result<Option<Arc<Analysis>>, String> {
     if let Some(held) = memo
         .as_ref()
         .filter(|held| held.path == path && held.text == text)
     {
         return held.analysis.clone();
     }
-    let analysis = Analysis::parse(path, text, index_positions).map(Arc::new);
+    let analysis =
+        Analysis::parse(path, text, index_positions).map(|analysis| analysis.map(Arc::new));
     *memo = Some(Memo {
         path: path.to_path_buf(),
         text: text.to_owned(),
@@ -242,8 +301,13 @@ fn reuse_or_parse(
 }
 
 impl Analysis {
-    fn parse(path: &Path, text: &str, index_positions: bool) -> Option<Self> {
-        let document = serde_norway::from_str::<Value>(text).ok()?;
+    fn parse(path: &Path, text: &str, index_positions: bool) -> Result<Option<Self>, String> {
+        let document = serde_norway::from_str::<Value>(text).map_err(|error| {
+            format!("The retained OpenAPI description does not parse as YAML or JSON: {error}")
+        })?;
+        // The compiler applies this gate before it reads selectors, sources, or questions.
+        let spec = Spec::from_value(document.clone(), OPENAPI_FILE)
+            .map_err(|error| format!("The retained OpenAPI description is invalid: {error}"))?;
         // A description too large to index positions in is analysed without them, and every
         // operation it publishes is then defined at the start of the file.
         let ranges = index_positions
@@ -251,15 +315,14 @@ impl Analysis {
             .flatten()
             .map(|parsed| operation_id_ranges(&parsed.value))
             .unwrap_or_default();
-        let operations = published_operations(&document, &ranges)?;
-        // The version gate the whole reading rests on. A document declaring no `openapi: 3.0.x` or
-        // `3.1.x` is one the compiler refuses before it resolves anything.
-        let spec = Spec::from_value(document, OPENAPI_FILE).ok()?;
-        Some(Self {
+        let Some(operations) = published_operations(&document, &ranges) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
             path: path.to_path_buf(),
             operations,
             spec,
-        })
+        }))
     }
 }
 
@@ -403,6 +466,7 @@ mod tests {
             text,
             index_positions,
         )
+        .expect("the retained description passes its prerequisite checks")
     }
 
     #[test]
@@ -444,13 +508,24 @@ mod tests {
             "openapi: 3.1.0\npaths:\n  /people: not-an-object\n",
             "openapi: 3.1.0\npaths:\n  /people:\n    $ref: '#/components/pathItems/people'\n",
             "openapi: 3.1.0\npaths:\n  /people:\n    get: not-an-object\n",
+        ] {
+            assert!(
+                analysis(refused, true).is_none(),
+                "this description must analyse to nothing: {refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_invalid_openapi_prerequisite_is_distinct_from_later_unavailable_analysis() {
+        for invalid in [
             "openapi: 2.0\npaths: {}\n",
             "paths: {}\n",
             "openapi: 3.1.0\npaths: {\n",
         ] {
             assert!(
-                analysis(refused, true).is_none(),
-                "this description must analyse to nothing: {refused:?}"
+                Analysis::parse(Path::new("/project/source.openapi.yaml"), invalid, true,).is_err(),
+                "this description fails before dependent documents are read: {invalid:?}"
             );
         }
     }
@@ -508,15 +583,21 @@ mod tests {
         let path = Path::new("/project/source.openapi.yaml");
         let mut memo = None;
 
-        let first = reuse_or_parse(&mut memo, path, DESCRIPTION, true).expect("it analyses");
-        let again = reuse_or_parse(&mut memo, path, DESCRIPTION, true).expect("it analyses");
+        let first = reuse_or_parse(&mut memo, path, DESCRIPTION, true)
+            .expect("the prerequisite is valid")
+            .expect("it analyses");
+        let again = reuse_or_parse(&mut memo, path, DESCRIPTION, true)
+            .expect("the prerequisite is valid")
+            .expect("it analyses");
         assert!(
             Arc::ptr_eq(&first, &again),
             "the same text is analysed once"
         );
 
         let changed = DESCRIPTION.replace("readPerson", "readPersonRecord");
-        let after = reuse_or_parse(&mut memo, path, &changed, true).expect("it analyses");
+        let after = reuse_or_parse(&mut memo, path, &changed, true)
+            .expect("the prerequisite is valid")
+            .expect("it analyses");
         assert!(
             !Arc::ptr_eq(&first, &after),
             "changed text is analysed again"
@@ -526,7 +607,9 @@ mod tests {
         // Another project's description of the same name replaces the entry rather than answering
         // from it.
         let other = Path::new("/other-project/source.openapi.yaml");
-        let elsewhere = reuse_or_parse(&mut memo, other, &changed, true).expect("it analyses");
+        let elsewhere = reuse_or_parse(&mut memo, other, &changed, true)
+            .expect("the prerequisite is valid")
+            .expect("it analyses");
         assert!(!Arc::ptr_eq(&after, &elsewhere));
         assert_eq!(elsewhere.path, other);
     }
@@ -539,10 +622,16 @@ mod tests {
         let mut memo = None;
         let refused = "openapi: 3.1.0\n";
 
-        assert!(reuse_or_parse(&mut memo, path, refused, true).is_none());
+        assert!(reuse_or_parse(&mut memo, path, refused, true)
+            .expect("the prerequisite is valid")
+            .is_none());
         let held = memo.as_ref().expect("the memo holds the reading");
         assert_eq!(held.text, refused);
-        assert!(held.analysis.is_none());
+        assert!(held
+            .analysis
+            .as_ref()
+            .expect("the prerequisite is valid")
+            .is_none());
     }
 
     /// Leaves are answered whether or not they are retained, so what the editor reports never

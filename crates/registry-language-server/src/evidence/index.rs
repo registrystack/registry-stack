@@ -27,7 +27,7 @@
 //! a derivation would put a word in front of the author that means another part of the form, so the
 //! two pointers are left alone until there is a kind that names them.
 //!
-//! Five rules of the authoring form belong to the compiler alone, and every one of them leaves the
+//! Four rules of the authoring form belong to the compiler alone, and every one of them leaves the
 //! editor quieter than the build rather than louder. A `sources/` or `selectors/` directory may
 //! hold only `<id>.yaml` files whose stem is a lowercase local identifier, so a `sources/README.md`
 //! or a `sources/People.yaml` is a project `registry-evidencectl` refuses, while a path is
@@ -36,13 +36,12 @@
 //! selects its subject by, while `selectors/<profile>.yaml` resolves here as soon as a file sits
 //! there. A question's subject has to be one its source really uses, and its subjects have to
 //! select exactly one alternative for every role the source declares, which is a reading of two
-//! documents against each other that nothing here performs. An access policy has to name between
-//! one and the 128 questions the form allows, sorted and unique, and only the names themselves are
-//! resolved here. Every question has to name its own derivation file, which no single question
-//! shows: two questions pointing at one `derivations/shared.rhai` both resolve, because that file
-//! is defined once under the path they both spell.
+//! documents against each other that nothing here performs. Every question has to name its own
+//! derivation file, which no single question shows: two questions pointing at one
+//! `derivations/shared.rhai` both resolve, because that file is defined once under the path they
+//! both spell.
 //!
-//! The five are recorded rather than closed, so a reader can tell a deliberate silence from a
+//! The four are recorded rather than closed, so a reader can tell a deliberate silence from a
 //! defect. Each one is a sentence the compiler gives the author anyway, and a rule drawn here on
 //! less than it needs is exactly the diagnostic over a project that builds that the paragraph above
 //! rules out.
@@ -55,6 +54,7 @@ use std::{
 };
 
 use registry_evidence_authoring::{
+    marker::PROJECT_MARKER_FILE,
     model::Question,
     validate::{collection_pointers, validate_answer_schema_path},
 };
@@ -62,14 +62,14 @@ use tower_lsp_server::ls_types::{CompletionItemKind, DiagnosticSeverity, Range};
 
 use crate::{
     evidence::{
-        diagnostics::{read_question, QuestionReading},
+        diagnostics::{read_access_policy, read_project_marker, read_question, QuestionReading},
         layout::{document_role, is_source_artifact, DocumentRole},
         openapi::Description,
     },
     refs::{
-        bounded_value, EvidenceKind, IndexedChoices, IndexedDiagnostic, IndexedLocation,
-        IndexedProject, IndexedReference, IndexedSymbol, SymbolKey, SymbolKind, SymbolQuery,
-        DOCUMENT_START,
+        bounded_message, bounded_value, EvidenceKind, IndexedChoices, IndexedDiagnostic,
+        IndexedLocation, IndexedProject, IndexedReference, IndexedSymbol, SymbolKey, SymbolKind,
+        SymbolQuery, DOCUMENT_START,
     },
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
@@ -80,6 +80,18 @@ pub(crate) fn build_index(
     parsed: &BTreeMap<PathBuf, ParsedDocument>,
     dropped: &BTreeSet<PathBuf>,
 ) -> IndexedProject {
+    let marker_path = root.join(PROJECT_MARKER_FILE);
+    if dropped.contains(&marker_path) {
+        return empty_index(Vec::new());
+    }
+    if let (Some(source), Some(document)) = (documents.get(&marker_path), parsed.get(&marker_path))
+    {
+        let diagnostics = read_project_marker(&marker_path, source, document);
+        if !diagnostics.is_empty() {
+            return empty_index(diagnostics);
+        }
+    }
+
     let mut builder = IndexBuilder {
         root,
         symbols: Vec::new(),
@@ -99,7 +111,18 @@ pub(crate) fn build_index(
     // The one project file the loader leaves on disk, read once for the whole build. Every operation
     // it publishes is defined here, whether or not a question names it, so that `Find references` on
     // an operation answers from the description an author is looking at.
-    let mut description = Description::read(root);
+    let mut description = match Description::read(root) {
+        Ok(description) => description,
+        Err(failure) => {
+            return empty_index(vec![IndexedDiagnostic {
+                path: failure.path().to_path_buf(),
+                range: DOCUMENT_START,
+                severity: DiagnosticSeverity::ERROR,
+                code: Some("evidence/openapi-prerequisite".to_owned()),
+                message: bounded_message(failure.message()),
+            }]);
+        }
+    };
     if let Some(description) = &description {
         for (operation_id, operation) in description.published() {
             builder.define(
@@ -159,7 +182,18 @@ pub(crate) fn build_index(
                 path,
                 DOCUMENT_START,
             ),
-            DocumentRole::AccessPolicy => builder.walk_access_policy(path, name, &document.value),
+            DocumentRole::AccessPolicy => {
+                let reading = documents
+                    .get(path)
+                    .map(|source| read_access_policy(path, source, document));
+                let accepted = reading
+                    .as_ref()
+                    .is_none_or(|reading| reading.validated.is_some());
+                builder.walk_access_policy(path, name, &document.value, accepted);
+                if let Some(reading) = reading {
+                    builder.diagnostics.extend(reading.diagnostics);
+                }
+            }
             // A schema and a fixture are named by their path rather than by anything written inside
             // them, so the document that points at one defines it. The marker declares the root, the
             // OpenAPI description belongs to the phase that reads operations, and a derivation is
@@ -182,6 +216,15 @@ pub(crate) fn build_index(
         references: builder.references,
         diagnostics: builder.diagnostics,
         choices: builder.choices,
+    }
+}
+
+fn empty_index(diagnostics: Vec<IndexedDiagnostic>) -> IndexedProject {
+    IndexedProject {
+        symbols: Vec::new(),
+        references: Vec::new(),
+        diagnostics,
+        choices: Vec::new(),
     }
 }
 
@@ -624,7 +667,7 @@ impl IndexBuilder<'_> {
     }
 
     /// An access policy defines itself and names the questions it admits.
-    fn walk_access_policy(&mut self, path: &Path, name: &str, value: &YamlValue) {
+    fn walk_access_policy(&mut self, path: &Path, name: &str, value: &YamlValue, accepted: bool) {
         let written = value.get_scalar("id");
         self.define(
             SymbolKey::global(EvidenceKind::AccessPolicy, name),
@@ -632,6 +675,9 @@ impl IndexBuilder<'_> {
             path,
             written.map_or(DOCUMENT_START, |scalar| scalar.range),
         );
+        if !accepted {
+            return;
+        }
         self.check_file_name(
             path,
             name,

@@ -1,4 +1,4 @@
-//! The authored question document, as an adopter writes it.
+//! Closed authored Evidence documents, as an adopter writes them.
 //!
 //! Every type here is closed: an unknown field is a rejection rather than
 //! something quietly carried along, so a document that parses is a document
@@ -8,6 +8,16 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
+
+/// One authored access policy: its format version, stable identifier, and the
+/// questions a caller assigned this policy may ask.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccessPolicy {
+    pub version: u8,
+    pub id: String,
+    pub questions: Vec<String>,
+}
 
 /// One authored question: what is asked, of which subjects, from which source,
 /// and which governed concepts the answer carries.
