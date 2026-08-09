@@ -36,6 +36,7 @@ class ReleaseRepeatabilityWorkflowTest(unittest.TestCase):
     def test_clean_proof_compares_binaries_and_images(self) -> None:
         self.assertIn("Build canonical Linux payload from clean state", self.workflow)
         self.assertIn("cmp \"published/${asset}\"", self.workflow)
+        self.assertIn('"evidence-oid4vci": "evidence-oid4vci"', self.workflow)
         self.assertIn("compare-release-image-layouts.py", self.workflow)
 
 

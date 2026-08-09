@@ -83,10 +83,12 @@ docker run --rm \
     cargo build --release --locked \
       -p registry-evidence \
       -p registry-evidencectl \
-      -p registry-mint
+      -p registry-mint \
+      -p registry-evidence-oid4vci
     cp target/release/evidence "dist/bin/evidence-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
     cp target/release/mint "dist/bin/mint-${RELEASE_TAG}-linux-amd64"
+    cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
   '
 
 printf '%s\n' "${release_builder_image}" > "${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
@@ -98,6 +100,7 @@ chmod 0755 \
   "${repo_root}/dist/bin/evidence-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/evidencectl-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/mint-${tag}-linux-amd64" \
+  "${repo_root}/dist/bin/evidence-oid4vci-${tag}-linux-amd64" \
   "${repo_root}/dist/image-bin/registry-relay" \
   "${repo_root}/dist/image-bin/registry-relay-rhai-worker"
 
@@ -107,6 +110,7 @@ chmod 0755 \
     "evidence-${tag}-linux-amd64" \
     "evidencectl-${tag}-linux-amd64" \
     "mint-${tag}-linux-amd64" \
+    "evidence-oid4vci-${tag}-linux-amd64" \
     "registry-manifest-${tag}-linux-amd64" \
     "registry-relay-${tag}-linux-amd64" \
     "registry-relay-rhai-worker-${tag}-linux-amd64" \

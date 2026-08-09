@@ -18,6 +18,7 @@ EXACT_ARTIFACT_INVENTORY = (
     "evidence",
     "evidence-client-node",
     "evidence-client-python",
+    "evidence-oid4vci",
     "evidencectl",
     "evidencectl-installer",
     "mint",

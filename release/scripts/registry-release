@@ -41,6 +41,7 @@ RELEASE_IMAGE_LOCK_MINIMUM_VERSION = (0, 9, 0)
 EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION = (0, 10, 0)
 NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
 EVIDENCE_RELEASE_MINIMUM_VERSION = (0, 17, 0)
+EVIDENCE_OID4VCI_MINIMUM_VERSION = (0, 18, 0)
 REGISTRYCTL_INSTALLER_MINIMUM_VERSION = (0, 14, 0)
 EXACT_ARTIFACT_INVENTORY = {
     "registry-notary",
@@ -69,6 +70,8 @@ OPTIONAL_EXACT_ARTIFACTS = {
     # Keep historical manifests valid if they declared the Evidence toolset
     # before its first stable release. From v0.17.0 onward these are required.
     *EVIDENCE_RELEASE_ARTIFACTS,
+    # The wallet delivery service joins the required inventory at v0.18.0.
+    "evidence-oid4vci",
 }
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 CURRENT_DOCS_VERSION = "main source (unreleased)"
@@ -153,6 +156,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
         )
         if parsed_version >= EVIDENCE_RELEASE_MINIMUM_VERSION:
             expected_inventory.update(EVIDENCE_RELEASE_ARTIFACTS)
+        if parsed_version >= EVIDENCE_OID4VCI_MINIMUM_VERSION:
+            expected_inventory.add("evidence-oid4vci")
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(
             artifact_names - expected_inventory - OPTIONAL_EXACT_ARTIFACTS
@@ -457,7 +462,7 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         f"registryctl-{tag}-macos-arm64",
         f"registryctl-{tag}-linux-arm64",
     ]
-    for evidence_binary in ("evidence", "evidencectl", "mint"):
+    for evidence_binary in ("evidence", "evidencectl", "mint", "evidence-oid4vci"):
         for platform_label in ("linux-amd64", "linux-arm64", "macos-arm64"):
             optional_binary_names.append(f"{evidence_binary}-{tag}-{platform_label}")
     worker_binary_names = [f"registry-relay-rhai-worker-{tag}-linux-amd64"]

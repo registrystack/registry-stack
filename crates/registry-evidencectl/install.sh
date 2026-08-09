@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
-binaries=(evidence evidencectl mint)
+binaries=(evidence evidencectl mint evidence-oid4vci)
 # Publication packaging replaces this empty value with the asset's canonical tag.
 default_version=""
 script_name="${BASH_SOURCE[0]:-}"
@@ -31,14 +31,15 @@ asset_dir="${EVIDENCECTL_ASSET_DIR:-}"
 usage() {
 	cat <<EOF
 Install the Evidence toolset: the evidence runtime, the evidencectl adopter
-tooling, and the mint token issuer.
+tooling, the mint token issuer, and the evidence-oid4vci wallet delivery
+service.
 
 Quick install:
   curl -fsSL https://github.com/${repo}/releases/latest/download/evidencectl-install.sh | bash
 
 The installer verifies every downloaded release asset against the release's
 SHA256SUMS before anything reaches the install directory, and installs the
-three binaries together or not at all. It does not verify release
+four binaries together or not at all. It does not verify release
 authenticity. For a higher-assurance installation, follow the release
 verification guide for the pinned tag, then rerun with EVIDENCECTL_ASSET_DIR
 set to the verified directory:
@@ -247,7 +248,7 @@ for binary in "${binaries[@]}"; do
 	fi
 done
 
-# Replace the three binaries only after every one of them is staged and
+# Replace the four binaries only after every one of them is staged and
 # verified, so an interrupted update never leaves a mixed-version toolset.
 install_started=1
 for binary in "${binaries[@]}"; do
