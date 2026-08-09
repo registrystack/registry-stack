@@ -29,6 +29,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.onDidChangeWorkspaceFolders(async () => {
       await enqueueLifecycle(() => reconcileClients(context));
     }),
+    vscode.workspace.onDidOpenTextDocument(async (document) => {
+      if (document.uri.scheme === 'file' && document.languageId === 'yaml') {
+        await enqueueLifecycle(() => reconcileClients(context));
+      }
+    }),
   );
 
   await enqueueLifecycle(() => reconcileClients(context));
@@ -122,7 +127,47 @@ async function stopAll(): Promise<void> {
 
 function findProjectFolders(): vscode.WorkspaceFolder[] {
   return (vscode.workspace.workspaceFolders ?? []).filter((folder) => {
-    return folder.uri.scheme === 'file' && isProjectRoot(folder.uri.fsPath);
+    if (folder.uri.scheme !== 'file') {
+      return false;
+    }
+    return (
+      clients.has(folderKey(folder)) ||
+      isProjectRoot(folder.uri.fsPath) ||
+      hasOpenDocumentInProject(folder)
+    );
+  });
+}
+
+function hasOpenDocumentInProject(folder: vscode.WorkspaceFolder): boolean {
+  const folderPath = path.resolve(folder.uri.fsPath);
+  return vscode.workspace.textDocuments.some((document) => {
+    if (document.uri.scheme !== 'file' || document.languageId !== 'yaml') {
+      return false;
+    }
+    const relative = path.relative(folderPath, document.uri.fsPath);
+    if (
+      relative === '' ||
+      relative === '..' ||
+      path.isAbsolute(relative) ||
+      relative.startsWith(`..${path.sep}`)
+    ) {
+      return false;
+    }
+
+    let directory = path.resolve(path.dirname(document.uri.fsPath));
+    while (true) {
+      if (isProjectRoot(directory)) {
+        return true;
+      }
+      if (directory === folderPath) {
+        return false;
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory) {
+        return false;
+      }
+      directory = parent;
+    }
   });
 }
 

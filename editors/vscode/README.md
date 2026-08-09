@@ -7,18 +7,23 @@ For the stable beta path, run `registryctl init <directory> --template http` or
 `evidencectl tooling editor --project <directory>` for an Evidence authoring project, and use the
 generated YAML schema settings. Install this integration for optional semantic navigation.
 
-This extension starts `registry-language-server` for a workspace whose root declares a project. A
-Relay project root contains `registry-stack.yaml`. An Evidence authoring project root contains
-`evidence-project.yaml`, or the pre-marker pair of a `source.openapi.yaml` and a `questions`
-directory. It adds cross-file definitions, references, workspace/document symbols, and Registry
+This extension activates when a workspace contains a Registry Stack project marker at its root or
+below it. A Relay project root contains `registry-stack.yaml`. An Evidence authoring project root
+contains `evidence-project.yaml`, or the pre-marker pair of a `source.openapi.yaml` and a
+`questions` directory. A workspace folder that is itself a project starts its language server
+immediately. For a project nested below a workspace folder, opening its first YAML document starts
+one language server for the containing workspace folder; the server then discovers the project by
+walking upward from that document. This avoids recursively scanning the workspace from the
+extension. It adds cross-file definitions, references, workspace/document symbols, and Registry
 Stack reference diagnostics. Red Hat YAML remains responsible for YAML syntax, schema validation,
 completion, formatting, and ordinary hover information.
 
-Multi-root workspaces are supported. The extension starts one isolated language-server process for
-each folder whose root declares a project, and it responds when workspace folders are added or
-removed. One process serves both families, so a workspace holding a Relay project and an Evidence
-project needs no separate configuration. Because the server executes a local binary and reads local
-files, the extension is disabled in untrusted and virtual workspaces.
+Multi-root workspaces are supported. The extension starts at most one isolated language-server
+process for each eligible local workspace folder and responds when workspace folders are added or
+removed. One process serves every project discovered inside that folder across both families, so a
+workspace holding a Relay project and an Evidence project needs no separate configuration. Because
+the server executes a local binary and reads local files, the extension is disabled in untrusted
+and virtual workspaces.
 
 ## Install and launch
 
@@ -95,11 +100,12 @@ and verifies that the VSIX contains no external `node_modules` runtime.
 
 ## Troubleshooting
 
-- If activation does not occur, confirm each intended workspace folder root itself contains
-  `registry-stack.yaml`, `evidence-project.yaml`, or a `source.openapi.yaml` beside a `questions`
-  directory, and that VS Code trusts the workspace. Opening only a YAML file or a parent directory
-  does not activate it. Select **Workspaces: Manage Workspace Trust**, trust the reviewed project,
-  and run **Registry Stack: Restart Language Server**.
+- If activation does not occur, confirm the workspace contains `registry-stack.yaml`,
+  `evidence-project.yaml`, or a `source.openapi.yaml` beside a `questions` directory, and that VS
+  Code trusts the workspace. For a project below the workspace-folder root, open one of that
+  project's YAML documents to start its folder's language server. Select **Workspaces: Manage
+  Workspace Trust**, trust the reviewed project, and run **Registry Stack: Restart Language
+  Server** if needed.
 - If startup reports that no server was found, set `registryStack.languageServer.path` to the
   standalone executable built for source iteration. Otherwise, add `registry-language-server` to
   `PATH`, or ensure a matching `registryctl` or `evidencectl` is on the environment inherited by VS
