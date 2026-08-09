@@ -84,10 +84,10 @@ Ok(())
 - Comparing a challenge is not consuming one. Both validators check equality
   only; single use of a nonce or `c_nonce` belongs to the caller's challenge
   store, as RFC 9901 section 7.3 requires.
-- `validate_oid4vci_proof_jwt` accepts a `jwk` header and refuses `kid` and
-  `x5c`: `kid` needs a key registered before the request, which a
-  pre-authorized code flow does not have, and `x5c` needs a certificate trust
-  anchor this crate does not hold.
+- `validate_oid4vci_proof_jwt` accepts an inline public `jwk` or a canonical
+  local `did:jwk:...#0` `kid`. It refuses remote `kid` resolution, `x5c`, and
+  private key material because this crate owns neither a remote resolver nor a
+  certificate trust anchor and must not receive holder secrets.
 - This crate validates cryptographic and binding checks, not credential
   revocation, replay storage, or authorization policy.
 

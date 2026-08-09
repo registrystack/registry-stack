@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.18.0
+
+- Exact-tag release binaries report `0.18.0`, while source and development
+  builds report `0.18.0-dev`. Scripts that inspect source builds must not
+  assume a bare semantic version.
+
 ## 0.17.0
 
 - Attribute-release claims now accept scalar values only. A required object or

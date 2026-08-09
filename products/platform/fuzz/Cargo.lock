@@ -1433,18 +1433,22 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
+ "base64",
+ "registry-platform-crypto",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
  "subtle",
  "thiserror",
+ "ulid",
  "zeroize",
 ]
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -1454,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1463,6 +1467,7 @@ dependencies = [
  "hmac 0.13.0",
  "p256",
  "pkcs1",
+ "pkcs8",
  "registry-platform-canonical-json",
  "serde",
  "serde_json",
@@ -1493,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64",
  "bytes",
@@ -1516,7 +1521,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64",
  "jsonwebtoken",
@@ -1531,7 +1536,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64",
  "getrandom 0.4.3",

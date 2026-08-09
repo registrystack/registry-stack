@@ -1,0 +1,32 @@
+stack:
+  release: beta-28
+  version: 0.18.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.18.0
+
+artifacts:
+  registry-relay: 0.18.0
+  registry-relay-rhai-worker: 0.18.0
+  registry-manifest-cli: 0.18.0
+  registryctl: 0.18.0
+  registryctl-image-lock: 0.18.0
+  registryctl-installer: 0.18.0
+  registry-docs: 0.18.0
+  evidence: 0.18.0
+  evidencectl: 0.18.0
+  mint: 0.18.0
+  evidence-oid4vci: 0.18.0
+  evidencectl-installer: 0.18.0
+  evidence-client-node: 0.18.0
+  evidence-client-python: 0.18.0
+
+external:
+  crosswalk:
+    repo: PublicSchema/crosswalk
+    ref: 1d44ec735fdc8a7c719264b339574371e8330337
+    status: tested external input
+
+warnings:
+  - code: notary-retired
+    classification: breaking-product-retirement
+    detail: Registry Notary is absent from this release. Historical Notary manifests and evidence remain immutable; operators must preserve any records they still require and rebuild current deployment projects with Registryctl rather than carrying retired Notary services forward.

@@ -5562,7 +5562,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-config-report"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "jsonschema 0.46.6",
  "serde",
@@ -5571,7 +5571,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "assert-json-diff",
  "async-trait",
@@ -5628,7 +5628,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-authoring"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "jsonschema 0.18.3",
@@ -5642,7 +5642,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -5670,7 +5670,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client-node"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64",
  "chrono",
@@ -5693,7 +5693,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-client-py"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64",
  "chrono",
@@ -5716,7 +5716,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-oid4vci"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5752,7 +5752,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidence-verifier"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64",
  "chrono",
@@ -5772,7 +5772,7 @@ dependencies = [
 
 [[package]]
 name = "registry-evidencectl"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -5803,7 +5803,7 @@ dependencies = [
 
 [[package]]
 name = "registry-language-server"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -5821,7 +5821,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "registry-manifest-core",
  "serde",
@@ -5832,7 +5832,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "oxiri",
  "oxjsonld",
@@ -5847,7 +5847,7 @@ dependencies = [
 
 [[package]]
 name = "registry-mint"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5884,7 +5884,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-audit"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -5906,7 +5906,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64",
  "proptest",
@@ -5923,11 +5923,11 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-buildinfo"
-version = "0.17.0"
+version = "0.18.0"
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -5937,7 +5937,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -5953,7 +5953,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5979,7 +5979,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "axum",
  "http",
@@ -5994,7 +5994,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "axum",
  "base64",
@@ -6021,7 +6021,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "axum",
  "base64",
@@ -6037,7 +6037,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "fs2",
  "jsonschema 0.46.6",
@@ -6054,14 +6054,14 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-pdp"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -6079,7 +6079,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -6102,7 +6102,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "arc-swap",
  "assert-json-diff",
@@ -6184,7 +6184,7 @@ dependencies = [
 
 [[package]]
 name = "registryctl"
-version = "0.17.0"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "async-trait",

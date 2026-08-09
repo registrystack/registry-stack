@@ -2,9 +2,16 @@
 
 ## Unreleased
 
-## 0.17.0
+## 0.18.0
 
 - Registry Manifest has no user-visible changes in this release.
+
+## 0.17.0
+
+- BREAKING: `registry-manifest/v1` no longer accepts the top-level
+  `federation` block after Registry Notary's retirement. Remove the block
+  before validation. `access.kind` is now open, and the retired
+  `registry-notary` kind no longer receives product-specific validation.
 
 ## 0.16.3
 
