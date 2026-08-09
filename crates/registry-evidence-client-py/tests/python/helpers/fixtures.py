@@ -54,6 +54,48 @@ def request_spec() -> dict:
     }
 
 
+def request_batch_spec() -> dict:
+    """Two positional subject requests sharing one batch policy."""
+    singular = request_spec()
+    return {
+        "requirement": singular["requirement"],
+        "purpose": singular["purpose"],
+        "audience": singular["audience"],
+        "evidence_type": singular["evidence_type"],
+        "issued_by": singular["issued_by"],
+        "provided_by": singular["provided_by"],
+        "configuration_revision": singular["configuration_revision"],
+        "expected_assurance_profile": singular["expected_assurance_profile"],
+        "expected_outputs": singular["expected_outputs"],
+        "maximum_assertion_lifetime_seconds": singular[
+            "maximum_assertion_lifetime_seconds"
+        ],
+        "clock_skew_seconds": singular["clock_skew_seconds"],
+        "items": [
+            {
+                "subjects": [
+                    {
+                        "role": "subject",
+                        "selector_profile": "national-id",
+                        "selector_values": {"record_reference": "synthetic-001"},
+                    }
+                ],
+                "subject_expectations": "accept_first_use",
+            },
+            {
+                "subjects": [
+                    {
+                        "role": "subject",
+                        "selector_profile": "national-id",
+                        "selector_values": {"record_reference": "synthetic-002"},
+                    }
+                ],
+                "subject_expectations": "accept_first_use",
+            },
+        ],
+    }
+
+
 def problem_body(
     status: int, code: str, operation: str = "01JQ0QZ8YHZ0000000000000AB"
 ) -> bytes:

@@ -8,23 +8,20 @@
 //! `registry-evidence-client` crate's own; this crate re-implements none of
 //! it.
 //!
-//! `PreparedEvidenceRequest` and `RawEvidenceResponse` cross as opaque classes
-//! wrapping an `Arc` around the real Rust value: neither real type is `Clone`
-//! constructible from JS-supplied data (`PreparedEvidenceRequest` is
-//! deliberately `!Clone` to protect its single-send flag; `RawEvidenceResponse`
-//! has no public constructor at all), and both are produced by one call
-//! (`prepare`, `send`) and consumed by a later one (`send`/`verify`, `verify`).
-//! An `Arc` clone is cheap and, for `PreparedEvidenceRequest`, preserves the
+//! Prepared and raw singular and request-batch values cross as opaque classes
+//! wrapping an `Arc` around the real Rust value. A prepared value is
+//! deliberately `!Clone` to protect its single-send flag, and a raw value has
+//! no public constructor at all. An `Arc` clone is cheap and preserves the
 //! identity of the interior `AtomicBool` the single-send guard checks: cloning
 //! the `Arc` shares the flag rather than resetting it.
 //!
-//! `send` and `requestAndVerify` cannot be plain `async fn` methods that take
-//! a class reference as a parameter: napi-rs's tokio bridge requires the whole
-//! generated future to be `Send + 'static`, and a class reference into a JS
-//! object (`Reference<T>`) is documented as not `Send`. Both methods are
-//! instead ordinary (non-async) `#[napi]` functions that clone the `Arc`s they
-//! need synchronously, then hand an `async move` block built from only those
-//! owned clones to [`napi::Env::spawn_future`].
+//! Methods that send a prepared singular or batch request cannot be plain
+//! `async fn` methods that take a class reference as a parameter: napi-rs's
+//! tokio bridge requires the whole generated future to be `Send + 'static`,
+//! and a class reference into a JS object (`Reference<T>`) is documented as
+//! not `Send`. They are instead ordinary (non-async) `#[napi]` functions that
+//! clone the `Arc`s they need synchronously, then hand an `async move` block
+//! built from only those owned clones to [`napi::Env::spawn_future`].
 #![deny(unsafe_code)]
 
 mod convert;
@@ -43,13 +40,18 @@ use napi::{
 use napi_derive::napi;
 use registry_evidence_client::{
     EvidenceClient as RealEvidenceClient, PreparedEvidenceRequest as RealPreparedEvidenceRequest,
+    PreparedEvidenceRequestBatch as RealPreparedEvidenceRequestBatch,
+    RawEvidenceRequestBatchResponse as RealRawEvidenceRequestBatchResponse,
     RawEvidenceResponse as RealRawEvidenceResponse,
     SdJwtVcBatchResponse as RealSdJwtVcBatchResponse, VerifiedEvidence as RealVerifiedEvidence,
+    VerifiedEvidenceRequestBatch as RealVerifiedEvidenceRequestBatch,
+    VerifiedEvidenceRequestBatchItem as RealVerifiedEvidenceRequestBatchItem,
 };
 
 use convert::{
-    config_from_json, datetime_from_unix_millis, evidence_to_json, map_client_error,
-    map_config_error, map_conversion_error, spec_from_json, subject_expectations_to_json,
+    batch_spec_from_json, config_from_json, datetime_from_unix_millis, evidence_to_json,
+    map_client_error, map_config_error, map_conversion_error, spec_from_json,
+    subject_expectations_to_json,
 };
 
 /// Every mapped failure (see `convert::map_client_error` and friends) carries
@@ -158,6 +160,77 @@ impl PreparedEvidenceRequest {
     }
 }
 
+/// One ordered request batch, with one nonce and closed policy per item,
+/// before any byte has left the process.
+///
+/// There is no constructor exposed to JS. The only way to obtain this opaque
+/// class is `EvidenceClient.prepareBatch`, and every `Arc` clone shares the
+/// real batch's one-send flag rather than recreating it.
+#[napi]
+pub struct PreparedEvidenceRequestBatch {
+    inner: Arc<RealPreparedEvidenceRequestBatch>,
+}
+
+#[napi]
+impl PreparedEvidenceRequestBatch {
+    /// Independently generated item nonces in request order.
+    #[napi(getter)]
+    pub fn request_nonces(&self) -> Result<Vec<String>> {
+        catch_panic("reading the request batch nonces", || {
+            Ok(self
+                .inner
+                .request_nonces()
+                .into_iter()
+                .map(str::to_owned)
+                .collect())
+        })
+    }
+
+    /// Independently closed policy documents in request order.
+    #[napi(getter)]
+    pub fn policy_documents(&self) -> Result<Vec<serde_json::Value>> {
+        catch_panic("reading the request batch policy documents", || {
+            (0..self.inner.count())
+                .map(|index| {
+                    serde_json::to_value(
+                        self.inner
+                            .policy_document(index)
+                            .expect("the index comes from the batch count"),
+                    )
+                    .map_err(|error| {
+                        to_napi_serialization_error("a request batch policy document", error)
+                    })
+                })
+                .collect()
+        })
+    }
+
+    /// Subject-verification stances in request order.
+    #[napi(getter)]
+    pub fn subject_expectations(&self) -> Result<Vec<serde_json::Value>> {
+        catch_panic("reading the request batch subject expectations", || {
+            Ok((0..self.inner.count())
+                .map(|index| {
+                    subject_expectations_to_json(
+                        self.inner
+                            .subject_expectations(index)
+                            .expect("the index comes from the batch count"),
+                    )
+                })
+                .collect())
+        })
+    }
+
+    /// Number of positional requests in this batch.
+    #[napi(getter)]
+    pub fn count(&self) -> Result<u32> {
+        catch_panic("reading the request batch count", || {
+            Ok(u32::try_from(self.inner.count())
+                .expect("a prepared request batch carries at most sixteen items"))
+        })
+    }
+}
+
 /// A signed response, read but not yet judged.
 ///
 /// There is no constructor exposed to JS: the real Rust type has no public
@@ -183,6 +256,34 @@ impl RawEvidenceResponse {
     #[napi(getter)]
     pub fn operation(&self) -> Result<Option<String>> {
         catch_panic("reading the response operation", || {
+            Ok(self.inner.operation().map(str::to_owned))
+        })
+    }
+}
+
+/// Request-batch response bytes read but not yet judged.
+///
+/// The class is opaque and has no JS constructor. It can only be returned by
+/// `EvidenceClient.sendBatch` and handed back to batch verification.
+#[napi]
+pub struct RawEvidenceRequestBatchResponse {
+    inner: Arc<RealRawEvidenceRequestBatchResponse>,
+}
+
+#[napi]
+impl RawEvidenceRequestBatchResponse {
+    /// Response envelope bytes exactly as received.
+    #[napi(getter)]
+    pub fn body(&self) -> Result<Buffer> {
+        catch_panic("reading the request batch response body", || {
+            Ok(self.inner.body().to_vec().into())
+        })
+    }
+
+    /// Deployment correlation identifier for the whole batch exchange.
+    #[napi(getter)]
+    pub fn operation(&self) -> Result<Option<String>> {
+        catch_panic("reading the request batch response operation", || {
             Ok(self.inner.operation().map(str::to_owned))
         })
     }
@@ -287,6 +388,45 @@ fn verified_evidence_to_napi(verified: &RealVerifiedEvidence) -> Result<Verified
     })
 }
 
+/// One ordered terminal request-batch result.
+///
+/// The generated TypeScript declaration is a discriminated union:
+/// `{ status: "available", verified } | { status: "notAvailable" }`.
+#[napi(discriminant = "status", discriminant_case = "camelCase")]
+pub enum VerifiedEvidenceRequestBatchItem {
+    Available { verified: VerifiedEvidence },
+    NotAvailable,
+}
+
+/// Every item of an atomically verified request-batch response.
+#[napi(object)]
+pub struct VerifiedEvidenceRequestBatch {
+    pub items: Vec<VerifiedEvidenceRequestBatchItem>,
+    pub operation: Option<String>,
+}
+
+fn verified_request_batch_to_napi(
+    verified: &RealVerifiedEvidenceRequestBatch,
+) -> Result<VerifiedEvidenceRequestBatch> {
+    let items = verified
+        .items()
+        .iter()
+        .map(|item| match item {
+            RealVerifiedEvidenceRequestBatchItem::Available(verified) => {
+                verified_evidence_to_napi(verified)
+                    .map(|verified| VerifiedEvidenceRequestBatchItem::Available { verified })
+            }
+            RealVerifiedEvidenceRequestBatchItem::NotAvailable => {
+                Ok(VerifiedEvidenceRequestBatchItem::NotAvailable)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(VerifiedEvidenceRequestBatch {
+        items,
+        operation: verified.operation().map(str::to_owned),
+    })
+}
+
 /// A relying party's connection to one Evidence deployment.
 #[napi]
 pub struct EvidenceClient {
@@ -330,6 +470,26 @@ impl EvidenceClient {
                 .prepare(spec)
                 .map_err(|error| to_napi_error(map_client_error(&error)))?;
             Ok(PreparedEvidenceRequest {
+                inner: Arc::new(prepared),
+            })
+        })
+    }
+
+    /// Close one independently nonce-bound policy for each positional item in
+    /// a multi-subject request batch. No I/O happens here, and the returned
+    /// opaque batch is good for exactly one exchange.
+    #[napi(
+        ts_args_type = "spec: { requirement: string; purpose: string; audience: string; evidenceType: string; issuedBy: string; providedBy: string; configurationRevision: string; expectedAssuranceProfile: any; expectedOutputs: ReadonlyArray<Readonly<Record<string, any>>>; maximumAssertionLifetimeSeconds: number; clockSkewSeconds: number; items: ReadonlyArray<{ subjects: ReadonlyArray<{ role: string; selectorProfile: string; selectorValues?: Readonly<Record<string, string | number | boolean>> | null }>; subjectExpectations: 'acceptFirstUse' | { pinned: ReadonlyArray<{ role: string; binding: string }> } }> }"
+    )]
+    pub fn prepare_batch(&self, spec: serde_json::Value) -> Result<PreparedEvidenceRequestBatch> {
+        catch_panic("preparing a request batch", || {
+            let spec = batch_spec_from_json(&spec)
+                .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
+            let prepared = self
+                .inner
+                .prepare_batch(spec)
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            Ok(PreparedEvidenceRequestBatch {
                 inner: Arc::new(prepared),
             })
         })
@@ -389,6 +549,27 @@ impl EvidenceClient {
         })
     }
 
+    /// Send one prepared request batch and read its unverified envelope. The
+    /// same opaque prepared object cannot be sent twice.
+    #[napi(ts_return_type = "Promise<RawEvidenceRequestBatchResponse>")]
+    pub fn send_batch<'env>(
+        &self,
+        env: &'env Env,
+        prepared: &PreparedEvidenceRequestBatch,
+    ) -> Result<PromiseRaw<'env, RawEvidenceRequestBatchResponse>> {
+        let client = Arc::clone(&self.inner);
+        let prepared = Arc::clone(&prepared.inner);
+        env.spawn_future(async move {
+            client
+                .send_batch(&prepared)
+                .await
+                .map(|response| RawEvidenceRequestBatchResponse {
+                    inner: Arc::new(response),
+                })
+                .map_err(|error| to_napi_error(map_client_error(&error)))
+        })
+    }
+
     /// Verify a signed response against the policy its request closed, as of
     /// now. The trusted key set is the one pinned at construction, always.
     ///
@@ -411,6 +592,23 @@ impl EvidenceClient {
         })
     }
 
+    /// Atomically verify every available member against the policy at its own
+    /// request position. No partial result is returned when one member fails.
+    #[napi]
+    pub fn verify_batch(
+        &self,
+        prepared: &PreparedEvidenceRequestBatch,
+        response: &RawEvidenceRequestBatchResponse,
+    ) -> Result<VerifiedEvidenceRequestBatch> {
+        catch_panic("verifying a request batch response", || {
+            let verified = self
+                .inner
+                .verify_batch(&prepared.inner, &response.inner)
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            verified_request_batch_to_napi(&verified)
+        })
+    }
+
     /// Request evidence and verify it in one step. This spends the single
     /// send `prepared` allows, exactly as `send` does, so calling it twice
     /// with one prepared request fails locally on the second call.
@@ -428,6 +626,24 @@ impl EvidenceClient {
                 .await
                 .map_err(|error| to_napi_error(map_client_error(&error)))?;
             verified_evidence_to_napi(&verified)
+        })
+    }
+
+    /// Send and atomically verify one prepared request batch in one step.
+    #[napi(ts_return_type = "Promise<VerifiedEvidenceRequestBatch>")]
+    pub fn request_and_verify_batch<'env>(
+        &self,
+        env: &'env Env,
+        prepared: &PreparedEvidenceRequestBatch,
+    ) -> Result<PromiseRaw<'env, VerifiedEvidenceRequestBatch>> {
+        let client = Arc::clone(&self.inner);
+        let prepared = Arc::clone(&prepared.inner);
+        env.spawn_future(async move {
+            let verified = client
+                .request_and_verify_batch(&prepared)
+                .await
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            verified_request_batch_to_napi(&verified)
         })
     }
 
@@ -460,6 +676,29 @@ impl EvidenceClient {
                 .map_err(|error| to_napi_error(map_client_error(&error)))?;
             verified_evidence_to_napi(&verified)
         })
+    }
+
+    /// Atomically verify a retained request-batch envelope as of an explicit
+    /// instant, in milliseconds since the Unix epoch.
+    #[napi]
+    pub fn verify_batch_as_of(
+        &self,
+        prepared: &PreparedEvidenceRequestBatch,
+        response: &RawEvidenceRequestBatchResponse,
+        as_of_millis: f64,
+    ) -> Result<VerifiedEvidenceRequestBatch> {
+        catch_panic(
+            "verifying a request batch response as of an instant",
+            || {
+                let now = datetime_from_unix_millis(as_of_millis)
+                    .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
+                let verified = self
+                    .inner
+                    .verify_batch_as_of(&prepared.inner, &response.inner, now)
+                    .map_err(|error| to_napi_error(map_client_error(&error)))?;
+                verified_request_batch_to_napi(&verified)
+            },
+        )
     }
 }
 

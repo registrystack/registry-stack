@@ -292,6 +292,62 @@ pub struct FlattenedJws {
     pub signature: String,
 }
 
+/// Ordered response to one multi-subject Evidence request batch.
+///
+/// The schema identifier is checked by the consumer after strict parsing. The
+/// closed `type` enum prevents another envelope kind from being accepted as
+/// this one.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceRequestBatchResponse {
+    pub schema: String,
+    #[serde(rename = "type")]
+    pub response_type: EvidenceRequestBatchResponseType,
+    pub items: Vec<EvidenceRequestBatchResponseItem>,
+}
+
+/// Closed type discriminator of an Evidence request-batch response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+pub enum EvidenceRequestBatchResponseType {
+    EvidenceRequestBatchResponse,
+}
+
+/// One positional result in an Evidence request-batch response.
+///
+/// An available member carries exactly one flattened JWS. An unavailable
+/// member carries no assertion and therefore supplies nothing that can be
+/// mistaken for verified evidence.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema, ToSchema)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum EvidenceRequestBatchResponseItem {
+    Evidence { evidence: FlattenedJws },
+    EvidenceNotAvailable,
+}
+
+impl<'de> Deserialize<'de> for EvidenceRequestBatchResponseItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
+        enum StrictItem {
+            Evidence { evidence: FlattenedJws },
+            // A struct variant is intentional here. Serde ignores unknown
+            // members on an internally tagged unit variant, while this
+            // zero-field form makes `deny_unknown_fields` enforce the closed
+            // unavailable shape. The public variant stays the ergonomic unit
+            // variant and serializes to the same wire object.
+            EvidenceNotAvailable {},
+        }
+
+        match StrictItem::deserialize(deserializer)? {
+            StrictItem::Evidence { evidence } => Ok(Self::Evidence { evidence }),
+            StrictItem::EvidenceNotAvailable {} => Ok(Self::EvidenceNotAvailable),
+        }
+    }
+}
+
 /// Self-identifying unsigned response envelope. It deliberately does not
 /// serialize as the signed Evidence payload by itself and carries no JWS
 /// member, so the strict JWS verifier rejects it.
@@ -361,6 +417,8 @@ redacted_debug!(
     EntityReferenceValue,
     StructuredValue,
     FlattenedJws,
+    EvidenceRequestBatchResponse,
+    EvidenceRequestBatchResponseItem,
     UnsignedEvidenceEnvelope,
 );
 
@@ -430,6 +488,13 @@ mod tests {
             payload: "protected-payload-canary".to_owned(),
             signature: "protected-signature-canary".to_owned(),
         };
+        let request_batch = EvidenceRequestBatchResponse {
+            schema: "protected-request-batch-schema-canary".to_owned(),
+            response_type: EvidenceRequestBatchResponseType::EvidenceRequestBatchResponse,
+            items: vec![EvidenceRequestBatchResponseItem::Evidence {
+                evidence: signed.clone(),
+            }],
+        };
         // The envelope's other fields are enum discriminants and a nested
         // `Evidence` that redacts itself, so only a canary here makes the
         // envelope's own redaction load-bearing.
@@ -458,10 +523,100 @@ mod tests {
             format!("{entity_reference:?}"),
             format!("{structured:?}"),
             format!("{signed:?}"),
+            format!("{request_batch:?}"),
+            format!("{:?}", request_batch.items[0]),
             format!("{unsigned_envelope:?}"),
         ] {
             assert!(diagnostic.contains("<redacted>"), "{diagnostic}");
             assert!(!diagnostic.contains("canary"), "{diagnostic}");
+        }
+    }
+
+    #[test]
+    fn request_batch_response_has_the_closed_ordered_wire_shape() {
+        let response: EvidenceRequestBatchResponse = serde_json::from_value(serde_json::json!({
+            "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+            "type": "EvidenceRequestBatchResponse",
+            "items": [
+                {
+                    "result": "evidence",
+                    "evidence": {
+                        "protected": "header",
+                        "payload": "payload",
+                        "signature": "signature"
+                    }
+                },
+                {"result": "evidence_not_available"}
+            ]
+        }))
+        .expect("the closed response shape parses");
+
+        assert_eq!(response.items.len(), 2);
+        assert!(matches!(
+            response.items[0],
+            EvidenceRequestBatchResponseItem::Evidence { .. }
+        ));
+        assert!(matches!(
+            response.items[1],
+            EvidenceRequestBatchResponseItem::EvidenceNotAvailable
+        ));
+        assert_eq!(
+            serde_json::to_value(response).expect("the response serializes"),
+            serde_json::json!({
+                "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+                "type": "EvidenceRequestBatchResponse",
+                "items": [
+                    {
+                        "result": "evidence",
+                        "evidence": {
+                            "protected": "header",
+                            "payload": "payload",
+                            "signature": "signature"
+                        }
+                    },
+                    {"result": "evidence_not_available"}
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn request_batch_response_refuses_open_envelopes_and_items() {
+        for response in [
+            serde_json::json!({
+                "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+                "type": "EvidenceRequestBatchResponse",
+                "items": [],
+                "extra": true
+            }),
+            serde_json::json!({
+                "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+                "type": "OtherResponse",
+                "items": []
+            }),
+            serde_json::json!({
+                "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+                "type": "EvidenceRequestBatchResponse",
+                "items": [{"result": "evidence_not_available", "extra": true}]
+            }),
+            serde_json::json!({
+                "schema": crate::EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+                "type": "EvidenceRequestBatchResponse",
+                "items": [{
+                    "result": "evidence",
+                    "evidence": {
+                        "protected": "header",
+                        "payload": "payload",
+                        "signature": "signature",
+                        "extra": true
+                    }
+                }]
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<EvidenceRequestBatchResponse>(response).is_err(),
+                "an open or wrong response shape must be refused"
+            );
         }
     }
 

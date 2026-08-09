@@ -19,6 +19,12 @@ export declare class EvidenceClient {
    */
   prepare(spec: { responseFormat: 'signed-jws' | 'sd-jwt-vc'; [key: string]: any }): PreparedEvidenceRequest
   /**
+   * Close one independently nonce-bound policy for each positional item in
+   * a multi-subject request batch. No I/O happens here, and the returned
+   * opaque batch is good for exactly one exchange.
+   */
+  prepareBatch(spec: { requirement: string; purpose: string; audience: string; evidenceType: string; issuedBy: string; providedBy: string; configurationRevision: string; expectedAssuranceProfile: any; expectedOutputs: ReadonlyArray<Readonly<Record<string, any>>>; maximumAssertionLifetimeSeconds: number; clockSkewSeconds: number; items: ReadonlyArray<{ subjects: ReadonlyArray<{ role: string; selectorProfile: string; selectorValues?: Readonly<Record<string, string | number | boolean>> | null }>; subjectExpectations: 'acceptFirstUse' | { pinned: ReadonlyArray<{ role: string; binding: string }> } }> }): PreparedEvidenceRequestBatch
+  /**
    * Read the request shapes this requester is entitled to send. Discovery
    * is authoring input, not a trust anchor: it never supplies verification
    * expectations for a request already in flight.
@@ -41,6 +47,11 @@ export declare class EvidenceClient {
    */
   send(prepared: PreparedEvidenceRequest): Promise<RawEvidenceResponse>
   /**
+   * Send one prepared request batch and read its unverified envelope. The
+   * same opaque prepared object cannot be sent twice.
+   */
+  sendBatch(prepared: PreparedEvidenceRequestBatch): Promise<RawEvidenceRequestBatchResponse>
+  /**
    * Verify a signed response against the policy its request closed, as of
    * now. The trusted key set is the one pinned at construction, always.
    *
@@ -51,11 +62,18 @@ export declare class EvidenceClient {
    */
   verify(prepared: PreparedEvidenceRequest, response: RawEvidenceResponse): VerifiedEvidence
   /**
+   * Atomically verify every available member against the policy at its own
+   * request position. No partial result is returned when one member fails.
+   */
+  verifyBatch(prepared: PreparedEvidenceRequestBatch, response: RawEvidenceRequestBatchResponse): VerifiedEvidenceRequestBatch
+  /**
    * Request evidence and verify it in one step. This spends the single
    * send `prepared` allows, exactly as `send` does, so calling it twice
    * with one prepared request fails locally on the second call.
    */
   requestAndVerify(prepared: PreparedEvidenceRequest): Promise<VerifiedEvidence>
+  /** Send and atomically verify one prepared request batch in one step. */
+  requestAndVerifyBatch(prepared: PreparedEvidenceRequestBatch): Promise<VerifiedEvidenceRequestBatch>
   /**
    * Verify a retained response as of an explicit instant, given as
    * milliseconds since the Unix epoch.
@@ -72,6 +90,11 @@ export declare class EvidenceClient {
    * not this.
    */
   verifyAsOf(prepared: PreparedEvidenceRequest, response: RawEvidenceResponse, asOfMillis: number): VerifiedEvidence
+  /**
+   * Atomically verify a retained request-batch envelope as of an explicit
+   * instant, in milliseconds since the Unix epoch.
+   */
+  verifyBatchAsOf(prepared: PreparedEvidenceRequestBatch, response: RawEvidenceRequestBatchResponse, asOfMillis: number): VerifiedEvidenceRequestBatch
 }
 
 /**
@@ -95,6 +118,38 @@ export declare class PreparedEvidenceRequest {
    * this request was prepared.
    */
   get subjectExpectations(): any
+}
+
+/**
+ * One ordered request batch, with one nonce and closed policy per item,
+ * before any byte has left the process.
+ *
+ * There is no constructor exposed to JS. The only way to obtain this opaque
+ * class is `EvidenceClient.prepareBatch`, and every `Arc` clone shares the
+ * real batch's one-send flag rather than recreating it.
+ */
+export declare class PreparedEvidenceRequestBatch {
+  /** Independently generated item nonces in request order. */
+  get requestNonces(): Array<string>
+  /** Independently closed policy documents in request order. */
+  get policyDocuments(): Array<any>
+  /** Subject-verification stances in request order. */
+  get subjectExpectations(): Array<any>
+  /** Number of positional requests in this batch. */
+  get count(): number
+}
+
+/**
+ * Request-batch response bytes read but not yet judged.
+ *
+ * The class is opaque and has no JS constructor. It can only be returned by
+ * `EvidenceClient.sendBatch` and handed back to batch verification.
+ */
+export declare class RawEvidenceRequestBatchResponse {
+  /** Response envelope bytes exactly as received. */
+  get body(): Buffer
+  /** Deployment correlation identifier for the whole batch exchange. */
+  get operation(): string | null
 }
 
 /**
@@ -182,3 +237,19 @@ export interface VerifiedEvidence {
    */
   pinnedSubjectExpectations: any
 }
+
+/** Every item of an atomically verified request-batch response. */
+export interface VerifiedEvidenceRequestBatch {
+  items: Array<VerifiedEvidenceRequestBatchItem>
+  operation?: string
+}
+
+/**
+ * One ordered terminal request-batch result.
+ *
+ * The generated TypeScript declaration is a discriminated union:
+ * `{ status: "available", verified } | { status: "notAvailable" }`.
+ */
+export type VerifiedEvidenceRequestBatchItem =
+  | { status: 'available', verified: VerifiedEvidence }
+  | { status: 'notAvailable' }

@@ -45,7 +45,8 @@ use p256::{
 };
 use pyo3::prelude::*;
 use registry_evidence_verifier::{
-    EVIDENCE_JWS_CTY, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_JWS_TYP, EVIDENCE_SCHEMA_V1,
+    EVIDENCE_JWS_CTY, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_JWS_TYP, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+    EVIDENCE_REQUEST_BATCH_SCHEMA_V1, EVIDENCE_SCHEMA_V1,
 };
 use registry_platform_crypto::PublicJwk;
 use wiremock::{
@@ -83,6 +84,33 @@ fn request_spec_json() -> serde_json::Value {
         "maximum_assertion_lifetime_seconds": 300,
         "clock_skew_seconds": 60,
         "subject_expectations": "accept_first_use",
+    })
+}
+
+fn request_batch_spec_json() -> serde_json::Value {
+    let singular = request_spec_json();
+    serde_json::json!({
+        "requirement": singular["requirement"],
+        "purpose": singular["purpose"],
+        "audience": singular["audience"],
+        "evidence_type": singular["evidence_type"],
+        "issued_by": singular["issued_by"],
+        "provided_by": singular["provided_by"],
+        "configuration_revision": singular["configuration_revision"],
+        "expected_assurance_profile": singular["expected_assurance_profile"],
+        "expected_outputs": singular["expected_outputs"],
+        "maximum_assertion_lifetime_seconds": singular["maximum_assertion_lifetime_seconds"],
+        "clock_skew_seconds": singular["clock_skew_seconds"],
+        "items": [
+            {
+                "subjects": singular["subjects"],
+                "subject_expectations": "accept_first_use"
+            },
+            {
+                "subjects": singular["subjects"],
+                "subject_expectations": "accept_first_use"
+            }
+        ]
     })
 }
 
@@ -383,6 +411,103 @@ fn request_and_verify_performs_the_same_round_trip() {
             .extract()
             .expect("requestNonce is a string");
         assert_eq!(verified_nonce, nonce);
+    });
+}
+
+#[test]
+fn a_live_two_item_batch_returns_mixed_ordered_results() {
+    let signing_key = fresh_signing_key();
+    let trusted_jwks = trusted_jwks_json(&signing_key);
+    let subject_binding = format!("urn:evidence:subject:v1_{}", "D".repeat(43));
+
+    let runtime = tokio::runtime::Runtime::new().expect("the stub's runtime starts");
+    let server = runtime.block_on(MockServer::start());
+    let base_url = server.uri();
+
+    Python::attach(|py| {
+        let module = evidence_client_module(py);
+        let client_class = module.getattr("EvidenceClient").expect("the class exists");
+        let client = client_class
+            .call1((
+                base_url.as_str(),
+                python_json(py, &trusted_jwks),
+                Vec::<String>::new(),
+                "test-token",
+            ))
+            .expect("the client is constructed");
+
+        let prepared = client
+            .call_method1(
+                "prepare_batch",
+                (python_json(py, &request_batch_spec_json()),),
+            )
+            .expect("the batch specification is accepted");
+        let nonces: Vec<String> = prepared
+            .getattr("request_nonces")
+            .expect("the nonces are exposed")
+            .extract()
+            .expect("the nonces are strings");
+        assert_eq!(nonces.len(), 2);
+
+        let available: serde_json::Value = serde_json::from_slice(&sign(
+            &evidence_for(&nonces[0], &subject_binding),
+            &signing_key,
+        ))
+        .expect("the signed JWS is JSON");
+        let body = serde_json::to_vec(&serde_json::json!({
+            "schema": EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+            "type": "EvidenceRequestBatchResponse",
+            "items": [
+                {"result": "evidence", "evidence": available},
+                {"result": "evidence_not_available"}
+            ]
+        }))
+        .expect("the request-batch envelope serializes");
+        runtime.block_on(
+            Mock::given(method("POST"))
+                .and(path_matcher("/v1/evidence/batch"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_raw(body, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE),
+                )
+                .expect(1)
+                .mount(&server),
+        );
+
+        let verified = client
+            .call_method1("request_and_verify_batch", (&prepared,))
+            .expect("the complete mixed batch verifies");
+        let items = verified.getattr("items").expect("items are exposed");
+        assert_eq!(items.len().expect("items has a length"), 2);
+
+        let first = items.get_item(0).expect("the first item exists");
+        let first_status: String = first
+            .get_item("status")
+            .expect("the first status exists")
+            .extract()
+            .expect("the first status is a string");
+        assert_eq!(first_status, "available");
+        let first_verified = first
+            .get_item("verified")
+            .expect("the available item carries verified evidence");
+        let first_evidence = first_verified
+            .getattr("evidence")
+            .expect("the verified evidence is exposed");
+        let verified_nonce: String = first_evidence
+            .get_item("requestNonce")
+            .expect("the nonce is present")
+            .extract()
+            .expect("the nonce is a string");
+        assert_eq!(verified_nonce, nonces[0]);
+
+        let second = items.get_item(1).expect("the second item exists");
+        let second_status: String = second
+            .get_item("status")
+            .expect("the second status exists")
+            .extract()
+            .expect("the second status is a string");
+        assert_eq!(second_status, "not_available");
+        assert!(second.get_item("verified").is_err());
     });
 }
 

@@ -28,9 +28,32 @@ const prepared = client.prepare(spec);       // synchronous, no I/O
 const definitions = await client.discover();
 const jwks = await client.fetchJwks();
 const response = await client.send(prepared);
-const verified = client.verify(prepared, response);        // synchronous
-const verified = await client.requestAndVerify(prepared);
-const verified = client.verifyAsOf(prepared, response, asOfMillis);
+const verified = client.verify(prepared, response); // synchronous
+const verifiedInOneStep = await client.requestAndVerify(prepared);
+const verifiedAt = client.verifyAsOf(prepared, response, asOfMillis);
+
+const batchSpec = {
+  requirement,
+  purpose,
+  audience,
+  evidenceType,
+  issuedBy,
+  providedBy,
+  configurationRevision,
+  expectedAssuranceProfile,
+  expectedOutputs,
+  maximumAssertionLifetimeSeconds,
+  clockSkewSeconds,
+  items: [
+    { subjects: firstSubjects, subjectExpectations: 'acceptFirstUse' },
+    { subjects: secondSubjects, subjectExpectations: 'acceptFirstUse' },
+  ],
+};
+const preparedBatch = client.prepareBatch(batchSpec); // synchronous, no I/O
+const rawBatch = await client.sendBatch(preparedBatch);
+const verifiedBatch = client.verifyBatch(preparedBatch, rawBatch);
+const verifiedBatchAt = client.verifyBatchAsOf(preparedBatch, rawBatch, asOfMillis);
+const verifiedBatchInOneStep = await client.requestAndVerifyBatch(preparedBatch);
 ```
 
 `responseFormat` is required on every request specification. Use
@@ -40,6 +63,17 @@ keyless SD-JWT VC response. `prepare()` closes that choice before any I/O,
 guesses a format from the returned bytes. The exported
 `EvidenceResponseFormat` and `EvidenceRequestSpec` TypeScript types describe
 these inputs.
+
+`prepareBatch()` closes one independently nonce-bound verification policy for
+each positional item. The requirement, purpose, audience, assertion
+expectations, and timing bounds are common to the whole request; an item adds
+only its subjects and subject-verification stance. `sendBatch()` posts the
+common `requirement` and `purpose` plus the ordered nonce-bearing items to
+`/v1/evidence/batch`. A verified batch preserves that order as
+`{ status: "available", verified }` or `{ status: "notAvailable" }` items.
+Any malformed envelope or invalid available member refuses the whole batch,
+never a partial result. The exported `EvidenceRequestBatchSpec` and
+`EvidenceRequestBatchItemSpec` TypeScript types describe the input.
 
 ## Design notes
 
@@ -77,9 +111,11 @@ transport, before any attempt to interpret the body as a problem response.
 
 Which bound applies depends on the call. `maxResponseBytes` bounds the signed
 response body that `send()` and `requestAndVerify()` read, and its default
-follows what the verifier will accept as a signed response. `maxMetadataBytes`
-bounds the documents `discover()` and `fetchJwks()` read, neither of which is
-signed or verified. Tightening one does not tighten the other.
+follows what the verifier will accept as a signed response. Request-batch
+responses use the smaller of `maxResponseBytes` and the protocol's independent
+1 MiB envelope ceiling. `maxMetadataBytes` bounds the documents `discover()`
+and `fetchJwks()` read, neither of which is signed or verified. Tightening one
+does not tighten the other.
 
 ### Nonce and the golden fixture
 
@@ -103,16 +139,16 @@ signer outside `cfg(test)`.
 
 ### Async bridging
 
-`send` and `requestAndVerify` cannot be plain `async fn` methods taking a
-class reference as a parameter: napi-rs's tokio bridge requires the generated
-future to be `Send + 'static`, and a `Reference<T>` into a JS object is not
-`Send`. Both methods are ordinary (non-async) `#[napi]` functions that clone
-the `Arc`s they need synchronously, then hand an `async move` block built only
-from those owned clones to `napi::Env::spawn_future`. `PreparedEvidenceRequest`
-and `RawEvidenceResponse` cross as opaque classes wrapping an `Arc` around the
-real Rust value for the same reason: cloning the `Arc` is cheap and, for a
-prepared request, preserves the identity of the interior single-send guard
-rather than resetting it.
+`send`, `sendBatch`, `requestAndVerify`, and `requestAndVerifyBatch` cannot be
+plain `async fn` methods taking a class reference as a parameter: napi-rs's
+tokio bridge requires the generated future to be `Send + 'static`, and a
+`Reference<T>` into a JS object is not `Send`. These methods are ordinary
+(non-async) `#[napi]` functions that clone the `Arc`s they need synchronously,
+then hand an `async move` block built only from those owned clones to
+`napi::Env::spawn_future`. Prepared and raw singular and request-batch values
+cross as opaque classes wrapping an `Arc` around the real Rust value for the
+same reason: cloning the `Arc` is cheap and, for a prepared value, preserves
+the identity of the interior single-send guard rather than resetting it.
 
 ### `unsafe_code` deviation
 
@@ -152,11 +188,12 @@ workspace-wide forbid would reject outright.
 
 Rust unit tests (`cargo test -p registry-evidence-client-node`) cover the
 conversion layer directly. JS tests (`npm test`, `node --test __test__/*.test.js`)
-cover construction refusals, a live happy-path round trip against a local stub
-server, the one-send guard, `discover`/`fetchJwks` against a stub, and error
-mapping for denied/not-available/protocol/transport failures. Building the
-native addon first (`npm run build:debug`) is required before running the JS
-tests.
+cover construction refusals, live singular and two-item request-batch round
+trips against a local stub server, both one-send guards, mixed batch outcomes,
+atomic refusal of an invalid member, `discover`/`fetchJwks` against a stub, and
+error mapping for denied/not-available/protocol/transport failures. Building
+the native addon first (`npm run build:debug`) is required before running the
+JS tests.
 
 `npm run check:types` rebuilds the addon in release mode with `--dts` and
 diffs the result against the committed `index.d.ts`, so a change to the

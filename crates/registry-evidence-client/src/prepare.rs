@@ -350,6 +350,10 @@ impl PreparedEvidenceRequest {
             .collect()
     }
 
+    pub(crate) fn request_body(&self) -> &EvidenceRequestBody {
+        &self.body
+    }
+
     /// Claim the single send this prepared request is good for.
     ///
     /// The claim is taken before any I/O, and an attempt that fails on the wire

@@ -38,7 +38,26 @@ response = client.send(prepared)
 verified = client.verify(prepared, response)
 verified = client.request_and_verify(prepared)
 verified = client.verify_as_of(prepared, response, as_of_unix_seconds)
+
+batch_spec = {
+    # requirement, purpose, and shared verification expectations
+    "items": [
+        {"subjects": subjects_a, "subject_expectations": "accept_first_use"},
+        {"subjects": subjects_b, "subject_expectations": pinned_subjects_b},
+    ],
+}
+prepared_batch = client.prepare_batch(batch_spec)  # synchronous, no I/O
+raw_batch = client.send_batch(prepared_batch)
+verified_batch = client.verify_batch(prepared_batch, raw_batch)
+# Or: client.request_and_verify_batch(prepared_batch)
 ```
+
+Request-batch results retain request order. Each item is either
+`{"status": "available", "verified": VerifiedEvidence}` or exactly
+`{"status": "not_available"}`. Rust verifies every available member against
+the policy and nonce at the same position before the binding returns any item.
+The prepared and raw batch classes have no public constructors, and a prepared
+batch can be sent only once.
 
 `response_format` is required on every request specification. Use
 `"signed-jws"` for a flattened JWS JSON response or `"sd-jwt-vc"` for the
@@ -189,16 +208,17 @@ wheel never carries that rpath: `maturin` always builds through this crate's
 
 Rust unit tests (`cargo test -p registry-evidence-client-py`) cover the
 conversion layer directly, plus a golden fixture and a live happy-path/
-nonce-mismatch/one-send-guard round trip against the real compiled Python
+request-batch/nonce-mismatch/one-send-guard round trip against the real compiled Python
 surface (`tests/happy_path.rs`), driven straight through PyO3 without
 shelling out to a `python3` process.
 
 The Python suite under `tests/python/` (`python3 -m unittest discover -s
 crates/registry-evidence-client-py/tests/python`) covers construction
 refusals, error mapping for denied/not-available/protocol/transport failures,
-discovery (`discover`/`fetch_jwks`) against a stub server, the one-send guard,
-a GIL-release concurrency proof, and a stub-drift check against the committed
-`.pyi`. Every file in that suite imports `tests/python/bootstrap.py` first,
+discovery (`discover`/`fetch_jwks`) against a stub server, singular and batch
+one-send guards, exact batch wire and malformed-member handling, a GIL-release
+concurrency proof, and a stub-drift check against the committed `.pyi`. Every
+file in that suite imports `tests/python/bootstrap.py` first,
 which runs:
 
 ```bash

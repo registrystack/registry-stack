@@ -6,8 +6,11 @@
 
 use chrono::{DateTime, Utc};
 use registry_evidence_verifier::{
-    model::{Evidence, JwksDocument},
+    model::{
+        Evidence, EvidenceRequestBatchResponse, EvidenceRequestBatchResponseItem, JwksDocument,
+    },
     verifier::ExpectedSubjectDocument,
+    EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{
@@ -28,12 +31,19 @@ use crate::{
         PreparedHolderBoundRequest,
     },
     problem::{essence, map_problem, sanitized_operation},
+    request_batch::{
+        EvidenceRequestBatchSpec, PreparedEvidenceRequestBatch, RawEvidenceRequestBatchResponse,
+        VerifiedEvidenceRequestBatch, VerifiedEvidenceRequestBatchItem,
+        MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES,
+    },
     response_format::EvidenceResponseFormat,
     retained::RetainedEvidenceVerification,
 };
 
 /// Path of the Evidence request endpoint.
 const EVIDENCE_PATH: &str = "v1/evidence";
+/// Path of the ordered multi-subject Evidence request-batch endpoint.
+const EVIDENCE_BATCH_PATH: &str = "v1/evidence/batch";
 /// Path of the requester-scoped discovery endpoint.
 const DEFINITIONS_PATH: &str = "v1/evidence-definitions";
 /// Path of the published verification key set.
@@ -189,6 +199,21 @@ impl EvidenceClient {
         PreparedEvidenceRequest::new_with_revoked_key_ids(spec, self.config.revoked_key_ids.clone())
     }
 
+    /// Close one independent policy and generate one independent nonce for
+    /// every ordered item in a request batch.
+    ///
+    /// No I/O happens here. The returned batch is good for exactly one
+    /// exchange and is deliberately not cloneable.
+    pub fn prepare_batch(
+        &self,
+        spec: EvidenceRequestBatchSpec,
+    ) -> Result<PreparedEvidenceRequestBatch, EvidenceClientError> {
+        PreparedEvidenceRequestBatch::new_with_revoked_key_ids(
+            spec,
+            self.config.revoked_key_ids.clone(),
+        )
+    }
+
     /// Close the expectations for one holder-bound request and generate its
     /// nonce.
     ///
@@ -298,7 +323,7 @@ impl EvidenceClient {
 
     /// Send one holder-bound batch request and read the issuance envelope.
     ///
-    /// The batch rule is [`EvidenceClient::send_batch`]'s: a request that did
+    /// The batch rule is the holder-bound response format's: a request that did
     /// not ask for a batch is refused here rather than sent, because the
     /// `Accept` header was decided when the request was prepared.
     pub async fn send_holder_bound_batch(
@@ -352,28 +377,102 @@ impl EvidenceClient {
         }
     }
 
-    /// Send one prepared batch request and read the issuance envelope.
+    /// Send one ordered multi-subject request batch and read its response
+    /// envelope without trusting any member.
     ///
-    /// This is [`EvidenceClient::send`] for a request whose author asked for
-    /// [`EvidenceResponseFormat::SdJwtVcBatch`], and it spends the same single
-    /// send. It infers nothing: a request that did not ask for a batch is
-    /// refused here rather than sent, because the `Accept` header was already
-    /// decided when the request was prepared and this method cannot change it.
-    ///
-    /// What comes back is read, not verified. Every credential in the returned
-    /// envelope is still unverified material; verify each one individually
-    /// before acting on anything it says.
+    /// The single-send claim is taken before serialization or I/O. There is no
+    /// retry, and a second call with the same prepared batch fails locally.
     pub async fn send_batch(
         &self,
-        prepared: &PreparedEvidenceRequest,
-    ) -> Result<SdJwtVcBatchResponse, EvidenceClientError> {
-        if prepared.response_format() != EvidenceResponseFormat::SdJwtVcBatch {
-            return Err(EvidenceClientError::configuration(
-                "this prepared request did not ask for a batch response format",
-            ));
+        prepared: &PreparedEvidenceRequestBatch,
+    ) -> Result<RawEvidenceRequestBatchResponse, EvidenceClientError> {
+        prepared.claim_single_send()?;
+        let url = self.endpoint(EVIDENCE_BATCH_PATH)?;
+        let request = self
+            .http
+            .request(Method::POST, url)
+            .header(ACCEPT, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+            .header(CONTENT_TYPE, JSON_MEDIA_TYPE)
+            .body(prepared.request_json()?);
+        let response = self.exchange(request, Credential::Required).await?;
+        let response = self
+            .expect_success(
+                response,
+                EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+                self.config
+                    .max_response_bytes
+                    .min(MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES as u64),
+            )
+            .await?;
+        Ok(RawEvidenceRequestBatchResponse {
+            body: response.body,
+            operation: response.operation,
+        })
+    }
+
+    /// Verify every available response member against the policy at the same
+    /// position, or refuse the whole envelope.
+    pub fn verify_batch(
+        &self,
+        prepared: &PreparedEvidenceRequestBatch,
+        response: &RawEvidenceRequestBatchResponse,
+    ) -> Result<VerifiedEvidenceRequestBatch, EvidenceClientError> {
+        self.verify_batch_as_of(prepared, response, Utc::now())
+    }
+
+    /// Verify a request-batch envelope at a caller-selected instant.
+    ///
+    /// Parsing, exact item count, and all available signatures and policies
+    /// must pass before any verified batch is returned. Available member `i`
+    /// is checked only against policy `i`, whose independently generated nonce
+    /// makes a swapped member fail rather than change positions silently.
+    pub fn verify_batch_as_of(
+        &self,
+        prepared: &PreparedEvidenceRequestBatch,
+        response: &RawEvidenceRequestBatchResponse,
+        now: DateTime<Utc>,
+    ) -> Result<VerifiedEvidenceRequestBatch, EvidenceClientError> {
+        let envelope: EvidenceRequestBatchResponse = serde_json::from_slice(&response.body)
+            .map_err(|_| batch_protocol_failure(response.operation.clone()))?;
+        if envelope.schema != EVIDENCE_REQUEST_BATCH_SCHEMA_V1
+            || envelope.items.len() != prepared.items().len()
+        {
+            return Err(batch_protocol_failure(response.operation.clone()));
         }
-        let response = self.send(prepared).await?;
-        SdJwtVcBatchResponse::parse(response.body())
+
+        let mut verified = Vec::with_capacity(envelope.items.len());
+        for (prepared_item, response_item) in prepared.items().iter().zip(envelope.items) {
+            match response_item {
+                EvidenceRequestBatchResponseItem::Evidence { evidence } => {
+                    let body = serde_json::to_vec(&evidence)
+                        .map_err(|_| batch_protocol_failure(response.operation.clone()))?;
+                    let raw = RawEvidenceResponse {
+                        body,
+                        operation: response.operation.clone(),
+                    };
+                    verified.push(VerifiedEvidenceRequestBatchItem::Available(
+                        self.verify_as_of(prepared_item, &raw, now)?,
+                    ));
+                }
+                EvidenceRequestBatchResponseItem::EvidenceNotAvailable => {
+                    verified.push(VerifiedEvidenceRequestBatchItem::NotAvailable);
+                }
+            }
+        }
+
+        Ok(VerifiedEvidenceRequestBatch {
+            items: verified,
+            operation: response.operation.clone(),
+        })
+    }
+
+    /// Send and atomically verify one prepared request batch.
+    pub async fn request_and_verify_batch(
+        &self,
+        prepared: &PreparedEvidenceRequestBatch,
+    ) -> Result<VerifiedEvidenceRequestBatch, EvidenceClientError> {
+        let response = self.send_batch(prepared).await?;
+        self.verify_batch(prepared, &response)
     }
 
     /// Verify a signed response against the policy its request closed.
@@ -703,6 +802,15 @@ impl NonVerifyingEvidenceClient {
     }
 }
 
+fn batch_protocol_failure(operation: Option<String>) -> EvidenceClientError {
+    EvidenceClientError::Protocol {
+        status: StatusCode::OK.as_u16(),
+        code: None,
+        operation,
+        retry_after_seconds: None,
+    }
+}
+
 /// Build the outbound client from the pinned deployment options.
 fn build_client(config: &EvidenceClientConfig) -> Result<reqwest::Client, EvidenceClientError> {
     outbound::build_client(OutboundOptions {
@@ -815,6 +923,53 @@ mod tests {
         RawEvidenceResponse {
             body,
             operation: Some("01JZZZOPERATION".to_owned()),
+        }
+    }
+
+    fn request_batch_spec(item_count: usize) -> EvidenceRequestBatchSpec {
+        let singular = spec(SubjectExpectations::AcceptFirstUse);
+        EvidenceRequestBatchSpec {
+            requirement: singular.requirement,
+            purpose: singular.purpose,
+            audience: singular.audience,
+            evidence_type: singular.evidence_type,
+            issued_by: singular.issued_by,
+            provided_by: singular.provided_by,
+            configuration_revision: singular.configuration_revision,
+            expected_assurance_profile: singular.expected_assurance_profile,
+            expected_outputs: singular.expected_outputs,
+            maximum_assertion_lifetime_seconds: singular.maximum_assertion_lifetime_seconds,
+            clock_skew_seconds: singular.clock_skew_seconds,
+            items: (0..item_count)
+                .map(|_| crate::EvidenceRequestBatchItemSpec {
+                    subjects: singular.subjects.clone(),
+                    subject_expectations: SubjectExpectations::AcceptFirstUse,
+                })
+                .collect(),
+        }
+    }
+
+    fn available_batch_item(jws: Vec<u8>) -> serde_json::Value {
+        serde_json::json!({
+            "result": "evidence",
+            "evidence": serde_json::from_slice::<serde_json::Value>(&jws)
+                .expect("the fixture creates a flattened JWS")
+        })
+    }
+
+    fn request_batch_envelope(items: Vec<serde_json::Value>) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schema": EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+            "type": "EvidenceRequestBatchResponse",
+            "items": items,
+        }))
+        .expect("the response envelope serializes")
+    }
+
+    fn raw_request_batch(items: Vec<serde_json::Value>) -> RawEvidenceRequestBatchResponse {
+        RawEvidenceRequestBatchResponse {
+            body: request_batch_envelope(items),
+            operation: Some("01JZZZBATCHOPERATION".to_owned()),
         }
     }
 
@@ -1165,6 +1320,232 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_prepared_request_batch_has_the_exact_exchange_and_reaches_it_once() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = client_for(&server.uri(), &fixture);
+        let prepared = client
+            .prepare_batch(request_batch_spec(2))
+            .expect("the request batch is prepared");
+        let expected_body: serde_json::Value = serde_json::from_slice(
+            &prepared
+                .request_json()
+                .expect("the request batch serializes"),
+        )
+        .expect("the request batch is JSON");
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence/batch"))
+            .and(header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE))
+            .and(header("content-type", JSON_MEDIA_TYPE))
+            .and(wiremock::matchers::body_json(expected_body))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                request_batch_envelope(vec![
+                    serde_json::json!({"result": "evidence_not_available"}),
+                    serde_json::json!({"result": "evidence_not_available"}),
+                ]),
+                EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        client
+            .send_batch(&prepared)
+            .await
+            .expect("the first send reaches the batch endpoint");
+        assert_eq!(
+            client
+                .send_batch(&prepared)
+                .await
+                .expect_err("the second send is refused locally"),
+            EvidenceClientError::configuration(
+                "a prepared request batch may be sent once; prepare again for fresh nonces"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn request_and_verify_batch_composes_one_exchange_and_atomic_verification() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = client_for(&server.uri(), &fixture);
+        let prepared = client
+            .prepare_batch(request_batch_spec(1))
+            .expect("the request batch is prepared");
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence/batch"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                request_batch_envelope(vec![
+                    serde_json::json!({"result": "evidence_not_available"}),
+                ]),
+                EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let verified = client
+            .request_and_verify_batch(&prepared)
+            .await
+            .expect("the unavailable positional result is a verified batch outcome");
+        assert!(matches!(
+            verified.item(0),
+            Some(VerifiedEvidenceRequestBatchItem::NotAvailable)
+        ));
+    }
+
+    #[test]
+    fn request_batch_verification_accepts_mixed_ordered_results() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare_batch(request_batch_spec(2))
+            .expect("the request batch is prepared");
+        let response = raw_request_batch(vec![
+            available_batch_item(fixture.sign(prepared.request_nonce(0).expect("the first nonce"))),
+            serde_json::json!({"result": "evidence_not_available"}),
+        ]);
+
+        let verified = client
+            .verify_batch_as_of(&prepared, &response, fixture.now)
+            .expect("every available member verifies");
+        assert_eq!(verified.count(), 2);
+        let Some(VerifiedEvidenceRequestBatchItem::Available(first)) = verified.item(0) else {
+            panic!("the first item should be available")
+        };
+        assert_eq!(
+            first.evidence().request_nonce.as_deref(),
+            prepared.request_nonce(0)
+        );
+        assert!(matches!(
+            verified.item(1),
+            Some(VerifiedEvidenceRequestBatchItem::NotAvailable)
+        ));
+        assert_eq!(verified.operation(), Some("01JZZZBATCHOPERATION"));
+    }
+
+    #[test]
+    fn request_batch_verification_refuses_swapped_nonces() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare_batch(request_batch_spec(2))
+            .expect("the request batch is prepared");
+        let response = raw_request_batch(vec![
+            available_batch_item(
+                fixture.sign(prepared.request_nonce(1).expect("the second nonce")),
+            ),
+            available_batch_item(fixture.sign(prepared.request_nonce(0).expect("the first nonce"))),
+        ]);
+
+        assert_eq!(
+            client
+                .verify_batch_as_of(&prepared, &response, fixture.now)
+                .expect_err("a member cannot move to another policy position"),
+            EvidenceClientError::Verification(VerificationError::Policy)
+        );
+    }
+
+    #[test]
+    fn request_batch_verification_is_atomic_when_one_signature_is_bad() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare_batch(request_batch_spec(2))
+            .expect("the request batch is prepared");
+        let first =
+            available_batch_item(fixture.sign(prepared.request_nonce(0).expect("the first nonce")));
+        let mut second = available_batch_item(
+            fixture.sign(prepared.request_nonce(1).expect("the second nonce")),
+        );
+        second["evidence"]["signature"] = serde_json::Value::String("AA".to_owned());
+
+        let failure = client
+            .verify_batch_as_of(
+                &prepared,
+                &raw_request_batch(vec![first, second]),
+                fixture.now,
+            )
+            .expect_err("one bad available member refuses the whole batch");
+        assert!(matches!(failure, EvidenceClientError::Verification(_)));
+    }
+
+    #[test]
+    fn request_batch_verification_refuses_malformed_missing_and_extra_members() {
+        let fixture = signed_evidence();
+        let client = client(&fixture);
+        let prepared = client
+            .prepare_batch(request_batch_spec(2))
+            .expect("the request batch is prepared");
+        let unavailable = || serde_json::json!({"result": "evidence_not_available"});
+        let responses = [
+            RawEvidenceRequestBatchResponse {
+                body: b"not json".to_vec(),
+                operation: Some("01JZZZBATCHOPERATION".to_owned()),
+            },
+            raw_request_batch(vec![unavailable()]),
+            raw_request_batch(vec![unavailable(), unavailable(), unavailable()]),
+            RawEvidenceRequestBatchResponse {
+                body: serde_json::to_vec(&serde_json::json!({
+                    "schema": "registry.other/v1",
+                    "type": "EvidenceRequestBatchResponse",
+                    "items": [unavailable(), unavailable()],
+                }))
+                .expect("the wrong-schema response serializes"),
+                operation: Some("01JZZZBATCHOPERATION".to_owned()),
+            },
+            RawEvidenceRequestBatchResponse {
+                body: serde_json::to_vec(&serde_json::json!({
+                    "schema": EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
+                    "type": "EvidenceRequestBatchResponse",
+                    "items": [unavailable(), unavailable()],
+                    "extra": true,
+                }))
+                .expect("the malformed response serializes"),
+                operation: Some("01JZZZBATCHOPERATION".to_owned()),
+            },
+        ];
+
+        for response in responses {
+            assert!(matches!(
+                client.verify_batch_as_of(&prepared, &response, fixture.now),
+                Err(EvidenceClientError::Protocol { status: 200, .. })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn request_batch_response_enforces_its_independent_one_mib_ceiling() {
+        let fixture = signed_evidence();
+        let server = MockServer::start().await;
+        let client = EvidenceClient::new(
+            config_for(&server.uri(), &fixture)
+                .with_max_response_bytes((MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES * 2) as u64),
+        )
+        .expect("the client is configured");
+        let prepared = client
+            .prepare_batch(request_batch_spec(1))
+            .expect("the request batch is prepared");
+        Mock::given(method("POST"))
+            .and(path("/v1/evidence/batch"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                vec![b'x'; MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES + 1],
+                EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_eq!(
+            client
+                .send_batch(&prepared)
+                .await
+                .expect_err("the protocol ceiling is independent of a looser client bound"),
+            EvidenceClientError::transport(TransportKind::ResponseTooLarge)
+        );
+    }
+
     /// The media-type grammar makes the type itself case-insensitive and a
     /// parameter no part of it. The problem contract is compared that way, and so
     /// is the success path, which shares the comparison: a deployment or an
@@ -1229,20 +1610,17 @@ mod tests {
             .expect("the SD-JWT VC response verifies");
     }
 
-    /// The batch format is a request, not an inference: stating it is what sets
-    /// the `Accept` header the deployment selects a batch from, and the envelope
-    /// that comes back reaches the caller as credentials in the order its holder
-    /// keys were presented.
+    /// Holder-key batch issuance keeps its own explicitly named API and media
+    /// type alongside the independently verified request-batch API.
     #[tokio::test]
-    async fn a_batch_request_asks_for_the_batch_media_type_and_reads_the_envelope() {
+    async fn a_holder_bound_batch_request_reads_the_issuance_envelope() {
         let fixture = signed_evidence();
         let server = MockServer::start().await;
         let client = client_for(&server.uri(), &fixture);
-        let mut request_spec = spec(SubjectExpectations::AcceptFirstUse);
-        request_spec.response_format = EvidenceResponseFormat::SdJwtVcBatch;
+        let mut request_spec = holder_bound_spec(EvidenceResponseFormat::SdJwtVcBatch);
         request_spec.holder_keys = vec![holder_key(), holder_key()];
         let prepared = client
-            .prepare(request_spec)
+            .prepare_holder_bound(request_spec)
             .expect("the batch request is prepared");
         let envelope = serde_json::json!({
             "schema": SD_JWT_VC_BATCH_SCHEMA_V1,
@@ -1262,7 +1640,7 @@ mod tests {
             .await;
 
         let batch = client
-            .send_batch(&prepared)
+            .send_holder_bound_batch(&prepared)
             .await
             .expect("the batch envelope is read");
 
@@ -1275,37 +1653,6 @@ mod tests {
             batch.credential_for_holder_key(1),
             Some("second-credential~")
         );
-    }
-
-    /// `send_batch` reads one format and one only. A request that asked for a
-    /// singular response already sent a singular `Accept`, and this method
-    /// cannot retroactively change what was asked for, so it refuses rather
-    /// than spending the single send on an answer it would not be able to read.
-    #[tokio::test]
-    async fn send_batch_refuses_a_request_that_did_not_ask_for_a_batch() {
-        let fixture = signed_evidence();
-        let server = MockServer::start().await;
-        let client = client_for(&server.uri(), &fixture);
-        Mock::given(any())
-            .respond_with(ResponseTemplate::new(200))
-            .expect(0)
-            .mount(&server)
-            .await;
-        let prepared = client
-            .prepare(spec(SubjectExpectations::AcceptFirstUse))
-            .expect("the singular request is prepared");
-
-        let failure = client
-            .send_batch(&prepared)
-            .await
-            .expect_err("a singular request is not a batch request");
-
-        assert!(
-            matches!(failure, EvidenceClientError::Configuration { .. }),
-            "{failure:?}"
-        );
-        // The refusal is local, so the single send is still unspent.
-        assert!(prepared.claim_single_send().is_ok());
     }
 
     /// Asking the client to verify a batch as one response is a category error,
