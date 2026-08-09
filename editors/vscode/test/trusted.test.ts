@@ -136,6 +136,10 @@ suite('Registry Stack extension', () => {
       path.join(nestedEvidencePath, 'evidence-project.yaml'),
       'version: 1\nproject: evidence-authoring\n',
     );
+    fs.writeFileSync(
+      path.join(nestedEvidencePath, 'source.openapi.yaml'),
+      'openapi: 3.1.0\ninfo: { title: test, version: 1.0.0 }\npaths: {}\n',
+    );
     const nestedSelectorPath = path.join(nestedSelectorsPath, 'nested-adopter.yaml');
     fs.writeFileSync(nestedSelectorPath, 'fields: {}\n');
     assert.strictEqual(

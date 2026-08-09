@@ -48,6 +48,10 @@ fs.writeFileSync(
   path.join(projectEvidence, 'evidence-project.yaml'),
   'version: 1\nproject: evidence-authoring\n',
 );
+fs.writeFileSync(
+  path.join(projectEvidence, 'source.openapi.yaml'),
+  'openapi: 3.1.0\ninfo: { title: test, version: 1.0.0 }\npaths: {}\n',
+);
 fs.writeFileSync(path.join(projectEvidence, 'selectors', 'smoke.yaml'), 'fields: {}\n');
 fs.writeFileSync(
   workspaceFolder,
