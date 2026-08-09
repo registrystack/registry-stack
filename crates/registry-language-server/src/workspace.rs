@@ -4,7 +4,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::{Path, PathBuf},
 };
 
@@ -17,6 +16,7 @@ use crate::{
         ProjectIndex, DOCUMENT_CEILING_RULE,
     },
     relay,
+    safety::{secure_regular_file, SecureFileRead},
     yaml::ParsedDocument,
 };
 
@@ -480,13 +480,13 @@ impl RootState {
         }
         self.disk_diagnostics
             .retain(|diagnostic| diagnostic.path != path);
-        if !self.family.is_safe_authored_file(&self.root, path) {
+        let Ok(Some(file)) = secure_regular_file(&self.root, path) else {
             self.documents.remove(path);
             return;
-        }
+        };
         let ceiling = self.family.document_ceiling(&self.root, path);
-        match fs::read(path) {
-            Ok(bytes) if !ceiling.admits(bytes.len()) => {
+        match file.read_bounded(ceiling.max_bytes) {
+            Ok(SecureFileRead::TooLarge) => {
                 self.documents.remove(path);
                 self.disk_diagnostics.push(document_rule_diagnostic(
                     path,
@@ -494,7 +494,7 @@ impl RootState {
                     &ceiling.message,
                 ));
             }
-            Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(SecureFileRead::Bytes(bytes)) => match String::from_utf8(bytes) {
                 Ok(text) => {
                     self.documents.insert(path.to_path_buf(), text);
                 }

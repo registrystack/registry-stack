@@ -15,7 +15,7 @@ use crate::{
         bounded_value, document_diagnostic, IndexedDiagnostic, IndexedLocation, IndexedReference,
         IndexedSymbol, RelayKind, SymbolKey, SymbolQuery,
     },
-    safety::{plain_file, secure_directory, secure_regular_file},
+    safety::{plain_file, secure_directory, secure_regular_file, SecureFileRead},
     workspace::LoadedProjectDocuments,
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
@@ -87,18 +87,26 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
     let mut documents = BTreeMap::new();
     let mut diagnostics = Vec::new();
     for path in candidates {
-        let Some(metadata) = secure_regular_file(root, &path)? else {
-            continue;
+        let file = match secure_regular_file(root, &path) {
+            Ok(Some(file)) => file,
+            Ok(None) => continue,
+            Err(error) if path.ends_with(PROJECT_FILE) => {
+                return Err(error).context("failed to read registry-stack.yaml")
+            }
+            Err(_) => {
+                diagnostics.push(document_diagnostic(
+                    &path,
+                    "Project document could not be read; check its permissions",
+                ));
+                continue;
+            }
         };
-        if metadata.len() > MAX_DOCUMENT_BYTES {
-            diagnostics.push(document_diagnostic(
+        match file.read_bounded(MAX_DOCUMENT_BYTES) {
+            Ok(SecureFileRead::TooLarge) => diagnostics.push(document_diagnostic(
                 &path,
                 "Project document exceeds the 1 MiB indexing limit",
-            ));
-            continue;
-        }
-        match fs::read(&path) {
-            Ok(bytes) => match String::from_utf8(bytes) {
+            )),
+            Ok(SecureFileRead::Bytes(bytes)) => match String::from_utf8(bytes) {
                 Ok(source) => {
                     documents.insert(path, source);
                 }
@@ -142,9 +150,7 @@ fn add_yaml_files(root: &Path, directory: &Path, candidates: &mut Vec<PathBuf>) 
                 root.display()
             )
         })?;
-        if entry.path().extension().is_some_and(|ext| ext == "yaml")
-            && secure_regular_file(root, &entry.path())?.is_some()
-        {
+        if entry.path().extension().is_some_and(|ext| ext == "yaml") {
             candidates.push(entry.path());
         }
     }

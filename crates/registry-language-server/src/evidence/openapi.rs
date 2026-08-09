@@ -9,8 +9,10 @@
 //! which is the one project file [`crate::evidence::load_project_documents`] deliberately leaves on
 //! disk.
 //!
-//! Reading it is bounded twice, and both bounds are decided from the file's size before it is
-//! opened, because a ceiling applied after the read has already paid for the read.
+//! Reading it is bounded twice, and both bounds start from the opened descriptor's size before its
+//! bytes are read, because a ceiling applied only after the read has already paid for the read.
+//! The bounded descriptor read checks both against the bytes actually returned as well, because an
+//! authored file may grow after it is opened.
 //! [`MAX_OPENAPI_BYTES`] is the authoring form's own ceiling on this document and bounds the
 //! semantic reading: past it there is no analysis, which is exactly what the compiler does with the
 //! same file. [`MAX_POSITION_BYTES`] bounds only the second, positional reading: past it the
@@ -29,7 +31,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
 };
@@ -43,7 +44,7 @@ use tower_lsp_server::ls_types::Range;
 
 use crate::{
     refs::DOCUMENT_START,
-    safety::secure_regular_file,
+    safety::{secure_regular_file, SecureFileRead},
     yaml::{parse_yaml, YamlValue},
 };
 
@@ -113,15 +114,16 @@ impl Description {
         let path = root.join(OPENAPI_FILE);
         // The gate every read in this server goes through. A path it refuses and a path it could
         // not decide are both paths this module does not open.
-        let metadata = secure_regular_file(root, &path).ok().flatten()?;
-        if metadata.len() > MAX_OPENAPI_BYTES {
+        let file = secure_regular_file(root, &path).ok().flatten()?;
+        // Both ceilings begin with the descriptor's size before its bytes are read. The bounded
+        // read and the actual byte count still check growth after the descriptor was opened.
+        let index_positions = file.len() <= MAX_POSITION_BYTES;
+        let SecureFileRead::Bytes(bytes) = file.read_bounded(MAX_OPENAPI_BYTES).ok()? else {
             return None;
-        }
-        // Both ceilings are answered from the size the filesystem reports, before the file is
-        // opened, so the larger one bounds what is read and the smaller one bounds what is parsed
-        // twice.
-        let index_positions = metadata.len() <= MAX_POSITION_BYTES;
-        let text = fs::read_to_string(&path).ok()?;
+        };
+        let index_positions = index_positions
+            && u64::try_from(bytes.len()).is_ok_and(|bytes| bytes <= MAX_POSITION_BYTES);
+        let text = String::from_utf8(bytes).ok()?;
         let analysis = analysis_for(&path, &text, index_positions)?;
         Some(Self {
             analysis,

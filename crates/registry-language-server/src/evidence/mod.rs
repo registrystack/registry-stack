@@ -29,7 +29,7 @@ use crate::{
         document_diagnostic, document_rule_diagnostic, DIRECTORY_CEILING_RULE,
         DOCUMENT_CEILING_RULE,
     },
-    safety::{plain_directory, plain_file, secure_directory, secure_regular_file},
+    safety::{plain_directory, plain_file, secure_directory, secure_regular_file, SecureFileRead},
     workspace::{DocumentCeiling, LoadedProjectDocuments, ProjectFamily},
 };
 
@@ -167,20 +167,25 @@ pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocumen
     candidates.dedup_by(|left, right| left.0 == right.0);
     let mut documents = BTreeMap::new();
     for (path, role) in candidates {
-        let Some(metadata) = secure_regular_file(root, &path)? else {
-            continue;
+        let file = match secure_regular_file(root, &path) {
+            Ok(Some(file)) => file,
+            Ok(None) => continue,
+            Err(_) => {
+                diagnostics.push(document_diagnostic(
+                    &path,
+                    "Project document could not be read; check its permissions",
+                ));
+                continue;
+            }
         };
         let ceiling = role_ceiling(role);
-        if metadata.len() > ceiling.max_bytes {
-            diagnostics.push(document_rule_diagnostic(
+        match file.read_bounded(ceiling.max_bytes) {
+            Ok(SecureFileRead::TooLarge) => diagnostics.push(document_rule_diagnostic(
                 &path,
                 ProjectFamily::Evidence.diagnostic_code(DOCUMENT_CEILING_RULE),
                 &ceiling.message,
-            ));
-            continue;
-        }
-        match fs::read(&path) {
-            Ok(bytes) => match String::from_utf8(bytes) {
+            )),
+            Ok(SecureFileRead::Bytes(bytes)) => match String::from_utf8(bytes) {
                 Ok(source) => {
                     documents.insert(path, source);
                 }
@@ -436,6 +441,28 @@ mod tests {
             .unwrap()
             .documents
             .contains_key(&generated));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_multiply_linked_document_is_not_loaded() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let temp = fixture_project();
+        write(temp.path(), "synthetic.yaml", "id: synthetic\n");
+        fs::hard_link(
+            temp.path().join("synthetic.yaml"),
+            temp.path().join("questions/multiply-linked.yaml"),
+        )
+        .unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let linked = root.join("questions/multiply-linked.yaml");
+        assert_eq!(fs::metadata(&linked).unwrap().nlink(), 2);
+
+        let loaded = load_project_documents(&root).unwrap();
+
+        assert!(!loaded.documents.contains_key(&linked));
+        assert!(!is_safe_authored_file(&root, &linked));
     }
 
     #[test]
