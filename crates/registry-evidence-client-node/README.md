@@ -134,6 +134,13 @@ workspace-wide forbid would reject outright.
 - Exactly two token providers are supported: `token: { static: "..." }` and
   `token: { privateKeyJwt: { tokenEndpoint, clientId, clientKey, ... } }`. A
   caller-supplied custom token provider is out of scope for this binding.
+- Holder-bound issuance is supported: `prepare` accepts public `holderKeys`,
+  and `SdJwtVcBatchResponse` parses the ordered credential envelope returned
+  for them. The binding stops at issuance. It exposes no operation for a
+  holder to create a selective-disclosure presentation or key-binding proof,
+  and no relying-party operation to verify that presentation. Use the
+  `registry-evidence-verifier` Rust crate or `evidence verify-presentation` for
+  the verification half of that workflow.
 - `verifyAsOf(prepared, response, asOfMillis)` judges a response as of an
   explicit instant rather than the live clock. A past instant is the direction
   that costs something: naming a stale instant accepts an assertion whose

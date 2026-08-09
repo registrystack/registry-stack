@@ -74,6 +74,81 @@ EVIDENCE_TUTORIALS=(
 	control-who-can-request-evidence
 )
 
+# Every other page under DOCS_ROOT, and the reason it is not replayed here.
+# check_tutorial_coverage below fails by name on a page in neither list, which
+# is the gap that let broken DHIS2 tutorial commands ship once already.
+EXCLUDED_EVIDENCE_TUTORIALS=(
+	author-registry-project                          # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
+	build-and-deploy-evidence-project                # drift-checked by evidence-production-build-docs.test.mjs; needs a production build environment
+	configure-project-api-key-authentication         # draft: true, hidden from the sidebar and redirected away
+	configure-project-script-adapter                 # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
+	connect-an-institution-source                    # how-to against the reader's own OpenAPI source; no fixed scenario this gate can replay
+	connect-a-sqlite-extract                         # starter is covered by evidencectl scaffold and fixture tests; production half needs an operator-mounted extract
+	deploy-standalone-with-own-data                  # draft: true, hidden from the sidebar and redirected away
+	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
+	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
+	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
+	issue-evidence-access-tokens-with-registry-mint  # drift-checked by evidence-production-build-docs.test.mjs; needs a Registry Mint deployment
+	issue-immunization-evidence-from-dhis2           # needs the public DHIS2 demo; live and opt-in, not replayed in CI
+	manage-evidence-verifier-trust                   # how-to against the reader's own deployment; no fixed scenario this gate can replay
+	move-evidence-to-production-signing              # drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
+	prove-an-evidence-project                        # how-to against the reader's own project; no fixed scenario this gate can replay
+	publish-spreadsheet-secured-registry-api         # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
+	request-a-holder-bound-credential                # draft: true, hidden from the sidebar; no verified wallet flow exists to replay
+	rotate-evidence-signing-keys                     # drift-checked by evidence-production-build-docs.test.mjs; needs a deployed signing key
+	use-your-spreadsheet                             # registryctl tutorial, drift-checked by check-tutorial.sh
+	verify-a-registered-parent-with-opencrvs         # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
+	verify-opencrvs-claims                           # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
+)
+
+in_list() {
+	local needle="$1"
+	shift
+	local item
+	for item in "$@"; do
+		[[ "$item" == "$needle" ]] && return 0
+	done
+	return 1
+}
+
+# Assert that every page under DOCS_ROOT is either registered for replay or
+# named in EXCLUDED_EVIDENCE_TUTORIALS with a reason. A page in neither list
+# is a coverage gap: nothing would ever replay it or explain why not.
+check_tutorial_coverage() {
+	local file slug
+	local -a unregistered=()
+	for slug in "${EXCLUDED_EVIDENCE_TUTORIALS[@]}"; do
+		if in_list "$slug" "${EVIDENCE_TUTORIALS[@]}"; then
+			printf 'coverage error in %s: %s is both registered in EVIDENCE_TUTORIALS and excluded in EXCLUDED_EVIDENCE_TUTORIALS\n' \
+				"${BASH_SOURCE[0]}" "$slug" >&2
+			exit 2
+		fi
+		if [[ ! -f "$DOCS_ROOT/$slug.mdx" ]]; then
+			printf 'coverage error in %s: %s.mdx in EXCLUDED_EVIDENCE_TUTORIALS does not exist under %s\n' \
+				"${BASH_SOURCE[0]}" "$slug" "$DOCS_ROOT" >&2
+			exit 2
+		fi
+	done
+	for file in "$DOCS_ROOT"/*.mdx; do
+		[[ -e "$file" ]] || continue
+		slug="$(basename "$file" .mdx)"
+		if ! in_list "$slug" "${EVIDENCE_TUTORIALS[@]}" && ! in_list "$slug" "${EXCLUDED_EVIDENCE_TUTORIALS[@]}"; then
+			unregistered+=("$slug")
+		fi
+	done
+	if ((${#unregistered[@]} > 0)); then
+		printf 'tutorial coverage gap: the following pages are neither registered in EVIDENCE_TUTORIALS nor excluded in EXCLUDED_EVIDENCE_TUTORIALS:\n' >&2
+		for slug in "${unregistered[@]}"; do
+			printf '  %s.mdx\n' "$slug" >&2
+		done
+		printf 'add each to EVIDENCE_TUTORIALS (with a load_spec branch) or to EXCLUDED_EVIDENCE_TUTORIALS with a reason, in %s\n' \
+			"${BASH_SOURCE[0]}" >&2
+		exit 1
+	fi
+}
+
+check_tutorial_coverage
+
 load_spec() {
 	SPEC_FENCES=0
 	SPEC_STEPS=()

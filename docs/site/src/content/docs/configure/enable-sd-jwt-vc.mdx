@@ -145,8 +145,7 @@ Neither command accepts the other's document. Both open no network connection, a
 exits 0 when the presentation is authentic, possession is proven, and the assertion is currently
 valid; 3 when it is authentic and possession is proven but the assertion is not currently valid;
 and 1 for every other outcome. Comparing the expected challenge is not consuming it, so the same
-presentation verifies again under the same policy. Walk the whole path in
-[Request a holder-bound credential](../../tutorials/request-a-holder-bound-credential/).
+presentation verifies again under the same policy.
 
 Provider metadata is published at `/.well-known/jwt-vc-issuer`, and signing keys remain at
 `/.well-known/evidence/jwks.json`. Both endpoints are discovery. Outside local mode, the service
@@ -172,8 +171,7 @@ proves no possession.
 A requirement the bundle declares as `holder-bound` scopes its subject bindings to the presented
 holder key instead, so the credential can be presented to a relying party that was not named at
 issuance. That mode is a deployment declaration, never a caller option, and it narrows the
-requirement to the SD-JWT VC serialization and its batch envelope. See
-[Request a holder-bound credential](../../tutorials/request-a-holder-bound-credential/).
+requirement to the SD-JWT VC serialization and its batch envelope.
 
 The profile emits `application/dc+sd-jwt`, `typ: dc+sd-jwt`, `vct`, SHA-256 disclosures, optional
 `cnf.jwk`, and a trailing tilde without a key-binding JWT. It is pinned to RFC 9901 and SD-JWT VC

@@ -51,6 +51,14 @@ guesses a format from the returned bytes. The shipped type stub exposes
 key, `"private_key_jwt"`. There is no caller-supplied token provider; that is
 out of scope for this binding, same as the Node binding.
 
+Holder-bound issuance is supported: `prepare()` accepts public `holder_keys`,
+and `SdJwtVcBatchResponse` parses the ordered credential envelope returned for
+them. The binding stops at issuance. It exposes no operation for a holder to
+create a selective-disclosure presentation or key-binding proof, and no
+relying-party operation to verify that presentation. Use the
+`registry-evidence-verifier` Rust crate or `evidence verify-presentation` for
+the verification half of that workflow.
+
 `trusted_jwks` and `revoked_key_ids` are both required trust inputs.
 `revoked_key_ids` contains current service-key RFC 7638 thumbprints and
 overrides a matching key even when it remains in `trusted_jwks` or in an older
