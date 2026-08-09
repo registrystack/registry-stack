@@ -121,6 +121,40 @@ test('the caller-access replay expects the privacy-safe refusal audit line', asy
   assert.doesNotMatch(branch, /ACCESS AUTHORIZED age-bracket/u);
 });
 
+// EVIDENCE_TUTORIALS and EXCLUDED_EVIDENCE_TUTORIALS between them must
+// account for every page under the tutorials directory, so a new page can
+// never ship unreplayed and unexplained. Read the lists from the gate
+// itself rather than restating them, so this test tracks the gate instead
+// of drifting from it.
+function extractBashArray(source, name) {
+  const match = source.match(new RegExp(`\\n${name}=\\(([\\s\\S]*?)\\n\\)`, 'u'));
+  assert.ok(match, `${name} array must exist in the gate`);
+  return match[1]
+    .split('\n')
+    .map((line) => line.split('#')[0].trim())
+    .filter(Boolean);
+}
+
+test('the tutorial coverage check fails on an unregistered page', async () => {
+  const source = await readFile(gate, 'utf8');
+  const excluded = extractBashArray(source, 'EXCLUDED_EVIDENCE_TUTORIALS');
+  const root = await mkdtemp(join(tmpdir(), 'evidence-tutorial-coverage-test-'));
+  try {
+    // Stub every already-excluded page so only the deliberately unregistered
+    // page below can trip the check.
+    for (const slug of excluded) {
+      await writeFile(join(root, `${slug}.mdx`), '---\ntitle: stub\n---\n');
+    }
+    await writeFile(join(root, 'orphan-tutorial.mdx'), '---\ntitle: stub\n---\n');
+    const { code, output } = await runGate({ EVIDENCE_TUTORIAL_DOCS_ROOT: root });
+    assert.notEqual(code, 0, 'an unregistered tutorial page must fail the gate');
+    assert.match(output, /tutorial coverage gap/u);
+    assert.match(output, /orphan-tutorial\.mdx/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('--only refuses a slug that is not registered', async () => {
   const { code, output } = await runGate({}, ['--dry-run', '--only', 'no-such-tutorial']);
   assert.notEqual(code, 0, 'an unregistered slug must fail the gate');

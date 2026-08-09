@@ -1,6 +1,6 @@
 ---
 title: Configure OID4VCI wallet delivery
-description: Deploy and configure evidence-oid4vci, the front end that delivers holder-bound Evidence Gateway credentials to a wallet over OID4VCI 1.0 Final.
+description: Configure the OID4VCI 1.0 adapter for holder-bound Evidence Gateway credentials.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,14 +12,15 @@ standards_referenced:
   - sd-jwt-vc
 ---
 
-Configure `evidence-oid4vci` when a deployment needs to deliver a holder-bound Evidence Gateway
-credential into a stock wallet, which accepts a credential only over OID4VCI, never over an
-arbitrary HTTP response.
+Configure `evidence-oid4vci` when a deployment needs to expose a holder-bound Evidence Gateway
+credential to an OID4VCI client rather than through the Evidence Gateway response contract.
+This page documents the adapter's protocol and deployment contract, not compatibility with a
+specific wallet.
 
 ## When to use evidence-oid4vci
 
 `evidence-oid4vci` is a supporting service, not a product pattern of its own, in the same sense
-Registry Mint is. It delivers Evidence Gateway credentials to a wallet over OID4VCI 1.0 Final, the
+Registry Mint is. It exposes Evidence Gateway credentials over OID4VCI 1.0 Final, the
 wallet-facing protocol Evidence Gateway deliberately refuses to speak.
 
 Three properties bound the service, and none is negotiable:
@@ -39,6 +40,9 @@ Evidence Gateway crate depends on `evidence-oid4vci` at runtime.
 Use `evidence-oid4vci` only for credentials issued under Evidence Gateway's `holder-bound` subject
 binding mode. A requirement whose subject binding is audience-scoped is not deliverable through
 this service.
+
+The repository does not yet carry a real-wallet or external OID4VCI conformance run. Verify the
+chosen wallet against the deployment before making a compatibility claim.
 
 ## Before you start
 
@@ -74,6 +78,13 @@ mint:
   clientId: evidence-oid4vci
   privateKeyFile: keys/delivery-client.jwk.json
   clientAssertionAudience: https://mint.example.org/token
+offers:
+  issuer: https://mint.example.org
+  jwksUri: https://mint.example.org/.well-known/jwks.json
+  audiences: [evidence-oid4vci]
+  algorithms: [EdDSA]
+  authorizedClients: [adopter-front-end]
+  maximumTokenLifetimeSeconds: 900
 store:
   maximumOffers: 4096
   offerLifetimeSeconds: 300
@@ -100,12 +111,25 @@ describe a credential Evidence Gateway would refuse to issue.
 to Registry Mint is built, and never logged or rendered. `mint.clientAssertionAudience` defaults to
 `mint.tokenEndpoint` when absent, which is the usual registration.
 
+`offers` is the authorization boundary of the adopter-facing `POST /offers` endpoint, and it is a
+required, separate document from `mint`: the identity this service authenticates to Mint with has
+nothing to do with the identities it accepts offer tokens from. `offers.issuer` and
+`offers.jwksUri` name the authorization server that issues offer tokens, compared exactly against a
+token's `iss` and read for its keys; both must be `https` in `strict` mode. `offers.audiences`
+names the resource identifiers this service answers to, so a token minted for another resource
+server cannot be replayed here; at least one is required. `offers.algorithms` defaults to
+`[EdDSA]` and accepts exactly one signature algorithm family per deployment. `offers.authorizedClients`
+defaults to empty, which accepts any client the issuer vouched for; naming one or more client
+identifiers narrows that further. `offers.maximumTokenLifetimeSeconds` defaults to `900` and is
+bounded to `60..=3600` seconds.
+
 `validationMode` defaults to `strict`, which requires every published and called origin
-(`credentialIssuer`, `evidence.baseUrl`, `mint.tokenEndpoint`, and the client assertion audience) to
-be an absolute `https` URL with a host and no embedded credentials, query, or fragment. Set it to
-`supervised-local-development` only for a disposable local developer environment; that mode admits
-one supervised process group on loopback, requiring the listener to match the credential issuer's
-origin exactly and every other endpoint to be a canonical `http://127.0.0.1:<port>` origin.
+(`credentialIssuer`, `evidence.baseUrl`, `mint.tokenEndpoint`, the client assertion audience,
+`offers.issuer`, and `offers.jwksUri`) to be an absolute `https` URL with a host and no embedded
+credentials, query, or fragment. Set it to `supervised-local-development` only for a disposable
+local developer environment; that mode admits one supervised process group on loopback, requiring
+the listener to match the credential issuer's origin exactly and every other endpoint to be a
+canonical `http://127.0.0.1:<port>` origin.
 
 `store` is optional and defaults as shown. Every bound is a memory limit or a window on the
 in-memory store described in [Operational limits](#operational-limits): `maximumOffers` is bounded
@@ -139,11 +163,11 @@ listener, the Evidence Gateway or Mint endpoints, or the store bounds means rest
 
 | Endpoint | Auth | Notes |
 | --- | --- | --- |
-| `GET /.well-known/openid-credential-issuer` | none | Publishes `credential_issuer`, `credential_endpoint`, `nonce_endpoint`, `authorization_servers`, and `credential_configurations_supported`. The token endpoint is not published here. |
-| `GET /.well-known/oauth-authorization-server` | none | The issuer names itself as its own authorization server, so it publishes the RFC 8414 document a wallet needs to find `token_endpoint`. Publishes only `issuer`, `token_endpoint`, the single supported grant type, an empty `response_types_supported`, and `none` for token endpoint authentication. |
+| `GET /.well-known/openid-credential-issuer` | none | Publishes the issuer and credential endpoints, authorization server, batch ceiling, and supported credential configurations. The token endpoint is not published here. |
+| `GET /.well-known/oauth-authorization-server` | none | Publishes the token endpoint, the pre-authorized-code grant, `none` for token endpoint authentication, and anonymous pre-authorized access. |
 | `POST /offers` | Registry Mint bearer token | Adopter-facing, not wallet-facing. Takes `credentialConfigurationId`, `subjects`, and a boolean `transactionCode`. Returns the offer object, its `openid-credential-offer://` URI, and, when one was asked for, the generated transaction code, once. |
 | `POST /token` | pre-authorized code, plus the transaction code when the offer set one | `grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code`. Returns `access_token`, `token_type`, `expires_in`. No `c_nonce`. |
-| `POST /nonce` | none required | Empty body in, `{"c_nonce": ...}` out, `Cache-Control: no-store`. A bearer token is read when one is presented, solely to bind the nonce to that token; without one the nonce is well-formed and no credential request can use it. |
+| `POST /nonce` | none | Empty body in, `{"c_nonce": ...}` out, `Cache-Control: no-store`. The nonce is a keyed freshness challenge and is not bound to an access token. |
 | `POST /credential` | bearer access token | Takes `credential_configuration_id` and `proofs.jwt[]`. Returns `credentials: [{credential: ...}]`. |
 | `GET /health`, `GET /ready` | none | Operational probes. Readiness deliberately reports nothing about the Evidence Gateway or Registry Mint deployments behind it, so a probe cannot be used to survey them. |
 
@@ -161,6 +185,12 @@ Gateway or Registry Mint.
 Only a `holder-bound` requirement can be named as a `credential_configuration_id`. A request
 naming an audience-scoped requirement is refused, so this service cannot be used to launder an
 audience-scoped credential into a wallet.
+
+Each proof uses ES256 and nominates exactly one P-256 public key. It can carry the public JWK
+inline, or carry a `kid` in the self-contained `did:jwk:<base64url-public-JWK>#0` form. The service
+decodes `did:jwk` locally and performs no remote DID resolution. `aud`, `iat`, and `nonce` are
+required. A proof may also carry `exp`; an expired proof is refused, and a far-future `exp` never
+widens the five-minute `iat` freshness window.
 
 ## Operational limits
 
@@ -180,8 +210,6 @@ restart or a second replica. State these limits plainly to anyone operating the 
 
 ## Next
 
-- [Request a holder-bound credential](../../tutorials/request-a-holder-bound-credential/) to
-  configure the `holder-bound` subject binding mode on Evidence Gateway itself.
 - [Configure Registry Mint](../mint/) to issue the access tokens `evidence-oid4vci` uses to
   authenticate to Evidence Gateway and to protect its own `POST /offers` endpoint.
 - [Configure Evidence Gateway](../evidence/) for the deployment this service requests credentials
