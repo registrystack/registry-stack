@@ -206,6 +206,48 @@ function propertyNameConstraints(document, schema) {
   ].sort();
 }
 
+// A branch's fixed discriminator gives readers a stable name for the meaning
+// that branch contributes. This is intentionally narrower than general schema
+// inference: it recognizes only a fixed scalar on the branch itself or on one
+// of the conventional discriminator properties these contracts use.
+function alternativeLabel(document, schema) {
+  const seen = new Set();
+  let node = schema;
+  while (node !== null && typeof node === 'object' && Object.hasOwn(node, '$ref')) {
+    if (seen.has(node.$ref)) {
+      return null;
+    }
+    seen.add(node.$ref);
+    node = resolveReference(document, node.$ref);
+  }
+  if (node === null || typeof node !== 'object' || Array.isArray(node)) {
+    return null;
+  }
+  if (Object.hasOwn(node, 'const')) {
+    return describeValue(node.const);
+  }
+  if (Array.isArray(node.enum) && node.enum.length === 1) {
+    return describeValue(node.enum[0]);
+  }
+  if (node.properties === null || typeof node.properties !== 'object') {
+    return null;
+  }
+  const discriminatorNames = ['kind', 'transport', 'from', 'form', 'version'];
+  for (const name of discriminatorNames) {
+    const property = node.properties[name];
+    if (property === null || typeof property !== 'object' || Array.isArray(property)) {
+      continue;
+    }
+    if (Object.hasOwn(property, 'const')) {
+      return describeValue(property.const);
+    }
+    if (Array.isArray(property.enum) && property.enum.length === 1) {
+      return describeValue(property.enum[0]);
+    }
+  }
+  return null;
+}
+
 function occurrenceOf(schema, keyPath, kind, required, state) {
   const fixed = [];
   if (Object.hasOwn(schema, 'const')) {
@@ -230,6 +272,15 @@ function occurrenceOf(schema, keyPath, kind, required, state) {
     // sharing a key apply together; occurrences under different branches of
     // one combinator are alternatives.
     variantKey: state.variantPath.join('>'),
+    // Fixed discriminator values for the alternatives taken to reach this
+    // occurrence. Shared outer labels are removed when descriptions merge, so
+    // a nested binding reads as `selector` versus `prepared`, not as two copies
+    // of the enclosing `sqlite-extract` label.
+    variantLabels: state.variantLabels,
+    // Descriptions authored directly on a property outrank descriptions on a
+    // referenced or nested combinator shape at the same key path. The latter
+    // commonly explain a sub-shape, not the field as a whole.
+    descriptionDepth: state.descriptionDepth,
     // Set when the answer depends on which alternative a deployment takes,
     // either because some alternative does not declare this key path at all or
     // because only some of them require it.
@@ -255,6 +306,8 @@ function assertionOf(keyPath, kind, required, variantKey, conditional) {
     values: [],
     constraints: [],
     variantKey,
+    variantLabels: [],
+    descriptionDepth: Number.POSITIVE_INFINITY,
     conditional,
     description: null,
     runtime_validation: null,
@@ -336,6 +389,7 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
       ...state,
       referenceStack: new Set([...state.referenceStack, reference]),
       scope: reference,
+      descriptionDepth: state.descriptionDepth + 1,
     });
     return;
   }
@@ -345,6 +399,7 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
       walk(document, branch, prefix, kind, required, occurrences, {
         ...state,
         scope: `${state.scope}/allOf[${index}]`,
+        descriptionDepth: state.descriptionDepth + 1,
       });
     });
   }
@@ -365,6 +420,8 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
         ...state,
         scope: branchScope,
         variantPath: [...state.variantPath, branchScope],
+        variantLabels: [...state.variantLabels, alternativeLabel(document, branch)],
+        descriptionDepth: state.descriptionDepth + 1,
       });
       return branchOccurrences;
     });
@@ -398,6 +455,7 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
           ...state,
           scope: clauseScope,
           variantPath: [...state.variantPath, clauseScope],
+          descriptionDepth: state.descriptionDepth + 1,
         });
       }
       // A clause reaches the key it bounds by traversing the objects above it.
@@ -454,6 +512,7 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
       walk(document, child ?? {}, childPath, 'property', requiredNames.has(name), occurrences, {
         ...state,
         scope: `${state.scope}/properties/${name}`,
+        descriptionDepth: 0,
       });
     }
   }
@@ -462,6 +521,7 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
     walk(document, schema.items, `${prefix}[]`, 'array_item', false, occurrences, {
       ...state,
       scope: `${state.scope}/items`,
+      descriptionDepth: 0,
     });
   }
 
@@ -483,6 +543,8 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
           values: [],
           constraints: nameConstraints,
           variantKey: state.variantPath.join('>'),
+          variantLabels: state.variantLabels,
+          descriptionDepth: 0,
           conditional: false,
           description: null,
           runtime_validation: null,
@@ -494,11 +556,79 @@ function walk(document, schema, prefix, kind, required, occurrences, state) {
     walk(document, additional, valuePath, 'map_value', false, occurrences, {
       ...state,
       scope: `${state.scope}/additionalProperties`,
+      descriptionDepth: 0,
     });
   }
 }
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
+
+function commonPrefixLength(values) {
+  if (values.length === 0) {
+    return 0;
+  }
+  const shortest = Math.min(...values.map((value) => value.length));
+  let index = 0;
+  while (index < shortest && values.every((value) => value[index] === values[0][index])) {
+    index += 1;
+  }
+  return index;
+}
+
+// A key path may be declared by several exclusive schema branches. Picking the
+// first description makes that branch sound universal, which is especially
+// misleading for shared HTTP and SQLite keys. Keep one universal description
+// when the schema supplies one; otherwise name each distinct branch meaning by
+// its fixed discriminator. Descriptions with no usable discriminator remain
+// explicitly alternative rather than being silently presented as universal.
+function mergeDescription(occurrences) {
+  const candidates = occurrences.filter(
+    (occurrence) => !occurrence.fromCondition && occurrence.description,
+  );
+  if (candidates.length === 0) {
+    return null;
+  }
+  const closest = Math.min(...candidates.map((occurrence) => occurrence.descriptionDepth));
+  const described = candidates.filter((occurrence) => occurrence.descriptionDepth === closest);
+
+  const shared = described.find((occurrence) => occurrence.variantKey === '');
+  if (shared) {
+    return shared.description;
+  }
+
+  const byVariant = new Map();
+  for (const occurrence of described) {
+    if (!byVariant.has(occurrence.variantKey)) {
+      byVariant.set(occurrence.variantKey, occurrence);
+    }
+  }
+  const byDescription = new Map();
+  for (const occurrence of byVariant.values()) {
+    const group = byDescription.get(occurrence.description) ?? [];
+    group.push(occurrence);
+    byDescription.set(occurrence.description, group);
+  }
+  if (byDescription.size === 1) {
+    return byDescription.keys().next().value;
+  }
+
+  const prefixLength = commonPrefixLength(
+    [...byVariant.values()].map((occurrence) => occurrence.variantLabels),
+  );
+  return [...byDescription.entries()]
+    .map(([description, group], index) => {
+      const labels = uniqueSorted(
+        group
+          .flatMap((occurrence) => occurrence.variantLabels.slice(prefixLength))
+          .filter(Boolean),
+      );
+      const label = labels.length > 0 ? labels.map((value) => `\`${value}\``).join(' or ') : null;
+      return label
+        ? `For ${label}: ${description}`
+        : `For accepted alternative ${index + 1}: ${description}`;
+    })
+    .join(' ');
+}
 
 // Constraint sets a deployment may satisfy, one group per alternative. Bounds
 // reached without choosing a branch hold under every alternative, so they join
@@ -600,7 +730,7 @@ function merge(occurrences) {
       occurrences.filter((occurrence) => !occurrence.fromCondition),
     ),
     conditional_constraints: conditionalConstraints(occurrences),
-    description: occurrences.find((occurrence) => occurrence.description)?.description ?? null,
+    description: mergeDescription(occurrences),
     runtime_validation:
       occurrences.find((occurrence) => occurrence.runtime_validation)?.runtime_validation ?? null,
   };
@@ -615,6 +745,8 @@ export function collectFields(document) {
   walk(document, document, '', null, false, occurrences, {
     referenceStack: new Set(),
     variantPath: [],
+    variantLabels: [],
+    descriptionDepth: 0,
     scope: '',
   });
 

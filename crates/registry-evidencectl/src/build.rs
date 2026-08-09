@@ -21,7 +21,7 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::{authoring, fixtures};
+use crate::authoring;
 
 const MAX_TARGET_BYTES: u64 = 1024 * 1024;
 const MAX_EVIDENCE_STDOUT_BYTES: u64 = 1024 * 1024;
@@ -131,7 +131,7 @@ fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCo
     let governance: TargetGovernance = serde_norway::from_slice(&governance_bytes)
         .context("deployment governance is not the closed Version 1 target shape")?;
     let governed_bundle = governance.into_bundle()?;
-    let evidence_bin = fixtures::resolve_evidence_binary(None)?;
+    let evidence_bin = crate::evidence_binary::resolve(None)?;
 
     interruption.check()?;
     let staging = tempfile::Builder::new()

@@ -82,7 +82,7 @@ evidence_data_request:
     required: true
     range: [1, 1000000]
     applied: Inside the engine, by the progress handler, between virtual machine instructions.
-  timeout_milliseconds: {required: true, range: [1, 30000], applied: Independently to source-concurrency admission and statement execution. Statement execution receives a fresh window and blocking-worker queue time is not part of either window.}
+  timeout_milliseconds: {required: true, range: [1, 30000], applied: As one absolute deadline across source-concurrency admission, blocking-worker queueing, and statement execution.}
   maximum_response_bytes:
     required: true
     upper_bound: 1048576

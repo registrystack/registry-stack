@@ -2435,6 +2435,24 @@ impl FixedRequest {
     }
 }
 
+/// A statement's select list is already its minimum-disclosure projection.
+///
+/// The generic projection may retain the whole rows array, every row object, or
+/// each declared member individually. It may add extract metadata paths, but it
+/// must not remove a column after SQLite has already materialized it.
+fn statement_projection_preserves_columns(projection: &[String], columns: &[SqliteColumn]) -> bool {
+    if projection
+        .iter()
+        .any(|path| path == "/rows" || path == "/rows/*")
+    {
+        return true;
+    }
+    columns.iter().all(|column| {
+        let expected = format!("/rows/*/{}", column.name);
+        projection.iter().any(|path| path == &expected)
+    })
+}
+
 /// The parameter name the runtime keeps for its own evaluation instant, so a
 /// statement never reads a clock of its own. A bundle that binds the name is
 /// rejected.
@@ -2570,6 +2588,9 @@ impl SqliteRequest {
             (None, None) => {}
         }
         validate_projection(&self.projection)?;
+        if !statement_projection_preserves_columns(&self.projection, &self.columns) {
+            return invalid("statement projection must preserve every declared result column");
+        }
         validate_range(self.maximum_rows, 1, 256, "statement rows")?;
         validate_range(self.maximum_cell_bytes, 1, 65_536, "statement cell size")?;
         validate_range(
@@ -5211,6 +5232,29 @@ mod tests {
             )),
             "source statement must be a SQL file",
         );
+    }
+
+    #[test]
+    fn a_statement_projection_cannot_discard_a_declared_result_column() {
+        let document = sqlite_source_document();
+        assert_eq!(
+            invalid_reason(&edited(
+                &document,
+                "      projection: [/rows/*/id, /rows/*/region, /extract/publishedAt]\n",
+                "      projection: [/rows/*/id, /extract/publishedAt]\n",
+            )),
+            "statement projection must preserve every declared result column"
+        );
+
+        EvidenceConfig::parse_yaml(
+            edited(
+                &document,
+                "      projection: [/rows/*/id, /rows/*/region, /extract/publishedAt]\n",
+                "      projection: [/rows, /extract/publishedAt]\n",
+            )
+            .as_bytes(),
+        )
+        .expect("retaining the complete rows array preserves every declared column");
     }
 
     #[test]

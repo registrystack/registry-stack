@@ -1,0 +1,8 @@
+type: object
+additionalProperties: false
+required: [qualifying_record_count]
+properties:
+  qualifying_record_count:
+    type: integer
+    minimum: 0
+    maximum: 1000000

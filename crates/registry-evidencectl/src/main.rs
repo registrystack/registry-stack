@@ -1,5 +1,5 @@
-//! Evidence adopter tooling: key generation, OpenAPI-assisted authoring, and
-//! fixture runs. Companion to the frozen `evidence` runtime CLI; it never
+//! Evidence adopter tooling: key generation, source authoring, and fixture
+//! runs. Companion to the frozen `evidence` runtime CLI; it never
 //! implements Evidence semantics itself and shells out to the runtime binary
 //! for them.
 
@@ -13,6 +13,7 @@ mod authoring;
 mod build;
 mod dev;
 mod doctor;
+mod evidence_binary;
 mod fixtures;
 mod jwks;
 mod keygen;
@@ -27,7 +28,7 @@ mod verify;
 #[command(
     name = "evidencectl",
     version = registry_platform_buildinfo::DISPLAY_VERSION,
-    about = "Evidence adopter tooling: keys, OpenAPI authoring, fixture runs"
+    about = "Evidence adopter tooling: keys, source authoring, fixture runs"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -44,7 +45,7 @@ enum Command {
     Keygen(keygen::KeygenCommand),
     /// Assemble a public JWKS document from public JWK files.
     Jwks(jwks::JwksArgs),
-    /// Start an editable Evidence authoring project from OpenAPI.
+    /// Start an editable Evidence authoring project from OpenAPI or a SQLite extract.
     New(scaffold::NewArgs),
     /// Compile an editable project into a reviewed deployment candidate.
     Build(build::BuildArgs),

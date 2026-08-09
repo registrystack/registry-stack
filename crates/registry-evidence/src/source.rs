@@ -204,12 +204,14 @@ fn map_statement_error(error: SqliteSourceError) -> SourceError {
         Some(cause::STEP_BUDGET_EXCEEDED | cause::TIME_BUDGET_EXCEEDED) => {
             SourceError::StatementBudget(fault)
         }
-        Some(cause::TOO_MANY_ROWS | cause::CELL_TOO_LARGE | cause::VALUE_TYPE_MISMATCH) => {
-            SourceError::StatementResult(fault)
-        }
-        // Every remaining cause, including a statement that failed while its
-        // result was read, says the statement itself did not hold up against
-        // the extract. That is one fix, in the one file the fault names.
+        Some(
+            cause::TOO_MANY_ROWS
+            | cause::CELL_TOO_LARGE
+            | cause::VALUE_TYPE_MISMATCH
+            | cause::EXECUTION_FAILED,
+        ) => SourceError::StatementResult(fault),
+        // Every remaining cause was settled while the statement was prepared,
+        // so the reviewed statement is the artifact an adopter must correct.
         _ => SourceError::StatementRefused(fault),
     }
 }
@@ -2877,8 +2879,9 @@ mod tests {
     }
 
     /// Which category a statement failure lands in decides which audit record
-    /// an adopter reads. An oversized result is a response-size refusal, not a
-    /// statement-result one, whichever of the two bounds measured it.
+    /// an adopter reads. An oversized result is a response-size refusal, while
+    /// a row-bound or execution failure is a statement-result failure rather
+    /// than a refused reviewed statement.
     #[test]
     fn an_oversized_statement_result_maps_to_the_response_size_refusal() {
         let fault =
@@ -2892,6 +2895,10 @@ mod tests {
         assert_eq!(
             map_statement_error(SqliteSourceError::Statement(fault(cause::TOO_MANY_ROWS))),
             SourceError::StatementResult(fault(cause::TOO_MANY_ROWS))
+        );
+        assert_eq!(
+            map_statement_error(SqliteSourceError::Statement(fault(cause::EXECUTION_FAILED))),
+            SourceError::StatementResult(fault(cause::EXECUTION_FAILED))
         );
     }
 }

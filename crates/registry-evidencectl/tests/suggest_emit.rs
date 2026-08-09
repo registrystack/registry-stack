@@ -9,8 +9,8 @@
 use registry_evidence_authoring::openapi::types;
 
 #[allow(dead_code)]
-#[path = "../src/fixtures.rs"]
-mod fixtures;
+#[path = "../src/evidence_binary.rs"]
+mod evidence_binary;
 
 #[allow(dead_code)]
 #[path = "../src/suggest/emit.rs"]

@@ -1,0 +1,6 @@
+maximumAggregateBytes: 96
+fields:
+  record_reference:
+    type: string
+    minimumBytes: 1
+    maximumBytes: 64
