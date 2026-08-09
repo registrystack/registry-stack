@@ -1,7 +1,7 @@
 version: 1
 starter:
   id: spreadsheet
-  release: 0.17.0
+  release: 0.18.0
   content_digest: sha256:c435b97fb247502094168de231dc2248ce57c145fec8bad9a5f8fbce841c071d
 
 registry:
