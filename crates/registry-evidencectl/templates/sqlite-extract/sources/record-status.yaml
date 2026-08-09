@@ -1,0 +1,28 @@
+transport: sqlite-extract
+posture: source-derived
+extractProfile: record-status-extract
+maximumExtractAgeSeconds: 604800
+request:
+  statement: queries/record-status.sql
+  columns:
+    - {name: qualifying_record_count, type: integer}
+  selectorInputs:
+    - role: subject
+      alternatives:
+        - {profile: record-reference-v1, fields: [record_reference]}
+  parameterBindings:
+    record_reference:
+      kind: selector
+      role: subject
+      profile: record-reference-v1
+      field: record_reference
+  projection: [/rows/*/qualifying_record_count]
+  maximumRows: 2
+  maximumCellBytes: 64
+  maximumStatementSteps: 100000
+  timeoutMilliseconds: 2000
+  maximumResponseBytes: 8192
+  concurrencyLimit: 8
+responseSchema: schemas/record-status-response.schema.yaml
+extractScript: adapters/record-status-extract.rhai
+factSchema: schemas/record-status-facts.schema.yaml

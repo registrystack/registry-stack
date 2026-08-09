@@ -1,0 +1,144 @@
+---
+title: Connect a published SQLite extract
+description: Create a runnable Evidence Gateway SQLite starter, adapt its fixed statement and synthetic fixture, then validate the mounted production extract.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-09"
+doc_type: how-to
+persona:
+  - assertion provider
+  - operator
+locale: en
+standards_referenced: []
+---
+
+Use a SQLite extract when the authority can publish an immutable snapshot but cannot offer a
+bounded live API. Evidence Gateway runs one reviewed SQL statement against the mounted file. It
+does not connect to the authority's database, hold a source credential, or create the extract.
+
+This guide starts with synthetic data. By the end, you will have proved the complete source,
+statement, extraction, derivation, output, and privacy path before binding a real extract.
+
+## Create and prove the starter
+
+Create an editable project without an OpenAPI document:
+
+```sh
+evidencectl new registry-status \
+  --transport sqlite-extract \
+  --profile local
+```
+
+Run its synthetic fixture through the real Evidence Gateway evaluator:
+
+```sh
+evidencectl fixtures run --project registry-status --explain
+```
+
+The starter passes 13 cases. They cover true and false answers, no match, ambiguity, the row
+bound, extract age, source failure, parameter binding, statement refusal, hostile selector text,
+the output gate, and anti-reconstruction. `--explain` reports the stage each case reached without
+printing selector or source values.
+
+## Read the editable path
+
+The files that make one source work are grouped by responsibility:
+
+```text
+registry-status/
+  selectors/record-reference-v1.yaml
+  sources/record-status.yaml
+  queries/record-status.sql
+  adapters/record-status-extract.rhai
+  schemas/record-status-response.schema.yaml
+  schemas/record-status-facts.schema.yaml
+  questions/record-status.yaml
+  derivations/record-status.rhai
+  fixtures/record-status.yaml
+```
+
+Start with `sources/record-status.yaml`. Its `extractProfile` is the logical name an operator will
+bind to a file. Its request names one fixed statement, its authorized selector input, the SQL
+parameter binding, the expected columns, and the row, cell, execution, timeout, response, and
+concurrency bounds.
+
+The statement receives `record_reference` as a bound value. Keep caller input out of SQL text.
+The extraction script decides only `match`, `no_match`, or `ambiguous`, and carries facts only for
+one match. The derivation reduces those facts to the concepts the question allows.
+
+## Adapt the source as one reviewed unit
+
+Change these files together:
+
+1. Replace the table and column names in `queries/record-status.sql`. Select only the narrow facts
+   the derivation needs.
+2. Make `request.columns` and `request.projection` in `sources/record-status.yaml` match the SQL
+   result exactly. Keep every caller-derived value in `parameterBindings`.
+3. Update the response and fact schemas to close the result shape and fact shape.
+4. Update the extraction and derivation scripts without adding I/O or a second query path.
+5. Replace the example requirement, concept, framework, Evidence Type, purpose, and disclosure
+   family identifiers in `questions/record-status.yaml`.
+6. Replace the synthetic schema and rows under `common.extract` in
+   `fixtures/record-status.yaml`. Keep the cases synthetic and retain the privacy canary.
+
+Rerun the fixture command after each coherent change. A project is not ready for production while
+the starter's example identifiers or table contract remain.
+
+## Publish the real extract
+
+Create the SQLite file on the publisher side with the authority's own export tooling. Evidence
+Gateway does not become an ETL pipeline. The finished file must contain exactly one metadata row:
+
+```sql
+CREATE TABLE evidence_extract (
+  published_at TEXT NOT NULL,
+  publisher    TEXT NOT NULL,
+  extract_id   TEXT NOT NULL
+);
+```
+
+Write `published_at` as the publisher's snapshot instant. If the reviewed statement compares text
+timestamps with `:evidence_now`, normalize those columns to whole-second UTC in
+`YYYY-MM-DDTHH:MM:SSZ` form before publication.
+
+Checkpoint the database into one file with no `-wal` or `-journal` beside it. Transfer it under a
+new versioned path, make it non-writable to the Evidence Gateway identity, and bind the source's
+`extractProfile` to that path in the target `runtime.yaml`:
+
+```yaml
+sourceExtracts:
+  record-status-extract:
+    path: /var/lib/registry-evidence/extracts/record-status-2026-08-09.sqlite
+```
+
+Never replace bytes behind a running immutable connection. Publish a new path and restart.
+
+## Gate the deployment
+
+Create a complete governed target by following [Build and deploy an Evidence Gateway
+project](../build-and-deploy-evidence-project/). Then build the editable project and run the checks
+against the exact candidate and mounted extract:
+
+```sh
+evidencectl build \
+  --project registry-status \
+  --target registry-status/deployment-targets/staging \
+  --output candidate-staging
+
+evidencectl doctor --project candidate-staging
+evidencectl fixtures run --project candidate-staging
+evidence --runtime candidate-staging/runtime.yaml check
+```
+
+The last command opens the bound extract, validates its metadata and fixed statement, and refuses
+an extract that is already older than `maximumExtractAgeSeconds`. Start the service only after
+that check passes. Route traffic after `/ready` and one authorized synthetic-subject request pass,
+then verify the signed response with independently pinned policy and public keys.
+
+## Next
+
+- [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
+- [Test an Evidence Gateway project with fixtures](../prove-an-evidence-project/)
+- [Evidence Gateway configuration reference](../../reference/evidence-configuration/)

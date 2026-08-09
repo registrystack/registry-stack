@@ -1047,21 +1047,22 @@ fails when a required local runtime or bundle input, selector binding,
 credential, CA binding, audit dependency, or signing dependency is absent,
 mutable, or invalid.
 
-A statement source holds no credential, so readiness has nothing to check for
-one and passes it. In particular, how old its mounted extract is never decides
-readiness. An extract past its source's `maximumExtractAgeSeconds` refuses every
-evaluation that reads it, with `dependency_unavailable` at the boundary and the
+A statement source holds no credential, so readiness has nothing to bootstrap
+for one. How old its mounted extract is still does not decide readiness. An
+extract past its source's `maximumExtractAgeSeconds` refuses every evaluation
+that reads it, with `dependency_unavailable` at the boundary and the
 `source-extract-stale` audit category, while `/ready` stays `200` and the
-requirements on other sources keep being served. This is the same standing an
-unreachable `jwksUri` has, and for the same reason: every replica mounts the
-same file, so removing one from rotation cures nothing and removing all of them
-turns one stale file into a full outage. The current startup warning identifies
-the governed source. Version 1 operator conformance additionally requires every
+requirements on other sources keep being served. Every replica may mount the
+same file, so removing all of them from rotation would turn one stale source
+into a full service outage. The deployment preflight is `evidence check`: it
+refuses an extract that is already stale before traffic is routed. A later
+transition to stale remains visible through the safe startup diagnostic and
+audit category. Version 1 operator conformance additionally requires every
 stale-extract fault to identify only the governed source or extract profile,
 never the publisher's `extractId`, filesystem path, or another metadata value.
-Alert on the safe startup line and audit category, not on readiness. The cure is
-to publish a fresh extract and restart. This is also why an already-stale extract
-does not refuse startup: a restart racing a republish would otherwise
+Alert on that safe diagnostic and audit category, not on readiness. The cure is
+to publish a fresh extract and restart. Startup itself does not refuse an
+already-stale extract because a restart racing a republish would otherwise
 crashloop.
 
 The access-token issuer's `jwksUri` is retrieved once at startup and again on

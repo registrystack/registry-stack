@@ -130,6 +130,80 @@ test('combinator branches merge into one entry per key path', () => {
   assert.equal(byPath.get('signer.ref').required, 'conditional');
 });
 
+test('alternative descriptions retain their discriminator semantics', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      source: {
+        oneOf: [
+          {
+            type: 'object',
+            properties: {
+              transport: { const: 'http-json' },
+              timeout: { type: 'integer', description: 'Bounds the HTTP exchange.' },
+            },
+          },
+          {
+            type: 'object',
+            properties: {
+              transport: { const: 'sqlite-extract' },
+              timeout: { type: 'integer', description: 'Bounds statement execution.' },
+            },
+          },
+        ],
+      },
+    },
+  });
+  const timeout = fields.find((field) => field.key_path === 'source.timeout');
+  assert.equal(
+    timeout.description,
+    'For `http-json`: Bounds the HTTP exchange. For `sqlite-extract`: Bounds statement execution.',
+  );
+});
+
+test('nested alternative descriptions omit their shared outer discriminator', () => {
+  const fields = collectFields({
+    type: 'object',
+    properties: {
+      source: {
+        oneOf: [
+          {
+            type: 'object',
+            properties: {
+              transport: { const: 'sqlite-extract' },
+              binding: {
+                oneOf: [
+                  {
+                    type: 'object',
+                    properties: {
+                      kind: { const: 'selector', description: 'Uses a selector field.' },
+                    },
+                  },
+                  {
+                    type: 'object',
+                    properties: {
+                      kind: { const: 'prepared', description: 'Uses preparation output.' },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+          {
+            type: 'object',
+            properties: { transport: { const: 'http-json' } },
+          },
+        ],
+      },
+    },
+  });
+  const kind = fields.find((field) => field.key_path === 'source.binding.kind');
+  assert.equal(
+    kind.description,
+    'For `selector`: Uses a selector field. For `prepared`: Uses preparation output.',
+  );
+});
+
 test('a key only one alternative declares is conditional, not required', () => {
   const fields = collectFields({
     type: 'object',
@@ -551,6 +625,36 @@ test('the committed schemas produce a valid reference for every configuration fi
   );
   for (const contract of document.contracts) {
     assert.ok(contract.fields.length > 0, `${contract.id} produced no fields`);
+  }
+});
+
+test('shared Evidence source keys describe every accepted branch', async () => {
+  const document = await buildEvidenceConfiguration(repoRoot);
+  const bundle = document.contracts.find((contract) => contract.id === 'bundle');
+  const byPath = new Map(bundle.fields.map((field) => [field.key_path, field]));
+  const cases = [
+    [
+      'sources.*.transport',
+      ['`http-json`', 'fixed HTTPS origin', '`sqlite-extract`', 'read-only SQLite extract'],
+    ],
+    [
+      'sources.*.request.timeoutMilliseconds',
+      ['`http-json`', 'HTTP exchange', '`sqlite-extract`', 'statement execution'],
+    ],
+    [
+      'sources.*.request.selectorInputs',
+      ['`http-json`', 'preparation script', '`sqlite-extract`', 'parameter bindings'],
+    ],
+    [
+      'sources.*.request.parameterBindings.*.kind',
+      ['`selector`', 'authorized selector field', '`prepared`', 'filled by the preparation script'],
+    ],
+  ];
+  for (const [keyPath, expectedParts] of cases) {
+    const description = byPath.get(keyPath)?.description ?? '';
+    for (const part of expectedParts) {
+      assert.ok(description.includes(part), `${keyPath} omits ${part}`);
+    }
   }
 });
 

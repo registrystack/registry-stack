@@ -1,8 +1,9 @@
-//! Minimal OpenAPI-assisted Evidence project authoring.
+//! Minimal Evidence project authoring from OpenAPI or a SQLite extract.
 //!
-//! `new` retains the API description for a later question-authoring step. It
-//! does not select an operation or invent Evidence semantics, source policy,
-//! runtime configuration, or acceptance cases.
+//! `new` retains an API description for a later question-authoring step, or
+//! creates a runnable synthetic SQLite starter around one fixed statement. The
+//! starter is an editable example, not a deployment policy or production
+//! extract.
 
 use std::{
     fs,
@@ -24,6 +25,12 @@ pub enum AuthoringProfile {
     Local,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum AuthoringTransport {
+    /// Author a fixed statement over a published SQLite extract.
+    SqliteExtract,
+}
+
 #[derive(Debug, Args)]
 pub struct NewArgs {
     /// New directory to create for the editable authoring project.
@@ -33,8 +40,12 @@ pub struct NewArgs {
     #[arg(long)]
     pub openapi: Option<String>,
 
-    /// Explicit development profile for OpenAPI-assisted authoring.
-    #[arg(long, value_enum, requires = "openapi")]
+    /// Source transport to author without an API description.
+    #[arg(long, value_enum, conflicts_with = "openapi")]
+    pub transport: Option<AuthoringTransport>,
+
+    /// Explicit development profile for local authoring.
+    #[arg(long, value_enum)]
     pub profile: Option<AuthoringProfile>,
 
     /// Compatibility flag; local projects now always generate disposable keys.
@@ -43,17 +54,31 @@ pub struct NewArgs {
 }
 
 pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
-    let openapi = args.openapi.as_ref().context(
-        "`evidencectl new` starts from an API description; pass --openapi <path-or-https-url>",
-    )?;
+    let source = match (args.openapi.as_deref(), args.transport) {
+        (Some(openapi), None) => AuthoringSource::OpenApi(openapi),
+        (None, Some(AuthoringTransport::SqliteExtract)) => AuthoringSource::SqliteExtract,
+        (None, None) => bail!(
+            "pass --openapi <path-or-https-url> for API authoring or --transport sqlite-extract for extract authoring"
+        ),
+        (Some(_), Some(_)) => bail!("--openapi and --transport cannot be used together"),
+    };
     if args.profile.is_none() {
-        bail!("OpenAPI authoring requires the explicit development profile `--profile local`");
+        bail!(
+            "{} authoring requires the explicit development profile `--profile local`",
+            source.label()
+        );
     }
 
     validate_new_destination(&args.directory)?;
     let parent = destination_parent(&args.directory)?;
-    let source = suggest::fetch::spec_source(openapi)?;
-    let (_, document) = suggest::load::open_retained(&source)?;
+    let retained_openapi = match source {
+        AuthoringSource::OpenApi(openapi) => {
+            let source = suggest::fetch::spec_source(openapi)?;
+            let (_, document) = suggest::load::open_retained(&source)?;
+            Some(document)
+        }
+        AuthoringSource::SqliteExtract => None,
+    };
 
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-new-")
@@ -66,11 +91,13 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         b"secrets/\n.evidence/\n",
         0o644,
     )?;
-    write_new_file(
-        &staged_root.join(RETAINED_OPENAPI_FILE),
-        document.as_bytes(),
-        0o644,
-    )?;
+    if let Some(document) = retained_openapi.as_ref() {
+        write_new_file(
+            &staged_root.join(RETAINED_OPENAPI_FILE),
+            document.as_bytes(),
+            0o644,
+        )?;
+    }
     write_new_file(
         &staged_root.join(registry_evidence_authoring::PROJECT_MARKER_FILE),
         registry_evidence_authoring::default_project_marker_document().as_bytes(),
@@ -88,6 +115,11 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         fs::create_dir(staged_root.join(directory))
             .with_context(|| format!("creating the empty {directory} directory"))?;
     }
+    if matches!(source, AuthoringSource::SqliteExtract) {
+        fs::create_dir(staged_root.join("queries"))
+            .context("creating the empty queries directory")?;
+        write_sqlite_starter(staged_root)?;
+    }
 
     keygen::generate_scaffold_key_material(&staged_root.join("secrets"))
         .context("generating unbound local authoring key material")?;
@@ -104,18 +136,24 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
     publish(staging, &args.directory)?;
 
     println!(
-        "Created an editable OpenAPI authoring project in {}",
+        "Created an editable {} authoring project in {}",
+        source.label(),
         args.directory.display()
     );
-    println!(
-        "  OpenAPI: {} (retained exactly for question authoring)",
-        args.directory.join(RETAINED_OPENAPI_FILE).display()
-    );
+    if matches!(source, AuthoringSource::OpenApi(_)) {
+        println!(
+            "  OpenAPI: {} (retained exactly for question authoring)",
+            args.directory.join(RETAINED_OPENAPI_FILE).display()
+        );
+    }
     println!(
         "  selectors: {}",
         args.directory.join("selectors").display()
     );
     println!("  sources: {}", args.directory.join("sources").display());
+    if matches!(source, AuthoringSource::SqliteExtract) {
+        println!("  queries: {}", args.directory.join("queries").display());
+    }
     println!(
         "  questions: {}",
         args.directory.join("questions").display()
@@ -129,12 +167,42 @@ pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
         "  keys: {} (owner-only, disposable, and unbound)",
         args.directory.join("secrets").display()
     );
-    println!(
-        "Next: run `evidencectl source suggest --project {}` to draft one editable source.",
-        args.directory.display()
-    );
-    println!("No question, fixture case, runtime, target, or deployment bundle was generated.");
+    match source {
+        AuthoringSource::OpenApi(_) => println!(
+            "Next: run `evidencectl source suggest --project {}` to draft one editable source.",
+            args.directory.display()
+        ),
+        AuthoringSource::SqliteExtract => {
+            println!(
+                "Next: run `evidencectl fixtures run --project {}` to prove the synthetic starter, then edit its source, statement, schemas, derivation, and fixtures together.",
+                args.directory.display()
+            );
+        }
+    }
+    match source {
+        AuthoringSource::OpenApi(_) => println!(
+            "No question, fixture case, runtime, target, or deployment bundle was generated."
+        ),
+        AuthoringSource::SqliteExtract => println!(
+            "A synthetic source, question, and fixture were generated. No runtime, target, production extract, or deployment bundle was generated."
+        ),
+    }
     Ok(ExitCode::SUCCESS)
+}
+
+#[derive(Clone, Copy)]
+enum AuthoringSource<'a> {
+    OpenApi(&'a str),
+    SqliteExtract,
+}
+
+impl AuthoringSource<'_> {
+    fn label(self) -> &'static str {
+        match self {
+            Self::OpenApi(_) => "OpenAPI",
+            Self::SqliteExtract => "SQLite-extract",
+        }
+    }
 }
 
 fn validate_new_destination(path: &Path) -> anyhow::Result<()> {
@@ -183,6 +251,52 @@ fn write_new_file(path: &Path, contents: &[u8], mode: u32) -> anyhow::Result<()>
         .with_context(|| format!("writing {}", path.display()))?;
     file.sync_all()
         .with_context(|| format!("persisting {}", path.display()))
+}
+
+const SQLITE_STARTER_FILES: &[(&str, &[u8])] = &[
+    (
+        "selectors/record-reference-v1.yaml",
+        include_bytes!("../templates/sqlite-extract/selectors/record-reference-v1.yaml"),
+    ),
+    (
+        "sources/record-status.yaml",
+        include_bytes!("../templates/sqlite-extract/sources/record-status.yaml"),
+    ),
+    (
+        "queries/record-status.sql",
+        include_bytes!("../templates/sqlite-extract/queries/record-status.sql"),
+    ),
+    (
+        "adapters/record-status-extract.rhai",
+        include_bytes!("../templates/sqlite-extract/adapters/record-status-extract.rhai"),
+    ),
+    (
+        "schemas/record-status-response.schema.yaml",
+        include_bytes!("../templates/sqlite-extract/schemas/record-status-response.schema.yaml"),
+    ),
+    (
+        "schemas/record-status-facts.schema.yaml",
+        include_bytes!("../templates/sqlite-extract/schemas/record-status-facts.schema.yaml"),
+    ),
+    (
+        "questions/record-status.yaml",
+        include_bytes!("../templates/sqlite-extract/questions/record-status.yaml"),
+    ),
+    (
+        "derivations/record-status.rhai",
+        include_bytes!("../templates/sqlite-extract/derivations/record-status.rhai"),
+    ),
+    (
+        "fixtures/record-status.yaml",
+        include_bytes!("../templates/sqlite-extract/fixtures/record-status.yaml"),
+    ),
+];
+
+fn write_sqlite_starter(root: &Path) -> anyhow::Result<()> {
+    for (relative, contents) in SQLITE_STARTER_FILES {
+        write_new_file(&root.join(relative), contents, 0o644)?;
+    }
+    Ok(())
 }
 
 fn publish(staging: tempfile::TempDir, destination: &Path) -> anyhow::Result<()> {

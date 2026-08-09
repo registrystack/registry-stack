@@ -754,21 +754,20 @@ This is the `request` a `sqlite-extract` source declares.
 | `adapterParameters` | no | Closed non-secret JSON constants, at most 64, read by the extraction script. |
 | `adapterParametersSchema` | with parameters | Closed bundle-relative JSON Schema for those parameters, required as soon as `adapterParameters` is non-empty. |
 | `preparationLimits` | with script | `maximumParameters` 1 through 64, never below the declared `prepared` binding count, and `maximumParameterValueBytes` 1 through 4,096. |
-| `projection` | yes | 1 through 64 unique pointers of 2 through 256 bytes each, over `/rows` and `/extract`, using the allowlist defined by `ADAPTER-API.md`. |
+| `projection` | yes | 1 through 64 unique pointers of 2 through 256 bytes each, over `/rows` and `/extract`, using the allowlist defined by `ADAPTER-API.md`. It must preserve every declared row column; it may not narrow the SQL select list after execution. |
 | `maximumRows` | yes | 1 through 256 rows. A statement matching more broadly than intended fails here rather than moving a bulk result into the runtime. |
 | `maximumCellBytes` | yes | 1 through 65,536 bytes for one returned value. |
 | `maximumStatementSteps` | yes | 1 through 1,000,000 virtual-machine steps. |
-| `timeoutMilliseconds` | yes | 1 through 30,000 milliseconds. The current runtime applies this ceiling independently to concurrency admission and statement execution; it is not one end-to-end source deadline. |
+| `timeoutMilliseconds` | yes | 1 through 30,000 milliseconds. One absolute deadline covers concurrency admission, blocking-worker queueing, and statement execution. |
 | `maximumResponseBytes` | yes | 1 through 1,048,576 bytes for the assembled result before projection. |
 | `concurrencyLimit` | yes | 1 through 256 statements held against this extract at once. |
 
 `maximumStatementSteps` and `timeoutMilliseconds` bound different things. The
-timeout bounds elapsed time separately while waiting for admission and while
-executing. Statement execution receives a fresh window, and blocking-worker
-queue time is not covered, so total source latency may exceed the configured
-number. The step budget bounds work itself, so a statement that scans more than
-the author expected is stopped on a fast host as well as a slow one. Set both,
-and size the outer request and acquisition ceilings for the current semantics.
+timeout is one elapsed-time deadline across admission, blocking-worker queueing,
+and execution. The step budget bounds work itself, so a statement that scans
+more than the author expected is stopped on a fast host as well as a slow one.
+Set both, and keep the outer request and acquisition ceilings no shorter than
+the source work they admit.
 
 `maximumCellBytes`, `maximumResponseBytes`, and `concurrencyLimit` are one
 process-capacity decision, not independent validation knobs. Set them
@@ -912,10 +911,12 @@ The supported publication handoff is deliberately explicit because
 6. Transfer the new file under a new versioned path, make it non-writable to the
    Evidence identity, update only the matching `runtime.yaml` binding, and
    restart. Never replace the bytes behind an open immutable connection.
-7. Run `evidence check`, every referenced fixture, real startup, and `/ready`
-   before routing traffic. Retain the runtime revision and governed extract
-   profile in the deployment record. Do not copy publisher-controlled metadata
-   values into logs, audit, or error tickets.
+7. Run `evidence check` against the exact runtime and mounted extract. The check
+   refuses an extract that is already older than its source permits. Then run
+   every referenced fixture, real startup, and `/ready` before routing traffic.
+   Retain the runtime revision and governed extract profile in the deployment
+   record. Do not copy publisher-controlled metadata values into logs, audit,
+   or error tickets.
 
 ### Requirement derivation selector inputs
 
@@ -1072,12 +1073,15 @@ credentials to another authority.
 
 ## Authoring and production-build workflow
 
-Treat an editable project like reviewed source code. `evidencectl new` creates
-empty `selectors/`, `sources/`, `adapters/`, `schemas/`, `questions/`,
-`derivations/`, and `fixtures/` directories plus owner-only disposable local
-P-256 Evidence signing material and distinct audit and subject-binding masters.
-It creates no deployment input. `evidencectl dev` creates session-scoped P-256
-Mint, caller, and holder keys automatically.
+Treat an editable project like reviewed source code. The OpenAPI form of
+`evidencectl new` creates empty authoring directories. The `--transport
+sqlite-extract` form creates a source-neutral synthetic statement, source,
+schemas, question, derivation, and fixture that can run immediately with
+`evidencectl fixtures run --project <dir> --explain`. Both forms create
+owner-only disposable local P-256 Evidence signing material plus distinct audit
+and subject-binding masters. Neither creates deployment input or a real
+extract. `evidencectl dev` creates session-scoped P-256 Mint, caller, and holder
+keys automatically for HTTP-source local sessions.
 While authoring, use only synthetic responses and selectors. Add the smallest
 provider-shaped `prepare/2`, `extract/2`, and requirement `derive/3` scripts,
 then add exact positive, legitimate-false, boundary, unresolved,
@@ -1128,7 +1132,8 @@ evidencectl build \
 
 The compiler follows no authored symlink, accepts no reference outside allowed
 project directories, rejects unreferenced generated artifacts, and removes only
-its own failed private staging. It requires authenticated HTTPS sources,
+its own failed private staging. It requires authenticated HTTPS for HTTP
+sources and a governed extract profile for every SQLite source,
 complete authority, resolved review markers, complete governance, governed
 public keys, and complete fixtures. It delegates its internal bundle-only check
 and every fixture to the real `evidence` binary without generating a temporary

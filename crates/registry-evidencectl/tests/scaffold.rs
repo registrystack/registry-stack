@@ -1,4 +1,4 @@
-//! Acceptance tests for the minimal `evidencectl new --openapi` path.
+//! Acceptance tests for the minimal `evidencectl new` authoring paths.
 
 #![cfg(unix)]
 
@@ -16,13 +16,63 @@ use tempfile::TempDir;
 const OPENAPI: &str = "# retained comment\r\nopenapi: 3.1.0\r\ninfo:\r\n  title: Records\r\n  version: 1.0.0\r\npaths: {}\r\n";
 
 #[test]
-fn bare_new_points_to_openapi_and_writes_nothing() {
+fn bare_new_names_both_authoring_inputs_and_writes_nothing() {
     let workspace = TempDir::new().expect("temporary directory");
     let project = workspace.path().join("project");
     let output = evidencectl(&["new", path(&project)]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("--openapi <path-or-https-url>"));
+    assert!(stderr(&output).contains("--transport sqlite-extract"));
+    assert!(!project.exists());
+}
+
+#[test]
+fn sqlite_extract_requires_the_explicit_local_profile_before_writing() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    let output = evidencectl(&["new", path(&project), "--transport", "sqlite-extract"]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("SQLite-extract authoring"));
+    assert!(stderr(&output).contains("--profile local"));
+    assert!(!project.exists());
+}
+
+#[test]
+fn local_sqlite_extract_creates_a_runnable_synthetic_starter() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    let output = sqlite_new(&project, &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    assert_sqlite_project(&project);
+    let printed = stdout(&output);
+    assert!(printed.contains("editable SQLite-extract authoring project"));
+    assert!(printed.contains("queries"));
+    assert!(printed.contains("evidencectl fixtures run --project"));
+    assert!(printed.contains("synthetic source, question, and fixture"));
+    assert!(!printed.contains("source suggest"));
+}
+
+#[test]
+fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let spec = write_spec(workspace.path(), OPENAPI.as_bytes());
+    let project = workspace.path().join("project");
+    let output = evidencectl(&[
+        "new",
+        path(&project),
+        "--openapi",
+        path(&spec),
+        "--transport",
+        "sqlite-extract",
+        "--profile",
+        "local",
+    ]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("cannot be used with"));
     assert!(!project.exists());
 }
 
@@ -252,6 +302,35 @@ fn existing_paths_and_force_are_refused_without_changes() {
     assert_no_staging_directories(workspace.path());
 }
 
+#[test]
+fn sqlite_extract_refuses_existing_and_symlink_destinations_without_changes() {
+    let workspace = TempDir::new().expect("temporary directory");
+
+    let directory = workspace.path().join("existing");
+    fs::create_dir(&directory).expect("existing directory");
+    fs::write(directory.join("sentinel"), b"unchanged").expect("sentinel");
+    let output = sqlite_new(&directory, &[]);
+    assert!(!output.status.success());
+    assert_eq!(
+        fs::read(directory.join("sentinel")).expect("sentinel"),
+        b"unchanged"
+    );
+
+    let external = workspace.path().join("external");
+    fs::create_dir(&external).expect("external directory");
+    fs::write(external.join("sentinel"), b"external").expect("external sentinel");
+    let symlinked = workspace.path().join("symlinked");
+    symlink(&external, &symlinked).expect("project symlink");
+    let output = sqlite_new(&symlinked, &[]);
+    assert!(!output.status.success());
+    assert_eq!(
+        fs::read(external.join("sentinel")).expect("external sentinel"),
+        b"external"
+    );
+    assert_eq!(entries(&external), ["sentinel"]);
+    assert_no_staging_directories(workspace.path());
+}
+
 fn assert_minimal_project(project: &Path, with_keys: bool) {
     let expected = if with_keys {
         vec![
@@ -354,12 +433,74 @@ fn assert_editor_schema_mappings(project: &Path) {
     );
 }
 
+fn assert_sqlite_project(project: &Path) {
+    assert_eq!(
+        entries(project),
+        [
+            ".evidence-editor",
+            ".gitignore",
+            ".vscode",
+            ".zed",
+            "adapters",
+            "derivations",
+            "evidence-project.yaml",
+            "fixtures",
+            "queries",
+            "questions",
+            "schemas",
+            "secrets",
+            "selectors",
+            "sources",
+        ]
+    );
+    for file in [
+        "selectors/record-reference-v1.yaml",
+        "sources/record-status.yaml",
+        "queries/record-status.sql",
+        "adapters/record-status-extract.rhai",
+        "schemas/record-status-response.schema.yaml",
+        "schemas/record-status-facts.schema.yaml",
+        "questions/record-status.yaml",
+        "derivations/record-status.rhai",
+        "fixtures/record-status.yaml",
+    ] {
+        assert!(project.join(file).is_file(), "missing starter file {file}");
+    }
+    assert!(!project.join("source.openapi.yaml").exists());
+    assert_eq!(
+        fs::read_to_string(project.join(".gitignore")).expect("gitignore"),
+        "secrets/\n.evidence/\n"
+    );
+    assert_eq!(
+        fs::metadata(project.join("secrets"))
+            .expect("secret directory")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    assert_editor_schema_mappings(project);
+}
+
 fn openapi_new(project: &Path, openapi: &str, extra: &[&str]) -> Output {
     let mut arguments = vec![
         "new",
         path(project),
         "--openapi",
         openapi,
+        "--profile",
+        "local",
+    ];
+    arguments.extend_from_slice(extra);
+    evidencectl(&arguments)
+}
+
+fn sqlite_new(project: &Path, extra: &[&str]) -> Output {
+    let mut arguments = vec![
+        "new",
+        path(project),
+        "--transport",
+        "sqlite-extract",
         "--profile",
         "local",
     ];

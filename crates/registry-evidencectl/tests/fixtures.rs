@@ -70,7 +70,7 @@ done
 step="check"
 for arg in "$@"; do
   case "$arg" in
-    evaluate) step="evaluate" ;;
+    evaluate|bundle-evaluate) step="evaluate" ;;
   esac
 done
 if [ -n "$fixture" ]; then
@@ -152,6 +152,55 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
             ],
         ],
         "unexpected evidence invocations"
+    );
+}
+
+#[test]
+fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path().join("sqlite-project");
+    let created = evidencectl()
+        .args([
+            "new",
+            project.to_str().expect("project path is UTF-8"),
+            "--transport",
+            "sqlite-extract",
+            "--profile",
+            "local",
+        ])
+        .output()
+        .expect("create SQLite starter");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "13")
+        .output()
+        .expect("run editable fixtures");
+
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let stdout = stdout_of(&output);
+    assert!(stdout.contains("PASS: check"), "{stdout}");
+    assert!(
+        stdout.contains("PASS: fixtures/record-status.yaml (13 cases)"),
+        "{stdout}"
+    );
+
+    let invocations = read_argv_log(&argv_log);
+    assert_eq!(invocations.len(), 2);
+    assert_eq!(invocations[0][0], "bundle-check");
+    assert_eq!(invocations[0][1], "--bundle");
+    assert_eq!(invocations[1][0], "bundle-evaluate");
+    assert_eq!(invocations[1][1], "--bundle");
+    assert_eq!(
+        invocations[1][3..],
+        ["--fixture", "fixtures/record-status.yaml"]
     );
 }
 

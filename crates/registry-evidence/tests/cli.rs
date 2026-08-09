@@ -129,6 +129,100 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
     );
 }
 
+#[test]
+fn check_refuses_an_already_stale_bound_extract_with_only_the_governed_source() {
+    let root = tempfile::tempdir().expect("temporary deployment");
+    let project = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../products/evidence/reference/request-adapter/deployment-projects/sqlite-extract-evidence",
+    );
+    let bundle = root.path().join("bundle");
+    copy_tree(&project.join("bundle"), &bundle);
+    let bundle_configuration = bundle.join("evidence.yaml");
+    let bundle_document = fs::read_to_string(&bundle_configuration).expect("read bundle document");
+    fs::write(
+        &bundle_configuration,
+        bundle_document.replacen(
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+            1,
+        ),
+    )
+    .expect("select local assurance");
+
+    let secret_root = root.path().join("secrets");
+    fs::create_dir(&secret_root).expect("create private secret root");
+    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
+        .expect("set private secret-root mode");
+    stage_reference_secrets(&secret_root);
+
+    let fixture: serde_json::Value = serde_norway::from_slice(
+        &fs::read(bundle.join("fixtures/professional-licence-cases.yaml"))
+            .expect("read statement fixture"),
+    )
+    .expect("parse statement fixture");
+    let seed = fixture
+        .pointer("/common/extract")
+        .and_then(serde_json::Value::as_str)
+        .expect("fixture carries extract seed")
+        .replacen("2026-08-01T00:00:00Z", "2000-01-01T00:00:00Z", 1);
+    let extract_path = root.path().join("licence-register.sqlite");
+    rusqlite::Connection::open(&extract_path)
+        .expect("create extract")
+        .execute_batch(&seed)
+        .expect("materialize extract");
+    fs::set_permissions(&extract_path, fs::Permissions::from_mode(0o444)).expect("seal extract");
+
+    let runtime = fs::read_to_string(project.join("runtime.yaml")).expect("read runtime template");
+    let runtime = runtime
+        .replacen(
+            "/etc/registry-evidence/bundle",
+            bundle.to_str().expect("bundle path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/run/secrets/registry-evidence",
+            secret_root.to_str().expect("secret path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/var/lib/registry-evidence/audit/evidence.jsonl",
+            root.path()
+                .join("audit.jsonl")
+                .to_str()
+                .expect("audit path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "/var/lib/registry-evidence/extracts/licence-register-2026-08-01.sqlite",
+            extract_path.to_str().expect("extract path is UTF-8"),
+            1,
+        )
+        .replacen(
+            "signer:\n  kind: transit\n  unixSocketPath: /run/registry-evidence/transit-proxy.sock\n  mount: transit\n  keyName: evidence-signing\n  keyVersion: 7\n  timeoutMilliseconds: 2000",
+            "signer:\n  kind: local-jwk\n  privateKeyRef: secret:file/evidence-signing",
+            1,
+        );
+    let runtime_path = root.path().join("runtime.yaml");
+    fs::write(&runtime_path, runtime).expect("stage runtime");
+    set_tree_mode(&bundle, 0o555, 0o444);
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).expect("seal runtime");
+
+    let output = invoke(&runtime_path, &["check"]);
+
+    set_tree_mode(&bundle, 0o755, 0o644);
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o644)).expect("unseal runtime");
+    fs::set_permissions(&extract_path, fs::Permissions::from_mode(0o644)).expect("unseal extract");
+    assert!(!output.status.success(), "a stale extract passed check");
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: bound extract is stale for source licence-register\n"
+    );
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(!diagnostic.contains("2000-01-01"));
+    assert!(!diagnostic.contains("2026-08-01-licence-register"));
+    assert!(!diagnostic.contains(extract_path.to_string_lossy().as_ref()));
+}
+
 /// The reference path has to explain itself as well as the acceptance path does.
 ///
 /// A reference case that records only the form it was written in says a case

@@ -235,18 +235,15 @@ fixture rather than passing a case that could never occur:
 
 | Name | Transport | The source did not complete because |
 |---|---|---|
-| `timeout` | both | HTTP exhausted its source timeout, or SQLite exhausted concurrency admission. |
+| `timeout` | both | The source exhausted its declared end-to-end timeout. |
 | `oversized` | both | The assembled result exceeded the declared response size. |
 | `connection-refused` | `http-json` | The origin could not be reached. |
 | `invalid-media-type` | `http-json` | The response carried a media type the source does not accept. |
 | `malformed-json` | `http-json` | The response body was not the JSON the source requires. |
-| `extract-unavailable` | `sqlite-extract` | The configured extract could not be opened. Mapping coverage only; serving discovers this at startup. |
 | `extract-too-old` | `sqlite-extract` | The extract's published instant is older than the declared bound. |
-| `statement-refused` | `sqlite-extract` | The authorizer refused the reviewed statement. Mapping coverage only; serving discovers this at startup. |
-| `statement-parameter` | `sqlite-extract` | A declared parameter was not bound. Mapping coverage only when static agreement should have rejected startup. |
-| `statement-budget` | `sqlite-extract` | Statement execution exceeded its virtual-machine step or elapsed-time budget. |
+| `statement-parameter` | `sqlite-extract` | A declared prepared parameter was not supplied at request time. |
+| `statement-budget` | `sqlite-extract` | Statement execution exceeded its virtual-machine step budget. |
 | `statement-result` | `sqlite-extract` | The result exceeded `maximumRows`, `maximumCellBytes`, or `maximumResponseBytes`, or result typing or execution failed. |
-| `statement-unavailable` | `sqlite-extract` | The statement worker could not run. Mapping coverage only; admission timeout uses `timeout`. |
 
 Every one of them collapses into the same `dependency_unavailable` public
 class, which is the point: what a caller learns from a source that did not
@@ -255,21 +252,17 @@ answer is that it did not answer.
 Extract opening, metadata, statement-authorizer, column-agreement, and static
 parameter-agreement failures are startup failures, not request-time
 `sourceFailure` cases. They belong in bundle/statement mutation cases and the
-source contract suite. SQLite concurrency admission currently maps to
-`timeout`, while elapsed time inside statement execution maps to
-`statement-budget`; they use separate windows rather than one end-to-end
-deadline. The harness must not synthesize a request-time cause the serving
-lifecycle cannot produce.
+source contract suite. SQLite uses one `timeout` deadline across concurrency
+admission, blocking-worker queueing, and execution. The separate
+`statement-budget` name covers the virtual-machine step ceiling. The harness
+must not synthesize a request-time cause the serving lifecycle cannot produce.
 
 A `sourceFailure` case proves only the closed public-problem mapping for an
 injected transport failure. It is not evidence that the acquisition path
-actually reached that failure. This distinction matters for the four entries
-marked mapping-only: the Version 1 fixture vocabulary still admits them, but
-they cannot satisfy the source-lifecycle or deployable-assurance gate. The
-transport's source contract suite must trigger each applicable failure at its
-real startup or request-time enforcement point, and a complete-project fixture
-must execute every successful acquisition stage rather than substituting a
-`sourceFailure` value for it.
+actually reached that failure. The transport's source contract suite must
+trigger each applicable failure at its real enforcement point, and a
+complete-project fixture must execute every successful acquisition stage
+rather than substituting a `sourceFailure` value for it.
 
 ## Expected vocabulary
 
@@ -391,7 +384,8 @@ carries move inside it as `passed` and `evaluatedCases`. The exit code and the
 operator message on standard error are the same in both forms.
 
 ```sh
-evidence evaluate --fixture "<path>" --explain --explain-format json \
+evidence --runtime "<candidate>/runtime.yaml" \
+  evaluate --fixture "<path>" --explain --explain-format json \
   | jq -r '.cases[] | "\(.id)\t\(.failure // "passed")"'
 ```
 

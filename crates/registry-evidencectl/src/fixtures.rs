@@ -2,7 +2,7 @@
 //! semantic decision and only aggregates results.
 
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
@@ -11,6 +11,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use serde_norway::Value as YamlValue;
+
+use crate::authoring::{compile_fixture_project, CompiledFixtureProject};
+use crate::evidence_binary;
 
 #[derive(Debug, Subcommand)]
 pub enum FixturesCommand {
@@ -95,35 +98,51 @@ pub fn run(command: FixturesCommand) -> Result<ExitCode> {
 
 fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let runtime_path = args.project.join("runtime.yaml");
-    if !runtime_path.is_file() {
-        bail!(
-            "runtime configuration not found at {} (expected a deployment project directory containing runtime.yaml)",
-            runtime_path.display()
-        );
-    }
-    let bundle_directory = resolve_bundle_directory(&runtime_path, &args.project)?;
-    let bundle_config_path = bundle_directory.join("evidence.yaml");
-    let fixture_paths = discover_fixtures(&bundle_config_path)?;
-    let evidence_bin = resolve_evidence_binary(args.evidence_bin.as_deref())?;
+    let evidence_bin = evidence_binary::resolve(args.evidence_bin.as_deref())?;
+    let target = if runtime_path.is_file() {
+        let bundle_directory = resolve_bundle_directory(&runtime_path, &args.project)?;
+        let bundle_config_path = bundle_directory.join("evidence.yaml");
+        FixtureTarget::Deployment {
+            runtime_path,
+            fixture_paths: discover_fixtures(&bundle_config_path)?,
+        }
+    } else {
+        if !args.project.join("questions").is_dir() || !args.project.join("sources").is_dir() {
+            bail!(
+                "project at {} is neither a deployment project with runtime.yaml nor an editable project with questions/ and sources/",
+                args.project.display()
+            );
+        }
+        let staging = tempfile::Builder::new()
+            .prefix("evidencectl-fixtures-")
+            .tempdir()
+            .context("creating private fixture compilation staging")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
+                .context("sealing private fixture compilation staging")?;
+        }
+        let compilation = compile_fixture_project(&args.project, staging.path())
+            .context("compiling editable project for fixture evaluation")?;
+        FixtureTarget::Editable {
+            compilation,
+            _staging: staging,
+        }
+    };
+    let fixture_paths = target.fixture_paths();
 
-    let check_outcome = run_evidence_step(&evidence_bin, &runtime_path, &["check"]);
+    let check_outcome = target.check(&evidence_bin);
     let check_passed = check_outcome.passed;
 
     // A broken bundle makes per-fixture results meaningless, so a failing
     // check short-circuits before any fixture is evaluated.
     let mut fixtures = Vec::new();
     if check_passed {
-        for fixture_path in &fixture_paths {
-            let mut evaluate = vec!["evaluate", "--fixture", fixture_path.as_str()];
-            if args.explain {
-                // The text form only. The case count is read from the summary
-                // line `evidence` prints beside the trace, and the structured
-                // form prints the document instead of that line.
-                evaluate.push("--explain");
-            }
-            let outcome = run_evidence_step(&evidence_bin, &runtime_path, &evaluate);
+        for fixture_path in fixture_paths {
+            let outcome = target.evaluate(&evidence_bin, fixture_path, args.explain);
             fixtures.push(FixtureReport {
-                path: fixture_path.clone(),
+                path: fixture_path.to_owned(),
                 passed: outcome.passed,
                 stderr: outcome.stderr,
                 evaluated_cases: outcome.evaluated_cases,
@@ -160,6 +179,69 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// The two project shapes adopters work with. Deployment projects carry a
+/// runtime binding; editable projects compile to a private bundle and use the
+/// runtime's bundle-only fixture seam.
+enum FixtureTarget {
+    Deployment {
+        runtime_path: PathBuf,
+        fixture_paths: Vec<String>,
+    },
+    Editable {
+        // Declared before the temporary directory so its Drop restores bundle
+        // permissions before the directory removes the staging tree.
+        compilation: CompiledFixtureProject,
+        _staging: tempfile::TempDir,
+    },
+}
+
+impl FixtureTarget {
+    fn fixture_paths(&self) -> &[String] {
+        match self {
+            Self::Deployment { fixture_paths, .. } => fixture_paths,
+            Self::Editable { compilation, .. } => &compilation.fixture_paths,
+        }
+    }
+
+    fn check(&self, evidence_bin: &Path) -> StepOutcome {
+        match self {
+            Self::Deployment { runtime_path, .. } => {
+                run_evidence_step(evidence_bin, &["--runtime"], Some(runtime_path), &["check"])
+            }
+            Self::Editable { compilation, .. } => run_evidence_step(
+                evidence_bin,
+                &["bundle-check", "--bundle"],
+                Some(&compilation.bundle_path),
+                &[],
+            ),
+        }
+    }
+
+    fn evaluate(&self, evidence_bin: &Path, fixture: &str, explain: bool) -> StepOutcome {
+        match self {
+            Self::Deployment { runtime_path, .. } => {
+                let mut args = vec!["evaluate", "--fixture", fixture];
+                if explain {
+                    args.push("--explain");
+                }
+                run_evidence_step(evidence_bin, &["--runtime"], Some(runtime_path), &args)
+            }
+            Self::Editable { compilation, .. } => {
+                let mut args = vec!["--fixture", fixture];
+                if explain {
+                    args.push("--explain");
+                }
+                run_evidence_step(
+                    evidence_bin,
+                    &["bundle-evaluate", "--bundle"],
+                    Some(&compilation.bundle_path),
+                    &args,
+                )
+            }
+        }
+    }
 }
 
 /// Resolve the bundle directory a project's `runtime.yaml` names. A relative
@@ -248,70 +330,23 @@ fn discover_fixtures(bundle_config_path: &Path) -> Result<Vec<String>> {
     Ok(fixture_paths)
 }
 
-/// Resolve the `evidence` binary: an explicit `--evidence-bin`, else
-/// `EVIDENCE_BIN`, else the first `evidence` found on `PATH`.
-/// Crate-visible so `suggest::emit` resolves the runtime binary the same way.
-pub(crate) fn resolve_evidence_binary(explicit: Option<&Path>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        if !path.is_file() {
-            bail!("evidence binary not found at {}", path.display());
-        }
-        return Ok(path.to_path_buf());
-    }
-    if let Ok(env_path) = env::var("EVIDENCE_BIN") {
-        let path = PathBuf::from(&env_path);
-        if !path.is_file() {
-            bail!(
-                "evidence binary not found at {} (from EVIDENCE_BIN)",
-                path.display()
-            );
-        }
-        return Ok(path);
-    }
-    find_on_path("evidence").ok_or_else(|| {
-        anyhow!(
-            "evidence binary not found: pass --evidence-bin, set EVIDENCE_BIN, or add `evidence` to PATH"
-        )
-    })
-}
-
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    let path_var = env::var_os("PATH")?;
-    env::split_paths(&path_var).find_map(|dir| {
-        let candidate = dir.join(name);
-        is_candidate_executable(&candidate).then_some(candidate)
-    })
-}
-
-/// A regular file, and, on unix, one with at least one executable bit set. A
-/// non-executable file on `PATH` is skipped so resolution falls through to
-/// the clearer "not found" error instead of a spawn failure later.
-fn is_candidate_executable(path: &Path) -> bool {
-    let Ok(metadata) = fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
 /// Run one `evidence --runtime <runtime_path> <args...>` invocation.
 ///
 /// Standard output and standard error are captured rather than inherited so
 /// steps never interleave, and any failure to even spawn the process is
 /// treated the same as a nonzero exit: the step failed.
-fn run_evidence_step(evidence_bin: &Path, runtime_path: &Path, args: &[&str]) -> StepOutcome {
+fn run_evidence_step(
+    evidence_bin: &Path,
+    prefix: &[&str],
+    path: Option<&Path>,
+    args: &[&str],
+) -> StepOutcome {
     let mut command = Command::new(evidence_bin);
-    command.arg("--runtime").arg(runtime_path).args(args);
+    command.args(prefix);
+    if let Some(path) = path {
+        command.arg(path);
+    }
+    command.args(args);
     match command.output() {
         Ok(output) if output.status.success() => {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();

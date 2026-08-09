@@ -43,6 +43,9 @@ the same fixtures with `evidence evaluate` before deployment, and can add
   one record through a protected, scoped, read-only registry API of the shape
   Registry Relay presents, and supports residence region as a coarse
   controlled code mapped from the register's own code.
+- [`sqlite-extract-evidence/`](sqlite-extract-evidence/) answers professional
+  licence status from one reviewed statement over a published, read-only
+  SQLite extract, without an outbound source credential or network request.
 
 Every hostname, issuer, identifier, and fixture value is synthetic. `.example`
 hosts must be replaced during deployment. Secret files are referenced only by

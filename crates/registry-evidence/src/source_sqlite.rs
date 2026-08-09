@@ -140,7 +140,7 @@ pub enum SqliteSourceError {
     Extract(ArtifactFault),
     #[error("the statement source concurrency boundary is unavailable")]
     Concurrency,
-    #[error("the statement source timed out waiting for a concurrency slot")]
+    #[error("the statement source exceeded its time limit")]
     Timeout,
     #[error("the statement source execution thread is unavailable")]
     Unavailable,
@@ -498,10 +498,16 @@ impl SqliteExtractSource {
         evaluation_instant: DateTime<Utc>,
     ) -> Result<JsonValue, SqliteSourceError> {
         let bindings = self.bind_values(parameters, evaluation_instant)?;
+        // One absolute deadline covers every wait this source owns. In
+        // particular, admission cannot consume this window and then hand a
+        // fresh one to SQLite, and a task waiting for a blocking worker cannot
+        // outlive it either.
+        let deadline = Instant::now() + self.plan.timeout;
+        let asynchronous_deadline = tokio::time::Instant::from_std(deadline);
         // An owned permit so the blocking task can hold it; a borrowed one would
         // be tied to this future, which is the lifetime being escaped.
-        let permit = tokio::time::timeout(
-            self.plan.timeout,
+        let permit = tokio::time::timeout_at(
+            asynchronous_deadline,
             Arc::clone(&self.concurrency).acquire_owned(),
         )
         .await
@@ -511,16 +517,31 @@ impl SqliteExtractSource {
         let plan = Arc::clone(&self.plan);
         let connections = Arc::clone(&self.connections);
 
-        let outcome = tokio::task::spawn_blocking(move || {
-            let outcome = run_statement(&connection, &plan, &bindings);
+        let execution = tokio::task::spawn_blocking(move || {
+            let outcome = run_statement(&connection, &plan, &bindings, deadline);
             return_connection(&connections, connection);
             drop(permit);
             outcome
-        })
-        .await
-        .map_err(|_| SqliteSourceError::Unavailable)?;
+        });
+        // Timing out this await detaches rather than cancels the blocking task.
+        // The task still owns the connection and permit and returns both from
+        // inside its closure, preserving the pool after a queue or execution
+        // timeout just as it does after caller cancellation.
+        let outcome = tokio::time::timeout_at(asynchronous_deadline, execution)
+            .await
+            .map_err(|_| SqliteSourceError::Timeout)?
+            .map_err(|_| SqliteSourceError::Unavailable)?;
 
-        let rows = outcome.map_err(|cause| self.plan.fault(cause))?;
+        let rows = match outcome {
+            Ok(rows) => rows,
+            // Admission, worker scheduling and execution share one time limit
+            // and therefore one operator category. Normalizing the progress
+            // handler's execution-time signal avoids a race where the same
+            // deadline could be reported differently depending on whether the
+            // blocking task or Tokio's timer was polled first.
+            Err(cause::TIME_BUDGET_EXCEEDED) => return Err(SqliteSourceError::Timeout),
+            Err(cause) => return Err(self.plan.fault(cause)),
+        };
         let mut result = JsonMap::new();
         result.insert("rows".to_owned(), JsonValue::Array(rows));
         result.insert("extract".to_owned(), self.extract.clone());
@@ -752,10 +773,14 @@ fn read_extract_metadata(
     maximum_statement_steps: u64,
     timeout: Duration,
 ) -> Result<ExtractMetadata, SqliteSourceError> {
-    let budget = install_progress_handler(connection, maximum_statement_steps, timeout)
-        // A connection that will not take a progress handler cannot be stepped
-        // under a bound, so it is not a connection this source can read from.
-        .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
+    let budget = install_progress_handler(
+        connection,
+        maximum_statement_steps,
+        Instant::now() + timeout,
+    )
+    // A connection that will not take a progress handler cannot be stepped
+    // under a bound, so it is not a connection this source can read from.
+    .map_err(|_| extract_fault(subject, cause::EXTRACT_UNAVAILABLE))?;
     let sql = format!("SELECT published_at, publisher, extract_id FROM {EXTRACT_METADATA_TABLE}");
     let mut statement = connection.prepare(&sql).map_err(|error| {
         // A missing table and a missing column are different problems for an
@@ -815,11 +840,74 @@ fn verify_statement(
     statement_sql: &str,
 ) -> Result<Vec<BoundParameter>, SqliteSourceError> {
     let artifact = request.statement.as_str();
+    if contains_positional_parameter(statement_sql) {
+        return Err(statement_fault(artifact, cause::UNDECLARED_PARAMETER));
+    }
     let statement = connection
         .prepare(statement_sql)
         .map_err(|error| classify_prepare(&error).statement_fault(artifact, statement_sql))?;
     verify_columns(&statement, request, artifact)?;
     verify_parameters(&statement, request, artifact)
+}
+
+/// Whether executable SQL contains a `?` or `?NNN` parameter token.
+///
+/// SQLite can alias `?1` to a slot first introduced as `:name`, after which
+/// its parameter API reports only the named spelling. Scan the reviewed text
+/// as well, ignoring quoted values, quoted identifiers, and comments, so that
+/// alias cannot bypass the named-only statement contract.
+fn contains_positional_parameter(sql: &str) -> bool {
+    #[derive(Clone, Copy)]
+    enum State {
+        Sql,
+        Quote(u8),
+        Bracket,
+        LineComment,
+        BlockComment,
+    }
+
+    let bytes = sql.as_bytes();
+    let mut state = State::Sql;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        let next = bytes.get(index + 1).copied();
+        match state {
+            State::Sql => match (byte, next) {
+                (b'?', _) => return true,
+                (b'\'', _) | (b'"', _) | (b'`', _) => state = State::Quote(byte),
+                (b'[', _) => state = State::Bracket,
+                (b'-', Some(b'-')) => {
+                    state = State::LineComment;
+                    index += 1;
+                }
+                (b'/', Some(b'*')) => {
+                    state = State::BlockComment;
+                    index += 1;
+                }
+                _ => {}
+            },
+            State::Quote(quote) if byte == quote => {
+                if next == Some(quote) {
+                    index += 1;
+                } else {
+                    state = State::Sql;
+                }
+            }
+            State::Quote(_) => {}
+            State::Bracket if byte == b']' => state = State::Sql,
+            State::Bracket => {}
+            State::LineComment if matches!(byte, b'\n' | b'\r') => state = State::Sql,
+            State::LineComment => {}
+            State::BlockComment if byte == b'*' && next == Some(b'/') => {
+                state = State::Sql;
+                index += 1;
+            }
+            State::BlockComment => {}
+        }
+        index += 1;
+    }
+    false
 }
 
 /// The declared `columns` are what `responseSchema`, the extraction script and
@@ -904,7 +992,7 @@ const BUDGET_TIME: u8 = 2;
 fn install_progress_handler(
     connection: &Connection,
     maximum_statement_steps: u64,
-    timeout: Duration,
+    deadline: Instant,
 ) -> Result<Arc<AtomicU8>, &'static str> {
     let outcome = Arc::new(AtomicU8::new(BUDGET_WITHIN));
     let observed = Arc::clone(&outcome);
@@ -912,7 +1000,6 @@ fn install_progress_handler(
     // budget shortens the interval to itself.
     let interval = maximum_statement_steps.clamp(1, PROGRESS_STEP_INTERVAL);
     let budget = maximum_statement_steps;
-    let deadline = Instant::now() + timeout;
     let mut consumed: u64 = 0;
     connection
         .progress_handler(
@@ -938,8 +1025,15 @@ fn run_statement(
     connection: &Connection,
     plan: &StatementPlan,
     bindings: &[(usize, BoundValue)],
+    deadline: Instant,
 ) -> Result<Vec<JsonValue>, &'static str> {
-    let budget = install_progress_handler(connection, plan.maximum_statement_steps, plan.timeout)?;
+    // A task may have spent the whole source window waiting for a blocking
+    // worker. Refuse it before preparing or stepping anything when it finally
+    // starts, while the async caller independently returns at the same deadline.
+    if Instant::now() >= deadline {
+        return Err(cause::TIME_BUDGET_EXCEEDED);
+    }
+    let budget = install_progress_handler(connection, plan.maximum_statement_steps, deadline)?;
     let mut statement = connection
         .prepare(&plan.sql)
         .map_err(|error| classify_prepare(&error).cause)?;
@@ -1136,9 +1230,11 @@ fn classify_step(error: &rusqlite::Error, budget: &AtomicU8) -> &'static str {
             rusqlite::Error::SqliteFailure(failure, _) if failure.code == ErrorCode::TooBig => {
                 cause::CELL_TOO_LARGE
             }
-            rusqlite::Error::SqliteFailure(failure, message) => {
-                classify_failure(failure.code, message.as_deref())
-            }
+            // Preparation has already settled statement syntax, names and
+            // authorization. Any other engine failure while rows are being
+            // stepped is an execution failure, not newly invalid SQL. Discard
+            // SQLite's message because it may quote extract content.
+            rusqlite::Error::SqliteFailure(_, _) => cause::EXECUTION_FAILED,
             _ => cause::EXECUTION_FAILED,
         },
     }
@@ -1598,7 +1694,82 @@ factSchema: schemas/facts.schema.yaml
              ) SELECT COUNT(*) AS total FROM counter",
             &path,
         );
-        assert_eq!(run_error(&source).await, cause::TIME_BUDGET_EXCEEDED);
+        let error = source
+            .execute(&BTreeMap::new(), instant("2026-08-07T03:00:00Z"))
+            .await
+            .expect_err("the time limit did not stop the statement");
+        assert_eq!(error, SqliteSourceError::Timeout);
+    }
+
+    /// Waiting for Tokio to assign a blocking worker belongs to the same source
+    /// deadline as permit admission and SQLite execution. The task remains
+    /// responsible for returning its connection and permit after the async
+    /// caller times out, even when it had not started running yet.
+    #[test]
+    fn blocking_worker_queue_time_is_bounded_and_the_pool_recovers() {
+        let directory = TempDir::new().expect("a temporary directory");
+        let path = extract(&directory);
+        let source = open(
+            &Plan::default().timeout(100),
+            "SELECT id FROM person ORDER BY id LIMIT 1",
+            &path,
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .max_blocking_threads(1)
+            .build()
+            .expect("a single-blocking-worker runtime");
+
+        runtime.block_on(async {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+            });
+            started_rx.await.expect("the blocking worker started");
+
+            // Spend part of the source window in admission, then leave the
+            // execution queued behind the occupied blocking worker. A reset
+            // after admission would let this call run until the test's much
+            // larger safety ceiling instead of enforcing its own 25 ms limit.
+            let held = Arc::clone(&source.concurrency)
+                .acquire_many_owned(2)
+                .await
+                .expect("the test holds every source permit");
+            let release_admission = async move {
+                tokio::time::sleep(Duration::from_millis(75)).await;
+                drop(held);
+            };
+            let parameters = BTreeMap::new();
+            // The 150 ms safety ceiling is longer than the source's one 100 ms
+            // deadline but shorter than a fresh 100 ms worker-queue window
+            // started after the 75 ms admission wait.
+            let source_call = tokio::time::timeout(
+                Duration::from_millis(150),
+                source.execute(&parameters, instant("2026-08-07T03:00:00Z")),
+            );
+            let ((), queued) = tokio::join!(release_admission, source_call);
+
+            // Release the worker before asserting so a failing implementation
+            // cannot leave the custom runtime waiting forever while it drops.
+            release_tx.send(()).expect("the worker can be released");
+            blocker.await.expect("the blocking worker exits");
+
+            assert_eq!(
+                queued.expect("the source enforced its own deadline"),
+                Err(SqliteSourceError::Timeout),
+            );
+
+            let answered = tokio::time::timeout(
+                Duration::from_millis(250),
+                source.execute(&BTreeMap::new(), instant("2026-08-07T03:00:00Z")),
+            )
+            .await
+            .expect("the recovered source answers within the test ceiling")
+            .expect("the timed-out queued task returned its connection and permit");
+            assert_eq!(answered["rows"], json!([{"id": "p-1"}]));
+        });
     }
 
     /// A caller may stop awaiting at any point, and both things a request holds
@@ -1649,6 +1820,18 @@ factSchema: schemas/facts.schema.yaml
             .await
             .expect("a cancelled request left the pool usable");
         assert_eq!(answered["rows"], json!([{"total": 1}]));
+    }
+
+    #[test]
+    fn an_engine_failure_while_stepping_is_not_reported_as_invalid_sql() {
+        let error = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT),
+            Some("database disk image is malformed around protected-value".to_owned()),
+        );
+        let budget = AtomicU8::new(BUDGET_WITHIN);
+
+        assert_eq!(classify_step(&error, &budget), cause::EXECUTION_FAILED);
+        assert!(!cause::EXECUTION_FAILED.contains("protected-value"));
     }
 
     #[tokio::test]
@@ -1782,9 +1965,27 @@ factSchema: schemas/facts.schema.yaml
         let declared =
             Plan::default().bindings(&format!("{{record: {}}}", selector_binding("given_name")));
         assert_eq!(
+            open_error(
+                &declared,
+                "SELECT id FROM person WHERE id = :record OR id = ?1",
+                &path,
+            ),
+            cause::UNDECLARED_PARAMETER,
+            "a numbered alias of a named parameter was accepted"
+        );
+        assert_eq!(
             open_error(&declared, "SELECT id FROM person", &path),
             cause::UNUSED_BINDING
         );
+    }
+
+    #[test]
+    fn positional_parameter_scan_ignores_literals_identifiers_and_comments() {
+        assert!(!contains_positional_parameter(
+            "SELECT '?' AS \"?\", `?`, [?] -- ?1\n/* ?2 */"
+        ));
+        assert!(contains_positional_parameter("SELECT :record, ?1"));
+        assert!(contains_positional_parameter("SELECT ?"));
     }
 
     #[tokio::test]

@@ -82,8 +82,9 @@ neutral.
 `evidencectl`, built from the `registry-evidencectl` crate, is adopter tooling
 beside the runtime, like `registryctl` for the rest of the stack. It sits
 outside the frozen Version 1 runtime contract: it generates key material,
-starts incomplete OpenAPI-assisted authoring workspaces, compiles a reviewed
-production candidate, and drives fixture runs for complete projects. It
+starts OpenAPI-assisted workspaces and runnable synthetic SQLite starters,
+compiles a reviewed production candidate, and drives fixture runs for editable
+or complete deployment projects. It
 delegates runtime evaluation, signing, bundle validation, and fixture evaluation
 to the `evidence` binary, and reuses `registry-evidence-client` and
 `registry-evidence-verifier` for relying-party request preparation and offline
@@ -99,6 +100,14 @@ and subject-binding masters. The command does not select an API operation,
 invent a question, fixture, policy, production target, Mint configuration, or
 deployable bundle. `evidencectl dev` additionally creates session-scoped P-256
 Mint, caller, and holder keys so the local happy path needs no key ceremony.
+
+`evidencectl new <dir> --transport sqlite-extract --profile local` needs no
+OpenAPI document. It creates a source-neutral synthetic statement source,
+question, derivation, schemas, and 13-case fixture. The first check is
+`evidencectl fixtures run --project <dir> --explain`, which compiles a private
+bundle and delegates bundle validation and fixture evaluation to `evidence`.
+The starter creates no real extract, runtime, production target, or deployable
+bundle.
 
 `evidencectl source suggest` drafts one source from an OpenAPI description:
 it derives a closed response schema, an extraction script, and the facts schema

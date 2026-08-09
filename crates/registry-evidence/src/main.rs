@@ -135,6 +135,9 @@ enum Command {
         bundle: PathBuf,
         #[arg(long)]
         fixture: PathBuf,
+        /// Print the same value-free per-stage trace as deployment evaluation.
+        #[arg(long)]
+        explain: bool,
     },
     /// Start the native Evidence HTTP service.
     Serve,
@@ -215,6 +218,11 @@ impl std::error::Error for CliError {}
 enum CommandError {
     Cli(CliError),
     Deployment(&'static str, ArtifactFault),
+    /// One or more governed extract sources cannot answer at check time.
+    ///
+    /// Source identifiers come from the reviewed bundle. Publisher metadata
+    /// and filesystem paths stay out of the diagnostic.
+    StaleExtracts(Vec<String>),
     /// The audit boundary refused, with the value-free cause it reported.
     ///
     /// It is the one startup boundary that separates its causes, because a
@@ -229,6 +237,12 @@ impl fmt::Display for CommandError {
         match self {
             Self::Cli(error) => fmt::Display::fmt(error, formatter),
             Self::Deployment(message, fault) => write!(formatter, "{message}: {fault}"),
+            Self::StaleExtracts(sources) => write!(
+                formatter,
+                "bound extract is stale for source{} {}",
+                if sources.len() == 1 { "" } else { "s" },
+                sources.join(", ")
+            ),
             Self::Audit(message, fault) => write!(formatter, "{message}: {fault}"),
             Self::Service(reason) => write!(formatter, "service failed: {reason}"),
         }
@@ -267,7 +281,15 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             let bundle = Arc::new(deployment.bundle);
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
-            let _source_plans = compile_source_plans(&bundle, &runtime)?;
+            let source_plans = compile_source_plans(&bundle, &runtime)?;
+            let stale_sources = source_plans
+                .iter()
+                .filter(|(_, source)| source.extract_is_stale(Utc::now()))
+                .map(|(source_id, _)| source_id.clone())
+                .collect::<Vec<_>>();
+            if !stale_sources.is_empty() {
+                return Err(CommandError::StaleExtracts(stale_sources));
+            }
             // Deployment secret material is validated exactly as startup
             // validates it, without opening the audit chain, so a deployment
             // the server would refuse fails check instead of first start.
@@ -351,23 +373,30 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        Command::BundleEvaluate { bundle, fixture } => {
+        Command::BundleEvaluate {
+            bundle,
+            fixture,
+            explain,
+        } => {
             let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
                 kernel_compile_error("fixture bundle compilation failed", error)
             })?;
             let source_plans = compile_bundle_source_plans(&bundle)?;
-            // This hidden seam is driven by Evidencectl, which reports the
-            // command's own output. It records a trace and discards it rather
-            // than growing a second explained surface. The canaries are still
-            // checked against that discarded trace: a fixture that would leak
-            // when explained has to fail here too, or the seam becomes the way
-            // to pass a fixture the explained command refuses.
+            // This hidden seam is driven by Evidencectl. It uses the same trace
+            // type and privacy-canary gate as deployment evaluation so an
+            // editable project can be diagnosed before it has a runtime file.
             let mut trace = FixtureTrace::default();
             let summary =
                 evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, false, &mut trace)
                     .await;
             validate_trace_canaries(&trace)?;
+            if explain {
+                if let Err(error) = &summary {
+                    trace.fail(error.0);
+                }
+                print!("{}", trace.render());
+            }
             let summary = summary?;
             println!(
                 "Evidence fixture passed ({} evaluated cases)",

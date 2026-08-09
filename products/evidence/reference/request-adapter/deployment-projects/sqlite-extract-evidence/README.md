@@ -24,7 +24,10 @@ Before deployment, the operator changes only:
 - issuer, provider, trust-domain, framework, evidence-type, and concept URIs;
 - the staleness bound, if this concept tolerates a different one;
 - authority tags and purposes;
+- the active public verification JWK and its thumbprint-derived file name and
+  references;
 - the referenced secret files; and
+- the pinned Transit key name and version; and
 - the runtime paths, listener binding, and bound extract file.
 
 ## Lookup shape

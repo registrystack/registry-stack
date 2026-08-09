@@ -2929,7 +2929,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Bundle-relative Rhai script whose two-parameter `extract` function maps the schema-validated projected response and adapter context to a match, no-match, or ambiguous outcome. The script never selects a candidate among multiple records and never turns protocol inconsistency into a closed lookup outcome.",
+          "description": "For `http-json`: Bundle-relative Rhai script whose two-parameter `extract` function maps the schema-validated projected response and adapter context to a match, no-match, or ambiguous outcome. The script never selects a candidate among multiple records and never turns protocol inconsistency into a closed lookup outcome. For `sqlite-extract`: Bundle-relative Rhai script whose two-parameter `extract` function maps the schema-validated projected result and adapter context to a match, no-match, or ambiguous outcome. The script never selects a candidate among multiple rows and never turns protocol inconsistency into a closed lookup outcome.",
           "runtime_validation": null
         },
         {
@@ -2945,7 +2945,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Bundle-relative closed JSON Schema the extraction script's output `facts` must exactly satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates what the script returns, not what the source sent.",
+          "description": "For `http-json`: Bundle-relative closed JSON Schema the extraction script's output `facts` must exactly satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates what the script returns, not what the source sent. For `sqlite-extract`: Bundle-relative closed JSON Schema the extraction script's output `facts` must exactly satisfy on a match outcome. Unlike `sources.*.responseSchema`, this schema validates what the script returns, not what the statement returned.",
           "runtime_validation": null
         },
         {
@@ -2978,7 +2978,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "Describes how much of the underlying record crosses the source wire, weakest at `record-transformed` and strongest at `source-derived`. A chained search-then-fetch requirement can claim no stronger minimization than the weaker of its two sources' postures.",
+          "description": "For `http-json`: Describes how much of the underlying record crosses the source wire, weakest at `record-transformed` and strongest at `source-derived`. A chained search-then-fetch requirement can claim no stronger minimization than the weaker of its two sources' postures. For `sqlite-extract`: Describes how much of the underlying record crosses the source boundary, weakest at `record-transformed` and strongest at `source-derived`. A statement that aggregates in SQL claims `source-derived` honestly, because only the aggregate leaves the statement.",
           "runtime_validation": null
         },
         {
@@ -2990,7 +2990,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "The one fixed evidence-data request plan for this source; a preparation script, a caller, and a source response hold no authority over method, path, headers, redirects, bounds, or request count.",
+          "description": "For `http-json`: The one fixed evidence-data request plan for this source; a preparation script, a caller, and a source response hold no authority over method, path, headers, redirects, bounds, or request count. For `sqlite-extract`: The one fixed statement plan for this source; a preparation script, a caller, and the extract itself hold no authority over the statement text, the declared columns, the parameters, or the bounds.",
           "runtime_validation": null
         },
         {
@@ -3006,7 +3006,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Closed non-secret constants supplied to both the preparation and the extraction script, rejected at bundle load when they fall outside `adapterParametersSchema`.",
+          "description": "For `http-json`: Closed non-secret constants supplied to both the preparation and the extraction script, rejected at bundle load when they fall outside `adapterParametersSchema`. For `sqlite-extract`: Closed non-secret constants supplied to the extraction script, and to the preparation script when one is declared, rejected at bundle load when they fall outside `adapterParametersSchema`.",
           "runtime_validation": null
         },
         {
@@ -3036,7 +3036,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "One constant read by both the preparation and the extraction script, which may itself nest further parameter values.",
+          "description": "For `http-json`: One constant read by both the preparation and the extraction script, which may itself nest further parameter values. For `sqlite-extract`: One constant read by the scripts, which may itself nest further parameter values.",
           "runtime_validation": null
         },
         {
@@ -3080,7 +3080,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties rule turns an undeclared or missing parameter into a startup failure.",
+          "description": "For `http-json`: Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties rule turns an undeclared or missing parameter into a startup failure. For `sqlite-extract`: Bundle-relative closed JSON Schema for the parameter set, whose required-equals-properties rule turns an undeclared or missing parameter into a startup failure. A non-empty `adapterParameters` without it fails startup.",
           "runtime_validation": null
         },
         {
@@ -3159,7 +3159,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Bounds how many evaluations may hold an outbound request to this source at once, and waiting for that admission is bounded by `timeoutMilliseconds`.",
+          "description": "For `http-json`: Bounds how many evaluations may hold an outbound request to this source at once, and waiting for that admission is bounded by `timeoutMilliseconds`. For `sqlite-extract`: Bounds how many evaluations may hold a statement against this extract at once, and waiting for that admission is bounded by `timeoutMilliseconds`.",
           "runtime_validation": null
         },
         {
@@ -3256,7 +3256,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Caps the response body read from this source before parsing and projection, so an oversized response fails as a transport failure rather than being parsed.",
+          "description": "For `http-json`: Caps the response body read from this source before parsing and projection, so an oversized response fails as a transport failure rather than being parsed. For `sqlite-extract`: Caps the assembled result before projection, so an oversized result fails rather than being projected.",
           "runtime_validation": null
         },
         {
@@ -3369,7 +3369,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "Selects the binding origin. This parameter is filled from the authorized selector field named below and from nothing else, so the preparation script cannot stand in for it.",
+          "description": "For `selector`: Selects the binding origin. This parameter is filled from the authorized selector field named below and from nothing else, so the preparation script cannot stand in for it. For `prepared`: Selects the binding origin. This parameter is filled by the preparation script and by nothing else, which is how a value no selector holds, such as a normalized reference or a derived bound, reaches the statement. It names no selector, because naming one would give the parameter a second origin, and the request fails if the script returns no value for it.",
           "runtime_validation": null
         },
         {
@@ -3547,7 +3547,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "Channel policy and output bounds Rust applies to the request parts a preparation script returns, all checked before credentials are resolved or the source is contacted.",
+          "description": "For `http-json`: Channel policy and output bounds Rust applies to the request parts a preparation script returns, all checked before credentials are resolved or the source is contacted. For `sqlite-extract`: Output bounds Rust applies to what a preparation script returns, declared with `prepareScript` and never alone.",
           "runtime_validation": null
         },
         {
@@ -3749,7 +3749,7 @@
             []
           ],
           "conditional_constraints": [],
-          "description": "Bundle-relative Rhai script implementing `prepare/2`, the only step that turns the minimized authorized selectors, closed parameters, and any prior facts into ordered query pairs and at most one JSON body.",
+          "description": "For `http-json`: Bundle-relative Rhai script implementing `prepare/2`, the only step that turns the minimized authorized selectors, closed parameters, and any prior facts into ordered query pairs and at most one JSON body. For `sqlite-extract`: Bundle-relative Rhai script implementing `prepare/2`. A statement source usually declares neither this nor `preparationLimits`, because most parameters name the selector field they come from; a source declares both together or neither, and only where it also declares a `prepared` parameter for the script to fill.",
           "runtime_validation": null
         },
         {
@@ -3767,7 +3767,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Allowlist of response leaves Rust retains, alongside the containers needed to reach them, so an extraction script never observes a field the source returned but the bundle did not select.",
+          "description": "For `http-json`: Allowlist of response leaves Rust retains, alongside the containers needed to reach them, so an extraction script never observes a field the source returned but the bundle did not select. For `sqlite-extract`: Restates the statement result shape for the shared projection boundary. It must preserve every declared row column, either through `/rows`, `/rows/*`, or each `/rows/*/<column>` path, and may additionally retain reviewed extract metadata.",
           "runtime_validation": null
         },
         {
@@ -3816,7 +3816,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Closes the minimized authorized selector alternatives a preparation script can see; an empty array is accepted only on a fetch source.",
+          "description": "For `http-json`: Closes the minimized authorized selector alternatives a preparation script can see; an empty array is accepted only on a fetch source. For `sqlite-extract`: Closes the minimized authorized selector alternatives this source's parameter bindings may draw on; an empty array is accepted only on a source that binds no selector.",
           "runtime_validation": null
         },
         {
@@ -3828,7 +3828,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "One subject role together with the alternative profiles and exact field sets a preparation script may receive for that role.",
+          "description": "For `http-json`: One subject role together with the alternative profiles and exact field sets a preparation script may receive for that role. For `sqlite-extract`: One subject role together with the alternative profiles and exact field sets a binding may name for that role.",
           "runtime_validation": null
         },
         {
@@ -3956,7 +3956,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Bounds each phase of one attempt at this source separately, carrying its whole value into every one: concurrency admission, any wait on the token single-flight boundary, and the HTTP exchange. It is not one deadline across the attempt, so an attempt that waits at one phase and then runs the next spends the bound again, and its worst-case wall clock is a multiple of this value rather than this value.",
+          "description": "For `http-json`: Bounds each phase of one attempt at this source separately, carrying its whole value into every one: concurrency admission, any wait on the token single-flight boundary, and the HTTP exchange. It is not one deadline across the attempt, so an attempt that waits at one phase and then runs the next spends the bound again, and its worst-case wall clock is a multiple of this value rather than this value. For `sqlite-extract`: One absolute deadline for an attempt at this source, covering concurrency admission, blocking-worker queueing, and statement execution. Time spent in an earlier phase reduces what remains for every later phase.",
           "runtime_validation": null
         },
         {
@@ -3972,7 +3972,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Bundle-relative closed JSON Schema the projected source response must satisfy before `sources.*.extractScript` runs; a response outside this shape fails as a source-protocol error and no script runs. Unlike `sources.*.factSchema`, this schema may require fewer members than it declares and may mark a leaf nullable, because projection can legitimately drop or null a value the record did not carry.",
+          "description": "For `http-json`: Bundle-relative closed JSON Schema the projected source response must satisfy before `sources.*.extractScript` runs; a response outside this shape fails as a source-protocol error and no script runs. Unlike `sources.*.factSchema`, this schema may require fewer members than it declares and may mark a leaf nullable, because projection can legitimately drop or null a value the record did not carry. For `sqlite-extract`: Bundle-relative closed JSON Schema the projected statement result must satisfy before `sources.*.extractScript` runs; a result outside this shape fails as a source-protocol error and no script runs. Unlike `sources.*.factSchema`, this schema may require fewer members than it declares and may mark a leaf nullable, because a declared column may legitimately be null in the extract.",
           "runtime_validation": null
         },
         {
@@ -4003,7 +4003,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "Selects the HTTP-plus-JSON transport, which reaches a fixed HTTPS origin over the network under one request and response contract for method, media type, and body shape. The tag chooses the shape of the whole source, so a key belonging to another transport is an unknown key here rather than an ignored one.",
+          "description": "For `http-json`: Selects the HTTP-plus-JSON transport, which reaches a fixed HTTPS origin over the network under one request and response contract for method, media type, and body shape. The tag chooses the shape of the whole source, so a key belonging to another transport is an unknown key here rather than an ignored one. For `sqlite-extract`: Selects the statement transport, which runs one reviewed SQL statement against a read-only SQLite extract file mounted beside the process. There is no origin, no credential, and no network hop, so the keys the HTTP transport needs for those are unknown keys here rather than ignored ones.",
           "runtime_validation": null
         },
         {

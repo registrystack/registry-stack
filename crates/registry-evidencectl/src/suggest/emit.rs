@@ -343,8 +343,8 @@ fn write_new_authoring_file(path: &Path, contents: &[u8]) -> Result<()> {
 /// `EVIDENCE_BIN`, else the first `evidence` found on `PATH`.
 #[allow(dead_code)]
 pub fn verify(project: &Path, evidence_bin: Option<&Path>) -> Result<CheckClassification> {
-    let evidence_bin = crate::fixtures::resolve_evidence_binary(evidence_bin)
-        .context("resolving the evidence binary")?;
+    let evidence_bin =
+        crate::evidence_binary::resolve(evidence_bin).context("resolving the evidence binary")?;
     let runtime_path = project.join("runtime.yaml");
 
     let output = Command::new(&evidence_bin)

@@ -310,6 +310,7 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Create a source from OpenAPI', slug: 'tutorials/connect-an-institution-source' },
+                { label: 'Connect a SQLite extract', slug: 'tutorials/connect-a-sqlite-extract' },
                 { label: 'OpenCRVS: registered parent', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
                 { label: 'OpenCRVS: birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
                 { label: 'DHIS2: immunization summary (under review)', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },

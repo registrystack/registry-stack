@@ -1,0 +1,25 @@
+id: record-status
+question: Does the selected record satisfy the reviewed condition?
+purpose: record-status-check
+subject:
+  role: subject
+  selector: record_reference
+  profile: record-reference-v1
+source:
+  ref: record-status
+answers:
+  - concept: condition_satisfied
+    id: urn:example:concept:record-condition-satisfied:v1
+    type: boolean
+derivation: derivations/record-status.rhai
+disclosure:
+  allow: [condition_satisfied]
+governance:
+  requirement: urn:example:requirement:record-status:v1
+  kind: criterion
+  referenceFrameworks: [urn:example:framework:record-status:v1]
+  evidenceType: urn:example:evidence-type:record-status:v1
+  validitySeconds: 300
+  observationTimezone: UTC
+  fixtures: fixtures/record-status.yaml
+  disclosureFamilies: [urn:example:disclosure-family:record-status]

@@ -20,33 +20,39 @@ before `evidence serve` runs it.
 
 ## The project layout
 
-`evidencectl new` starts an incomplete local authoring workspace from an OpenAPI document
-(`crates/registry-evidencectl/src/scaffold.rs`):
+`evidencectl new` starts local authoring from an OpenAPI document or from a synthetic SQLite
+starter:
 
 ```sh
 project_dir="<dir>"
 openapi_source="<file-or-url>"
 evidencectl new "$project_dir" --openapi "$openapi_source" --profile local
+
+evidencectl new "$project_dir" --transport sqlite-extract --profile local
 ```
 
 ```text
 <dir>/
   .gitignore
-  source.openapi.yaml  retained OpenAPI document
+  source.openapi.yaml  retained OpenAPI document, for HTTP source authoring
   selectors/           reusable Version 1 selector-profile objects
   sources/             reusable Version 1 source objects
   adapters/            source preparation and extraction scripts
   schemas/             source parameter, response, and fact schemas
-  questions/           empty question-authoring directory
-  derivations/         empty derivation-authoring directory
-  fixtures/            empty production-fixture directory
+  queries/             fixed reviewed statements, for SQLite source authoring
+  questions/           question-authoring documents
+  derivations/         derivation scripts
+  fixtures/            synthetic executable cases
   secrets/             owner-only, unbound disposable local keys
 ```
 
-The command retains the OpenAPI bytes exactly and creates no fixture content, question, source policy,
-Mint configuration, README, production target, or deployable bundle. It automatically creates disposable local
-signing and HMAC material. `evidencectl source suggest --project <dir>` drafts one source and its
-editable artifacts from the retained contract. After you add a question, `evidencectl dev`
+The OpenAPI path retains the document bytes exactly and creates empty authoring directories.
+`evidencectl source suggest --project <dir>` then drafts one HTTP source and its editable artifacts.
+The SQLite path creates a neutral synthetic source, statement, question, derivation, schemas, and
+fixture that `evidencectl fixtures run --project <dir>` can evaluate immediately. Neither path
+creates Mint configuration, a production target, a real extract, or a deployable bundle. Both
+automatically create disposable local signing and HMAC material. After you add a question to an
+HTTP project, `evidencectl dev`
 compiles the authoring objects into a private local runtime and delegates validation to the real
 Evidence Gateway loader. Each development session also scaffolds disposable P-256 keys for Registry
 Mint, its caller, and the optional SD-JWT VC holder.

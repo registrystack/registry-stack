@@ -111,6 +111,21 @@ pub(crate) struct CompiledProductionProject {
     pub(crate) bundle: Value,
 }
 
+/// One unpublished local bundle used only by the fixture driver.
+///
+/// Dropping it restores owner-write permission so the caller's temporary
+/// staging directory can be removed without leaving sealed artifacts behind.
+pub(crate) struct CompiledFixtureProject {
+    pub(crate) bundle_path: PathBuf,
+    pub(crate) fixture_paths: Vec<String>,
+}
+
+impl Drop for CompiledFixtureProject {
+    fn drop(&mut self) {
+        let _ = set_bundle_modes(&self.bundle_path, 0o700, 0o600);
+    }
+}
+
 enum CompileProfile {
     Local {
         ports: LocalServicePorts,
@@ -184,6 +199,7 @@ pub(crate) fn compile_local_project_with_ports(
     // Resolve the complete plan before writing anything. Unsupported or
     // ambiguous authoring inputs therefore leave the staging root empty.
     let inputs = read_inputs(&project_root, true)?;
+    validate_local_dev_sources(&inputs.sources)?;
     let (active_public_jwk_file, active_public_jwk) = local_signing_public_jwk(&project_root)?;
     let plan = compile_plan(
         inputs,
@@ -204,6 +220,18 @@ pub(crate) fn compile_local_project_with_ports(
     }
 
     Ok(compilation)
+}
+
+fn validate_local_dev_sources(sources: &BTreeMap<String, Value>) -> Result<()> {
+    if sources
+        .values()
+        .any(|source| source.get("transport").and_then(Value::as_str) == Some("sqlite-extract"))
+    {
+        bail!(
+            "local serving does not bind SQLite extracts; prove this editable project with `evidencectl fixtures run --project <dir>`"
+        );
+    }
+    Ok(())
 }
 
 /// Compile one complete non-local deployment bundle into an unpublished private
@@ -245,6 +273,45 @@ pub(crate) fn compile_production_project(
         bundle_path,
         fixture_paths,
         bundle: plan.bundle,
+    })
+}
+
+/// Compile an editable project into a local bundle for offline fixture runs.
+///
+/// This path writes no runtime file and binds no extract. The real `evidence`
+/// binary remains responsible for bundle validation and for materializing a
+/// fixture's synthetic SQLite seed during `bundle-evaluate`.
+pub(crate) fn compile_fixture_project(
+    project_root: &Path,
+    staging_root: &Path,
+) -> Result<CompiledFixtureProject> {
+    let project_root = validate_project_root(project_root)?;
+    validate_private_empty_staging(staging_root)?;
+    let inputs = read_inputs(&project_root, false)?;
+    validate_production_inputs(&project_root, &inputs)?;
+    let (active_public_jwk_file, active_public_jwk) = local_signing_public_jwk(&project_root)?;
+    let plan = compile_plan(
+        inputs,
+        CompileProfile::Local {
+            ports: LocalServicePorts::default(),
+            active_public_jwk_file,
+            active_public_jwk,
+        },
+    )?;
+    let bundle_path = write_bundle(&project_root, None, staging_root, &plan)?;
+    let fixture_paths = plan
+        .questions
+        .iter()
+        .map(|question| {
+            question
+                .fixture_artifact
+                .clone()
+                .expect("fixture inputs were validated")
+        })
+        .collect();
+    Ok(CompiledFixtureProject {
+        bundle_path,
+        fixture_paths,
     })
 }
 
@@ -440,14 +507,29 @@ fn validate_evidence_binary(path: &Path) -> Result<()> {
 }
 
 fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Inputs> {
-    let openapi_text = read_regular_file(
-        &project_root.join(OPENAPI_FILE),
-        MAX_OPENAPI_BYTES,
-        "retained OpenAPI document",
-    )?;
-    let openapi: Value = serde_norway::from_slice(&openapi_text)
-        .context("parsing retained OpenAPI document as YAML or JSON")?;
-    validate_openapi_version(&openapi)?;
+    let openapi_path = project_root.join(OPENAPI_FILE);
+    let openapi = match fs::symlink_metadata(&openapi_path) {
+        Ok(_) => {
+            let openapi_text = read_regular_file(
+                &openapi_path,
+                MAX_OPENAPI_BYTES,
+                "retained OpenAPI document",
+            )?;
+            let openapi: Value = serde_norway::from_slice(&openapi_text)
+                .context("parsing retained OpenAPI document as YAML or JSON")?;
+            validate_openapi_version(&openapi)?;
+            openapi
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspecting retained OpenAPI document {}",
+                    openapi_path.display()
+                )
+            })
+        }
+    };
 
     let selectors = read_named_objects(project_root, SELECTORS_DIRECTORY, "selector profile")?;
     let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source")?;
@@ -3883,6 +3965,22 @@ factSchema: schemas/source-facts.schema.yaml
             "extractProfile": "licence-register-extract",
             "maximumExtractAgeSeconds": 604800,
         })
+    }
+
+    #[test]
+    fn local_dev_refuses_an_unbound_statement_source_with_the_fixture_next_step() {
+        let sources =
+            BTreeMap::from([("records".to_owned(), json!({"transport": "sqlite-extract"}))]);
+        let error = validate_local_dev_sources(&sources)
+            .expect_err("local serving accepted an unbound statement source")
+            .to_string();
+        assert!(error.contains("evidencectl fixtures run --project <dir>"));
+
+        validate_local_dev_sources(&BTreeMap::from([(
+            "records".to_owned(),
+            json!({"transport": "http-json"}),
+        )]))
+        .expect("HTTP local development remains supported");
     }
 
     #[test]

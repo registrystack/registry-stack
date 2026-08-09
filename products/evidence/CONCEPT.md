@@ -172,8 +172,8 @@ Evidence distinguishes three source-access postures:
 
 | Posture | Source behavior | Claim |
 |---|---|---|
-| `source-derived` | Source returns the final fact | Full acquisition and disclosure minimization |
-| `field-projected` | Source returns only facts needed for derivation | Strong acquisition and disclosure minimization |
+| `source-derived` | Source returns only the request-specific fact needed for concept derivation | Full acquisition and disclosure minimization |
+| `field-projected` | Source returns a minimized set of fields from which the evaluator derives that fact | Strong acquisition and disclosure minimization |
 | `record-transformed` | Legacy source returns a broader record | Disclosure minimization only |
 
 Every source declares its posture. A single-source requirement inherits that
@@ -183,11 +183,12 @@ be described as full lifecycle minimization.
 
 Posture describes what crosses the boundary between a source and the evaluator.
 For a source that runs a reviewed statement against a published extract, that
-boundary is the statement's result set, so a statement computing the final fact
-is `source-derived` on the same terms as an API returning it. What the extract
-itself contains is an acquisition decision the publisher made once, before any
-request and outside Evidence. Section 9.2 states what that moves and what it
-leaves in place.
+boundary is the statement's result set, so a statement computing the narrow
+request-specific fact is `source-derived` on the same terms as an API returning
+it. The later derivation may map that fact to the asserted concept. What the
+extract itself contains is an acquisition decision the publisher made once,
+before any request and outside Evidence. Section 9.2 states what that moves and
+what it leaves in place.
 
 For every posture:
 
@@ -717,26 +718,26 @@ Illustrative YAML, beside the HTTP source of the same bundle:
 sources:
   subject-extract:
     transport: sqlite-extract
-    extract_profile: subject-registry-extract
+    extractProfile: subject-registry-extract
     posture: source-derived
-    maximum_extract_age_seconds: 86400
+    maximumExtractAgeSeconds: 86400
     request:
       statement: queries/subject-facts.sql
-      selector_inputs:
+      selectorInputs:
         - role: subject
           alternatives:
             - profile: person-demographics-v1
               fields: [given_name, family_name, birth_date]
-      parameter_bindings:
+      parameterBindings:
         birth_date:
           kind: selector
           role: subject
           profile: person-demographics-v1
           field: birth_date
-      maximum_rows: 2
-    response_schema: schemas/subject-extract-response.schema.yaml
-    extract_script: adapters/subject-extract-extract.rhai
-    fact_schema: schemas/subject-extract-facts.schema.yaml
+      maximumRows: 2
+    responseSchema: schemas/subject-extract-response.schema.yaml
+    extractScript: adapters/subject-extract-extract.rhai
+    factSchema: schemas/subject-extract-facts.schema.yaml
 ```
 
 The statement is a bundle artifact covered by the bundle hash. The file is not:

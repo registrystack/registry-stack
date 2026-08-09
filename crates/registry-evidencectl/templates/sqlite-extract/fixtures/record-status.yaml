@@ -1,0 +1,168 @@
+fixture: registry.evidence.reference.sqlite-record-status-starter/v1
+synthetic_only: true
+common:
+  observed_at: "2026-08-02T00:00:00Z"
+  selectors:
+    subject:
+      profile: record-reference-v1
+      values: {record_reference: REC-0001}
+  extract: |
+    CREATE TABLE evidence_extract (
+      published_at TEXT NOT NULL,
+      publisher    TEXT NOT NULL,
+      extract_id   TEXT NOT NULL
+    );
+    INSERT INTO evidence_extract (published_at, publisher, extract_id) VALUES
+      ('2026-08-01T00:00:00Z',
+       'urn:example:publisher:synthetic-register',
+       'synthetic-record-status-2026-08-01');
+
+    CREATE TABLE records (
+      record_id               TEXT NOT NULL PRIMARY KEY,
+      reference               TEXT NOT NULL,
+      qualifying_record_count INTEGER NOT NULL,
+      private_note            TEXT NOT NULL
+    );
+    INSERT INTO records
+      (record_id, reference, qualifying_record_count, private_note)
+    VALUES
+      ('ROW-0001', 'REC-0001', 1, 'SOURCE-UNRELATED-CANARY'),
+      ('ROW-0002', 'REC-0002', 0, 'SOURCE-UNRELATED-CANARY'),
+      ('ROW-0003', 'REC-0003', 1, 'SOURCE-UNRELATED-CANARY'),
+      ('ROW-0004', 'REC-0003', 0, 'SOURCE-UNRELATED-CANARY'),
+      ('ROW-0005', 'REC-0004', 1, 'SOURCE-UNRELATED-CANARY'),
+      ('ROW-0006', 'REC-0004', 1, 'SOURCE-UNRELATED-CANARY'),
+      ('ROW-0007', 'REC-0004', 1, 'SOURCE-UNRELATED-CANARY');
+  expectedRequestParts:
+    parameters: {}
+  expectedTransport:
+    statement: queries/record-status.sql
+cases:
+  - id: positive
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0001}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts: {qualifying_record_count: 1}
+      value: true
+
+  - id: negative-false-is-success
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0002}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      facts: {qualifying_record_count: 0}
+      value: false
+
+  - id: no-match
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0099}
+    expected:
+      lookup: no_match
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  - id: ambiguous
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0003}
+    expected:
+      lookup: ambiguous
+      publicProblem: evidence_not_available
+      derivationRuns: false
+      signed: false
+
+  - id: result-past-row-bound
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0004}
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+      sourceRequestCount: 1
+
+  - id: boundary-extract-at-age-bound
+    observed_at: "2026-08-08T00:00:00Z"
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0001}
+    expected:
+      lookup: match
+      derivationRuns: true
+      signed: true
+      value: true
+
+  - id: stale-extract
+    observed_at: "2026-08-08T00:00:01Z"
+    selectors:
+      subject:
+        profile: record-reference-v1
+        values: {record_reference: REC-0001}
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+      sourceRequestCount: 1
+
+  - id: source-failure
+    sourceFailure: timeout
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+      sourceRequestCount: 1
+
+  - id: missing-statement-parameter
+    sourceFailure: statement-parameter
+    expected:
+      publicProblem: dependency_unavailable
+      signed: false
+      sourceRequestCount: 1
+
+  - id: statement-refused
+    statementMutation: attach-external-database
+    expected: {bundle: rejected}
+
+  - id: hostile-reference-remains-data
+    selectorOverrides:
+      subject:
+        values: {record_reference: "X' OR '1'='1"}
+    expected:
+      sourceRequestCount: 1
+      expectedTransport:
+        statement: queries/record-status.sql
+        parameters:
+          record_reference: "X' OR '1'='1"
+
+  - id: output-gate-rejects-a-raw-reference
+    derivationMutation: return-raw-reference
+    expected:
+      outputGate: rejected
+      signed: false
+
+  - id: anti-reconstruction
+    bundleMutation: duplicate-disclosure-family
+    expected: {bundle: rejected}
+privacyExpectation:
+  evidenceContains: [urn:example:concept:record-condition-satisfied:v1]
+  evidenceExcludes:
+    - qualifying_record_count
+    - record_reference
+    - REC-0001
+    - ROW-0001
+    - records
+    - private_note
+    - SOURCE-UNRELATED-CANARY
+  diagnosticsExclude: [REC-0001, ROW-0001, SOURCE-UNRELATED-CANARY]
