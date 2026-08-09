@@ -20,7 +20,7 @@ use crate::binding::entity_reference;
 use crate::bundle::{ArtifactFault, Bundle, Codelist};
 use crate::config::{
     ConceptConfig, ConceptForm, PreparationChannelPolicy, PreparationLimits, RequirementConfig,
-    SchemaFault, SourceConfig, SqlitePreparationLimits,
+    SchemaFault, SourceConfig, SourceSelectorSet, SqlitePreparationLimits,
 };
 use crate::model::{
     BucketForm, BucketValue, EntityReferenceForm, EntityReferenceValue, Evidence,
@@ -28,12 +28,13 @@ use crate::model::{
     StructuredValueForm, SubjectBinding, SubjectBindingMode, SupportedValue,
 };
 use crate::rhai_runtime::{
-    CalendarDate, CodelistHandle, CompiledDerivation, CompiledExtraction, CompiledPreparation,
-    DerivedConceptValue, DerivedValue, EvaluationContext, LegalLocalTime, RequestPartRequirement,
-    RequestPartsBounds, RequestPartsLimits, RhaiRuntime, RhaiRuntimeError, StatementParameters,
+    CalendarDate, CodelistHandle, CompiledBatchExtraction, CompiledBatchPreparation,
+    CompiledDerivation, CompiledExtraction, CompiledPreparation, DerivedConceptValue, DerivedValue,
+    EvaluationContext, LegalLocalTime, RequestPartRequirement, RequestPartsBounds,
+    RequestPartsLimits, RhaiRuntime, RhaiRuntimeError, StatementParameters,
     StatementParametersLimits, UtcInstant, MAXIMUM_RESULT_BYTES,
 };
-use crate::source::PreparedSourceRequest;
+use crate::source::{PreparedSourceBatchRequest, PreparedSourceRequest};
 use crate::values::Decimal;
 
 const MAXIMUM_PUBLIC_STRING_BYTES: usize = 1_024;
@@ -118,6 +119,42 @@ fn script_compile_cause(error: RhaiRuntimeError) -> &'static str {
         RhaiRuntimeError::EntryPoint => "script entry point is invalid",
         RhaiRuntimeError::InputBound => "script exceeds its size bound",
         _ => "script does not compile",
+    }
+}
+
+/// Every failure after a physical batch response exists is global. Keeping the
+/// mapping in one function prevents a malformed member or FactSet from taking
+/// the ordinary per-item unavailable lane used by sequential extraction.
+fn batch_extraction_failure(_: RhaiRuntimeError) -> KernelError {
+    KernelError::SourceProtocol
+}
+
+#[derive(Clone, Copy)]
+enum ExtractionFailurePolicy {
+    /// Preserve the frozen singular and holder-bound public collapse.
+    Ordinary,
+    /// A malformed member aborts the atomic outer request batch.
+    RequestBatch,
+}
+
+fn extraction_failure(error: RhaiRuntimeError, policy: ExtractionFailurePolicy) -> KernelError {
+    match error {
+        RhaiRuntimeError::Unavailable => KernelError::Extraction,
+        RhaiRuntimeError::ExtractionResult | RhaiRuntimeError::FactSchema => match policy {
+            ExtractionFailurePolicy::Ordinary => KernelError::Extraction,
+            ExtractionFailurePolicy::RequestBatch => KernelError::SourceProtocol,
+        },
+        RhaiRuntimeError::SourceProtocol => KernelError::SourceProtocol,
+        RhaiRuntimeError::Compilation
+        | RhaiRuntimeError::EntryPoint
+        | RhaiRuntimeError::Invocation
+        | RhaiRuntimeError::InputBound
+        | RhaiRuntimeError::AdapterInput
+        | RhaiRuntimeError::PreparationResult
+        | RhaiRuntimeError::DerivationResult
+        | RhaiRuntimeError::DerivationInput
+        | RhaiRuntimeError::EvaluationContext
+        | RhaiRuntimeError::Codelist => KernelError::Script,
     }
 }
 
@@ -281,6 +318,63 @@ fn compile_statement_parameters_limits(
     .map_err(|_| KernelError::Bundle)
 }
 
+/// Hold the caller-visible JSON representation to the exact minimized source
+/// selector grammar before it is copied into a batch script input.
+fn batch_selector_items_are_exact(
+    source: &SourceConfig,
+    allowed_sets: &[SourceSelectorSet],
+    items: &[Value],
+) -> bool {
+    items.iter().all(|item| {
+        let Some(roles) = item.as_object() else {
+            return false;
+        };
+        let mut active = Vec::with_capacity(roles.len());
+        for (role, selector) in roles {
+            let Some(input) = source
+                .selector_inputs()
+                .iter()
+                .find(|input| input.role == *role)
+            else {
+                return false;
+            };
+            let Some(selector) = selector.as_object() else {
+                return false;
+            };
+            if selector.len() != 2
+                || !selector.contains_key("profile")
+                || !selector.contains_key("values")
+            {
+                return false;
+            }
+            let Some(profile) = selector.get("profile").and_then(Value::as_str) else {
+                return false;
+            };
+            let Some(alternative) = input
+                .alternatives
+                .iter()
+                .find(|alternative| alternative.profile == profile)
+            else {
+                return false;
+            };
+            let Some(values) = selector.get("values").and_then(Value::as_object) else {
+                return false;
+            };
+            let expected = alternative.fields.iter().collect::<BTreeSet<_>>();
+            if values.keys().collect::<BTreeSet<_>>() != expected
+                || values.values().any(|value| {
+                    !matches!(value, Value::String(_) | Value::Bool(_)) && value.as_i64().is_none()
+                })
+            {
+                return false;
+            }
+            active.push((role.clone(), profile.to_owned()));
+        }
+        active.sort();
+        allowed_sets.contains(&active)
+    })
+}
+
 /// A kernel compiled entirely from the bytes captured in one immutable bundle.
 pub struct OfflineKernel {
     bundle: Arc<Bundle>,
@@ -289,11 +383,56 @@ pub struct OfflineKernel {
     extractions: BTreeMap<String, CompiledExtraction>,
     request_parts_limits: BTreeMap<String, RequestPartsLimits>,
     statement_parameters_limits: BTreeMap<String, StatementParametersLimits>,
+    batch_preparations: BTreeMap<String, CompiledBatchPreparation>,
+    batch_extractions: BTreeMap<String, CompiledBatchExtraction>,
+    batch_response_schemas: BTreeMap<String, JSONSchema>,
     derivations: BTreeMap<String, CompiledDerivation>,
     response_schemas: BTreeMap<String, JSONSchema>,
     fact_schemas: BTreeMap<String, JSONSchema>,
     reviewed_schemas: BTreeMap<String, JSONSchema>,
     codelist_handles: BTreeMap<String, BTreeMap<String, CodelistHandle>>,
+}
+
+/// One internally slotted, reviewed optimized source request.
+///
+/// The slot sequence, source identity, and adapter identity are retained with
+/// the preparation so extraction cannot be invoked against another source or
+/// with a caller-supplied correlation set. Its diagnostic form contains no
+/// selectors or request parts.
+pub struct PreparedSourceBatch {
+    source_id: String,
+    adapter_id: String,
+    slots: Vec<i64>,
+    request: PreparedSourceBatchRequest,
+}
+
+impl PreparedSourceBatch {
+    pub fn request(&self) -> &PreparedSourceBatchRequest {
+        &self.request
+    }
+
+    pub fn item_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+
+    pub fn adapter_id(&self) -> &str {
+        &self.adapter_id
+    }
+}
+
+impl std::fmt::Debug for PreparedSourceBatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedSourceBatch")
+            .field("source_id", &self.source_id)
+            .field("adapter_id", &self.adapter_id)
+            .field("item_count", &self.slots.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for OfflineKernel {
@@ -314,6 +453,9 @@ impl OfflineKernel {
         let mut extractions = BTreeMap::new();
         let mut request_parts_limits = BTreeMap::new();
         let mut statement_parameters_limits = BTreeMap::new();
+        let mut batch_preparations = BTreeMap::new();
+        let mut batch_extractions = BTreeMap::new();
+        let mut batch_response_schemas = BTreeMap::new();
         let mut response_schemas = BTreeMap::new();
         let mut fact_schemas = BTreeMap::new();
         for (source_id, source) in bundle.config.sources.iter() {
@@ -341,6 +483,41 @@ impl OfflineKernel {
                         source_id.to_owned(),
                         compile_request_parts_limits(&request.preparation_limits)?,
                     );
+                    if let Some(batch) = source.batch() {
+                        let preparation = bundle
+                            .script(&batch.prepare_script)
+                            .ok_or(KernelError::Bundle)?;
+                        let compiled = runtime
+                            .compile_batch_preparation(&preparation.source)
+                            .map_err(|error| {
+                                refuse_artifact(
+                                    batch.prepare_script.as_str(),
+                                    script_compile_cause(error),
+                                )
+                            })?;
+                        batch_preparations.insert(source_id.to_owned(), compiled);
+
+                        let extraction = bundle
+                            .script(&batch.extract_script)
+                            .ok_or(KernelError::Bundle)?;
+                        let compiled = runtime
+                            .compile_batch_extraction(&extraction.source)
+                            .map_err(|error| {
+                                refuse_artifact(
+                                    batch.extract_script.as_str(),
+                                    script_compile_cause(error),
+                                )
+                            })?;
+                        batch_extractions.insert(source_id.to_owned(), compiled);
+
+                        let schema = bundle
+                            .fact_schema(&batch.response_schema)
+                            .ok_or(KernelError::Bundle)?;
+                        batch_response_schemas.insert(
+                            source_id.to_owned(),
+                            compile_schema(batch.response_schema.as_str(), schema)?,
+                        );
+                    }
                 }
                 SourceConfig::SqliteExtract { request, .. } => {
                     if let (Some(prepare_script), Some(limits)) =
@@ -438,6 +615,9 @@ impl OfflineKernel {
             extractions,
             request_parts_limits,
             statement_parameters_limits,
+            batch_preparations,
+            batch_extractions,
+            batch_response_schemas,
             derivations,
             response_schemas,
             fact_schemas,
@@ -518,6 +698,129 @@ impl OfflineKernel {
         }
     }
 
+    /// Prepare one optimized HTTP source call for several logical lookups.
+    ///
+    /// Every selector object is revalidated against the source's compiled
+    /// role/profile/field declarations before Rust assigns its opaque integer
+    /// slot. The script therefore receives no caller key, no extra selector
+    /// field, and no transport authority.
+    pub fn prepare_source_batch(
+        &self,
+        source_id: &str,
+        selector_items: &[Value],
+    ) -> Result<PreparedSourceBatch, KernelError> {
+        let source = self
+            .bundle
+            .config
+            .sources
+            .get(source_id)
+            .ok_or(KernelError::Bundle)?;
+        let batch = source.batch().ok_or(KernelError::Bundle)?;
+        if selector_items.is_empty()
+            || selector_items.len() > usize::from(batch.maximum_items)
+            || !batch_selector_items_are_exact(
+                source,
+                &self.bundle.config.source_selector_sets(source_id),
+                selector_items,
+            )
+        {
+            return Err(KernelError::Preparation);
+        }
+        let slots = (0..selector_items.len())
+            .map(|slot| i64::try_from(slot).map_err(|_| KernelError::Preparation))
+            .collect::<Result<Vec<_>, _>>()?;
+        let items = Value::Array(
+            slots
+                .iter()
+                .zip(selector_items)
+                .map(|(slot, selectors)| {
+                    Value::Object(JsonMap::from_iter([
+                        ("slot".to_owned(), Value::from(*slot)),
+                        ("selectors".to_owned(), selectors.clone()),
+                    ]))
+                })
+                .collect(),
+        );
+        let parameters =
+            serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
+        let script = self
+            .batch_preparations
+            .get(source_id)
+            .ok_or(KernelError::Bundle)?;
+        let limits = self
+            .request_parts_limits
+            .get(source_id)
+            .ok_or(KernelError::Bundle)?;
+        let request = self
+            .runtime
+            .prepare_batch(script, &items, &parameters, limits)
+            .map(PreparedSourceBatchRequest::new)
+            .map_err(|_| KernelError::Preparation)?;
+        let adapter_id = Path::new(batch.extract_script.as_str())
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .ok_or(KernelError::Bundle)?
+            .to_owned();
+        Ok(PreparedSourceBatch {
+            source_id: source_id.to_owned(),
+            adapter_id,
+            slots,
+            request,
+        })
+    }
+
+    /// Validate one projected batch response, run its reviewed extraction,
+    /// require an exact slot bijection, and return logical request order.
+    pub fn extract_source_batch(
+        &self,
+        prepared: &PreparedSourceBatch,
+        source_response: &Value,
+    ) -> Result<Vec<LookupResult>, KernelError> {
+        let source = self
+            .bundle
+            .config
+            .sources
+            .get(&prepared.source_id)
+            .ok_or(KernelError::Bundle)?;
+        let batch = source.batch().ok_or(KernelError::Bundle)?;
+        let response_schema = self
+            .batch_response_schemas
+            .get(&prepared.source_id)
+            .ok_or(KernelError::Bundle)?;
+        if let Err(errors) = response_schema.validate(source_response) {
+            report_response_shape_rejection(
+                &prepared.source_id,
+                batch.response_schema.as_str(),
+                errors,
+            );
+            return Err(KernelError::SourceProtocol);
+        }
+        let script = self
+            .batch_extractions
+            .get(&prepared.source_id)
+            .ok_or(KernelError::Bundle)?;
+        let fact_schema = self
+            .fact_schemas
+            .get(&prepared.source_id)
+            .ok_or(KernelError::Bundle)?;
+        let parameters =
+            serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
+        self.runtime
+            .extract_batch(
+                script,
+                source_response,
+                &parameters,
+                &prepared.slots,
+                fact_schema,
+            )
+            // A batch extraction has one global protocol boundary. A malformed
+            // outer result, malformed member, invalid FactSet, invocation
+            // failure, or slot failure cannot be collapsed into one logical
+            // item's unavailable outcome. Only a successfully decoded
+            // `LookupResult::NoMatch` or `Ambiguous` can take that lane.
+            .map_err(batch_extraction_failure)
+    }
+
     pub fn bundle(&self) -> &Bundle {
         &self.bundle
     }
@@ -551,6 +854,39 @@ impl OfflineKernel {
         source_response: &Value,
         prior_facts: &BTreeMap<String, Value>,
     ) -> Result<LookupResult, KernelError> {
+        self.extract_source_with_policy(
+            source_id,
+            source_response,
+            prior_facts,
+            ExtractionFailurePolicy::Ordinary,
+        )
+    }
+
+    /// Extract one sequential request-batch stage without allowing malformed
+    /// script output or an invalid FactSet to become one item's unavailable
+    /// result. Genuine `required(...)` unavailability retains that per-item
+    /// collapse; protocol violations abort the atomic outer batch.
+    pub(crate) fn extract_source_for_request_batch(
+        &self,
+        source_id: &str,
+        source_response: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+    ) -> Result<LookupResult, KernelError> {
+        self.extract_source_with_policy(
+            source_id,
+            source_response,
+            prior_facts,
+            ExtractionFailurePolicy::RequestBatch,
+        )
+    }
+
+    fn extract_source_with_policy(
+        &self,
+        source_id: &str,
+        source_response: &Value,
+        prior_facts: &BTreeMap<String, Value>,
+        failure_policy: ExtractionFailurePolicy,
+    ) -> Result<LookupResult, KernelError> {
         let script = self.extractions.get(source_id).ok_or(KernelError::Bundle)?;
         let schema = self
             .fact_schemas
@@ -578,23 +914,7 @@ impl OfflineKernel {
             serde_json::to_value(source.adapter_parameters()).map_err(|_| KernelError::Bundle)?;
         self.runtime
             .extract_with_prior_facts(script, source_response, &parameters, prior_facts, schema)
-            .map_err(|error| match error {
-                RhaiRuntimeError::ExtractionResult | RhaiRuntimeError::FactSchema => {
-                    KernelError::Extraction
-                }
-                RhaiRuntimeError::Unavailable => KernelError::Extraction,
-                RhaiRuntimeError::SourceProtocol => KernelError::SourceProtocol,
-                RhaiRuntimeError::Compilation
-                | RhaiRuntimeError::EntryPoint
-                | RhaiRuntimeError::Invocation
-                | RhaiRuntimeError::InputBound
-                | RhaiRuntimeError::AdapterInput
-                | RhaiRuntimeError::PreparationResult
-                | RhaiRuntimeError::DerivationResult
-                | RhaiRuntimeError::DerivationInput
-                | RhaiRuntimeError::EvaluationContext
-                | RhaiRuntimeError::Codelist => KernelError::Script,
-            })
+            .map_err(|error| extraction_failure(error, failure_policy))
     }
 
     /// Derive and gate the exact Supported Value set for one unique match.
@@ -1418,6 +1738,7 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
+    use crate::rhai_runtime::RequestParts;
     use crate::signing::{jwks_document, EvidenceSigner};
     use crate::source::project_fixture_response;
     use crate::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
@@ -1443,6 +1764,200 @@ mod tests {
             binding_key: KEY,
             binding_key_version: 1,
         }
+    }
+
+    #[test]
+    fn source_batch_items_are_revalidated_as_exact_minimized_selectors() {
+        let source: SourceConfig = serde_json::from_value(json!({
+            "transport": "http-json",
+            "baseUrl": "https://source.invalid",
+            "posture": "field-projected",
+            "authentication": {"kind": "static-authorization", "tokenRef": "secret:file/source"},
+            "request": {
+                "method": "POST",
+                "path": "/facts",
+                "fixedHeaders": [],
+                "selectorInputs": [{
+                    "role": "subject",
+                    "alternatives": [{"profile": "opaque-v1", "fields": ["id"]}]
+                }],
+                "prepareScript": "adapters/prepare.rhai",
+                "adapterParameters": {},
+                "adapterParametersSchema": "schemas/parameters.schema.yaml",
+                "preparationLimits": {"query": "forbidden", "jsonBody": "required"},
+                "projection": ["/result"],
+                "redirects": "deny",
+                "timeoutMilliseconds": 1000,
+                "maximumResponseBytes": 4096,
+                "concurrencyLimit": 1
+            },
+            "responseSchema": "schemas/response.schema.yaml",
+            "extractScript": "adapters/extract.rhai",
+            "factSchema": "schemas/facts.schema.yaml",
+            "batch": {
+                "maximumItems": 2,
+                "prepareScript": "adapters/prepare-batch.rhai",
+                "extractScript": "adapters/extract-batch.rhai",
+                "responseSchema": "schemas/batch-response.schema.yaml",
+                "projection": ["/results/*"]
+            }
+        }))
+        .expect("source deserializes");
+        let allowed = vec![vec![("subject".to_owned(), "opaque-v1".to_owned())]];
+        let minimized = json!({
+            "subject": {"profile": "opaque-v1", "values": {"id": "synthetic"}}
+        });
+        assert!(batch_selector_items_are_exact(
+            &source,
+            &allowed,
+            std::slice::from_ref(&minimized)
+        ));
+        for expanded in [
+            json!({
+                "subject": {"profile": "opaque-v1", "values": {"id": "synthetic", "extra": "leak"}}
+            }),
+            json!({
+                "subject": {"profile": "opaque-v1", "values": {"id": "synthetic"}, "headers": {"x": "authority"}}
+            }),
+            json!({
+                "subject": {"profile": "other-v1", "values": {"id": "synthetic"}}
+            }),
+            json!({
+                "subject": {"profile": "opaque-v1", "values": {"id": "synthetic"}},
+                "other": {"profile": "opaque-v1", "values": {"id": "cross-slot"}}
+            }),
+        ] {
+            assert!(
+                !batch_selector_items_are_exact(&source, &allowed, &[expanded]),
+                "expanded selector material reached batch preparation"
+            );
+        }
+    }
+
+    #[test]
+    fn every_malformed_batch_extraction_is_a_global_protocol_failure() {
+        let kernel = batch_extraction_kernel();
+        let prepared = PreparedSourceBatch {
+            source_id: "source-a".to_owned(),
+            adapter_id: "extract-batch".to_owned(),
+            slots: vec![0, 1],
+            request: PreparedSourceBatchRequest::new(RequestParts {
+                query: Vec::new(),
+                body: None,
+            }),
+        };
+        for (label, kind) in [
+            ("wrong outer shape", "wrong-outer"),
+            ("wrong member shape", "wrong-member"),
+            ("member keys are not exact", "extra-key"),
+            ("FactSet violates the source fact schema", "invalid-facts"),
+            ("missing slot", "missing"),
+            ("duplicate slot", "duplicate"),
+            ("extra slot", "extra"),
+            ("out-of-range slot", "out-of-range"),
+            ("negative slot", "negative"),
+        ] {
+            assert_eq!(
+                kernel.extract_source_batch(&prepared, &json!({"kind": kind})),
+                Err(KernelError::SourceProtocol),
+                "{label} could collapse into a per-item unavailable outcome"
+            );
+        }
+    }
+
+    fn batch_extraction_kernel() -> OfflineKernel {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/fixtures/acceptance/adult-status");
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        copy_tree(&source, temporary.path());
+        let config_path = temporary.path().join("evidence.yaml");
+        let config = fs::read_to_string(&config_path).expect("configuration reads");
+        assert_eq!(config.matches("version: 1\n").count(), 1);
+        assert_eq!(
+            config
+                .matches("    factSchema: schemas/facts.schema.yaml\n")
+                .count(),
+            1
+        );
+        let config = config
+            .replacen(
+                "version: 1\n",
+                "version: 1\nacquisitionCapabilities: [source-batch]\n",
+                1,
+            )
+            .replacen(
+                "    factSchema: schemas/facts.schema.yaml\n",
+                "    factSchema: schemas/facts.schema.yaml\n    batch:\n      maximumItems: 2\n      prepareScript: adapters/prepare-batch.rhai\n      extractScript: adapters/extract-batch.rhai\n      responseSchema: schemas/batch-response.schema.yaml\n      projection: [/output]\n",
+                1,
+            );
+        fs::write(config_path, config).expect("configuration writes");
+        fs::write(
+            temporary.path().join("adapters/prepare-batch.rhai"),
+            "fn prepare_batch(items, context) { #{query: [], body: #{items: items}} }\n",
+        )
+        .expect("batch preparation writes");
+        fs::write(
+            temporary.path().join("adapters/extract-batch.rhai"),
+            r#"
+fn extract_batch(response, context) {
+    if response.kind == "wrong-outer" {
+        return #{};
+    }
+    if response.kind == "wrong-member" {
+        return [0, #{slot: 1, result: #{outcome: "no_match"}}];
+    }
+    if response.kind == "extra-key" {
+        return [
+            #{slot: 0, result: #{outcome: "no_match"}, extra: true},
+            #{slot: 1, result: #{outcome: "no_match"}}
+        ];
+    }
+    if response.kind == "invalid-facts" {
+        return [
+            #{slot: 0, result: #{outcome: "match", facts: #{unexpected: true}}},
+            #{slot: 1, result: #{outcome: "no_match"}}
+        ];
+    }
+    if response.kind == "missing" {
+        return [#{slot: 0, result: #{outcome: "no_match"}}];
+    }
+    if response.kind == "duplicate" {
+        return [
+            #{slot: 0, result: #{outcome: "no_match"}},
+            #{slot: 0, result: #{outcome: "no_match"}}
+        ];
+    }
+    if response.kind == "extra" {
+        return [
+            #{slot: 0, result: #{outcome: "no_match"}},
+            #{slot: 1, result: #{outcome: "no_match"}},
+            #{slot: 2, result: #{outcome: "no_match"}}
+        ];
+    }
+    if response.kind == "out-of-range" {
+        return [
+            #{slot: 0, result: #{outcome: "no_match"}},
+            #{slot: 2, result: #{outcome: "no_match"}}
+        ];
+    }
+    [
+        #{slot: 0, result: #{outcome: "no_match"}},
+        #{slot: -1, result: #{outcome: "no_match"}}
+    ]
+}
+"#,
+        )
+        .expect("batch extraction writes");
+        fs::write(
+            temporary
+                .path()
+                .join("schemas/batch-response.schema.yaml"),
+            "$schema: https://json-schema.org/draft/2020-12/schema\ntype: object\nadditionalProperties: false\nrequired: [kind]\nproperties:\n  kind:\n    type: string\n    enum: [wrong-outer, wrong-member, extra-key, invalid-facts, missing, duplicate, extra, out-of-range, negative]\n",
+        )
+        .expect("batch response schema writes");
+        make_read_only(temporary.path());
+        let bundle = Arc::new(Bundle::load(temporary.path()).expect("batch bundle loads"));
+        OfflineKernel::compile(bundle).expect("batch kernel compiles")
     }
 
     #[test]
@@ -1766,6 +2281,59 @@ mod tests {
                 projection(),
             )
             .is_err());
+    }
+
+    #[test]
+    fn sequential_request_batch_extraction_distinguishes_unavailability_from_protocol_faults() {
+        let copied = immutable_fixture("adult-status");
+        let bundle = Arc::new(Bundle::load(copied.path()).expect("bundle loads"));
+        let kernel = OfflineKernel::compile(bundle).expect("kernel compiles");
+        let prior_facts = BTreeMap::new();
+
+        // The frozen singular lane continues to collapse an invalid extracted
+        // FactSet, while the atomic outer batch treats it as a global source
+        // protocol failure.
+        let response = json!({"total": 1});
+        assert_eq!(
+            kernel.extract_source("source-a", &response, &prior_facts),
+            Err(KernelError::Extraction)
+        );
+        assert_eq!(
+            kernel.extract_source_for_request_batch("source-a", &response, &prior_facts),
+            Err(KernelError::SourceProtocol)
+        );
+
+        let malformed = kernel_with_adult_extraction(
+            r#"fn extract(source_response, context) {
+    #{outcome: "no_match", extra: true}
+}
+"#,
+        );
+        let response = json!({"total": 0});
+        assert_eq!(
+            malformed.extract_source("source-a", &response, &prior_facts),
+            Err(KernelError::Extraction),
+            "singular behavior remains frozen"
+        );
+        assert_eq!(
+            malformed.extract_source_for_request_batch("source-a", &response, &prior_facts),
+            Err(KernelError::SourceProtocol),
+            "malformed ordinary extraction output aborts the outer batch"
+        );
+
+        let unavailable = kernel_with_adult_extraction(
+            r#"fn extract(source_response, context) {
+    required(get_path(source_response, "/date_of_birth"), "required_fact_missing");
+    #{outcome: "no_match"}
+}
+"#,
+        );
+        let response = json!({"total": 1});
+        assert_eq!(
+            unavailable.extract_source_for_request_batch("source-a", &response, &prior_facts),
+            Err(KernelError::Extraction),
+            "genuine required-value unavailability remains a per-item outcome"
+        );
     }
 
     #[test]
@@ -2737,6 +3305,18 @@ mod tests {
         fs::write(&path, text).expect("writes copied artifact");
         make_read_only(temporary.path());
         temporary
+    }
+
+    fn kernel_with_adult_extraction(extraction: &str) -> OfflineKernel {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/fixtures/acceptance/adult-status");
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        copy_tree(&source, temporary.path());
+        fs::write(temporary.path().join("adapters/source-a.rhai"), extraction)
+            .expect("replacement extraction writes");
+        make_read_only(temporary.path());
+        let bundle = Arc::new(Bundle::load(temporary.path()).expect("bundle loads"));
+        OfflineKernel::compile(bundle).expect("kernel compiles")
     }
 
     fn immutable_fixture(name: &str) -> TempDir {

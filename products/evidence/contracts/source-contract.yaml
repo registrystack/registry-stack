@@ -3,7 +3,7 @@ status: frozen
 ownership:
   governed_bundle:
     - requirement acquisition kind, every source that kind fixes, each fetch stage's declared prior-fact allowlist, and any whole-acquisition ceiling the kind declares
-    - the gated acquisition kinds the bundle declares it uses
+    - the gated acquisition kinds and source-call optimizations the bundle declares it uses
     - each source's fixed origin, acquisition posture, authentication kind, and logical secret references
     - fixed method and fixed path, or complete-segment pathTemplate and pathBindings
     - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters, and the adapter-parameter, response, and fact schemas
@@ -11,13 +11,15 @@ ownership:
     - optional logical TLS trust-profile name
   runtime_yaml:
     - bundle directory, listener and process bounds
-    - the gated acquisition kinds this deployment enables; a bundle needing one absent from that list is refused before serving
+    - the gated acquisition kinds and source-call optimizations this deployment enables; a bundle needing an acquisition kind absent from that list is refused before serving and an absent optimization is never selected
     - file-secret root and audit-storage path
     - exact private-CA file binding for each governed logical TLS trust profile
   runtime_override: prohibited
   scripts:
     prepare: Renders only ordered query pairs and at most one JSON body from minimized authorized selectors, closed parameters, and the empty or validated prior FactSet supplied by Rust.
     extract: Maps only the bounded projected response, already inside its declared response schema, closed parameters, and the same prior FactSet to the closed lookup union.
+    prepare_batch: For an eligible HTTP source batch only, renders one RequestParts value from ordered opaque slots, each paired with one logical item's minimized authorized selectors, plus closed parameters.
+    extract_batch: For that one physical response only, maps the bounded projected batch response and opaque slot list to an exact slot-to-ordinary-LookupResult bijection.
     prohibited: source sequence, origin, method, path binding origin, headers, authentication, credentials, TLS, proxy, redirect, retry, pagination, concurrency, or request-count authority
 evidence_data_request:
   count:
@@ -26,6 +28,19 @@ evidence_data_request:
     search-then-fetch-set: One search, followed only after a unique schema-valid match by each declared fetch member in declared order; the ceiling is one plus the declared member count, at most five. The count is fixed by the bundle before any request is made, and no response can raise it, lower it, or reorder it. A member that does not resolve stops the acquisition, so an execution is always a prefix of the declared sequence.
     common_order: Successful authorization and request rate limiting occur once. Each actual source call requires its own durable access audit and complete RequestParts validation before credential resolution.
   retry: The HTTP client disables transport retry explicitly, so each configured stage yields at most one connection attempt and never creates an evidence-data request the declared acquisition did not already fix.
+  request_batch_strategy:
+    selection: Rust chooses optimized or sequential execution after complete outer-request validation and authorization and before credential resolution, durable access audit, or source I/O.
+    optimized_eligibility:
+      - the governed bundle acquisitionCapabilities contains source-batch
+      - runtime.yaml acquisitionCapabilities contains source-batch
+      - the selected requirement has acquisition kind single
+      - that one source uses http-json, declares a fixed path rather than pathTemplate, and carries a batch block
+      - the complete outer item count is no greater than batch.maximumItems
+    configuration_gate: A source batch block without the bundle capability, or a bundle carrying that block without the runtime capability, fails startup before serving.
+    sequential_fallback: Omission of the optional source block, an item count above maximumItems, SQLite sources, path templates, search-then-fetch, and search-then-fetch-set select ordinary per-item execution from the start, in request order. It is normal strategy selection, not a failed optimized attempt.
+    no_late_fallback: Once optimized preparation, audit, credential resolution, semaphore admission, or I/O begins, any failure aborts the outer request. The runtime never retries as sequential fanout and never splits one outer batch into optimized sub-batches.
+    physical_call_count: An optimized execution performs exactly one ordinary authenticated HTTP source call for the complete item set. A sequential execution performs the same source calls each singular evaluation already declares, item by item in request order.
+    shared_transport_authority: The optimized call reuses the ordinary source's method, fixed origin and path, authentication, fixed headers, TLS trust, redirect denial, timeout, maximum response bytes, concurrency semaphore, and preparation limits. The batch block supplies none of those fields.
   acquisition_budget: A multi-call acquisition kind may declare one whole-acquisition ceiling in milliseconds, in the same [1, 30000] range one request carries. It bounds the source exchanges and the transitions between stages and never crosses a durable audit append. Exhaustion is a dependency failure naming the last stage actually executed, distinct from a per-source timeout.
   owner: Core runtime.
   method_allowlist: [GET, POST]
@@ -40,6 +55,7 @@ evidence_data_request:
     body: At most one bounded JSON value. JSON null means no body; GET sources must configure the JSON-body channel as forbidden and any defensive GET-with-body execution is rejected before concurrency admission or credential resolution.
     channels: Each source marks query and JSON body required, allowed, or forbidden and may configure tighter bounds beneath the ABI ceilings.
     validation_order: Rust validates the exact keys, types, channel policy, sizes, query controls, and normalized output before resolving credentials or contacting the source.
+    optimized_batch: prepare_batch returns this same RequestParts shape. Rust subjects it to the same preparationLimits and transport validation as prepare before the one access proceeds.
   path:
     fixed: One normalized absolute path.
     template: A placeholder occupies one complete segment and binds directly through tagged pathBindings either to one already authorized selector role, profile, and field or, on a fetch source only, one scalar fact required by the preceding search fact schema.
@@ -198,11 +214,23 @@ failure_classes:
   projection: [invalid-pointer, missing-intermediate, mistyped-intermediate, projected-input-oversized]
   response_shape: [missing-required-member, unexpected-member, wrong-member-type, out-of-bounds-value, oversized-array, duplicate-array-member]
   semantic: [no-match, ambiguous, required-fact-missing, wrong-fact-type, unknown-controlled-code]
+  request_batch_mapping: Every condition the singular collapse contract exposes as evidence_not_available affects only that logical item and becomes the closed unavailable outcome, exactly no_match, ambiguous, required_fact_missing, and derivation_input_unresolved in Version 1. Every transport, projection, response-shape, preparation, extraction-protocol, other derivation-protocol, signing, audit, size, or time-budget failure aborts the outer request without partial release.
   graphql_envelope_rule: Any top-level errors member, including partial data with errors, fails closed.
 persistence:
   source_request_or_response: prohibited
   raw_fact: prohibited
   in_memory_lifetime: One bounded evaluation only; validated search facts are dropped with the fetch and are never placed in audit.
+source_batch_block:
+  permitted_source: http-json only
+  required_keys: [maximumItems, prepareScript, extractScript, responseSchema, projection]
+  maximum_items: {minimum: 1, maximum: 16}
+  fixed_path_only: A source carrying batch is rejected at startup unless its ordinary request declares path and omits pathTemplate and pathBindings.
+  capability_gate: A source carrying batch is rejected at startup unless the bundle also names source-batch, and runtime binding is rejected unless runtime.yaml names it independently.
+  preparation_abi: prepare_batch(items, context), where items is the ordered array of exact `{slot, selectors}` maps and context has exactly parameters.
+  extraction_abi: extract_batch(response, context), where context has exactly parameters and slots and the output is the array of exact `{slot, result}` maps.
+  slot_rule: Slots are Rust-issued opaque integers. Extraction may reorder its array, but it must return an exact bijection over the supplied slots. Missing, duplicate, extra, negative, non-integer, or out-of-range slots abort the complete outer request.
+  response_pipeline: The ordinary maximumResponseBytes applies before parse. Rust then applies batch.projection, batch.responseSchema, and the ordinary 65536-byte projected-input limit before extraction.
+  fact_validation: Every match result is validated independently against the ordinary source factSchema; the batch block cannot declare an alternate fact contract.
 neutrality:
   production_contract: Generic HTTP, generic authentication, bounded JSON, extended JSON Pointer projection, and Rhai preparation and extraction only.
   named_compatibility_profiles: Test fixtures and reference documentation only.

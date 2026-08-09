@@ -20,6 +20,17 @@ use url::{Host, Url};
 
 pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+pub const MAXIMUM_SOURCE_BATCH_ITEMS: u16 = 16;
+
+/// Whether one logical request batch can use a source's optional one-call
+/// optimization. Selection is complete before preparation, credential
+/// resolution, or source I/O, and an optimized execution never falls back to
+/// the sequential path after it starts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SourceBatchPlan {
+    Sequential,
+    Optimized { source_id: String },
+}
 
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
 pub enum ConfigError {
@@ -518,7 +529,10 @@ impl EvidenceConfig {
         let response_schemas = self
             .sources
             .iter()
-            .map(|(_, source)| source.response_schema().as_str())
+            .flat_map(|(_, source)| {
+                std::iter::once(source.response_schema().as_str())
+                    .chain(source.batch().map(|batch| batch.response_schema.as_str()))
+            })
             .collect::<BTreeSet<_>>();
         let fact_schemas = self
             .sources
@@ -642,6 +656,14 @@ impl EvidenceConfig {
             "bundle acquisition capabilities must be unique",
             "bundle acquisition capabilities",
         )?;
+        if self
+            .sources
+            .iter()
+            .any(|(_, source)| source.batch().is_some())
+            && !declared.contains(SOURCE_BATCH_CAPABILITY)
+        {
+            return invalid("source batch optimization is not a declared bundle capability");
+        }
         for requirement in &self.requirements {
             if requirement
                 .acquisition
@@ -694,6 +716,56 @@ impl EvidenceConfig {
             }
         }
         sets.into_iter().collect()
+    }
+
+    /// Select the optional one-call source optimization for a logical request
+    /// batch, or the ordinary sequential strategy.
+    ///
+    /// The optimized lane is deliberately narrower than ordinary source
+    /// execution: both governed documents opt in, the requirement is a
+    /// `single` acquisition, the source is HTTP with a fixed path and a batch
+    /// block, and the complete item set fits that block's ceiling. Every other
+    /// case is decided as sequential without touching credentials or a source.
+    pub fn source_batch_plan(
+        &self,
+        runtime: &RuntimeConfig,
+        requirement_id: &str,
+        item_count: usize,
+    ) -> SourceBatchPlan {
+        if item_count == 0
+            || !self
+                .acquisition_capabilities
+                .iter()
+                .any(|capability| capability == SOURCE_BATCH_CAPABILITY)
+            || !runtime.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY)
+        {
+            return SourceBatchPlan::Sequential;
+        }
+        let Some(requirement) = self
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == requirement_id)
+        else {
+            return SourceBatchPlan::Sequential;
+        };
+        let AcquisitionConfig::Single { source } = &requirement.acquisition else {
+            return SourceBatchPlan::Sequential;
+        };
+        let Some(SourceConfig::HttpJson { request, batch, .. }) = self.sources.get(source) else {
+            return SourceBatchPlan::Sequential;
+        };
+        let Some(batch) = batch else {
+            return SourceBatchPlan::Sequential;
+        };
+        if request.path.is_none()
+            || request.path_template.is_some()
+            || item_count > usize::from(batch.maximum_items)
+        {
+            return SourceBatchPlan::Sequential;
+        }
+        SourceBatchPlan::Optimized {
+            source_id: source.clone(),
+        }
     }
 
     fn validate_cross_references(&self) -> Result<(), ConfigError> {
@@ -1922,6 +1994,12 @@ pub enum SourceConfig {
         response_schema: ArtifactPath,
         extract_script: ArtifactPath,
         fact_schema: ArtifactPath,
+        /// Optional reviewed one-call optimization for a logical request
+        /// batch. It reuses the ordinary source authority and all transport
+        /// bounds; only preparation, response projection, and extraction are
+        /// batch-specific.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        batch: Option<Box<HttpBatchConfig>>,
     },
     /// One reviewed SQL statement against a read-only extract file.
     #[serde(rename_all = "camelCase")]
@@ -1950,6 +2028,7 @@ impl SourceConfig {
                 tls_trust_profile,
                 authentication,
                 request,
+                batch,
                 ..
             } => {
                 validate_source_origin(base_url)?;
@@ -1974,6 +2053,12 @@ impl SourceConfig {
                 }
                 authentication.validate()?;
                 request.validate()?;
+                if let Some(batch) = batch {
+                    if request.path.is_none() || request.path_template.is_some() {
+                        return invalid("source batch optimization requires a fixed request path");
+                    }
+                    batch.validate()?;
+                }
             }
             Self::SqliteExtract {
                 extract_profile,
@@ -2013,6 +2098,9 @@ impl SourceConfig {
             self.adapter_parameters_schema()
                 .map(|schema| schema.as_str()),
         );
+        if let Some(batch) = self.batch() {
+            roles.push(batch.response_schema.as_str());
+        }
         let distinct = roles.iter().collect::<BTreeSet<_>>();
         if distinct.len() != roles.len() {
             return invalid("source schema roles must be distinct artifacts");
@@ -2072,6 +2160,13 @@ impl SourceConfig {
             Self::HttpJson { fact_schema, .. } | Self::SqliteExtract { fact_schema, .. } => {
                 fact_schema
             }
+        }
+    }
+
+    pub fn batch(&self) -> Option<&HttpBatchConfig> {
+        match self {
+            Self::HttpJson { batch, .. } => batch.as_deref(),
+            Self::SqliteExtract { .. } => None,
         }
     }
 
@@ -2517,6 +2612,47 @@ pub struct FixedRequest {
     pub timeout_milliseconds: u64,
     pub maximum_response_bytes: u64,
     pub concurrency_limit: u16,
+}
+
+/// Reviewed scripts and response contract for one physical HTTP call serving
+/// several independent logical source lookups.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpBatchConfig {
+    pub maximum_items: u16,
+    pub prepare_script: ArtifactPath,
+    pub extract_script: ArtifactPath,
+    pub response_schema: ArtifactPath,
+    pub projection: Vec<String>,
+}
+
+impl HttpBatchConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_range(
+            u64::from(self.maximum_items),
+            1,
+            u64::from(MAXIMUM_SOURCE_BATCH_ITEMS),
+            "source batch items",
+        )?;
+        for script in [&self.prepare_script, &self.extract_script] {
+            require_artifact_prefix(script, "adapters/")?;
+            if !script.as_str().ends_with(".rhai") {
+                return invalid("source batch script must be a Rhai file");
+            }
+        }
+        if self.prepare_script == self.extract_script {
+            return invalid("source batch scripts must be distinct artifacts");
+        }
+        Path::new(self.extract_script.as_str())
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| valid_local_id(value))
+            .ok_or(ConfigError::Invalid(
+                "source batch adapter name must be a local identifier",
+            ))?;
+        require_artifact_prefix(&self.response_schema, "schemas/")?;
+        validate_projection(&self.projection)
+    }
 }
 
 impl FixedRequest {
@@ -3212,7 +3348,8 @@ pub enum ValueOrigin {
 /// capability list therefore names only the forms added after that surface
 /// froze, and a bundle written before any of them existed keeps serving exactly
 /// what it served before without carrying a list at all.
-const GATED_ACQUISITION_KINDS: [&str; 1] = ["search-then-fetch-set"];
+pub const SOURCE_BATCH_CAPABILITY: &str = "source-batch";
+const GATED_ACQUISITION_KINDS: [&str; 2] = ["search-then-fetch-set", SOURCE_BATCH_CAPABILITY];
 
 /// The gated acquisition kinds one document declares, as a set.
 ///
@@ -5276,6 +5413,31 @@ mod tests {
         include_str!("../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml")
     }
 
+    fn source_batch_document() -> String {
+        let with_capability = edited(
+            acceptance_fixture(),
+            "version: 1\n",
+            "version: 1\nacquisitionCapabilities: [source-batch]\n",
+        );
+        edited(
+            &with_capability,
+            "    factSchema: schemas/facts.schema.yaml\n",
+            "    factSchema: schemas/facts.schema.yaml\n    batch:\n      maximumItems: 2\n      prepareScript: adapters/source-prepare-batch.rhai\n      extractScript: adapters/source-extract-batch.rhai\n      responseSchema: schemas/source-batch-response.schema.yaml\n      projection: [/results/*]\n",
+        )
+    }
+
+    fn runtime_for_source_batch(enabled: bool) -> RuntimeConfig {
+        let base = include_str!(
+            "../../../products/evidence/reference/request-adapter/deployment-projects/dhis2-tracker-evidence/runtime.yaml"
+        );
+        let document = if enabled {
+            format!("{base}acquisitionCapabilities: [source-batch]\n")
+        } else {
+            base.to_owned()
+        };
+        RuntimeConfig::parse_yaml(document.as_bytes()).expect("runtime configuration validates")
+    }
+
     /// The acceptance fixture with its HTTP source replaced by a statement one.
     fn sqlite_source_document() -> String {
         let fixture = acceptance_fixture();
@@ -7277,6 +7439,12 @@ outboundTls:
             assert!(!parsed.enables_acquisition_capability("search-then-fetch"));
         }
 
+        let source_batch = format!("{base}acquisitionCapabilities: [source-batch]\n");
+        let parsed = RuntimeConfig::parse_yaml(source_batch.as_bytes())
+            .expect("the source-batch capability parses");
+        assert!(parsed.enables_acquisition_capability(SOURCE_BATCH_CAPABILITY));
+        assert!(!parsed.enables_acquisition_capability("search-then-fetch-set"));
+
         for (declaration, expected) in [
             (
                 "acquisitionCapabilities: [search-then-fetch-sets]\n",
@@ -7295,6 +7463,10 @@ outboundTls:
             ),
             (
                 "acquisitionCapabilities: [search-then-fetch-set, search-then-fetch-set]\n",
+                "runtime acquisition capabilities must be unique",
+            ),
+            (
+                "acquisitionCapabilities: [source-batch, source-batch]\n",
                 "runtime acquisition capabilities must be unique",
             ),
         ] {
@@ -7326,6 +7498,103 @@ outboundTls:
                 "{malformed}"
             );
         }
+    }
+
+    #[test]
+    fn source_batch_optimization_is_fixed_route_two_author_and_pre_io_planned() {
+        let document = source_batch_document();
+        let config =
+            EvidenceConfig::parse_yaml(document.as_bytes()).expect("batch source validates");
+        let requirement = &config.requirements[0].id;
+        let runtime = runtime_for_source_batch(true);
+        assert_eq!(
+            config.source_batch_plan(&runtime, requirement, 2),
+            SourceBatchPlan::Optimized {
+                source_id: "source-a".to_owned()
+            }
+        );
+        assert_eq!(
+            config.source_batch_plan(&runtime, requirement, 3),
+            SourceBatchPlan::Sequential,
+            "a logical batch over the source ceiling must be selected sequentially"
+        );
+        assert_eq!(
+            config.source_batch_plan(&runtime_for_source_batch(false), requirement, 2),
+            SourceBatchPlan::Sequential,
+            "the bundle author cannot activate the optimization without the operator"
+        );
+
+        let without_bundle_capability =
+            edited(&document, "acquisitionCapabilities: [source-batch]\n", "");
+        assert_eq!(
+            EvidenceConfig::parse_yaml(without_bundle_capability.as_bytes()).err(),
+            Some(ConfigError::Invalid(
+                "source batch optimization is not a declared bundle capability"
+            )),
+            "the source block cannot activate itself without the bundle author"
+        );
+
+        let templated = edited(
+            &document,
+            "      path: /v1/facts\n",
+            "      pathTemplate: /v1/facts/{subject}\n      pathBindings:\n        subject: {from: selector, role: subject, profile: person-demographics-v1, field: given_name}\n",
+        );
+        assert_eq!(
+            EvidenceConfig::parse_yaml(templated.as_bytes()).err(),
+            Some(ConfigError::Invalid(
+                "source batch optimization requires a fixed request path"
+            ))
+        );
+
+        let unsafe_adapter = edited(
+            &document,
+            "      extractScript: adapters/source-extract-batch.rhai\n",
+            "      extractScript: adapters/Source-extract-batch.rhai\n",
+        );
+        assert_eq!(
+            EvidenceConfig::parse_yaml(unsafe_adapter.as_bytes()).err(),
+            Some(ConfigError::Invalid(
+                "source batch adapter name must be a local identifier"
+            )),
+            "the batch adapter identity emitted to audit must use the closed local grammar"
+        );
+    }
+
+    #[test]
+    fn source_batch_optimization_is_silent_without_a_block_and_never_applies_to_multistage() {
+        let with_capability = edited(
+            acceptance_fixture(),
+            "version: 1\n",
+            "version: 1\nacquisitionCapabilities: [source-batch]\n",
+        );
+        let mut config = EvidenceConfig::parse_yaml(with_capability.as_bytes())
+            .expect("a capability with no batch block leaves the source unchanged");
+        let requirement = config.requirements[0].id.clone();
+        let runtime = runtime_for_source_batch(true);
+        assert_eq!(
+            config.source_batch_plan(&runtime, &requirement, 2),
+            SourceBatchPlan::Sequential
+        );
+
+        config = EvidenceConfig::parse_yaml(source_batch_document().as_bytes())
+            .expect("batch source validates");
+        config.requirements[0].acquisition = AcquisitionConfig::SearchThenFetch {
+            search: "source-a".to_owned(),
+            fetch: "source-a".to_owned(),
+        };
+        assert_eq!(
+            config.source_batch_plan(&runtime, &requirement, 2),
+            SourceBatchPlan::Sequential,
+            "multi-stage acquisitions stay on their declared sequential plan"
+        );
+
+        let sqlite = EvidenceConfig::parse_yaml(sqlite_source_document().as_bytes())
+            .expect("statement source fixture validates");
+        assert_eq!(
+            sqlite.source_batch_plan(&runtime, &requirement, 2),
+            SourceBatchPlan::Sequential,
+            "statement sources never enter HTTP batch execution"
+        );
     }
 
     /// Port 0 is not a port. The kernel picks an arbitrary one, so the socket an

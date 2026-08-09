@@ -41,6 +41,7 @@ pub const MAXIMUM_STATEMENT_PARAMETERS: usize = 64;
 pub const MAXIMUM_STATEMENT_PARAMETER_NAME_BYTES: usize = 64;
 pub const MAXIMUM_STATEMENT_PARAMETER_VALUE_BYTES: usize = 4_096;
 pub const MAXIMUM_JSON_BODY_DEPTH: usize = 32;
+pub const MAXIMUM_SOURCE_BATCH_ITEMS: usize = 16;
 
 const MAXIMUM_BUCKETS: usize = 64;
 const MAXIMUM_ENTITY_REFERENCE_ITEMS: usize = 64;
@@ -117,6 +118,16 @@ pub struct CompiledExtraction {
 
 #[derive(Clone, Debug)]
 pub struct CompiledPreparation {
+    ast: AST,
+}
+
+#[derive(Clone, Debug)]
+pub struct CompiledBatchPreparation {
+    ast: AST,
+}
+
+#[derive(Clone, Debug)]
+pub struct CompiledBatchExtraction {
     ast: AST,
 }
 
@@ -548,6 +559,22 @@ impl RhaiRuntime {
             .map(|ast| CompiledExtraction { ast })
     }
 
+    pub fn compile_batch_preparation(
+        &self,
+        source: &str,
+    ) -> Result<CompiledBatchPreparation, RhaiRuntimeError> {
+        self.compile_exact(source, "prepare_batch", 2)
+            .map(|ast| CompiledBatchPreparation { ast })
+    }
+
+    pub fn compile_batch_extraction(
+        &self,
+        source: &str,
+    ) -> Result<CompiledBatchExtraction, RhaiRuntimeError> {
+        self.compile_exact(source, "extract_batch", 2)
+            .map(|ast| CompiledBatchExtraction { ast })
+    }
+
     pub fn compile_derivation(&self, source: &str) -> Result<CompiledDerivation, RhaiRuntimeError> {
         self.compile_exact(source, "derive", 3)
             .map(|ast| CompiledDerivation { ast })
@@ -582,6 +609,42 @@ impl RhaiRuntime {
                 &script.ast,
                 "prepare",
                 (selectors, context),
+            )
+            .map_err(|error| classify_invocation_error(error, ScriptStage::Preparation))?;
+        decode_request_parts(result, limits)
+    }
+
+    /// Run the closed HTTP batch-preparation ABI. `items` is constructed by
+    /// Rust after exact selector-shape validation and contains only an opaque
+    /// slot plus the ordinary minimized selector object for each logical
+    /// request. No prior facts or transport authority enter this context.
+    pub fn prepare_batch(
+        &self,
+        script: &CompiledBatchPreparation,
+        items: &Value,
+        parameters: &Value,
+        limits: &RequestPartsLimits,
+    ) -> Result<RequestParts, RhaiRuntimeError> {
+        validate_batch_items(items)?;
+        validate_adapter_object(parameters)?;
+        let combined = Value::Array(vec![items.clone(), parameters.clone()]);
+        if serde_json::to_vec(&combined)
+            .map_err(|_| RhaiRuntimeError::AdapterInput)?
+            .len()
+            > MAXIMUM_PREPARATION_INPUT_BYTES
+        {
+            return Err(RhaiRuntimeError::InputBound);
+        }
+        let items = rhai::serde::to_dynamic(items).map_err(|_| RhaiRuntimeError::AdapterInput)?;
+        let context = batch_context_to_dynamic(parameters, None)?;
+        let result = self
+            .engine
+            .call_fn_with_options::<Dynamic>(
+                CallFnOptions::new().eval_ast(false),
+                &mut Scope::new(),
+                &script.ast,
+                "prepare_batch",
+                (items, context),
             )
             .map_err(|error| classify_invocation_error(error, ScriptStage::Preparation))?;
         decode_request_parts(result, limits)
@@ -676,6 +739,43 @@ impl RhaiRuntime {
             )
             .map_err(|error| classify_invocation_error(error, ScriptStage::Extraction))?;
         decode_lookup_result(result, fact_schema)
+    }
+
+    /// Run the closed HTTP batch-extraction ABI and restore logical request
+    /// order after proving the returned slots are an exact bijection. The
+    /// optimized lane applies only to `single` acquisitions, so there are no
+    /// prior-stage facts to expose: extraction receives exactly adapter
+    /// parameters and Rust's retained expected slots.
+    pub fn extract_batch<V>(
+        &self,
+        script: &CompiledBatchExtraction,
+        source_response: &Value,
+        parameters: &Value,
+        slots: &[i64],
+        fact_schema: &V,
+    ) -> Result<Vec<LookupResult>, RhaiRuntimeError>
+    where
+        V: FactSchemaValidator + ?Sized,
+    {
+        validate_json_bound(source_response, MAXIMUM_SOURCE_INPUT_BYTES)?;
+        if !json_numbers_are_supported(source_response) {
+            return Err(RhaiRuntimeError::InputBound);
+        }
+        validate_batch_slots(slots)?;
+        let input =
+            rhai::serde::to_dynamic(source_response).map_err(|_| RhaiRuntimeError::InputBound)?;
+        let context = batch_context_to_dynamic(parameters, Some(slots))?;
+        let result = self
+            .engine
+            .call_fn_with_options::<Dynamic>(
+                CallFnOptions::new().eval_ast(false),
+                &mut Scope::new(),
+                &script.ast,
+                "extract_batch",
+                (input, context),
+            )
+            .map_err(|error| classify_invocation_error(error, ScriptStage::Extraction))?;
+        decode_batch_lookup_results(result, slots, fact_schema)
     }
 
     pub fn derive(
@@ -1238,6 +1338,50 @@ where
     }
 }
 
+fn decode_batch_lookup_results<V>(
+    result: Dynamic,
+    expected_slots: &[i64],
+    fact_schema: &V,
+) -> Result<Vec<LookupResult>, RhaiRuntimeError>
+where
+    V: FactSchemaValidator + ?Sized,
+{
+    let array = result
+        .try_cast::<Array>()
+        .ok_or(RhaiRuntimeError::ExtractionResult)?;
+    if array.len() != expected_slots.len() {
+        return Err(RhaiRuntimeError::SourceProtocol);
+    }
+    let expected = expected_slots.iter().copied().collect::<BTreeSet<_>>();
+    let mut by_slot = BTreeMap::new();
+    for item in array {
+        let map = item
+            .try_cast::<Map>()
+            .ok_or(RhaiRuntimeError::ExtractionResult)?;
+        if !has_exact_keys(&map, &["result", "slot"]) {
+            return Err(RhaiRuntimeError::ExtractionResult);
+        }
+        let slot = map
+            .get("slot")
+            .and_then(|slot| slot.clone().try_cast::<INT>())
+            .ok_or(RhaiRuntimeError::SourceProtocol)?;
+        if slot < 0 || !expected.contains(&slot) || by_slot.contains_key(&slot) {
+            return Err(RhaiRuntimeError::SourceProtocol);
+        }
+        let lookup = decode_lookup_result(
+            map.get("result")
+                .ok_or(RhaiRuntimeError::ExtractionResult)?
+                .clone(),
+            fact_schema,
+        )?;
+        by_slot.insert(slot, lookup);
+    }
+    expected_slots
+        .iter()
+        .map(|slot| by_slot.remove(slot).ok_or(RhaiRuntimeError::SourceProtocol))
+        .collect()
+}
+
 fn decode_derivation_result(result: Dynamic) -> Result<Vec<DerivedConceptValue>, RhaiRuntimeError> {
     let array = result
         .try_cast::<Array>()
@@ -1793,6 +1937,71 @@ fn validate_adapter_inputs(
         return Err(RhaiRuntimeError::InputBound);
     }
     Ok(())
+}
+
+fn validate_batch_items(items: &Value) -> Result<(), RhaiRuntimeError> {
+    let items = items
+        .as_array()
+        .filter(|items| !items.is_empty() && items.len() <= MAXIMUM_SOURCE_BATCH_ITEMS)
+        .ok_or(RhaiRuntimeError::AdapterInput)?;
+    for (expected_slot, item) in items.iter().enumerate() {
+        let item = item.as_object().ok_or(RhaiRuntimeError::AdapterInput)?;
+        if item.len() != 2 || !item.contains_key("slot") || !item.contains_key("selectors") {
+            return Err(RhaiRuntimeError::AdapterInput);
+        }
+        let slot = item
+            .get("slot")
+            .and_then(Value::as_i64)
+            .ok_or(RhaiRuntimeError::AdapterInput)?;
+        if usize::try_from(slot).ok() != Some(expected_slot) {
+            return Err(RhaiRuntimeError::AdapterInput);
+        }
+        validate_adapter_object(
+            item.get("selectors")
+                .ok_or(RhaiRuntimeError::AdapterInput)?,
+        )?;
+    }
+    validate_json_bound(
+        &Value::Array(items.to_vec()),
+        MAXIMUM_PREPARATION_INPUT_BYTES,
+    )
+}
+
+fn validate_batch_slots(slots: &[i64]) -> Result<(), RhaiRuntimeError> {
+    if slots.is_empty() || slots.len() > MAXIMUM_SOURCE_BATCH_ITEMS {
+        return Err(RhaiRuntimeError::InputBound);
+    }
+    if slots
+        .iter()
+        .enumerate()
+        .any(|(expected, slot)| usize::try_from(*slot).ok() != Some(expected))
+    {
+        return Err(RhaiRuntimeError::SourceProtocol);
+    }
+    Ok(())
+}
+
+fn batch_context_to_dynamic(
+    parameters: &Value,
+    slots: Option<&[i64]>,
+) -> Result<Dynamic, RhaiRuntimeError> {
+    validate_adapter_object(parameters)?;
+    let mut context = Map::new();
+    context.insert("parameters".into(), adapter_object_to_dynamic(parameters)?);
+    if let Some(slots) = slots {
+        validate_batch_slots(slots)?;
+        context.insert(
+            "slots".into(),
+            Dynamic::from(
+                slots
+                    .iter()
+                    .copied()
+                    .map(Dynamic::from_int)
+                    .collect::<Array>(),
+            ),
+        );
+    }
+    Ok(Dynamic::from(context))
 }
 
 fn validate_adapter_context(
@@ -2537,6 +2746,182 @@ mod tests {
             },
         )
         .expect("request limits")
+    }
+
+    #[test]
+    fn batch_preparation_receives_only_slotted_minimized_items_and_parameters() {
+        let runtime = runtime();
+        let script = runtime
+            .compile_batch_preparation(
+                r#"
+                fn prepare_batch(items, context) {
+                    #{
+                        query: [],
+                        body: #{
+                            items: items,
+                            marker: context.parameters.marker,
+                            context_key_count: len(context),
+                            prior_facts_absent: is_missing(context.prior_facts),
+                            slots_absent: is_missing(context.slots)
+                        }
+                    }
+                }
+                "#,
+            )
+            .expect("batch preparation compiles");
+        let items = json!([
+            {"slot": 0, "selectors": {"subject": {"profile": "opaque-v1", "values": {"id": "first"}}}},
+            {"slot": 1, "selectors": {"subject": {"profile": "opaque-v1", "values": {"id": "second"}}}}
+        ]);
+        let prepared = runtime
+            .prepare_batch(
+                &script,
+                &items,
+                &json!({"marker": "fixed"}),
+                &request_limits(
+                    RequestPartRequirement::Forbidden,
+                    RequestPartRequirement::Required,
+                ),
+            )
+            .expect("batch prepares");
+        assert_eq!(
+            prepared.body,
+            Some(json!({
+                "items": items,
+                "marker": "fixed",
+                "context_key_count": 1,
+                "prior_facts_absent": true,
+                "slots_absent": true
+            }))
+        );
+    }
+
+    #[test]
+    fn batch_extraction_context_is_parameters_and_rust_slots_only() {
+        let runtime = runtime();
+        let script = runtime
+            .compile_batch_extraction(
+                r#"
+                fn extract_batch(response, context) {
+                    if len(context) != 2
+                        || context.parameters.marker != "fixed"
+                        || !is_missing(context.prior_facts)
+                        || !is_missing(context.headers)
+                        || !is_missing(context.path) {
+                        return [#{slot: context.slots[0], result: #{outcome: "ambiguous"}}];
+                    }
+                    [#{slot: context.slots[0], result: #{outcome: "no_match"}}]
+                }
+                "#,
+            )
+            .expect("batch extraction compiles");
+        assert_eq!(
+            runtime.extract_batch(
+                &script,
+                &json!({}),
+                &json!({"marker": "fixed"}),
+                &[0],
+                &|_: &Value| true,
+            ),
+            Ok(vec![LookupResult::NoMatch])
+        );
+    }
+
+    #[test]
+    fn batch_extraction_accepts_reordering_and_restores_request_order() {
+        let runtime = runtime();
+        let script = runtime
+            .compile_batch_extraction(
+                r#"
+                fn extract_batch(response, context) {
+                    [
+                        #{slot: context.slots[1], result: #{outcome: "no_match"}},
+                        #{slot: context.slots[0], result: #{outcome: "match", facts: #{code: response.results[0].code}}}
+                    ]
+                }
+                "#,
+            )
+            .expect("batch extraction compiles");
+        let extracted = runtime
+            .extract_batch(
+                &script,
+                &json!({"results": [{"code": "A"}]}),
+                &json!({}),
+                &[0, 1],
+                &|facts: &Value| facts == &json!({"code": "A"}),
+            )
+            .expect("reordered results extract");
+        assert!(matches!(
+            &extracted[0],
+            LookupResult::Match(facts) if facts == &BTreeMap::from([("code".to_owned(), json!("A"))])
+        ));
+        assert!(matches!(extracted[1], LookupResult::NoMatch));
+    }
+
+    #[test]
+    fn batch_and_sequential_extraction_share_lookup_result_primitives() {
+        let runtime = runtime();
+        for result in [
+            r##"#{outcome: "match", facts: #{code: response.code}}"##,
+            r##"#{outcome: "no_match"}"##,
+            r##"#{outcome: "ambiguous"}"##,
+        ] {
+            let ordinary = runtime
+                .compile_extraction(&format!("fn extract(response, context) {{ {result} }}"))
+                .expect("ordinary extraction compiles");
+            let batch = runtime
+                .compile_batch_extraction(&format!(
+                    "fn extract_batch(response, context) {{ [#{{slot: context.slots[0], result: {result}}}] }}"
+                ))
+                .expect("batch extraction compiles");
+            let response = json!({"code": "A"});
+            let fact_schema = |facts: &Value| facts == &json!({"code": "A"});
+            let ordinary = runtime
+                .extract(&ordinary, &response, &json!({}), &fact_schema)
+                .expect("ordinary result decodes");
+            assert_eq!(
+                runtime
+                    .extract_batch(&batch, &response, &json!({}), &[0], &fact_schema)
+                    .expect("batch result decodes"),
+                vec![ordinary]
+            );
+        }
+    }
+
+    #[test]
+    fn batch_extraction_requires_an_exact_slot_bijection() {
+        let runtime = runtime();
+        let cases = [
+            ("[#{slot: 0, result: #{outcome: \"no_match\"}}]", "missing"),
+            (
+                "[#{slot: 0, result: #{outcome: \"no_match\"}}, #{slot: 0, result: #{outcome: \"no_match\"}}]",
+                "duplicate",
+            ),
+            (
+                "[#{slot: 0, result: #{outcome: \"no_match\"}}, #{slot: 1, result: #{outcome: \"no_match\"}}, #{slot: 2, result: #{outcome: \"no_match\"}}]",
+                "extra",
+            ),
+            (
+                "[#{slot: 0, result: #{outcome: \"no_match\"}}, #{slot: 2, result: #{outcome: \"no_match\"}}]",
+                "out-of-range",
+            ),
+            (
+                "[#{slot: 0, result: #{outcome: \"no_match\"}}, #{slot: -1, result: #{outcome: \"no_match\"}}]",
+                "negative",
+            ),
+        ];
+        for (result, label) in cases {
+            let script = runtime
+                .compile_batch_extraction(&format!(
+                    "fn extract_batch(response, context) {{ {result} }}"
+                ))
+                .unwrap_or_else(|error| panic!("{label} script did not compile: {error}"));
+            assert_eq!(
+                runtime.extract_batch(&script, &json!({}), &json!({}), &[0, 1], &|_: &Value| true,),
+                Err(RhaiRuntimeError::SourceProtocol),
+                "{label} slots were accepted"
+            );
+        }
     }
 
     #[test]

@@ -324,20 +324,24 @@ properties:
           $ref: '#/$defs/absolute-path'
   acquisitionCapabilities:
     description: >-
-      Gated acquisition kinds this deployment enables, the operator half of the same two-sided
-      gate the bundle declares. Omission and an explicit empty list both enable nothing.
+      Gated acquisition kinds and source-call optimizations this deployment enables, the
+      operator half of the same two-sided gate the bundle declares. Omission and an explicit
+      empty list both enable nothing.
     type: array
-    maxItems: 1
+    maxItems: 2
     uniqueItems: true
     items:
       description: >-
-        One gated acquisition kind this deployment permits; a bundle needing a kind absent
-        here is refused before the listener binds.
+        One gated acquisition kind or source-call optimization this deployment permits. A
+        bundle needing an acquisition kind absent here is refused before the listener binds;
+        an absent optimization is never selected.
       enum:
         - search-then-fetch-set
+        - source-batch
     x-runtime-validation: >-
-      A bundle whose requirement needs a gated acquisition kind absent from this list is refused
-      at startup, before the deployment serves anything.
+      A bundle whose requirement needs a gated acquisition kind, or whose HTTP source carries a
+      batch block, is refused at startup when the corresponding capability is absent from this
+      list, before the deployment serves anything.
 $defs:
   local-id:
     type: string

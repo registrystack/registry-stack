@@ -55,15 +55,16 @@ const MINT_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 /// Registry Mint's default public-key route when `signing.jwksPath` is omitted.
 const DEFAULT_MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
 
-/// The acquisition kinds an operator must enable in `runtime.yaml` before a
-/// deployment serves them.
+/// The acquisition capabilities an operator must enable in `runtime.yaml`
+/// before a deployment uses them.
 ///
 /// The Evidence runtime owns this vocabulary and remains the only authority on
 /// it; it is restated here because this walk reads deployment documents rather
-/// than linking the runtime. The frozen Version 1 forms are deliberately
-/// absent, exactly as they are in both published contracts: a requirement
-/// acquiring through one asks the operator for nothing.
-const GATED_ACQUISITION_KINDS: [&str; 1] = ["search-then-fetch-set"];
+/// than linking the runtime. The ordinary Version 1 acquisition forms are
+/// deliberately absent: a requirement acquiring through one asks the operator
+/// for nothing. `source-batch` gates an optional source optimization rather
+/// than a requirement acquisition kind.
+const GATED_ACQUISITION_CAPABILITIES: [&str; 2] = ["search-then-fetch-set", "source-batch"];
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
@@ -494,22 +495,45 @@ fn check_acquisition(
         });
     }
 
+    let uses_source_batch = bundle
+        .get("sources")
+        .and_then(YamlValue::as_mapping)
+        .is_some_and(|sources| sources.values().any(|source| source.get("batch").is_some()));
+    if uses_source_batch {
+        if !declared.iter().any(|entry| entry == "source-batch") {
+            undeclared.push("source-batch");
+        }
+        if !enabled.iter().any(|entry| entry == "source-batch") {
+            unenabled.push("source-batch");
+        }
+    }
+
     // The capability names are the closed published vocabulary, not document
     // values, so the entry an author or an operator must add can be stated
     // exactly.
     for capability in undeclared {
+        let use_site = if capability == "source-batch" {
+            "a source batch block in it uses"
+        } else {
+            "a requirement in it uses"
+        };
         run.refuse(
             bundle_config_path,
             format!(
-                "does not declare the {capability} acquisition capability a requirement in it uses; add acquisitionCapabilities: [{capability}]"
+                "does not declare the {capability} acquisition capability {use_site}; add acquisitionCapabilities: [{capability}]"
             ),
         );
     }
     for capability in unenabled {
+        let use_site = if capability == "source-batch" {
+            "a source batch block in this bundle needs"
+        } else {
+            "a requirement in this bundle needs"
+        };
         run.refuse(
             runtime_path,
             format!(
-                "does not enable the {capability} acquisition capability a requirement in this bundle needs; add acquisitionCapabilities: [{capability}]"
+                "does not enable the {capability} acquisition capability {use_site}; add acquisitionCapabilities: [{capability}]"
             ),
         );
     }
@@ -542,7 +566,7 @@ fn gate_half(run: &mut CheckRun, document: &YamlValue, path: &Path, states: &str
     };
     let mut named: Vec<String> = Vec::new();
     for capability in listed {
-        if !GATED_ACQUISITION_KINDS.contains(&capability.as_str()) {
+        if !GATED_ACQUISITION_CAPABILITIES.contains(&capability.as_str()) {
             run.refuse(
                 path,
                 format!("{states} an acquisition capability this release does not define; the runtime refuses the deployment at startup"),
@@ -1079,7 +1103,7 @@ fn print_diagnostics(report: &DoctorReport, to_stderr: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{YamlValue, GATED_ACQUISITION_KINDS};
+    use super::{YamlValue, GATED_ACQUISITION_CAPABILITIES};
 
     /// The Evidence runtime owns this vocabulary and this crate does not link
     /// it, so the restatement above is the one place a new gated kind can be
@@ -1088,7 +1112,7 @@ mod tests {
     /// the document both halves of the gate already answer to, so it is what
     /// the restatement is held against.
     #[test]
-    fn the_restated_gated_kinds_match_the_published_runtime_contract() {
+    fn the_restated_acquisition_capabilities_match_the_published_runtime_contract() {
         let contract = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../products/evidence/contracts/runtime.schema.yaml"
@@ -1108,7 +1132,7 @@ mod tests {
             .map(|kind| kind.as_str().expect("each gated kind is a name").to_owned())
             .collect::<Vec<_>>();
         assert_eq!(
-            published, GATED_ACQUISITION_KINDS,
+            published, GATED_ACQUISITION_CAPABILITIES,
             "doctor's restated vocabulary drifted from the published contract"
         );
     }

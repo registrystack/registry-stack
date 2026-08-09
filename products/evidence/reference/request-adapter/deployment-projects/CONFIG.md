@@ -97,7 +97,7 @@ The governed file is `bundle/evidence.yaml`.
 | `rateLimits` | yes | Governed anti-enumeration and request limits. |
 | `signing` | yes | Evidence/JWS format, algorithm, key references, validity, JWKS path, and rollover policy. |
 | `responseFormats` | no | Response formats the whole deployment permits. Omission means `[signed-jws]`. Declare it explicitly in production bundles. |
-| `acquisitionCapabilities` | no | Gated acquisition kinds this bundle opts in to, at most one entry. Omission and `[]` both enable nothing. |
+| `acquisitionCapabilities` | no | Gated acquisition kinds and source optimizations this bundle opts in to, at most two entries: `search-then-fetch-set` and `source-batch`. Omission and `[]` both enable nothing. |
 | `holderBoundBatchMaxSize` | no | Ceiling of 1 through 16 on how many assertions one holder-bound release may carry. Omission means 1, so a bundle written before batch release cannot serve a batch. |
 | `selectorProfiles` | yes | Closed caller/grant/context selector shapes. |
 | `sources` | yes | Fixed source authorities, transport policy, scripts, schemas, and bounds. |
@@ -383,6 +383,7 @@ Beyond the shared keys, an `http-json` source declares:
 | `baseUrl` | yes | Fixed HTTPS origin, except for the `kind: none` local loopback boundary below. No path, query, fragment, user information, wildcard, or runtime substitution. |
 | `tlsTrustProfile` | no | Logical profile name bound by `runtime.yaml`. Omission uses configured system roots only. |
 | `authentication` | yes | One closed source-authentication profile below. `kind: none` is restricted to explicit local authoring at a numeric-loopback origin. |
+| `batch` | no | Reviewed one-call optimization for the multi-subject request-batch route. It is fixed-path-only and requires both bundle and runtime `source-batch` capability. |
 
 Its `request` is the fixed evidence-data request plan in
 [Request](#request).
@@ -653,6 +654,49 @@ fails preparation, and no source request is made.
 
 At least one output channel must be usable. `required` means non-empty. For a
 JSON body, JSON `null` is absent; an empty object or array is present.
+
+### Optional HTTP source batch
+
+An `http-json` source whose ordinary request uses `path` may declare one
+optimized call for a complete multi-subject request batch:
+
+```yaml
+acquisitionCapabilities: [source-batch]
+sources:
+  source-a:
+    transport: http-json
+    # ordinary baseUrl, posture, authentication, request, and schemas omitted
+    batch:
+      maximumItems: 16
+      prepareScript: adapters/source-a-batch-prepare.rhai
+      extractScript: adapters/source-a-batch-extract.rhai
+      responseSchema: schemas/source-a-batch-response.schema.yaml
+      projection: [/results/*/slot, /results/*/outcome, /results/*/facts]
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `maximumItems` | yes | Integer 1 through 16. A larger outer request uses ordinary sequential execution from the start and is not split. |
+| `prepareScript` | yes | Bundle-relative script implementing `prepare_batch(items, {parameters})`. |
+| `extractScript` | yes | Bundle-relative script implementing `extract_batch(response, {parameters, slots})`. |
+| `responseSchema` | yes | Closed schema applied after the batch projection and before batch extraction. |
+| `projection` | yes | Non-empty extended JSON Pointer allowlist under the ordinary projection and 65,536-byte input bounds. |
+
+This block carries no transport authority. It reuses the ordinary method,
+origin, fixed path, authentication, headers, TLS trust, redirect denial,
+timeout, response-byte limit, concurrency semaphore, adapter parameters, and
+preparation limits. A batch block beside a path template, or without both
+capability gates, is a startup error. Omitting the block on a path-template,
+SQLite, or multi-stage path, or exceeding `maximumItems`, selects sequential
+execution before any source I/O. Once an optimized attempt begins, no error
+retries as sequential fanout.
+
+`prepare_batch` receives ordered exact `{slot, selectors}` maps. `slot` is an
+opaque Rust integer; `selectors` is the ordinary minimized source selector
+object for that item. `extract_batch` returns exact `{slot, result}` maps where
+`result` is the ordinary closed lookup union. Rust permits output reordering but
+requires every supplied slot exactly once. Missing, duplicate, extra, negative,
+non-integer, or out-of-range slots abort the outer request.
 
 ### Extract source
 
@@ -1058,7 +1102,7 @@ sourceExtracts:
 | `outboundTls.trustProfiles.<id>.caBundleFile` | for each profile | Absolute path to one bounded PEM CA file. Profile names must exactly match bundle `tlsTrustProfile` references. |
 | `sourceExtracts` | no | Closed map of at most 64 logical extract names. Omission binds none, which is what a runtime file for a bundle with no extract source says. |
 | `sourceExtracts.<name>.path` | for each name | Absolute path to one read-only regular file. Names must exactly match bundle `extractProfile` references. |
-| `acquisitionCapabilities` | no | Gated acquisition kinds this deployment enables, at most one entry. Omission and `[]` both enable nothing, so a bundle needing a gated kind is refused before the listener binds. |
+| `acquisitionCapabilities` | no | Gated acquisition kinds and source optimizations this deployment enables, at most two entries: `search-then-fetch-set` and `source-batch`. Omission and `[]` both enable nothing, so a bundle carrying a source batch block or needing a gated kind is refused before the listener binds. |
 
 `bundleDirectory`, secret roots, audit destinations, and CA files must be
 absolute paths. The runtime rejects symlinks, insecure ownership/modes, missing
@@ -1445,6 +1489,13 @@ sources.*.authentication.tokenRef
 sources.*.authentication.usernameRef
 sources.*.authentication.valueRef
 sources.*.baseUrl
+sources.*.batch
+sources.*.batch.extractScript
+sources.*.batch.maximumItems
+sources.*.batch.prepareScript
+sources.*.batch.projection
+sources.*.batch.projection[]
+sources.*.batch.responseSchema
 sources.*.extractProfile
 sources.*.extractScript
 sources.*.factSchema
