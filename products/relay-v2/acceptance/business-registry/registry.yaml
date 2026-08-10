@@ -32,7 +32,7 @@ semantics:
   alignments:
     - id: semic-business-alignment
       profileRef: semantics/semic-business-alignment.yaml
-      digest: sha256:69c6efc233798949fb69457583733b837ce7fa36d238828e9357533383f197c3
+      digest: sha256:6a46a9be0a3d5b4a5650934c7e8ef73ad1803cb479981f7d235a1c17a335af52
       version: "1"
       relationRequired: true
 classifications:
@@ -44,7 +44,7 @@ sources:
   companies:
     kind: sqlite
     profile: snapshot
-    expectedSchemaFingerprint: sha256:5f12cd971dfa9cafd98018bd8723f2c3902e7d96b3c57ecf5c20e4885eb806a8
+    expectedSchemaFingerprint: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
 resources:
   - id: registered-business
     title: Registered business
@@ -153,6 +153,98 @@ resources:
         legalBasisRef: governance/legal-basis.yaml
         dpvProfileRef: governance/legal-basis.yaml
         safeguards: [reviewed-public-view, property-minimization, deterministic-pagination, change-impact-review]
+  - id: registered-premises
+    title: Registered premises
+    description: Current synthetic public premises locations associated with registered businesses.
+    semanticClass: local:RegisteredPremises
+    source:
+      source: companies
+      view: relay_registered_premises
+    classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    recordContext:
+      recordIdentifier: {sourceColumn: premises_identifier}
+      revisionIdentifier: {sourceColumn: record_revision}
+      lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
+      recordedAt: {sourceColumn: recorded_at}
+    sourceColumnClassifications:
+      longitude: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+      latitude: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    properties:
+      premisesIdentifier:
+        sourceColumn: premises_identifier
+        type: string
+        sourceRequired: true
+        semanticTerm: local:premisesIdentifier
+        label: Premises identifier
+        description: Stable synthetic identifier for the registered premises Record.
+      businessRegistrationNumber:
+        sourceColumn: business_registration_number
+        type: string
+        sourceRequired: true
+        semanticTerm: local:businessRegistrationNumber
+        label: Business registration number
+        description: Registration number of the business associated with the premises.
+      premisesName:
+        sourceColumn: premises_name
+        type: string
+        sourceRequired: true
+        semanticTerm: local:premisesName
+        label: Premises name
+        description: Published name of the synthetic registered premises.
+      location:
+        type: point
+        crs: http://www.opengis.net/def/crs/OGC/0/CRS84
+        source: {longitudeColumn: longitude, latitudeColumn: latitude}
+        sourceRequired: true
+        semanticTerm: local:location
+        label: Premises location
+        description: Reviewed Point location of the registered premises in CRS84 longitude-latitude order.
+        classification: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    primaryGeometry: location
+    disclosureProfiles:
+      public-premises:
+        properties: [premisesIdentifier, premisesName, location]
+      registrar-premises:
+        properties: [premisesIdentifier, businessRegistrationNumber, premisesName, location]
+    operations:
+      list:
+        defaultAccessProfile: registrar-premises
+        accessProfiles:
+          registrar-premises:
+            access: {scope: registry:business:premises-list}
+            disclosureProfile: registrar-premises
+        allowUnfiltered: true
+        orderBy: [premisesIdentifier]
+        pagination: {defaultPageSize: 2, maximumPageSize: 4}
+      read:
+        defaultAccessProfile: public-premises
+        accessProfiles:
+          public-premises: {access: public, disclosureProfile: public-premises}
+          registrar-premises:
+            access: {scope: registry:business:premises-read-registrar}
+            disclosureProfile: registrar-premises
+      searches:
+        - id: within-bbox
+          query:
+            kind: point-bbox
+            maximumLongitudeSpanDegrees: 2
+            maximumLatitudeSpanDegrees: 2
+          defaultAccessProfile: public-premises
+          accessProfiles:
+            public-premises: {access: public, disclosureProfile: public-premises}
+            registrar-premises:
+              access: {scope: registry:business:premises-search-registrar}
+              disclosureProfile: registrar-premises
+          orderBy: [premisesIdentifier]
+          pagination: {defaultPageSize: 2, maximumPageSize: 4}
+    processingDescriptions:
+      - id: public-premises-publication
+        operationRefs: [list, read, search:within-bbox]
+        purpose: statutory-publication
+        recipientClass: public
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [reviewed-public-view, geometry-disclosure-review, bounded-point-bbox, deterministic-pagination, change-impact-review]
 metadataVisibility:
   service: public
   resources: public

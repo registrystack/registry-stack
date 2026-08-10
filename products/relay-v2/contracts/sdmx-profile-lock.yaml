@@ -1,0 +1,41 @@
+schemaVersion: relay.registrystack.org/sdmx-profile-lock/v1alpha1
+upstreamBytesCommitted: false
+profiles:
+  rest:
+    version: 2.2.2
+    source: https://github.com/sdmx-twg/sdmx-rest/tree/v2.2.2
+    commit: 19b14e39b78fe6dacf20a8f97e971ab29c3c83e2
+    subset: [keyed-data, omitted-key-data-alias, dataflow-structure, datastructure-structure]
+  dataJson:
+    version: 2.1.0
+    mediaType: application/vnd.sdmx.data+json;version=2.1.0
+    specification: https://github.com/sdmx-twg/sdmx-json/tree/v2.1.0/data-message
+    commit: faa661d2247b9914052c76a5dabafd5990493f5a
+    schema:
+      url: https://json.sdmx.org/2.1.0/sdmx-json-data-schema.json
+      id: https://json.sdmx.org/2.1/sdmx-json-data-schema.json
+      sha256: sha256:ca1c85c7693a2d9d0602a1ca8e5a8b1cc56437fcb05e25cce15165ee75dcd80d
+      cacheFile: sdmx-json-data-schema-2.1.0.json
+  dataCsv:
+    version: 2.1.0
+    mediaType: application/vnd.sdmx.data+csv;version=2.1.0
+    specification: https://github.com/sdmx-twg/sdmx-csv/tree/v2.1.0/data-message
+    commit: 9a65b133ec99622a04701f1ff09e7c0777afedbf
+  structureJson:
+    version: 2.1.0
+    mediaType: application/vnd.sdmx.structure+json;version=2.1.0
+    specification: https://github.com/sdmx-twg/sdmx-json/tree/v2.1.0/structure-message
+    commit: faa661d2247b9914052c76a5dabafd5990493f5a
+    schema:
+      url: https://json.sdmx.org/2.1.0/sdmx-json-structure-schema.json
+      id: https://json.sdmx.org/2.1/sdmx-json-structure-schema.json
+      sha256: sha256:0f502a347cb463aee7664283ec53d79b6993bf5b503dc76151bb597d10ae3e32
+      cacheFile: sdmx-json-structure-schema-2.1.0.json
+validation:
+  script: scripts/validate-sdmx-profile.py
+  networkByDefault: false
+  explicitFetchOption: --fetch-official-schemas
+  schemaCacheEnvironment: SDMX_SCHEMA_CACHE
+  packageArtifactSuffixes:
+    dataflow: .sdmx.dataflow.json
+    datastructure: .sdmx.datastructure.json

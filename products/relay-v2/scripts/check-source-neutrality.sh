@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRODUCT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-forbidden='social[-_ ]?assistance|business[-_ ]?registry|civil[-_ ]?event|crvs|birth|death|household|benefit|company'
+forbidden='social[-_ ]?assistance|business[-_ ]?registry|civil[-_ ]?event|labour[-_ ]?statistics|crvs|birth|death|household|benefit|company'
 
 if rg -i -l "$forbidden" \
   "$PRODUCT_DIR/../../crates/registry-relay-v2/src" \

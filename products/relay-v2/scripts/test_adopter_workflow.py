@@ -21,7 +21,20 @@ import yaml
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = PRODUCT_ROOT.parents[1]
-PROJECTS = ("social-assistance", "business-registry", "civil-event")
+PROJECTS = (
+    "social-assistance",
+    "business-registry",
+    "civil-event",
+    "labour-statistics",
+)
+STATISTICAL_INSPECTIONS = {
+    "labour-statistics": {
+        "view": "relay_labour_force_rates",
+        "timeColumn": "time_period",
+        "measureColumn": "obs_value",
+        "attributeColumns": ("unit_measure",),
+    }
+}
 BASELINE_PATH = PRODUCT_ROOT / "contracts/generated-baselines.yaml"
 CONFIGURATION_REFERENCE = PRODUCT_ROOT / "CONFIGURATION-EXAMPLES.md"
 CONFIGURATION_MARKERS = {
@@ -224,7 +237,12 @@ def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
         "relay.artifacts.retrieve",
     }
     full_ids = {operation["operationId"] for operation in full_operations.values()}
-    if full_ids != fixed_ids | capability_ids:
+    full_capability_ids = {
+        operation.get("x-registry-capability-operation", operation["operationId"])
+        for operation in full_operations.values()
+        if operation["operationId"] not in fixed_ids
+    }
+    if full_ids & fixed_ids != fixed_ids or full_capability_ids != capability_ids:
         raise GateFailure("full OpenAPI does not exactly cover compiled capabilities and router metadata")
 
     public_capabilities = json.loads(
@@ -244,13 +262,18 @@ def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
     }
     if not required_public_ids.issubset(public_ids):
         raise GateFailure("public OpenAPI omits a required public router operation")
-    if public_ids - fixed_ids != public_capability_ids:
+    bound_public_ids = {
+        operation.get("x-registry-capability-operation", operation["operationId"])
+        for operation in public_operations.values()
+        if operation["operationId"] not in fixed_ids
+    }
+    if bound_public_ids != public_capability_ids:
         raise GateFailure("public OpenAPI capability paths do not match public discovery")
 
 
 def validate_exposure_and_identity(package: Path, generated: Path) -> dict[str, Any]:
     manifest = json.loads((package / "relay-package.json").read_text(encoding="utf-8"))
-    if manifest.get("packageVersion") != "relay.registrystack.org/package/v1alpha2":
+    if manifest.get("packageVersion") != "relay.registrystack.org/package/v1alpha3":
         raise GateFailure("sealed package has an unsupported manifest")
     artifacts = manifest.get("artifacts")
     operation_bindings = manifest.get("operationArtifactBindings")
@@ -290,10 +313,29 @@ def validate_exposure_and_identity(package: Path, generated: Path) -> dict[str, 
                 raise GateFailure("artifact exposure inventory disagrees with file inventory")
         visibility = artifact.get("visibility")
         operation = artifact.get("operationIdentifier")
-        if visibility == "operation-bound" and not operation:
+        access_binding = artifact.get("accessBinding")
+        if "accessProfileIdentifier" in artifact:
+            raise GateFailure(
+                "package artifact carries the retired accessProfileIdentifier field"
+            )
+        if (operation is None) != (access_binding is None):
+            raise GateFailure("artifact operation identity and access binding disagree")
+        if visibility == "operation-bound" and operation is None:
             raise GateFailure("operation-bound artifact has no compiled operation gate")
-        if visibility != "operation-bound" and operation is not None:
-            raise GateFailure("non-operation-bound artifact carries an operation gate")
+        if access_binding is not None:
+            if not isinstance(access_binding, dict):
+                raise GateFailure("artifact has no explicit access binding")
+            if access_binding.get("kind") == "access-profile":
+                if visibility != "operation-bound":
+                    raise GateFailure(
+                        "non-operation-bound Record artifact carries an access-profile gate"
+                    )
+                if set(access_binding) != {"kind", "identifier"} or not isinstance(
+                    access_binding.get("identifier"), str
+                ) or not access_binding["identifier"]:
+                    raise GateFailure("access-profile artifact has a malformed access binding")
+            elif access_binding != {"kind": "fixed-operation"}:
+                raise GateFailure("artifact has an unknown access binding")
         generated_path = generated / path.removeprefix("generated/")
         if not generated_path.is_file() or generated_path.read_bytes() != (package / path).read_bytes():
             raise GateFailure("generated and packaged artifact bytes differ")
@@ -392,7 +434,56 @@ def run_workflow(relayctl: Path, project_name: str, root: Path) -> tuple[list[di
     shutil.copytree(source, project, dirs_exist_ok=True)
     materialize(project)
     shutil.copytree(project, previous)
-    accepted(["inspect", str(project / "fixture.sqlite"), "--starters", str(root / "inspection")])
+    inspect_arguments = [
+        "inspect",
+        str(project / "fixture.sqlite"),
+        "--starters",
+        str(root / "inspection"),
+    ]
+    statistical = STATISTICAL_INSPECTIONS.get(project_name)
+    if statistical is not None:
+        inspect_arguments.extend(
+            [
+                "--statistical-view",
+                statistical["view"],
+                "--time-column",
+                statistical["timeColumn"],
+                "--measure-column",
+                statistical["measureColumn"],
+            ]
+        )
+        for attribute_column in statistical["attributeColumns"]:
+            inspect_arguments.extend(["--attribute-column", attribute_column])
+    inspection = accepted(inspect_arguments)
+    if statistical is not None:
+        starter_path = root / "inspection" / "statistical-dataset-starter.yaml"
+        starter = yaml.safe_load(starter_path.read_text(encoding="utf-8"))
+        datasets = starter.get("statisticalDatasets") if isinstance(starter, dict) else None
+        if not isinstance(datasets, list) or len(datasets) != 1:
+            raise GateFailure(
+                f"{project_name}: inspect did not create one statistical starter"
+            )
+        dataset = datasets[0]
+        attributes = dataset.get("attributes", {})
+        if (
+            inspection["details"].get("statistical_starter_file")
+            != "statistical-dataset-starter.yaml"
+            or dataset.get("publication", {}).get("releaseAt") != "REVIEW_REQUIRED"
+            or dataset.get("classificationDefaults", {}).get("status") != "suggested"
+            or dataset.get("bindings", {}).get("sdmx") != {}
+            or dataset.get("time", {}).get("column") != statistical["timeColumn"]
+            or dataset.get("time", {}).get("granularity") != "REVIEW_REQUIRED"
+            or dataset.get("measure", {}).get("column") != statistical["measureColumn"]
+            or sorted(
+                attribute.get("column")
+                for attribute in attributes.values()
+                if isinstance(attribute, dict)
+            )
+            != sorted(statistical["attributeColumns"])
+        ):
+            raise GateFailure(
+                f"{project_name}: statistical starter is not review-gated and format-neutral"
+            )
     check = accepted(["check", str(project), "--production"])
     accepted(["generate", str(project), "--output", str(root / "generated")])
     accepted(["test", str(project)])
@@ -477,7 +568,10 @@ def main() -> int:
         key_paths = {"registry": set(), "runtime": set()}
         for project_name in PROJECTS:
             with tempfile.TemporaryDirectory(prefix=f"relay-v2-{project_name}-") as raw:
-                _, outputs, result = run_workflow(relayctl, project_name, Path(raw))
+                try:
+                    _, outputs, result = run_workflow(relayctl, project_name, Path(raw))
+                except GateFailure as error:
+                    raise GateFailure(f"{project_name}: {error}") from error
                 canaries = protected_canaries(PRODUCT_ROOT / "acceptance" / project_name)
                 assert_value_free(outputs, canaries, project_name)
                 snapshots[project_name] = baseline(result["manifest"])

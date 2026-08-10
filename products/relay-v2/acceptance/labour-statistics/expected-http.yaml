@@ -1,0 +1,171 @@
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry:labour-statistics
+authorizations:
+  zone-a-planner:
+    principal: synthetic-statistics-client
+    scopes: [statistics:labour-authority:read]
+    claims: {purpose: official-planning, area_authority: zone-a}
+  wrong-scope-planner:
+    principal: synthetic-statistics-unentitled
+    scopes: [statistics:unrelated:read]
+    claims: {purpose: official-planning, area_authority: zone-a}
+  wrong-purpose-planner:
+    principal: synthetic-statistics-wrong-purpose
+    scopes: [statistics:labour-authority:read]
+    claims: {purpose: commercial-profiling, area_authority: zone-a}
+  missing-binding-planner:
+    principal: synthetic-statistics-missing-binding
+    scopes: [statistics:labour-authority:read]
+    claims: {purpose: official-planning}
+steps:
+  - id: registry-discovery
+    request: {method: GET, path: /v2}
+    expect:
+      status: 200
+      capabilityPatterns: [aggregate-data.statistical-dataflow]
+      absentCapabilityPatterns: [consultation.list, consultation.retrieve, consultation.search]
+  - id: dataflow-structure
+    request:
+      method: GET
+      path: /sdmx/v2/structure/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0
+      query: {references: none}
+    expect:
+      status: 200
+      mediaType: application/vnd.sdmx.structure+json;version=2.1.0
+  - id: dsd-structure
+    request:
+      method: GET
+      path: /sdmx/v2/structure/datastructure/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION_DSD/1.0.0
+      query: {references: none}
+    expect:
+      status: 200
+      mediaType: application/vnd.sdmx.structure+json;version=2.1.0
+  - id: public-keyed-json
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0/EX-A.F
+      query:
+        "c[TIME_PERIOD]": "ge:2024-Q1+le:2024-Q2"
+        dimensionAtObservation: AllDimensions
+    expect:
+      status: 200
+      observationCount: 2
+      mediaType: application/vnd.sdmx.data+json;version=2.1.0
+      cache: public-snapshot-revalidation
+      sdmxJsonTypes:
+        dimensions: {REF_AREA: string, SEX: string, TIME_PERIOD: string}
+        measures: {PARTICIPATION_RATE: number}
+        attributes: {UNIT_MEASURE: string}
+  - id: public-omitted-key-alias
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0
+      query:
+        "c[REF_AREA]": EX-A
+        "c[SEX]": F
+        "c[TIME_PERIOD]": 2024-Q1
+    expect:
+      status: 200
+      observationCount: 1
+      mediaType: application/vnd.sdmx.data+json;version=2.1.0
+  - id: public-csv
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0/EX-A.F
+      headers: {accept: "application/vnd.sdmx.data+csv;version=2.1.0"}
+      query: {"c[TIME_PERIOD]": "ge:2024-Q1+le:2024-Q2"}
+    expect:
+      status: 200
+      observationCount: 2
+      mediaType: application/vnd.sdmx.data+csv;version=2.1.0
+      recordsEquivalentTo: public-keyed-json
+  - id: preferred-json
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0/EX-A.F
+      headers:
+        accept: "application/vnd.sdmx.data+csv;version=2.1.0;q=0.1, application/vnd.sdmx.data+json;version=2.1.0;q=1"
+      query: {"c[TIME_PERIOD]": 2024-Q1}
+    expect:
+      status: 200
+      observationCount: 1
+      mediaType: application/vnd.sdmx.data+json;version=2.1.0
+  - id: unsupported-format
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0/EX-A.F
+      headers: {accept: "application/vnd.sdmx.data+json;version=2.1.0;q=0.0"}
+      query: {"c[TIME_PERIOD]": 2024-Q1}
+    expect: {status: 406, code: format.unsupported}
+  - id: overlapping-dimension-constraint
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0/EX-A.F
+      query: {"c[REF_AREA]": EX-B, limit: 1}
+    expect: {status: 400, code: aggregate-data.invalid_request}
+  - id: too-broad
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0/*
+    expect: {status: 413, code: aggregate-data.too_large}
+  - id: invalid-source-code
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/LABOUR_STATISTICS/LABOUR_FORCE_PARTICIPATION/1.0.0/EX-B.X
+      query: {"c[TIME_PERIOD]": 2024-Q2}
+    expect:
+      status: 503
+      code: source.unavailable
+      absentEverywhere: ["X", "70.0"]
+  - id: protected-missing-credential
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/EXAMPLE_STAT/LABOUR_FORCE_AUTHORITY/1.0.0/*
+      query: {limit: 4}
+    expect: {status: 401, code: auth.missing_credential}
+  - id: protected-scope-denied
+    authorizationFixture: wrong-scope-planner
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/EXAMPLE_STAT/LABOUR_FORCE_AUTHORITY/1.0.0/*
+      query: {limit: 4}
+    expect: {status: 404, code: resource.not_found}
+  - id: protected-purpose-denied
+    authorizationFixture: wrong-purpose-planner
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/EXAMPLE_STAT/LABOUR_FORCE_AUTHORITY/1.0.0/*
+      query: {limit: 4}
+    expect: {status: 403, code: aggregate-data.denied}
+  - id: protected-binding-denied
+    authorizationFixture: missing-binding-planner
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/EXAMPLE_STAT/LABOUR_FORCE_AUTHORITY/1.0.0/*
+      query: {limit: 4}
+    expect: {status: 403, code: aggregate-data.denied}
+  - id: protected-authority
+    authorizationFixture: zone-a-planner
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/EXAMPLE_STAT/LABOUR_FORCE_AUTHORITY/1.0.0/*
+      query: {limit: 4, dimensionAtObservation: AllDimensions}
+    expect:
+      status: 200
+      observationCount: 4
+      mediaType: application/vnd.sdmx.data+json;version=2.1.0
+      cache: no-store
+      absentEverywhere: [EX-B, zone-a, authority_scope]
+  - id: protected-structure-concealed
+    authorizationFixture: wrong-scope-planner
+    request:
+      method: GET
+      path: /sdmx/v2/structure/dataflow/EXAMPLE_STAT/LABOUR_FORCE_AUTHORITY/1.0.0
+      query: {references: none}
+    expect: {status: 404, code: resource.not_found}
+  - id: unknown-dataflow-concealed
+    authorizationFixture: zone-a-planner
+    request:
+      method: GET
+      path: /sdmx/v2/data/dataflow/EXAMPLE_STAT/UNKNOWN_FLOW/1.0.0/*
+    expect: {status: 404, code: resource.not_found}

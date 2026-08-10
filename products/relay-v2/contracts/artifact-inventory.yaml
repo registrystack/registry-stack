@@ -16,7 +16,25 @@ artifacts:
     visibility: operation-compatible
     source: compiled-resource
     generated: true
-    invariant: One artifact exists per compiled operation access profile and validates mandatory Registry Core with every allowed selected-profile domainData subset.
+    invariant: One artifact exists per compiled operation access profile, validates mandatory Registry Core with every allowed selected-profile domainData subset, and carries the access-profile accessBinding with its exact profile identifier.
+  - id: geojson-response-schema
+    mediaType: application/schema+json
+    visibility: operation-compatible
+    source: compiled-operation-access-profile
+    generated: true
+    invariant: Exists only when the selected access profile discloses the primary Point property and validates its RFC 7946 or JSON-FG response shape.
+  - id: sdmx-dataflow-structure
+    mediaType: application/vnd.sdmx.structure+json;version=2.1.0
+    visibility: statistical-dataset-compatible
+    source: compiled-statistical-dataset
+    generated: true
+    invariant: One exact canonical artifact exists per SDMX-bound statistical dataset at artifacts/<dataset>.sdmx.dataflow.json, carries the fixed-operation accessBinding, and is the byte source for its dataflow structure route.
+  - id: sdmx-datastructure-structure
+    mediaType: application/vnd.sdmx.structure+json;version=2.1.0
+    visibility: statistical-dataset-compatible
+    source: compiled-statistical-dataset
+    generated: true
+    invariant: One exact canonical artifact exists per SDMX-bound statistical dataset at artifacts/<dataset>.sdmx.datastructure.json, carries the fixed-operation accessBinding, and is the byte source for its datastructure route.
   - id: access-profile-shacl
     mediaType: text/turtle
     visibility: operation-compatible
@@ -28,7 +46,7 @@ artifacts:
     visibility: operator-only
     source: compiled-resource
     generated: true
-    invariant: Validates the complete reviewed source access profile before field minimization.
+    invariant: Validates the complete reviewed source Record, including an undisclosed Point property, before field minimization.
   - id: full-record-shacl
     mediaType: text/turtle
     visibility: operator-only
@@ -66,6 +84,7 @@ artifacts:
     visibility: operator-only
     source: relay-audit-vocabulary
     generated: true
+    invariant: Records categorical access-profile, format-profile, statistical data-or-structure surface, SDMX wire format, and query-shape identity without bbox, SDMX keys or constraints, principal, carrier, or source values.
   - id: identification-report
     mediaType: application/json
     visibility: operator-only
@@ -96,3 +115,9 @@ artifacts:
     source: reviewed-governance-sidecar
     generated: false
     invariant: Binds Registry identity and classification inventory; generated review also binds its exact report and rule pack.
+  - id: sdmx-profile-lock
+    mediaType: application/yaml
+    visibility: operator-only
+    source: product-contract
+    generated: false
+    invariant: Pins the aligned REST read subset, JSON and CSV formats, and exact external JSON-schema digests; upstream schema bytes are fetched only by an explicit validation option or supplied through an external cache and are never committed.

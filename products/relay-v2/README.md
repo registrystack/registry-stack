@@ -12,6 +12,8 @@ The initial boundary is intentionally narrow:
 - resources are Record types within the Registry;
 - compiled operations map only to Consultation Retrieve, List, and constrained
   Search;
+- explicitly bound, pre-aggregated statistical datasets map only to the
+  Aggregate Data statistical-dataflow pattern and the aligned SDMX read subset;
 - responses are unsigned;
 - Registry Mint is optional and Registry Evidence remains a separate product;
 - the written GovStack drafts are alignment inputs, not conformance contracts;
@@ -27,7 +29,7 @@ The initial boundary is intentionally narrow:
 | `IMPLEMENTATION.md` | Approved implementation sequence and verification policy. |
 | `STANDARDS-ALIGNMENT.md` | Maintained directional mapping to the pinned GovStack drafts. |
 | `contracts/` | Hand-authored product catalogs and security invariants. |
-| `acceptance/` | Three coequal one-Registry deployment projects. |
+| `acceptance/` | Four coequal one-Registry deployment projects. |
 | `scripts/` | Product-local validation, neutrality, and fixture checks. |
 
 The acceptance projects are synthetic. Their identifiers, organisations, and
@@ -47,4 +49,9 @@ products/relay-v2/scripts/test-http.sh
 Together they validate the product catalogs and configs, build each SQLite
 fixture in a temporary directory, run the canonical `relayctl test` journeys,
 reproduce generated artifacts, enforce source neutrality, and exercise all
-three deployments through the real Relay router.
+four deployments through the real Relay router. Official SDMX schema bytes are
+used only through the explicit temporary-fetch option or an external cache in
+`scripts/validate-sdmx-profile.py`; those upstream bytes are never committed.
+Set `RELAY_V2_SDMX_CONFORMANCE=1` when running `scripts/test-http.sh` to fetch
+the digest-locked schemas temporarily and validate generated data and structure
+responses.

@@ -35,7 +35,7 @@ An adopter supplies:
 Relay produces:
 
 - a read-only registry API over explicitly declared resources;
-- ordinary JSON and equivalent JSON-LD representations;
+- ordinary JSON, equivalent JSON-LD, and opt-in GeoJSON Point representations;
 - OpenAPI, JSON Schema, SHACL shapes, contexts, codelists, and discovery metadata;
 - derived Consultation capabilities and a concise standards-alignment note;
 - generated local semantics when the adopter has no existing vocabulary work;
@@ -78,7 +78,9 @@ Inspection is schema-only by default. Any future value sampling must be explicit
 
 A Relay deployment describes exactly one Registry. The Registry has a globally
 stable identifier, name, Registry Authority, optional operator, authoritative
-scope, base URI, standards-alignment targets, resources, and operations. The
+scope, base URI, authored standards-alignment targets, resources, operations,
+and optional pre-aggregated statistical datasets. Compiler-owned binding
+profile versions are derived metadata, not authored alignment targets. The
 Registry Authority is accountable for the Registry in its declared scope. It
 is not automatically the same party as the privacy controller, publisher, or
 technical operator.
@@ -130,8 +132,8 @@ alignment evidence. The institutional guarantee remains named as such.
 API families are external capability and trust groupings. They are not crates,
 services, URL prefixes, or an invitation to implement every family.
 
-Relay V2 implements only the Consultation patterns actually compiled for a
-Registry:
+Relay V2 implements only the capabilities actually compiled for a Registry.
+Registry Core resources support these Consultation patterns:
 
 - identifier read maps to `consultation.retrieve`;
 - collection list maps to `consultation.list`;
@@ -142,8 +144,34 @@ matching explanation. Family and pattern identifiers are attached to compiled
 operations and generated into capability discovery. They are not repeated in
 an independently authored capability list and do not appear in route names.
 
-Relay V2 does not claim Provisioning, Evidence, Write, Notification, Aggregate
-Data, Access Transparency, or Identity Federation. `relayctl` is offline
+An explicitly declared pre-aggregated statistical dataset compiles the
+Aggregate Data `statistical-dataflow` pattern. `statisticalDatasets` remains
+separate from Record resources and format-neutral: it governs a snapshot view,
+dimensions, one annual, quarterly, monthly, or daily time dimension, one
+measure, attributes, publication facts, classification, exactly one fixed
+access rule, and query bounds. A required `bindings.sdmx` selects a one-way
+binding. It does not turn the authoring contract into an SDMX DSD and does not
+add access profiles.
+
+The compiler derives stable dataflow and DSD identities, exact dataflow and
+datastructure package artifacts, and an aligned SDMX read subset. The only
+routes are keyed data, its omitted-key alias, dataflow structure, and
+datastructure structure. Queries accept compiled dimension equality and the
+bounded time constraints of that subset. Relay executes only compiler-owned
+bound SQLite predicates whose parameter storage classes match the declared
+component types. SDMX-JSON preserves declared string and number types;
+SDMX-CSV is an equivalent wire representation. Relay never infers a dataset
+from arbitrary rows or performs caller-directed aggregation.
+
+The binding implements the SDMX REST 2.2.2 read subset with SDMX-JSON,
+SDMX-CSV, and Structure JSON 2.1.0. Those versions are compiler-owned profile
+metadata, not adopter-authored `alignmentTargets`. Digest-locked official JSON
+schemas validate generated outputs only through explicit temporary fetch or an
+external cache; upstream schema bytes are not vendored. This is an alignment
+claim for a narrow read subset, not full SDMX conformance.
+
+Relay V2 does not claim Provisioning, Evidence, Write, Notification, another
+Aggregate Data pattern, Access Transparency, or Identity Federation. `relayctl` is offline
 authoring tooling, not a Provisioning API. Internal audit is not an Access
 Transparency service. OAuth protection and optional Mint issuance are not
 Identity Federation. Registry Evidence remains a separate product.
@@ -151,8 +179,8 @@ Identity Federation. Registry Evidence remains a separate product.
 The draft Digital Registries target is recorded as an `alignmentTarget`, and
 the generated mapping is `alignmentEvidence`. Relay does not claim GovStack
 certification, Digital Registries conformance, or the future Base Registry
-profile. A deployment advertises only the Consultation patterns it actually
-compiles.
+profile. A deployment advertises only the Consultation or statistical-dataflow
+patterns it actually compiles.
 
 ### Semantic by default, without an expert prerequisite
 
@@ -289,13 +317,16 @@ engine are not part of this release.
 
 ### Registry operations and safe requester minimization
 
-A resource compiles only the operations its publisher declares: collection listing, identifier read, and named exact lookup. A resource may expose any appropriate subset. An exact-lookup-only resource compiles no enumeration or identifier-read operation.
+A resource compiles only the operations its publisher declares: collection
+listing, identifier read, named exact lookup, and named Point-bbox search. A
+resource may expose any appropriate subset. Lists and named searches remain
+separate operations with independent access profiles and scopes.
 
 Collection queries use publisher-defined, typed, camelCase filter parameters
 directly in the query string, for example `status=ACTIVE`. Version one supports
 exact equality. Any non-empty subset of declared filters is valid; the contract
 separately declares whether an unfiltered request is allowed. `pageSize`,
-`cursor`, `fields`, and `accessProfile` are reserved names. Filters in query strings are
+`cursor`, `fields`, `accessProfile`, `formatProfile`, and `bbox` are reserved names. Filters in query strings are
 limited to non-personal selectors. Relay binds their values as SQL parameters.
 Transforms are response-only: a transformed property cannot be a filter or
 fixed-order key because doing so would compare or order its undisclosed raw
@@ -344,15 +375,20 @@ GET  /openapi.json
 GET  /v2
 GET  /v2/resources?pageSize=...&cursor=...
 GET  /v2/resources/{resource}
-GET  /v2/resources/{resource}/records?pageSize=...&cursor=...&status=...&accessProfile=...&fields=...
-GET  /v2/resources/{resource}/records/{recordIdentifier}?accessProfile=...&fields=...
-POST /v2/resources/{resource}/lookups/{lookup}?accessProfile=...&fields=...
+GET  /v2/resources/{resource}/records?pageSize=...&cursor=...&status=...&accessProfile=...&fields=...&formatProfile=...
+GET  /v2/resources/{resource}/records/{recordIdentifier}?accessProfile=...&fields=...&formatProfile=...
+POST /v2/resources/{resource}/lookups/{lookup}?accessProfile=...&fields=...&formatProfile=...
+GET  /v2/resources/{resource}/searches/{search}?bbox=...&pageSize=...&cursor=...&accessProfile=...&fields=...&formatProfile=...
 GET  /v2/artifacts/{artifactIdentifier}
+GET  /sdmx/v2/data/dataflow/{agency}/{dataflow}/{version}/{key}
+GET  /sdmx/v2/data/dataflow/{agency}/{dataflow}/{version}
+GET  /sdmx/v2/structure/dataflow/{agency}/{dataflow}/{version}?references=none
+GET  /sdmx/v2/structure/datastructure/{agency}/{datastructure}/{version}?references=none
 ```
 
 `GET /v2` is the Registry service-metadata document. It publishes the Registry
 identifier, name, Authority, operator, authoritative scope, product and API
-binding versions, pinned alignment targets, derived visible Consultation
+binding versions, pinned authored alignment targets, derived visible
 capabilities, and links to resources and artifacts. Registry identity is public;
 resource, operation, schema, semantic, classification, and processing details
 remain subject to their compiled visibility. Treating this service document as
@@ -395,6 +431,48 @@ with a public processing floor over a snapshot may be cacheable. Every cacheable
 response includes `Vary: Accept, Authorization` so an anonymous `200` cannot
 satisfy a request carrying an invalid bearer. Non-public and unversioned-live responses are
 `no-store` and emit no ETag.
+
+### Bounded Point profile
+
+A resource may make one existing property its `primaryGeometry`. That property
+uses `type: point`, the exact CRS84 identifier, and a strict `source` containing
+only reviewed `longitudeColumn` and `latitudeColumn` carriers. It remains an
+ordinary classified, selectable domain property. Its carrier columns are
+processing inputs only and never become response metadata or independent
+properties.
+
+The resource may separately declare a named `point-bbox` search. The operation
+requires one finite, ordered, non-wrapping CRS84
+`bbox=west,south,east,north`, applies the contract's longitude and latitude
+span limits, and owns its pagination, ordering, and finite access profiles.
+List access neither accepts `bbox` nor grants access to the named search.
+
+When the selected access profile discloses the primary geometry,
+`Accept: application/geo+json` returns an RFC 7946 Feature or
+FeatureCollection. `formatProfile=rfc7946` is the default and
+`formatProfile=jsonfg` adds only bounded JSON-FG conformance and feature-type
+metadata. Feature `properties` plus `geometry` carry exactly the same governed
+disclosure as ordinary JSON. Omitting the primary geometry through `fields`
+produces `geometry: null`. This profile does not claim OGC API Features
+conformance and adds no generic geometry abstraction, CQL2, EDR, tiles,
+reprojection, spatial joins, or dynamic spatial extension.
+
+### Bounded statistical-dataflow profile
+
+The statistical routes above exist only for a compiled `bindings.sdmx`. Data
+uses the frozen SDMX media types and supports a keyed route plus the identical
+omitted-key alias. Structure reads expose only the exact generated dataflow and
+DSD artifacts. Schema, availability, history, and structure-maintenance routes
+do not exist. There are no placeholder responses that promise those future
+surfaces.
+
+The dataflow's one fixed access decision, metadata visibility, snapshot cache
+posture, source revision, query ceiling, and audit gates apply identically to
+data and structure routes. A protected dataflow without its scope is concealed
+as `404 resource.not_found`; a known flow with a failed purpose or authority
+binding is `403 aggregate-data.denied`. Attempt and terminal audit events
+distinguish data from structure and bind the exact JSON or CSV bytes while
+remaining free of query values, observations, authority values, and source rows.
 
 The packaged deployment contains the full generated OpenAPI 3.1 contract. The
 unauthenticated `/openapi.json` endpoint serves a deterministic safe public
@@ -604,7 +682,10 @@ Relay V2 is not:
 - a multi-source analytics or interoperability-protocol suite;
 - an extension, mode, or command group of the existing `registryctl`.
 
-PostgreSQL and other source adapters, GeoJSON and SpatiaLite, richer semantic profiles, and additional registry protocols are later profiles. The initial architecture should leave room for source adapters, but version one should not introduce a generic storage trait before a second adapter proves the abstraction.
+PostgreSQL and other source adapters, SpatiaLite, richer geometry types, richer
+semantic profiles, and additional registry protocols are later profiles.
+Version one does not introduce a generic storage or geometry trait before
+another concrete need proves either abstraction.
 
 ## Reuse from `registry-platform-*`
 
@@ -680,6 +761,7 @@ Evidence keeps its product semantics:
 Relay keeps its product semantics:
 
 - resource and property bindings;
+- format-neutral statistical dataset and one-way binding compilation;
 - enumeration posture, operation access, and disclosure plans;
 - identifier, predefined filter, named lookup, safe property selection, and pagination behavior;
 - semantics, classifications, DPV processing descriptions, and registry serialization.
@@ -708,7 +790,7 @@ The first coherent Relay V2 release should contain:
 4. generated Consultation capability discovery and a concise Digital Registries alignment note;
 5. generated local semantics, JSON-LD, JSON Schema, SHACL, full packaged OpenAPI, and safe public OpenAPI;
 6. property classification with provenance and the `public`, `internal`, `confidential`, and `restricted` handling levels;
-7. derived public, protected, or absent enumeration with independently compiled list, read, and named-lookup operations;
+7. derived public, protected, or absent enumeration with independently compiled list, read, named-lookup, and named Point-bbox search operations;
 8. `pageSize` and client-opaque authenticated-encrypted cursor lists, direct predefined equality filters, and safe caller selection of fewer properties than the selected access profile;
 9. strict OAuth JWT access-token verification, operation scopes, trusted purpose, optional authority row binding, and an optional conforming Mint issuer;
 10. snapshot and live read-only SQLite profiles, including useful unversioned live read and lookup deployments;
@@ -716,15 +798,17 @@ The first coherent Relay V2 release should contain:
 12. unsigned registry responses with truthful Record, source, and contract revisions;
 13. tamper-evident attempt, refusal, and pre-release audit gates;
 14. fixture, schema-drift, contract-drift, change-impact, and security-safeguard checks.
+15. snapshot-only pre-aggregated statistical dataflows with generated exact
+    dataflow and DSD artifacts and the bounded SDMX read profile.
 
-This is enough to establish Relay as a governed semantic registry publisher rather than a database API. Additional storage engines, spatial data, richer policy, and protocol profiles can then be judged against that identity.
+This is enough to establish Relay as a governed semantic registry publisher rather than a database API. Additional storage engines, richer geometry, policy, and protocol profiles can then be judged against that identity.
 
 ## Definition of Done and coequal acceptance registries
 
 The detailed [Relay V2 Definition of Done](DEFINITION-OF-DONE.md) is the completion contract. Every required row must pass on one revision; one working SQLite endpoint or registry is not completion.
 
-Three coequal acceptance deployments prevent the runtime from inheriting one
-registry domain. They are three separate Registries exercised as independently
+Four coequal acceptance deployments prevent the runtime from inheriting one
+registry domain. They are four separate Registries exercised as independently
 instantiated one-Registry services over real loopback HTTP, plus one packaged
 real-process start, request, stop, and restart smoke:
 
@@ -734,17 +818,21 @@ real-process start, request, stop, and restart smoke:
   operation-specific disclosures, optional conforming Mint tokens,
   unversioned-live truthfulness, and the ordinary protected-source boundary a
   future Evidence integration can use.
+- a labour-statistics registry proves separate format-neutral statistical
+  datasets, snapshot-only bounded reads, fixed public and protected access,
+  typed SQLite predicates, typed SDMX-JSON values, equivalent CSV, exact
+  generated dataflow and DSD artifacts, and distinct value-free audit surfaces.
 
-All three must use the same compiler, operation model, SQLite executor,
+All four must use the same compiler, SQLite executor,
 disclosure planner, serializers, access-decision types, audit vocabulary,
 problem model, and adopter workflow. Focused parameterized compiler and runtime
-tests prove that state cannot cross resource boundaries without creating a
-fourth deployment project.
+tests prove that state cannot cross resource or statistical-dataset boundaries
+without adding a fifth deployment project.
 Production Rust and public generic contracts contain no social, business, or
-civil-registration domain branches.
+civil-registration or labour-statistics domain branches.
 
 The [Relay V2 Configuration Examples](CONFIGURATION-EXAMPLES.md)
-exercise these three definitions and define the intended Version 1 authoring
+exercise these four definitions and define the intended Version 1 authoring
 shape. The generated schema makes their constraints precise.
 
 ## Decisions fixed for Version 1
@@ -752,8 +840,11 @@ shape. The generated schema makes their constraints precise.
 - Relay owns a strict registry contract. A Registry Manifest projection is a later portability artifact, not the Relay execution contract.
 - One contract and process serves one Registry, which may contain several resources.
 - Registry Core context is mandatory and requester field selection can narrow only `domainData`.
-- Lists use `pageSize`, `cursor`, `items`, and `pageInfo.nextCursor`; predefined filters are direct camelCase equality parameters.
+- Lists use `pageSize`, `cursor`, `items`, and `pageInfo.nextCursor`; predefined filters are direct camelCase equality parameters. A named Point-bbox search owns its bounded `bbox` query and independent access profiles.
 - Named exact lookup remains a bounded POST action and maps to constrained Consultation Search, not Record Match.
+- `statisticalDatasets` is separate from resources, snapshot-only,
+  format-neutral, and has one fixed access rule, required `bindings.sdmx`, one
+  time granularity, and only the bounded dataflow read and structure routes.
 - Each operation has finite reviewed access profiles, an explicit sole default,
   and access-profile-owned access plus disclosure. Dynamic, caller-derived
   entitlement variants are deferred.
@@ -771,6 +862,10 @@ shape. The generated schema makes their constraints precise.
 - multi-issuer selection and a frozen `relay`/`relayctl` subprocess protocol;
 - Registry Manifest, DPV, safeguards, and machine-readable GovStack alignment projections;
 - formal GovStack conformance or a compatibility flag translating wire conventions;
-- a Digital Registries family beyond Consultation;
-- additional sources, GeoJSON, and SpatiaLite;
+- a Digital Registries family beyond Consultation or another Aggregate Data
+  pattern beyond the compiled statistical dataflow;
+- SDMX schema and availability routes, history, structure maintenance, dynamic
+  aggregation, arbitrary operators, and large-result streaming;
+- additional sources, SpatiaLite, generic or non-Point geometry, reprojection,
+  and OGC API Features routes;
 - dynamic masking, a general PDP, write operations, notification, access-history publication, and response signing.

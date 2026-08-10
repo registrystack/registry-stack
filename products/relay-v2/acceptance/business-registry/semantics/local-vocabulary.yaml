@@ -4,9 +4,14 @@ origin: curated-local
 reviewStatus: reviewed
 classes:
   - {id: RegisteredBusiness, label: Registered business, description: Synthetic current business registration.}
+  - {id: RegisteredPremises, label: Registered premises, description: Synthetic current premises location associated with a registered business.}
 properties:
   - {id: registrationNumber, label: Registration number, datatype: string, cardinality: one}
   - {id: legalName, label: Legal name, datatype: string, cardinality: one}
   - {id: registrationStatus, label: Registration status, datatype: controlled-code, cardinality: one}
   - {id: legalForm, label: Legal form, datatype: controlled-code, cardinality: one}
   - {id: registeredJurisdiction, label: Registered jurisdiction, datatype: controlled-code, cardinality: one}
+  - {id: premisesIdentifier, label: Premises identifier, datatype: string, cardinality: one}
+  - {id: businessRegistrationNumber, label: Business registration number, datatype: string, cardinality: one}
+  - {id: premisesName, label: Premises name, datatype: string, cardinality: one}
+  - {id: location, label: Premises location, datatype: point, cardinality: one}

@@ -22,7 +22,12 @@ except ModuleNotFoundError as exc:  # pragma: no cover - environment failure
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = PRODUCT_ROOT.parents[1]
-PROJECTS = ("social-assistance", "business-registry", "civil-event")
+PROJECTS = (
+    "social-assistance",
+    "business-registry",
+    "civil-event",
+    "labour-statistics",
+)
 INVALID_SOURCE_ROW_CLASSES = {
     "wrong-type",
     "missing-required",
@@ -35,7 +40,12 @@ TRANSFORM_FAILURE_SCENARIOS = {
 }
 ACCESS_PROFILE_CONCEALMENT_STEPS = {
     "social-assistance": {"unauthorized-access-profile", "unknown-access-profile"},
-    "business-registry": {"registrar-access-profile-denied", "public-access-profile-unknown"},
+    "business-registry": {
+        "registrar-access-profile-denied",
+        "public-access-profile-unknown",
+        "premises-search-access-profile-denied",
+        "premises-search-access-profile-unknown",
+    },
     "civil-event": {"supervisory-access-profile-denied", "invalid-access-profile"},
 }
 SECURITY_INVARIANT_IDS = {
@@ -61,6 +71,11 @@ SECURITY_INVARIANT_IDS = {
     "sec-audit-release-gate",
     "sec-audit-correlation-and-minimization",
     "sec-cursor-integrity",
+    "sec-spatial-disclosure-confinement",
+    "sec-spatial-query-confinement",
+    "sec-statistical-binding-inherits-access",
+    "sec-statistical-query-closed-and-bounded",
+    "sec-statistical-audit-and-wire-binding",
     "sec-source-truthfulness",
     "sec-value-free-diagnostics",
     "sec-value-free-operational-logs",
@@ -237,22 +252,45 @@ def validate_acceptance_access_profile_contracts(errors: list[str]) -> None:
         "social-assistance": "generated",
         "business-registry": "imported",
         "civil-event": "manual",
+        "labour-statistics": "manual",
     }
     expected_access_profiles = {
         "social-assistance": {"limited", "caseworker"},
-        "business-registry": {"public-register", "registrar"},
+        "business-registry": {
+            "public-register",
+            "registrar",
+            "public-premises",
+            "registrar-premises",
+        },
         "civil-event": {"registrar", "supervisory"},
+        "labour-statistics": set(),
     }
     for project_name in PROJECTS:
         project = PRODUCT_ROOT / "acceptance" / project_name
         registry = mapping(load_yaml(project / "registry.yaml"), f"{project_name} registry", errors)
         validate_review_sidecar(project, registry, expected_methods[project_name], errors)
         resources = sequence(registry.get("resources"), f"{project_name} resources", errors)
-        operations = mapping(resources[0].get("operations") if resources else None, f"{project_name} operations", errors)
         access_profiles: set[str] = set()
-        operation_definitions = [operations.get("list"), operations.get("read")] + list(
-            operations.get("lookups", []) if isinstance(operations.get("lookups"), list) else []
-        )
+        primary_operations: dict[str, Any] = {}
+        operation_definitions: list[Any] = []
+        for resource_index, raw_resource in enumerate(resources):
+            resource = mapping(
+                raw_resource,
+                f"{project_name} resource[{resource_index}]",
+                errors,
+            )
+            operations = mapping(
+                resource.get("operations"),
+                f"{project_name} resource[{resource_index}] operations",
+                errors,
+            )
+            if resource_index == 0:
+                primary_operations = operations
+            operation_definitions.extend([operations.get("list"), operations.get("read")])
+            for collection_name in ("lookups", "searches"):
+                collection = operations.get(collection_name, [])
+                if isinstance(collection, list):
+                    operation_definitions.extend(collection)
         for index, operation in enumerate(operation_definitions):
             if operation is None:
                 continue
@@ -296,12 +334,128 @@ def validate_acceptance_access_profile_contracts(errors: list[str]) -> None:
                     "social-assistance: quota fixture must admit exactly the twelve "
                     "pre-quota lookup executions before the named rate-limit proof"
                 )
+        if project_name == "business-registry":
+            premises = next(
+                (
+                    resource
+                    for resource in resources
+                    if isinstance(resource, dict)
+                    and resource.get("id") == "registered-premises"
+                ),
+                None,
+            )
+            premises = mapping(premises, "business-registry registered premises", errors)
+            properties = mapping(
+                premises.get("properties"),
+                "business-registry registered premises properties",
+                errors,
+            )
+            location = mapping(
+                properties.get("location"),
+                "business-registry location property",
+                errors,
+            )
+            expected_location = {
+                "type": "point",
+                "crs": "http://www.opengis.net/def/crs/OGC/0/CRS84",
+                "source": {
+                    "longitudeColumn": "longitude",
+                    "latitudeColumn": "latitude",
+                },
+                "sourceRequired": True,
+                "semanticTerm": "local:location",
+                "label": "Premises location",
+                "description": (
+                    "Reviewed Point location of the registered premises in CRS84 "
+                    "longitude-latitude order."
+                ),
+                "classification": {
+                    "privacy": "non-personal",
+                    "institutional": "public",
+                    "handling": "public",
+                    "status": "reviewed",
+                },
+            }
+            if location != expected_location or premises.get("primaryGeometry") != "location":
+                errors.append(
+                    "business-registry: registered premises must keep the strict additive "
+                    "Point property and primaryGeometry reference"
+                )
+
+            premises_operations = mapping(
+                premises.get("operations"),
+                "business-registry registered premises operations",
+                errors,
+            )
+            list_operation = mapping(
+                premises_operations.get("list"),
+                "business-registry registered premises list",
+                errors,
+            )
+            if "spatialQuery" in list_operation:
+                errors.append(
+                    "business-registry: bbox must remain a named search, not a list option"
+                )
+            searches = sequence(
+                premises_operations.get("searches"),
+                "business-registry registered premises searches",
+                errors,
+            )
+            bbox_search = next(
+                (
+                    search
+                    for search in searches
+                    if isinstance(search, dict) and search.get("id") == "within-bbox"
+                ),
+                None,
+            )
+            bbox_search = mapping(
+                bbox_search,
+                "business-registry within-bbox search",
+                errors,
+            )
+            if bbox_search.get("query") != {
+                "kind": "point-bbox",
+                "maximumLongitudeSpanDegrees": 2,
+                "maximumLatitudeSpanDegrees": 2,
+            }:
+                errors.append(
+                    "business-registry: within-bbox must keep the bounded point-bbox query"
+                )
+            list_profiles = mapping(
+                list_operation.get("accessProfiles"),
+                "business-registry registered premises list access profiles",
+                errors,
+            )
+            search_profiles = mapping(
+                bbox_search.get("accessProfiles"),
+                "business-registry within-bbox access profiles",
+                errors,
+            )
+            list_scope = (
+                list_profiles.get("registrar-premises", {}).get("access", {}).get("scope")
+                if isinstance(list_profiles.get("registrar-premises"), dict)
+                else None
+            )
+            search_scope = (
+                search_profiles.get("registrar-premises", {}).get("access", {}).get("scope")
+                if isinstance(search_profiles.get("registrar-premises"), dict)
+                else None
+            )
+            if (
+                not isinstance(list_scope, str)
+                or not isinstance(search_scope, str)
+                or list_scope == search_scope
+            ):
+                errors.append(
+                    "business-registry: protected list and bbox search scopes must be distinct"
+                )
         if project_name == "civil-event":
             properties = resources[0].get("properties", {}) if resources else {}
             transform = mapping(properties.get("registrationYear", {}).get("transform"), "civil date-precision transform", errors)
             if transform != {"kind": "date-precision", "sourceType": "date", "precision": "year"}:
                 errors.append("civil-event: supervisory access profile must use the frozen date-precision transform")
-            if operations.get("list") is not None:
+            if primary_operations.get("list") is not None:
                 errors.append("civil-event: collection list remains out of scope")
             runtime = mapping(
                 load_yaml(project / "runtime.yaml"), "civil-event runtime", errors
@@ -314,8 +468,230 @@ def validate_acceptance_access_profile_contracts(errors: list[str]) -> None:
                 )
 
 
+def validate_statistical_acceptance(errors: list[str]) -> None:
+    project = PRODUCT_ROOT / "acceptance" / "labour-statistics"
+    registry = mapping(load_yaml(project / "registry.yaml"), "labour-statistics registry", errors)
+    if registry.get("resources") != []:
+        errors.append("labour-statistics: statisticalDatasets must remain separate from resources")
+    sources = mapping(registry.get("sources"), "labour-statistics sources", errors)
+    if not sources or any(
+        not isinstance(source, dict) or source.get("profile") != "snapshot"
+        for source in sources.values()
+    ):
+        errors.append("labour-statistics: every statistical dataset source must be snapshot-only")
+    metadata = mapping(
+        registry.get("metadataVisibility"),
+        "labour-statistics metadata visibility",
+        errors,
+    )
+    if metadata.get("statisticalDatasets") != "public":
+        errors.append(
+            "labour-statistics: metadataVisibility.statisticalDatasets must be explicit"
+        )
+    alignment_targets = registry.get("registry", {}).get("alignmentTargets", [])
+    if not isinstance(alignment_targets, list) or not alignment_targets:
+        errors.append(
+            "labour-statistics: at least one authored directional alignmentTarget is required"
+        )
+    if any("sdmx" in str(target).lower() for target in alignment_targets):
+        errors.append(
+            "labour-statistics: compiler-owned SDMX profile versions must not be authored alignmentTargets"
+        )
+
+    datasets = sequence(
+        registry.get("statisticalDatasets"),
+        "labour-statistics statistical datasets",
+        errors,
+    )
+    if {item.get("id") for item in datasets if isinstance(item, dict)} != {
+        "labour-force-participation",
+        "labour-force-authority",
+    }:
+        errors.append("labour-statistics: the two acceptance dataflows are required")
+    granularities = {"annual", "quarterly", "monthly", "daily"}
+    for index, raw_dataset in enumerate(datasets):
+        dataset = mapping(raw_dataset, f"labour-statistics dataset[{index}]", errors)
+        if "accessProfiles" in dataset or "defaultAccessProfile" in dataset:
+            errors.append(
+                "labour-statistics: each statistical dataset has one fixed access and no accessProfiles"
+            )
+        if "access" not in dataset:
+            errors.append(f"labour-statistics dataset[{index}]: access is required")
+        bindings = mapping(
+            dataset.get("bindings"), f"labour-statistics dataset[{index}] bindings", errors
+        )
+        require_exact_keys(
+            bindings,
+            {"sdmx"},
+            f"labour-statistics dataset[{index}] bindings",
+            errors,
+        )
+        mapping(
+            bindings.get("sdmx"),
+            f"labour-statistics dataset[{index}] bindings.sdmx",
+            errors,
+        )
+        time = mapping(
+            dataset.get("time"), f"labour-statistics dataset[{index}] time", errors
+        )
+        granularity = time.get("granularity")
+        if granularity not in granularities:
+            errors.append(
+                f"labour-statistics dataset[{index}]: time.granularity must be annual, quarterly, monthly, or daily"
+            )
+        if granularity != "quarterly":
+            errors.append(
+                f"labour-statistics dataset[{index}]: the acceptance fixture remains quarterly"
+            )
+
+    journey = mapping(
+        load_yaml(project / "expected-http.yaml"), "labour-statistics journey", errors
+    )
+    steps = {
+        step.get("id"): step
+        for step in sequence(journey.get("steps"), "labour-statistics journey steps", errors)
+        if isinstance(step, dict)
+    }
+    for step in steps.values():
+        path = str(step.get("request", {}).get("path", ""))
+        allowed = (
+            path == "/v2"
+            or re.fullmatch(
+                r"/sdmx/v2/data/dataflow/[^/]+/[^/]+/[^/]+(?:/[^/]+)?", path
+            )
+            or re.fullmatch(
+                r"/sdmx/v2/structure/(?:dataflow|datastructure)/[^/]+/[^/]+/[^/]+",
+                path,
+            )
+        )
+        if not allowed:
+            errors.append(
+                "labour-statistics: only dataflow data and dataflow/datastructure structure routes are allowed"
+            )
+    expected_media = {
+        "dataflow-structure": "application/vnd.sdmx.structure+json;version=2.1.0",
+        "dsd-structure": "application/vnd.sdmx.structure+json;version=2.1.0",
+        "public-keyed-json": "application/vnd.sdmx.data+json;version=2.1.0",
+        "public-omitted-key-alias": "application/vnd.sdmx.data+json;version=2.1.0",
+        "public-csv": "application/vnd.sdmx.data+csv;version=2.1.0",
+    }
+    for identifier, media_type in expected_media.items():
+        if steps.get(identifier, {}).get("expect", {}).get("mediaType") != media_type:
+            errors.append(
+                f"labour-statistics: {identifier} must retain the frozen SDMX 2.1.0 media type"
+            )
+    denial_mapping = {
+        "protected-missing-credential": (401, "auth.missing_credential"),
+        "protected-scope-denied": (404, "resource.not_found"),
+        "protected-purpose-denied": (403, "aggregate-data.denied"),
+        "protected-binding-denied": (403, "aggregate-data.denied"),
+        "protected-structure-concealed": (404, "resource.not_found"),
+        "unknown-dataflow-concealed": (404, "resource.not_found"),
+    }
+    for identifier, expected in denial_mapping.items():
+        expectation = steps.get(identifier, {}).get("expect", {})
+        if (expectation.get("status"), expectation.get("code")) != expected:
+            errors.append(
+                f"labour-statistics: {identifier} does not use the fixed denial mapping"
+            )
+    if steps.get("unsupported-format", {}).get("expect") != {
+        "status": 406,
+        "code": "format.unsupported",
+    }:
+        errors.append("labour-statistics: unsupported Accept must use format.unsupported")
+    expected_types = {
+        "dimensions": {"REF_AREA": "string", "SEX": "string", "TIME_PERIOD": "string"},
+        "measures": {"PARTICIPATION_RATE": "number"},
+        "attributes": {"UNIT_MEASURE": "string"},
+    }
+    if steps.get("public-keyed-json", {}).get("expect", {}).get("sdmxJsonTypes") != expected_types:
+        errors.append("labour-statistics: typed SDMX-JSON acceptance is incomplete")
+
+
+def validate_sdmx_profile_contract(errors: list[str]) -> None:
+    path = PRODUCT_ROOT / "contracts" / "sdmx-profile-lock.yaml"
+    lock = mapping(load_yaml(path), "SDMX profile lock", errors)
+    require_exact_keys(
+        lock,
+        {"schemaVersion", "upstreamBytesCommitted", "profiles", "validation"},
+        "SDMX profile lock",
+        errors,
+    )
+    if lock.get("schemaVersion") != "relay.registrystack.org/sdmx-profile-lock/v1alpha1":
+        errors.append("SDMX profile lock: schemaVersion is not supported")
+    if lock.get("upstreamBytesCommitted") is not False:
+        errors.append("SDMX profile lock: upstream schema bytes must remain external")
+    profiles = mapping(lock.get("profiles"), "SDMX profiles", errors)
+    if set(profiles) != {"rest", "dataJson", "dataCsv", "structureJson"}:
+        errors.append("SDMX profile lock: the profile set is closed")
+    if mapping(profiles.get("rest"), "SDMX REST profile", errors).get("version") != "2.2.2":
+        errors.append("SDMX profile lock: REST subset must remain 2.2.2")
+    for profile in ("dataJson", "dataCsv", "structureJson"):
+        if mapping(profiles.get(profile), f"SDMX {profile} profile", errors).get("version") != "2.1.0":
+            errors.append(f"SDMX profile lock: {profile} must remain 2.1.0")
+    for profile in ("dataJson", "structureJson"):
+        schema = mapping(
+            mapping(profiles.get(profile), f"SDMX {profile} profile", errors).get("schema"),
+            f"SDMX {profile} schema",
+            errors,
+        )
+        require_exact_keys(
+            schema,
+            {"url", "id", "sha256", "cacheFile"},
+            f"SDMX {profile} schema",
+            errors,
+        )
+        if not SHA256.fullmatch(str(schema.get("sha256", ""))):
+            errors.append(f"SDMX profile lock: {profile} schema digest is invalid")
+    expected_profile_pins = {
+        "rest": {
+            "commit": "19b14e39b78fe6dacf20a8f97e971ab29c3c83e2",
+        },
+        "dataJson": {
+            "commit": "faa661d2247b9914052c76a5dabafd5990493f5a",
+            "sha256": "sha256:ca1c85c7693a2d9d0602a1ca8e5a8b1cc56437fcb05e25cce15165ee75dcd80d",
+        },
+        "dataCsv": {
+            "commit": "9a65b133ec99622a04701f1ff09e7c0777afedbf",
+        },
+        "structureJson": {
+            "commit": "faa661d2247b9914052c76a5dabafd5990493f5a",
+            "sha256": "sha256:0f502a347cb463aee7664283ec53d79b6993bf5b503dc76151bb597d10ae3e32",
+        },
+    }
+    for name, expected in expected_profile_pins.items():
+        profile = mapping(profiles.get(name), f"SDMX {name} profile", errors)
+        if profile.get("commit") != expected["commit"]:
+            errors.append(f"SDMX profile lock: {name} official revision changed")
+        if "sha256" in expected and profile.get("schema", {}).get("sha256") != expected["sha256"]:
+            errors.append(f"SDMX profile lock: {name} official schema digest changed")
+    validation = mapping(lock.get("validation"), "SDMX profile validation", errors)
+    require_exact_keys(
+        validation,
+        {
+            "script",
+            "networkByDefault",
+            "explicitFetchOption",
+            "schemaCacheEnvironment",
+            "packageArtifactSuffixes",
+        },
+        "SDMX profile validation",
+        errors,
+    )
+    script = validation.get("script")
+    if script != "scripts/validate-sdmx-profile.py":
+        errors.append("SDMX profile lock: canonical script path changed")
+    if validation.get("networkByDefault") is not False or validation.get("explicitFetchOption") != "--fetch-official-schemas":
+        errors.append("SDMX profile lock: official schema fetch must remain explicit")
+    script_path = PRODUCT_ROOT / str(script)
+    if not script_path.is_file() or not os.access(script_path, os.X_OK):
+        errors.append("SDMX profile lock: executable profile validation script is missing")
+
+
 def validate_catalogs(errors: list[str]) -> None:
     validate_acceptance_access_profile_contracts(errors)
+    validate_statistical_acceptance(errors)
+    validate_sdmx_profile_contract(errors)
     layout = mapping(
         load_yaml(PRODUCT_ROOT / "contracts/package-layout.yaml"), "package layout", errors
     )
@@ -386,6 +762,9 @@ def validate_catalogs(errors: list[str]) -> None:
         "openapi-full",
         "openapi-public",
         "access-profile-schema",
+        "geojson-response-schema",
+        "sdmx-dataflow-structure",
+        "sdmx-datastructure-structure",
         "access-profile-shacl",
         "full-record-schema",
         "full-record-shacl",
@@ -400,6 +779,7 @@ def validate_catalogs(errors: list[str]) -> None:
         "access-profile-report",
         "contextual-review-findings",
         "classification-review",
+        "sdmx-profile-lock",
     }:
         if required not in artifact_ids:
             errors.append(f"artifact inventory: missing {required}")
@@ -557,7 +937,7 @@ def validate_catalogs(errors: list[str]) -> None:
     if set(mapping(baselines.get("projects"), "generated baseline projects", errors)) != set(
         PROJECTS
     ):
-        errors.append("generated baselines: all three acceptance projects must be present")
+        errors.append("generated baselines: every acceptance project must be present")
 
 
 def validate_all() -> list[str]:

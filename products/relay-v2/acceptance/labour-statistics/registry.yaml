@@ -1,0 +1,177 @@
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RegistryContract
+metadata:
+  id: labour-statistics
+  version: 2026-08-10
+  title: Synthetic labour statistics
+registry:
+  registryIdentifier: urn:example:registry:labour-statistics
+  name: Synthetic labour statistics Registry
+  authority:
+    identifier: urn:example:institution:statistics-office
+    name: Example Statistics Office
+  authoritativeScope: Synthetic pre-aggregated labour statistics for Relay SDMX testing
+  baseUri: https://statistics.example.invalid/registry/
+  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
+  alignmentTargets:
+    - name: govstack-digital-registries
+      version: 3.0.0-alpha.2
+      status: directional
+    - name: govstack-api-design-guide
+      version: 0.1.0-draft
+      status: directional
+governance:
+  controller: urn:example:institution:statistics-office
+  publisher: urn:example:institution:statistics-office
+  auditOwner: urn:example:institution:statistics-office-audit
+semantics:
+  localVocabulary: https://statistics.example.invalid/vocabulary/
+classifications:
+  privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
+  institutional: {scheme: https://statistics.example.invalid/classification, version: "1"}
+  handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
+  provenanceRef: governance/classification-review.yaml
+sources:
+  labour-statistics:
+    kind: sqlite
+    profile: snapshot
+    expectedSchemaFingerprint: sha256:21890387ccf8d33a95a4ba38d085b6eac79e4522b8a8b34a10a4a637711b4034
+resources: []
+statisticalDatasets:
+  - id: labour-force-participation
+    title: Labour force participation rate
+    description: Synthetic pre-aggregated quarterly labour force participation rates.
+    publication: {releaseAt: 2026-08-10T00:00:00Z}
+    source:
+      source: labour-statistics
+      view: relay_labour_force_rates
+    classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    dimensions:
+      refArea:
+        label: Reference area
+        description: Synthetic geographical reference area.
+        column: ref_area
+        type: code
+        vocabulary: codelists/areas.yaml
+        concept: local:referenceArea
+      sex:
+        label: Sex
+        description: Synthetic statistical sex classification.
+        column: sex
+        type: code
+        vocabulary: codelists/sex.yaml
+        concept: local:sex
+    time:
+      label: Time period
+      description: Quarterly observation period.
+      column: time_period
+      concept: local:timePeriod
+      granularity: quarterly
+    measure:
+      id: participationRate
+      label: Participation rate
+      description: Labour force participation rate.
+      column: obs_value
+      type: decimal
+      concept: local:participationRate
+    attributes:
+      unitMeasure:
+        label: Unit of measure
+        description: Unit used for the observation value.
+        column: unit_measure
+        type: code
+        vocabulary: codelists/units.yaml
+        required: true
+        concept: local:unitMeasure
+    access: public
+    query:
+      allowUnfiltered: true
+      maximumObservations: 4
+      maximumOffset: 10000
+    bindings:
+      sdmx: {}
+    processingDescriptions:
+      - id: official-statistics-publication
+        operationRefs: [statistics:read]
+        purpose: official-statistics-publication
+        recipientClass: public
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [pre-aggregated-view, non-personal-review, bounded-query, deterministic-order]
+  - id: labour-force-authority
+    title: Authority-confined labour force participation rate
+    description: Synthetic pre-aggregated rates confined by a verified authority claim.
+    publication: {releaseAt: 2026-08-10T00:00:00Z}
+    source:
+      source: labour-statistics
+      view: relay_authority_labour_force_rates
+    classificationDefaults: {privacy: non-personal, institutional: internal, handling: internal, status: reviewed}
+    sourceColumnClassifications:
+      authority_scope: {privacy: non-personal, institutional: internal, handling: internal, status: reviewed}
+    dimensions:
+      refArea:
+        label: Reference area
+        description: Synthetic geographical reference area.
+        column: ref_area
+        type: code
+        vocabulary: codelists/areas.yaml
+        concept: local:referenceArea
+      sex:
+        label: Sex
+        description: Synthetic statistical sex classification.
+        column: sex
+        type: code
+        vocabulary: codelists/sex.yaml
+        concept: local:sex
+    time:
+      label: Time period
+      description: Quarterly observation period.
+      column: time_period
+      concept: local:timePeriod
+      granularity: quarterly
+    measure:
+      id: participationRate
+      label: Participation rate
+      description: Labour force participation rate.
+      column: obs_value
+      type: decimal
+      concept: local:participationRate
+    attributes:
+      unitMeasure:
+        label: Unit of measure
+        description: Unit used for the observation value.
+        column: unit_measure
+        type: code
+        vocabulary: codelists/units.yaml
+        required: true
+        concept: local:unitMeasure
+    access:
+      scope: statistics:labour-authority:read
+      purpose: {claim: purpose, allowed: [official-planning]}
+      authorityRowBinding: {claim: area_authority, sourceColumn: authority_scope}
+    query:
+      allowUnfiltered: true
+      maximumObservations: 4
+      maximumOffset: 10000
+    bindings:
+      sdmx:
+        agencyId: EXAMPLE_STAT
+        dataflowId: LABOUR_FORCE_AUTHORITY
+        version: 1.0.0
+        dataStructureId: LABOUR_FORCE_AUTHORITY_DSD
+        conceptSchemeId: LABOUR_FORCE_AUTHORITY_CONCEPTS
+    processingDescriptions:
+      - id: authority-statistics-consultation
+        operationRefs: [statistics:read]
+        purpose: official-planning
+        recipientClass: authorized-public-authority
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [pre-aggregated-view, non-personal-review, verified-purpose, authority-row-binding]
+metadataVisibility:
+  service: public
+  resources: public
+  statisticalDatasets: public
+  semantics: public
+  classifications: public
+  processing: public

@@ -137,6 +137,105 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
             any("lookup quota fixture must admit exactly" in error for error in errors), errors
         )
 
+    def test_business_spatial_contract_remains_narrow_and_scope_separated(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_spatial_drift(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "registry.yaml" and path.parent.name == "business-registry":
+                premises = next(
+                    resource
+                    for resource in value["resources"]
+                    if resource["id"] == "registered-premises"
+                )
+                premises["properties"]["location"]["sourceColumn"] = "location"
+                premises["operations"]["list"]["spatialQuery"] = {
+                    "kind": "point-bbox"
+                }
+                premises["operations"]["searches"][0]["accessProfiles"][
+                    "registrar-premises"
+                ]["access"]["scope"] = "registry:business:premises-list"
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_spatial_drift
+        ):
+            VALIDATOR.validate_acceptance_access_profile_contracts(errors)
+        self.assertTrue(any("strict additive Point" in error for error in errors), errors)
+        self.assertTrue(any("bbox must remain a named search" in error for error in errors), errors)
+        self.assertTrue(any("scopes must be distinct" in error for error in errors), errors)
+
+    def test_statistical_dataset_is_fixed_access_snapshot_and_binding_owned(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_statistical_drift(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "registry.yaml" and path.parent.name == "labour-statistics":
+                value["metadataVisibility"].pop("statisticalDatasets")
+                value["registry"]["alignmentTargets"] = [
+                    {"name": "sdmx-rest", "version": "2.2.2"}
+                ]
+                dataset = value["statisticalDatasets"][0]
+                dataset["accessProfiles"] = {"public": {"access": "public"}}
+                dataset["time"].pop("granularity")
+            if path.name == "expected-http.yaml" and path.parent.name == "labour-statistics":
+                unsupported = next(
+                    step for step in value["steps"] if step["id"] == "unsupported-format"
+                )
+                unsupported["expect"]["code"] = "representation.unsupported"
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_statistical_drift
+        ):
+            VALIDATOR.validate_statistical_acceptance(errors)
+        self.assertTrue(any("metadataVisibility.statisticalDatasets" in error for error in errors), errors)
+        self.assertTrue(any("must not be authored alignmentTargets" in error for error in errors), errors)
+        self.assertTrue(any("one fixed access" in error for error in errors), errors)
+        self.assertTrue(any("time.granularity" in error for error in errors), errors)
+        self.assertTrue(any("format.unsupported" in error for error in errors), errors)
+
+    def test_statistical_registry_requires_authored_directional_alignment(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_alignment(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "registry.yaml" and path.parent.name == "labour-statistics":
+                value["registry"]["alignmentTargets"] = []
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_alignment
+        ):
+            VALIDATOR.validate_statistical_acceptance(errors)
+        self.assertTrue(
+            any("at least one authored directional alignmentTarget" in error for error in errors),
+            errors,
+        )
+
+    def test_sdmx_profile_lock_is_external_version_closed_and_fetch_explicit(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_conformance_drift(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "sdmx-profile-lock.yaml":
+                value["upstreamBytesCommitted"] = True
+                value["profiles"]["rest"]["version"] = "latest"
+                value["validation"]["networkByDefault"] = True
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_conformance_drift
+        ):
+            VALIDATOR.validate_sdmx_profile_contract(errors)
+        self.assertTrue(any("schema bytes must remain external" in error for error in errors), errors)
+        self.assertTrue(any("REST subset must remain 2.2.2" in error for error in errors), errors)
+        self.assertTrue(any("schema fetch must remain explicit" in error for error in errors), errors)
+
     def test_invalid_source_row_scenario_must_match_the_executable_failure(self) -> None:
         original = VALIDATOR.load_yaml
 

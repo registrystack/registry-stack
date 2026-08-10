@@ -25,6 +25,8 @@ The intended boundaries are firmer than the syntax:
 - every operation declares one default and a finite ordered set of access profiles; an operation with any public access profile uses a public default; access and disclosure belong to the access profile, while the requester may only select fewer properties within the chosen access profile;
 - token issuers assign authority, but they cannot enable an operation Relay did not compile;
 - family capabilities are derived from compiled operations, never duplicated in configuration;
+- `statisticalDatasets` is a separate, format-neutral publication contract with exactly one fixed `access`, snapshot-only sources, bounded observation queries, and an explicit `bindings.sdmx` selection;
+- SDMX REST and serialization profile versions are compiler-owned binding metadata and are never authored as Registry `alignmentTargets`;
 - none of these examples enables response signing.
 
 Each short classification entry inherits scheme versions and review provenance
@@ -62,6 +64,19 @@ place such items in `items`; single reads and resolved lookups place one in
 the response `meta` links the JSON-LD context separately.
 
 Each example shows the governed and runtime documents together for readability. A real project would keep them as separately validated files and package them with synthetic fixtures and generated artifacts.
+
+The fourth coequal acceptance project, [labour statistics](acceptance/labour-statistics/),
+exercises a different governed shape without changing the three Record examples.
+It declares two pre-aggregated datasets under `statisticalDatasets`, each over a
+snapshot SQLite view. Each dataset has dimensions, one time dimension with an
+explicit annual, quarterly, monthly, or daily granularity, one measure,
+attributes, publication metadata, bounded query limits, exactly one access
+rule, and a required `bindings.sdmx`. The binding compiles only keyed data, the
+omitted-key data alias, and exact dataflow and datastructure structure routes.
+It emits SDMX-JSON 2.1.0, SDMX-CSV 2.1.0, and Structure JSON 2.1.0 within the
+aligned SDMX REST 2.2.2 read subset. It does not add access profiles, dynamic
+aggregation, schema or availability placeholders, history, or structure
+maintenance.
 
 ## Example 1: social assistance enrolment
 
@@ -472,6 +487,104 @@ What this example must prove:
 - the captured snapshot digest and schema fingerprint make responses reproducible and strongly cacheable by revision;
 - capability discovery derives `consultation.list` and `consultation.retrieve` and no other family pattern.
 
+### Point location variant: governed premises search
+
+The business Registry may add this second resource. Scalar properties keep the
+same mapping shape used elsewhere. `location` is the one additive Point form:
+it names exact CRS84 and a closed two-column `source`, then
+`primaryGeometry` references that property by name. The named search owns
+`bbox`; it is not a list option and its protected scope is distinct from list.
+
+```yaml
+- id: registered-premises
+  title: Registered premises
+  description: Current synthetic public premises locations associated with registered businesses.
+  semanticClass: local:RegisteredPremises
+  source: {source: companies, view: relay_registered_premises}
+  classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+  sourceColumnClassifications:
+    longitude: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    latitude: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+  recordContext:
+    recordIdentifier: {sourceColumn: premises_identifier}
+    revisionIdentifier: {sourceColumn: record_revision}
+    lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
+    recordedAt: {sourceColumn: recorded_at}
+  properties:
+    premisesIdentifier:
+      type: string
+      sourceColumn: premises_identifier
+      sourceRequired: true
+      semanticTerm: local:premisesIdentifier
+      label: Premises identifier
+      description: Stable identifier of the registered premises.
+    businessRegistrationNumber:
+      type: string
+      sourceColumn: registration_number
+      sourceRequired: true
+      semanticTerm: local:businessRegistrationNumber
+      label: Business registration number
+      description: Registration number linking the premises to its registered business.
+    premisesName:
+      type: string
+      sourceColumn: premises_name
+      sourceRequired: true
+      semanticTerm: local:premisesName
+      label: Premises name
+      description: Published name of the synthetic registered premises.
+    location:
+      type: point
+      crs: http://www.opengis.net/def/crs/OGC/0/CRS84
+      source: {longitudeColumn: longitude, latitudeColumn: latitude}
+      sourceRequired: true
+      semanticTerm: local:location
+      label: Premises location
+      description: Reviewed Point location of the registered premises in CRS84 longitude-latitude order.
+      classification: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+  primaryGeometry: location
+  disclosureProfiles:
+    public-premises: {properties: [premisesIdentifier, premisesName, location]}
+    registrar-premises: {properties: [premisesIdentifier, businessRegistrationNumber, premisesName, location]}
+  operations:
+    list:
+      defaultAccessProfile: registrar-premises
+      accessProfiles:
+        registrar-premises:
+          access: {scope: registry:business:premises-list}
+          disclosureProfile: registrar-premises
+      allowUnfiltered: true
+      orderBy: [premisesIdentifier]
+      pagination: {defaultPageSize: 2, maximumPageSize: 4}
+    read:
+      defaultAccessProfile: public-premises
+      accessProfiles:
+        public-premises: {access: public, disclosureProfile: public-premises}
+        registrar-premises:
+          access: {scope: registry:business:premises-read-registrar}
+          disclosureProfile: registrar-premises
+    searches:
+      - id: within-bbox
+        query:
+          kind: point-bbox
+          maximumLongitudeSpanDegrees: 2
+          maximumLatitudeSpanDegrees: 2
+        defaultAccessProfile: public-premises
+        accessProfiles:
+          public-premises: {access: public, disclosureProfile: public-premises}
+          registrar-premises:
+            access: {scope: registry:business:premises-search-registrar}
+            disclosureProfile: registrar-premises
+        orderBy: [premisesIdentifier]
+        pagination: {defaultPageSize: 2, maximumPageSize: 4}
+```
+
+`GET /v2/resources/registered-premises/searches/within-bbox?bbox=100,13,101,14`
+performs inclusive containment. JSON and JSON-LD remain available. When the
+selected access profile discloses `location`, `Accept: application/geo+json`
+returns RFC 7946 by default; `formatProfile=jsonfg` adds the bounded JSON-FG
+metadata. These formats do not change authorization or disclosure, and this
+profile does not claim OGC API Features conformance.
+
 ## Example 3: civil-event registry
 
 This registry is CRVS-shaped but the runtime remains event-domain neutral. It has no collection-list operation. Authorized registrars may read a known opaque event identifier under one scope and disclosure profile. A verification client may perform only a named exact lookup under a different scope and smaller disclosure profile. It uses an ordinary external issuer for the core journey. Registry Mint may replace that issuer later when it emits the same standard token profile.
@@ -700,7 +813,7 @@ quotas: {requestsPerMinute: 120, burst: 20}
 ## Complete accepted key-path inventory
 
 The following blocks come from successful typed `relayctl check --production`
-reports for all three coequal acceptance projects. They describe the complete
+reports for all four coequal acceptance projects. They describe the complete
 strict configuration surface exercised by those projects. Run
 `products/relay-v2/scripts/check-configs.sh --write` after an intentional model
 change, then review and explain every new path in the examples above.
@@ -734,6 +847,7 @@ metadataVisibility.processing
 metadataVisibility.resources
 metadataVisibility.semantics
 metadataVisibility.service
+metadataVisibility.statisticalDatasets
 registry
 registry.alignmentTargets
 registry.alignmentTargets[]
@@ -768,15 +882,12 @@ resources[].id
 resources[].operations
 resources[].operations.list
 resources[].operations.list.accessProfiles
-resources[].operations.list.accessProfiles.public-register
-resources[].operations.list.accessProfiles.public-register.access
-resources[].operations.list.accessProfiles.public-register.disclosureProfile
-resources[].operations.list.accessProfiles.registrar
-resources[].operations.list.accessProfiles.registrar.access
-resources[].operations.list.accessProfiles.registrar.access.authorityRowBinding
-resources[].operations.list.accessProfiles.registrar.access.purpose
-resources[].operations.list.accessProfiles.registrar.access.scope
-resources[].operations.list.accessProfiles.registrar.disclosureProfile
+resources[].operations.list.accessProfiles.*
+resources[].operations.list.accessProfiles.*.access
+resources[].operations.list.accessProfiles.*.access.authorityRowBinding
+resources[].operations.list.accessProfiles.*.access.purpose
+resources[].operations.list.accessProfiles.*.access.scope
+resources[].operations.list.accessProfiles.*.disclosureProfile
 resources[].operations.list.allowUnfiltered
 resources[].operations.list.defaultAccessProfile
 resources[].operations.list.filters
@@ -792,50 +903,17 @@ resources[].operations.list.pagination.maximumPageSize
 resources[].operations.lookups
 resources[].operations.lookups[]
 resources[].operations.lookups[].accessProfiles
-resources[].operations.lookups[].accessProfiles.caseworker
-resources[].operations.lookups[].accessProfiles.caseworker.access
-resources[].operations.lookups[].accessProfiles.caseworker.access.authorityRowBinding
-resources[].operations.lookups[].accessProfiles.caseworker.access.authorityRowBinding.claim
-resources[].operations.lookups[].accessProfiles.caseworker.access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].accessProfiles.caseworker.access.purpose
-resources[].operations.lookups[].accessProfiles.caseworker.access.purpose.allowed
-resources[].operations.lookups[].accessProfiles.caseworker.access.purpose.allowed[]
-resources[].operations.lookups[].accessProfiles.caseworker.access.purpose.claim
-resources[].operations.lookups[].accessProfiles.caseworker.access.scope
-resources[].operations.lookups[].accessProfiles.caseworker.disclosureProfile
-resources[].operations.lookups[].accessProfiles.limited
-resources[].operations.lookups[].accessProfiles.limited.access
-resources[].operations.lookups[].accessProfiles.limited.access.authorityRowBinding
-resources[].operations.lookups[].accessProfiles.limited.access.authorityRowBinding.claim
-resources[].operations.lookups[].accessProfiles.limited.access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].accessProfiles.limited.access.purpose
-resources[].operations.lookups[].accessProfiles.limited.access.purpose.allowed
-resources[].operations.lookups[].accessProfiles.limited.access.purpose.allowed[]
-resources[].operations.lookups[].accessProfiles.limited.access.purpose.claim
-resources[].operations.lookups[].accessProfiles.limited.access.scope
-resources[].operations.lookups[].accessProfiles.limited.disclosureProfile
-resources[].operations.lookups[].accessProfiles.registrar-verification
-resources[].operations.lookups[].accessProfiles.registrar-verification.access
-resources[].operations.lookups[].accessProfiles.registrar-verification.access.authorityRowBinding
-resources[].operations.lookups[].accessProfiles.registrar-verification.access.authorityRowBinding.claim
-resources[].operations.lookups[].accessProfiles.registrar-verification.access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].accessProfiles.registrar-verification.access.purpose
-resources[].operations.lookups[].accessProfiles.registrar-verification.access.purpose.allowed
-resources[].operations.lookups[].accessProfiles.registrar-verification.access.purpose.allowed[]
-resources[].operations.lookups[].accessProfiles.registrar-verification.access.purpose.claim
-resources[].operations.lookups[].accessProfiles.registrar-verification.access.scope
-resources[].operations.lookups[].accessProfiles.registrar-verification.disclosureProfile
-resources[].operations.lookups[].accessProfiles.supervisory
-resources[].operations.lookups[].accessProfiles.supervisory.access
-resources[].operations.lookups[].accessProfiles.supervisory.access.authorityRowBinding
-resources[].operations.lookups[].accessProfiles.supervisory.access.authorityRowBinding.claim
-resources[].operations.lookups[].accessProfiles.supervisory.access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].accessProfiles.supervisory.access.purpose
-resources[].operations.lookups[].accessProfiles.supervisory.access.purpose.allowed
-resources[].operations.lookups[].accessProfiles.supervisory.access.purpose.allowed[]
-resources[].operations.lookups[].accessProfiles.supervisory.access.purpose.claim
-resources[].operations.lookups[].accessProfiles.supervisory.access.scope
-resources[].operations.lookups[].accessProfiles.supervisory.disclosureProfile
+resources[].operations.lookups[].accessProfiles.*
+resources[].operations.lookups[].accessProfiles.*.access
+resources[].operations.lookups[].accessProfiles.*.access.authorityRowBinding
+resources[].operations.lookups[].accessProfiles.*.access.authorityRowBinding.claim
+resources[].operations.lookups[].accessProfiles.*.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].accessProfiles.*.access.purpose
+resources[].operations.lookups[].accessProfiles.*.access.purpose.allowed
+resources[].operations.lookups[].accessProfiles.*.access.purpose.allowed[]
+resources[].operations.lookups[].accessProfiles.*.access.purpose.claim
+resources[].operations.lookups[].accessProfiles.*.access.scope
+resources[].operations.lookups[].accessProfiles.*.disclosureProfile
 resources[].operations.lookups[].defaultAccessProfile
 resources[].operations.lookups[].id
 resources[].operations.lookups[].requestBody
@@ -849,21 +927,39 @@ resources[].operations.lookups[].requestBody.selectors.*.sourceColumn
 resources[].operations.lookups[].requestBody.selectors.*.type
 resources[].operations.read
 resources[].operations.read.accessProfiles
-resources[].operations.read.accessProfiles.public-register
-resources[].operations.read.accessProfiles.public-register.access
-resources[].operations.read.accessProfiles.public-register.disclosureProfile
-resources[].operations.read.accessProfiles.registrar
-resources[].operations.read.accessProfiles.registrar.access
-resources[].operations.read.accessProfiles.registrar.access.authorityRowBinding
-resources[].operations.read.accessProfiles.registrar.access.authorityRowBinding.claim
-resources[].operations.read.accessProfiles.registrar.access.authorityRowBinding.sourceColumn
-resources[].operations.read.accessProfiles.registrar.access.purpose
-resources[].operations.read.accessProfiles.registrar.access.purpose.allowed
-resources[].operations.read.accessProfiles.registrar.access.purpose.allowed[]
-resources[].operations.read.accessProfiles.registrar.access.purpose.claim
-resources[].operations.read.accessProfiles.registrar.access.scope
-resources[].operations.read.accessProfiles.registrar.disclosureProfile
+resources[].operations.read.accessProfiles.*
+resources[].operations.read.accessProfiles.*.access
+resources[].operations.read.accessProfiles.*.access.authorityRowBinding
+resources[].operations.read.accessProfiles.*.access.authorityRowBinding.claim
+resources[].operations.read.accessProfiles.*.access.authorityRowBinding.sourceColumn
+resources[].operations.read.accessProfiles.*.access.purpose
+resources[].operations.read.accessProfiles.*.access.purpose.allowed
+resources[].operations.read.accessProfiles.*.access.purpose.allowed[]
+resources[].operations.read.accessProfiles.*.access.purpose.claim
+resources[].operations.read.accessProfiles.*.access.scope
+resources[].operations.read.accessProfiles.*.disclosureProfile
 resources[].operations.read.defaultAccessProfile
+resources[].operations.searches
+resources[].operations.searches[]
+resources[].operations.searches[].accessProfiles
+resources[].operations.searches[].accessProfiles.*
+resources[].operations.searches[].accessProfiles.*.access
+resources[].operations.searches[].accessProfiles.*.access.authorityRowBinding
+resources[].operations.searches[].accessProfiles.*.access.purpose
+resources[].operations.searches[].accessProfiles.*.access.scope
+resources[].operations.searches[].accessProfiles.*.disclosureProfile
+resources[].operations.searches[].defaultAccessProfile
+resources[].operations.searches[].id
+resources[].operations.searches[].orderBy
+resources[].operations.searches[].orderBy[]
+resources[].operations.searches[].pagination
+resources[].operations.searches[].pagination.defaultPageSize
+resources[].operations.searches[].pagination.maximumPageSize
+resources[].operations.searches[].query
+resources[].operations.searches[].query.kind
+resources[].operations.searches[].query.maximumLatitudeSpanDegrees
+resources[].operations.searches[].query.maximumLongitudeSpanDegrees
+resources[].primaryGeometry
 resources[].processingDescriptions
 resources[].processingDescriptions[]
 resources[].processingDescriptions[].dpvProfileRef
@@ -883,9 +979,13 @@ resources[].properties.*.classification.institutional
 resources[].properties.*.classification.privacy
 resources[].properties.*.classification.status
 resources[].properties.*.codelist
+resources[].properties.*.crs
 resources[].properties.*.description
 resources[].properties.*.label
 resources[].properties.*.semanticTerm
+resources[].properties.*.source
+resources[].properties.*.source.latitudeColumn
+resources[].properties.*.source.longitudeColumn
 resources[].properties.*.sourceColumn
 resources[].properties.*.sourceRequired
 resources[].properties.*.transform
@@ -930,6 +1030,120 @@ sources.*
 sources.*.expectedSchemaFingerprint
 sources.*.kind
 sources.*.profile
+statisticalDatasets
+statisticalDatasets[]
+statisticalDatasets[].access
+statisticalDatasets[].access.authorityRowBinding
+statisticalDatasets[].access.authorityRowBinding.claim
+statisticalDatasets[].access.authorityRowBinding.sourceColumn
+statisticalDatasets[].access.purpose
+statisticalDatasets[].access.purpose.allowed
+statisticalDatasets[].access.purpose.allowed[]
+statisticalDatasets[].access.purpose.claim
+statisticalDatasets[].access.scope
+statisticalDatasets[].attributes
+statisticalDatasets[].attributes.unitMeasure
+statisticalDatasets[].attributes.unitMeasure.classification
+statisticalDatasets[].attributes.unitMeasure.classification.handling
+statisticalDatasets[].attributes.unitMeasure.classification.institutional
+statisticalDatasets[].attributes.unitMeasure.classification.privacy
+statisticalDatasets[].attributes.unitMeasure.classification.status
+statisticalDatasets[].attributes.unitMeasure.column
+statisticalDatasets[].attributes.unitMeasure.concept
+statisticalDatasets[].attributes.unitMeasure.description
+statisticalDatasets[].attributes.unitMeasure.label
+statisticalDatasets[].attributes.unitMeasure.required
+statisticalDatasets[].attributes.unitMeasure.type
+statisticalDatasets[].attributes.unitMeasure.vocabulary
+statisticalDatasets[].bindings
+statisticalDatasets[].bindings.sdmx
+statisticalDatasets[].bindings.sdmx.agencyId
+statisticalDatasets[].bindings.sdmx.conceptSchemeId
+statisticalDatasets[].bindings.sdmx.dataStructureId
+statisticalDatasets[].bindings.sdmx.dataflowId
+statisticalDatasets[].bindings.sdmx.version
+statisticalDatasets[].classificationDefaults
+statisticalDatasets[].classificationDefaults.handling
+statisticalDatasets[].classificationDefaults.institutional
+statisticalDatasets[].classificationDefaults.privacy
+statisticalDatasets[].classificationDefaults.status
+statisticalDatasets[].description
+statisticalDatasets[].dimensions
+statisticalDatasets[].dimensions.refArea
+statisticalDatasets[].dimensions.refArea.classification
+statisticalDatasets[].dimensions.refArea.classification.handling
+statisticalDatasets[].dimensions.refArea.classification.institutional
+statisticalDatasets[].dimensions.refArea.classification.privacy
+statisticalDatasets[].dimensions.refArea.classification.status
+statisticalDatasets[].dimensions.refArea.column
+statisticalDatasets[].dimensions.refArea.concept
+statisticalDatasets[].dimensions.refArea.description
+statisticalDatasets[].dimensions.refArea.label
+statisticalDatasets[].dimensions.refArea.type
+statisticalDatasets[].dimensions.refArea.vocabulary
+statisticalDatasets[].dimensions.sex
+statisticalDatasets[].dimensions.sex.classification
+statisticalDatasets[].dimensions.sex.classification.handling
+statisticalDatasets[].dimensions.sex.classification.institutional
+statisticalDatasets[].dimensions.sex.classification.privacy
+statisticalDatasets[].dimensions.sex.classification.status
+statisticalDatasets[].dimensions.sex.column
+statisticalDatasets[].dimensions.sex.concept
+statisticalDatasets[].dimensions.sex.description
+statisticalDatasets[].dimensions.sex.label
+statisticalDatasets[].dimensions.sex.type
+statisticalDatasets[].dimensions.sex.vocabulary
+statisticalDatasets[].id
+statisticalDatasets[].measure
+statisticalDatasets[].measure.classification
+statisticalDatasets[].measure.classification.handling
+statisticalDatasets[].measure.classification.institutional
+statisticalDatasets[].measure.classification.privacy
+statisticalDatasets[].measure.classification.status
+statisticalDatasets[].measure.column
+statisticalDatasets[].measure.concept
+statisticalDatasets[].measure.description
+statisticalDatasets[].measure.id
+statisticalDatasets[].measure.label
+statisticalDatasets[].measure.type
+statisticalDatasets[].processingDescriptions
+statisticalDatasets[].processingDescriptions[]
+statisticalDatasets[].processingDescriptions[].dpvProfileRef
+statisticalDatasets[].processingDescriptions[].id
+statisticalDatasets[].processingDescriptions[].legalBasisRef
+statisticalDatasets[].processingDescriptions[].operationRefs
+statisticalDatasets[].processingDescriptions[].operationRefs[]
+statisticalDatasets[].processingDescriptions[].purpose
+statisticalDatasets[].processingDescriptions[].recipientClass
+statisticalDatasets[].processingDescriptions[].safeguards
+statisticalDatasets[].processingDescriptions[].safeguards[]
+statisticalDatasets[].publication
+statisticalDatasets[].publication.releaseAt
+statisticalDatasets[].query
+statisticalDatasets[].query.allowUnfiltered
+statisticalDatasets[].query.maximumObservations
+statisticalDatasets[].query.maximumOffset
+statisticalDatasets[].source
+statisticalDatasets[].source.source
+statisticalDatasets[].source.view
+statisticalDatasets[].sourceColumnClassifications
+statisticalDatasets[].sourceColumnClassifications.authority_scope
+statisticalDatasets[].sourceColumnClassifications.authority_scope.handling
+statisticalDatasets[].sourceColumnClassifications.authority_scope.institutional
+statisticalDatasets[].sourceColumnClassifications.authority_scope.privacy
+statisticalDatasets[].sourceColumnClassifications.authority_scope.status
+statisticalDatasets[].time
+statisticalDatasets[].time.classification
+statisticalDatasets[].time.classification.handling
+statisticalDatasets[].time.classification.institutional
+statisticalDatasets[].time.classification.privacy
+statisticalDatasets[].time.classification.status
+statisticalDatasets[].time.column
+statisticalDatasets[].time.concept
+statisticalDatasets[].time.description
+statisticalDatasets[].time.granularity
+statisticalDatasets[].time.label
+statisticalDatasets[].title
 ```
 <!-- relay-v2-registry-key-paths:end -->
 
@@ -980,7 +1194,7 @@ What this example must prove:
 
 ## Design observations from the examples
 
-The three examples suggest a compact core model:
+The four acceptance examples suggest a compact core model:
 
 ```text
 registry contract

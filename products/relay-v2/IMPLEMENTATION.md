@@ -16,7 +16,7 @@ ordinary lockfile or CI routing updates. `registryctl` receives no V2 command,
 compatibility shim, deprecation, or migration work.
 
 The product is complete only when the full Relay V2 Definition of Done passes
-for the social, business, and civil-event acceptance deployments on one
+for the social, business, civil-event, and labour-statistics acceptance deployments on one
 revision. Milestones may merge independently when their own boundary is
 complete and green, but no partial milestone is described as Relay V2 complete.
 
@@ -51,7 +51,7 @@ request -> authentication -> AccessDecision -> DisclosurePlan
 
 The HTTP service and offline fixtures call the same compiled kernel. Production
 code contains no social, business, company, benefit, household, birth, death,
-or CRVS branch. There is one compiled Registry and one administrative trust
+CRVS, labour, or statistics-office branch. There is one compiled Registry and one administrative trust
 domain per process, with any number of related resources under that Registry.
 
 ## Frozen interfaces
@@ -64,12 +64,12 @@ owns:
 - contract identity and version;
 - one Registry identifier, name, Registry Authority, optional operator,
   authoritative scope, base URI, identifier-lifecycle policy, and pinned
-  alignment targets;
+  authored alignment targets; compiler-owned binding versions are derived;
 - reviewed SQLite sources and views;
 - resources, Registry Core source bindings, URL-safe camelCase property keys,
   published properties, datatypes, source requiredness, codelists, labels,
   descriptions, and local semantic IRIs;
-- compiled list, read, or named exact-lookup operations; query shape remains
+- compiled list, read, named exact-lookup, or named Point-bbox search operations; query shape remains
   operation-owned while each operation declares one `defaultAccessProfile`
   and finite ordered `accessProfiles` with access-profile-owned `access` and
   `disclosureProfile`; list presence derives the enumeration posture;
@@ -84,12 +84,21 @@ owns:
   resource defaults expanded before validation;
 - operation scopes, verified-purpose constraints, authority-to-row bindings,
   optional processing sidecars, and metadata visibility.
+- separately authored format-neutral `statisticalDatasets`, each bound only to
+  a snapshot view and containing dimensions, one time component with required
+  `annual`, `quarterly`, `monthly`, or `daily` granularity, one measure,
+  attributes, classification, publication, bounded query, exactly one fixed
+  access, required `bindings.sdmx`, and explicit statistical metadata visibility.
 
 Every resource binds `recordIdentifier`, `revisionIdentifier`,
 `lifecycleState`, and `recordedAt` to reviewed source-view columns. Registry,
 authority, schema, and semantic-model references derive from the contract.
-Version 1 supports only `string`, `boolean`, `integer`, RFC 3339 `date`, RFC
-3339 `date-time`, and `controlled-code` domain properties. Every reviewed view
+Version 1 keeps the scalar property forms `string`, `boolean`, `integer`, RFC
+3339 `date`, RFC 3339 `date-time`, and `controlled-code` unchanged. It adds one
+strict `point` form with exact CRS84 and a `source` containing only
+`longitudeColumn` and `latitudeColumn`. `primaryGeometry` references that
+property by name. Point carriers are reviewed processing inputs, not separate
+published properties or generated metadata. Every reviewed view
 column must be accounted for as a Record binding, public property, filter,
 order key, selector, or row binding. Extra columns fail
 compilation. There is no authored SQL and no generic source-adapter trait.
@@ -110,7 +119,9 @@ Record. It does not make a property mandatory in every requester-minimized
 access profile. The compiler emits separate full-record validation and
 permitted-access-profile artifacts. The latter requires Registry Core and
 validates selectable `domainData` properties when present; the former preserves
-source requiredness and full SHACL cardinality.
+source requiredness and full SHACL cardinality, including every Point whether
+or not a particular access profile discloses it. Semantic generation includes
+the Point once as its property and never duplicates carrier metadata.
 
 `RelayRuntime` is a separate strict deployment file. It binds listener,
 `packagePath`, SQLite paths, at most one issuer and audience, secrets, cursor
@@ -136,12 +147,19 @@ generated/openapi.public.json
 generated/artifacts/...
 ```
 
-`relay-package.json` is canonical JSON containing `packageVersion`,
+`relay-package.json` is canonical JSON with package version
+`relay.registrystack.org/package/v1alpha3`, containing
 `packageRevision`, `contractRevision`, the expected SQLite schema fingerprint,
 the generated-artifact inventory and operation bindings, and for every relative
 regular file its path, size, SHA-256 digest, media type, visibility, and
 generated/authored status. `compiled/registry.json` is the canonical compiled
 runtime plan produced by the shared compiler.
+Every operation-bound generated artifact has an explicit `accessBinding`:
+`{kind: access-profile, identifier: ...}` for a Record access profile or
+`{kind: fixed-operation}` for a statistical structure. `PackageArtifact`
+contains no `accessProfileIdentifier`; the separate
+`operationArtifactBindings` entries retain that field for their existing
+Record-operation binding contract.
 References cannot escape the directory and symlinks are rejected. The runtime
 file, sealed package tree, and their ancestry must be owned by root or the
 Relay service user and must not be writable by another account; only a
@@ -290,7 +308,8 @@ row-binding value, raw principal, token, SQL, or protected source value.
 
 Where caching is allowed, a strong ETag hashes the exact response bytes and
 therefore binds the selected access profile, field subset, and JSON or JSON-LD
-wire representation. `Vary: Accept, Authorization`, `If-None-Match`, and `304`
+wire representation, including the GeoJSON format profile when selected.
+`Vary: Accept, Authorization`, `If-None-Match`, and `304`
 are part of the GET contract.
 Non-public and unversioned-live responses are `no-store` and emit no ETag.
 
@@ -326,6 +345,48 @@ the bound SHACL shape, and maps transport-only `meta` and `pageInfo` to null so
 they do not become domain triples. Ordinary JSON retains the shapes above
 without `@context`, `@id`, or `@type`.
 
+When the selected access profile discloses the resource's `primaryGeometry`,
+`application/geo+json` returns an RFC 7946 Feature for one Record and a
+FeatureCollection for list or named search. `geometry` is the selected Point,
+or `null` when `fields` omits it. Feature `properties` contains Registry Core
+and the selected non-spatial domain properties, so the combined result is the
+same governed disclosure as JSON. `formatProfile=rfc7946` is the default;
+`formatProfile=jsonfg` adds only the fixed JSON-FG `conformsTo` and
+`featureType` members. It does not enable an operation or widen disclosure.
+The JSON-FG collection adds:
+
+```json
+{
+  "conformsTo": [
+    "http://www.opengis.net/spec/json-fg-1/1.0/conf/core",
+    "http://www.opengis.net/spec/json-fg-1/1.0/conf/types-schemas"
+  ],
+  "featureType": "registered-premises"
+}
+```
+
+`featureType` is the compiled resource identifier, not acceptance-specific
+runtime logic. Response profile links use
+`http://www.opengis.net/def/profile/OGC/0/rfc7946` and
+`http://www.opengis.net/def/profile/OGC/0/jsonfg` respectively.
+
+For a statistical dataset, the compiler derives one fixed access decision and
+one immutable query plan. Each keyed or named component constraint becomes a
+bound SQLite predicate with the exact declared storage class. The executor
+validates every selected dimension, time, measure, and attribute plus global
+observation-key uniqueness before serialization. SDMX-JSON dimensions and
+attributes remain strings, numeric measures remain JSON numbers, and SDMX-CSV
+contains the same observations. No caller expression, source column, sort,
+join, aggregation, or coercion reaches SQLite.
+
+Compilation generates canonical `{dataset}.sdmx.dataflow.json` and
+`{dataset}.sdmx.datastructure.json` artifacts. They are sealed in the package,
+rederived at startup, and served byte-for-byte from the structure routes. The
+profile validator locks the aligned SDMX REST 2.2.2 read subset plus JSON, CSV,
+and Structure JSON 2.1.0. Official JSON schemas are fetched only by the explicit
+temporary-fetch option or supplied through an external cache, digest-checked,
+used, and discarded. Their bytes are never vendored.
+
 ### HTTP binding and capabilities
 
 The initial routes are:
@@ -337,11 +398,30 @@ GET  /openapi.json
 GET  /v2
 GET  /v2/resources?pageSize=...&cursor=...
 GET  /v2/resources/{resource}
-GET  /v2/resources/{resource}/records?pageSize=...&cursor=...&<declaredFilter>=...&fields=...
-GET  /v2/resources/{resource}/records/{recordIdentifier}?fields=...
-POST /v2/resources/{resource}/lookups/{lookup}?fields=...
+GET  /v2/resources/{resource}/records?pageSize=...&cursor=...&<declaredFilter>=...&accessProfile=...&fields=...&formatProfile=...
+GET  /v2/resources/{resource}/records/{recordIdentifier}?accessProfile=...&fields=...&formatProfile=...
+POST /v2/resources/{resource}/lookups/{lookup}?accessProfile=...&fields=...&formatProfile=...
+GET  /v2/resources/{resource}/searches/{search}?bbox=...&pageSize=...&cursor=...&accessProfile=...&fields=...&formatProfile=...
 GET  /v2/artifacts/{artifactIdentifier}
+GET  /sdmx/v2/data/dataflow/{agency}/{dataflow}/{version}/{key}
+GET  /sdmx/v2/data/dataflow/{agency}/{dataflow}/{version}
+GET  /sdmx/v2/structure/dataflow/{agency}/{dataflow}/{version}?references=none
+GET  /sdmx/v2/structure/datastructure/{agency}/{datastructure}/{version}?references=none
 ```
+
+The SDMX binding mounts exactly these data and structure shapes. Schema,
+availability, history, and structure-maintenance routes are absent, including
+placeholder responses. Missing protected-dataflow scope and hidden structure
+use `404 resource.not_found`; failed purpose or authority binding uses `403
+aggregate-data.denied`; unsupported `Accept` uses `406 format.unsupported`.
+
+A named `point-bbox` search requires exactly one
+`bbox=west,south,east,north`. All values are finite CRS84 coordinates, bounds
+are ordered without antimeridian wrapping, and compiled longitude and latitude
+span limits are enforced before source access. Containment is inclusive. A
+list rejects `bbox`, and list and search scopes do not imply one another. The
+cursor binds the search identifier, bbox, selected access and disclosure
+profiles, fields, wire format, format profile, order, revisions, and expiry.
 
 `GET /v2` returns the closed service document
 `{registryIdentifier, name, authority, operator, authoritativeScope, product,
@@ -494,6 +574,9 @@ error array is emitted.
 | Invalid credential | 401 | `auth.invalid_credential` | `bearer access token validation failed` |
 | Valid credential without the selected operation or access profile scope | 404 | `resource.not_found` | `the requested resource was not found` |
 | Insufficient purpose or row authority after scope selection | 403 | `consultation.denied` | `the consultation is not permitted` |
+| Statistical purpose or row authority denied after scope selection | 403 | `aggregate-data.denied` | `the statistical data request is not permitted` |
+| Invalid or overlapping statistical component constraints | 400 | `aggregate-data.invalid_request` | `the statistical data request is invalid` |
+| Statistical observation ceiling exceeded | 413 | `aggregate-data.too_large` | `the statistical data request is too large` |
 | Unknown or visibility-hidden resource, artifact, operation, or access profile | 404 | `resource.not_found` | `the requested resource was not found` |
 | Unknown, hidden, ambiguous, or policy-hidden Record outcome | 404 | `consultation.unresolved` | `the requested record was not resolved` |
 | Unsupported response `Accept` | 406 | `format.unsupported` | `the requested format is not supported` |
@@ -568,6 +651,13 @@ access profile, access-rule, processing, disclosure, transform,
 selected-property, handling, contract, and truthful source revision identifiers. They contain no token, selector, SQL,
 path, source or response value, or raw principal identifier.
 
+Statistical events use the same ordering but name data and structure as
+distinct audit surfaces and SDMX-JSON and SDMX-CSV as distinct wire formats.
+They bind the dataset, dataflow/DSD artifact identity, query-plan identity,
+contract and source revisions, and exact released bytes. They never contain a
+key, component constraint, time bound, observation, codelist value, hidden
+authority value, or response value.
+
 Registry Mint is optional. Relay production crates do not depend on Mint. A
 Mint deployment may be paired after core V1 when its server-side client grants
 can emit Relay's standard audience, scope, optional purpose, and optional
@@ -584,7 +674,7 @@ deployment TLS remains mandatory.
 ### 0. Canonical contracts and gates
 
 - Import the approved concept, DoD, examples, and this plan into
-  `products/relay-v2`; add one compact three-registry scenario table and one
+  `products/relay-v2`; add one compact four-registry scenario table and one
   machine-readable security-invariant matrix.
 - Freeze the authored contract vocabulary, Registry Core response, problem
   taxonomy, capability mapping, metadata visibility, token claim profile,
@@ -628,12 +718,13 @@ one workspace Rust gate because the root workspace changed.
   complete Record validation, disclosure, field narrowing, JSON/JSON-LD
   serialization, revisions, and audit-event construction without HTTP.
 - Generate local semantic IRIs, JSON Schema, SHACL, JSON-LD context, codelists,
-  capability discovery, and full/public OpenAPI.
+  capability discovery, exact statistical dataflow and DSD package artifacts,
+  and full/public OpenAPI.
 - Expose compilation, inspection, generation, fixture, diff, and package
   functions through the shared library API.
 
 Gate: compiler and live-platform tests, offline kernel and fixture tests for all
-three contracts, byte-reproducible artifacts and packages, unsafe or incomplete
+four contracts, byte-reproducible artifacts and packages, unsafe or incomplete
 contracts failing before evaluation, and explicit full/public OpenAPI drift
 tests.
 
@@ -645,7 +736,9 @@ tests.
   inspection, checking, generation, fixtures, semantic diff, and packaging.
 - Keep inspection schema-only by default. Generate local semantics,
   classifications, processing, and lifecycle-policy starters as visibly
-  unreviewed suggestions. A production check rejects unreviewed suggestions.
+  unreviewed suggestions. Statistical inspection emits a format-neutral,
+  review-gated starter with required time granularity and empty explicit SDMX
+  binding. A production check rejects unreviewed suggestions.
 - Present the authoritative shared-library diff report for security and meaning
   changes, including newly exposed properties, operations, filters, relaxed
   handling, removed bindings, expanded purposes, metadata visibility, source
@@ -660,6 +753,9 @@ Registry. No `registryctl` file or command changes.
 - Mount the already-proven offline kernel behind HTTP and add ETags, cursors,
   list/read/lookup routes, Registry service metadata, resource metadata,
   artifacts, health, readiness, and safe public OpenAPI.
+- Mount only the compiled SDMX keyed/omitted-key data and dataflow/datastructure
+  structure routes. Serve the canonical packaged structures, preserve declared
+  JSON scalar types, and keep schema and availability placeholders absent.
 - Implement exact-lookup collapse, request and concurrency quotas, cursor
   reauthorization, schema drift refusal, live transaction consistency, and
   classification-aware caching.
@@ -692,22 +788,22 @@ any diagnostic surface.
 
 ### 6. Coequal acceptance and product composition
 
-- Materialize the social, business, and civil-event examples as separate
+- Materialize the social, business, civil-event, and labour-statistics examples as separate
   synthetic deployment projects and run each through `relayctl`, offline
   fixtures, and a real local `relay` process.
 - Use focused parameterized compiler/runtime tests for multi-resource state
-  isolation instead of a fourth deployment project.
+  isolation instead of a fifth deployment project.
 - Record the standard token contract Mint must emit. Mint grant changes and a
   full Mint pairing are a later independently deliverable integration.
 - Record Relay's named lookup as an ordinary protected HTTP source contract for
   a future Evidence integration. A real Evidence pairing remains a separate,
   non-blocking integration journey; Evidence remains the signer and adds no
   Relay authorization model.
-- Complete the three-registry scenario table, security matrix,
+- Complete the four-registry scenario table, security matrix,
   source-neutrality checks, and concise alignment note. Record the deferred
   same-operation entitlement variant rather than simulating support.
 
-Gate: every DoD row and three acceptance definitions pass on one revision with
+Gate: every DoD row and four acceptance definitions pass on one revision with
 no external credentials. Optional live demos may supplement but never replace
 local deterministic evidence.
 
@@ -750,15 +846,19 @@ future compatibility profiles do not block focused implementation milestones.
 - caller-dependent maximum disclosure entitlements within one operation;
 - a GovStack compatibility flag, BB problem namespace, or formal conformance;
 - any Digital Registries family other than the three declared Consultation
-  patterns;
+  patterns or another Aggregate Data pattern beyond statistical dataflow;
 - publisher-owned live revisions, live pagination, and live caching;
 - multi-issuer selection, new authorization-server discovery modes, and Mint
   grant changes;
 - a frozen `relay`/`relayctl` subprocess protocol;
+- SDMX schema or availability routes, history, structure maintenance, dynamic
+  aggregation, arbitrary constraint operators, and large-result streaming;
 - Registry Manifest, DPV, safeguards, and machine-readable GovStack alignment
   projections;
-- Registry multi-tenancy, generic storage traits, PostgreSQL, SpatiaLite,
-  GeoJSON, relationships, nested properties, arrays, decimals, search language,
+- Registry multi-tenancy, generic storage or geometry traits, PostgreSQL,
+  SpatiaLite, GeoPackage decoding, non-Point geometry, OGC API Features, CQL2,
+  EDR, tiles, reprojection, spatial joins, relationships, nested properties,
+  arrays, decimals, general search language,
   fuzzy matching, and Record Match;
 - dynamic masking, general PDP, consent workflow, writes, notification,
   aggregate computation, principal-facing access history, response signing,

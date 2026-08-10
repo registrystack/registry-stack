@@ -12,6 +12,7 @@ requiredContracts:
   - contracts/package-layout.yaml
   - contracts/acceptance-scenario-matrix.yaml
   - contracts/generated-baselines.yaml
+  - contracts/sdmx-profile-lock.yaml
 acceptanceProjects:
   - id: social-assistance
     path: acceptance/social-assistance
@@ -21,6 +22,9 @@ acceptanceProjects:
     registryCount: 1
   - id: civil-event
     path: acceptance/civil-event
+    registryCount: 1
+  - id: labour-statistics
+    path: acceptance/labour-statistics
     registryCount: 1
 projectFiles:
   - registry.yaml
