@@ -1134,10 +1134,13 @@ factSchema: schemas/facts.schema.yaml
     async fn the_time_budget_stops_a_slow_statement() {
         let directory = TempDir::new().expect("a temporary directory");
         let path = extract(&directory);
+        // Opening verifies the extract metadata under the same configured
+        // budget. Leave setup margin, then keep the step ceiling high enough
+        // that the execution deadline is the first statement limit reached.
         let plan = Plan::default()
             .columns("[{name: total, type: integer}]")
-            .steps(1_000_000)
-            .timeout(1);
+            .steps(100_000_000)
+            .timeout(50);
         let source = open(
             &plan,
             "WITH RECURSIVE counter(n) AS (
