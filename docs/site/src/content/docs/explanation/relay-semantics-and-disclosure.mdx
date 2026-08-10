@@ -1,6 +1,6 @@
 ---
 title: Semantics, classification, and disclosure in Relay
-description: Understand how Relay separates source processing, public meaning, reviewed representations, and bounded disclosure.
+description: Understand how Relay separates source processing, public meaning, access profiles, and bounded disclosure.
 status: draft
 owner: registry-docs
 source_repos:
@@ -36,7 +36,7 @@ It does not profile or read row values, make machine-learning inferences, or aut
 Candidates record their evidence and categorical confidence.
 Conflicts remain uncertain and require institutional review.
 
-## Preserve Registry Core in every representation
+## Preserve Registry Core in every wire format
 
 Every successful Record has mandatory Registry Core context: Registry and Record identifiers,
 revision, lifecycle state, Authority, recorded time, and links to the response schema and semantic
@@ -48,8 +48,8 @@ This split explains why Relay produces two kinds of validation artifact.
 The compiler validates hidden source bindings.
 The complete-record schema and Shape Constraint Language (SHACL) shape retain source requiredness
 for every governed output property.
-Each representation schema validates Registry Core and the domain properties that representation
-permits when they are present.
+Each operation response schema validates Registry Core and the domain properties that its access
+profile permits when they are present.
 
 ## Classify output and processing separately
 
@@ -60,15 +60,15 @@ The source classification is not a duplicate of the published property's classif
 the data Relay had to process even when Relay does not serialize it.
 
 The technical handling order is `public`, `internal`, `confidential`, then `restricted`.
-The compiler derives two floors for each representation:
+The compiler derives two floors for each access profile:
 
 | Floor | Includes | Controls |
 | --- | --- | --- |
 | Processing handling | Every source column used to answer the operation | Compiler validity, source use, audit context, and cache eligibility. |
-| Disclosure handling | Properties serializable by the representation | The sensitivity of the releasable output. |
+| Disclosure handling | Properties serializable by the access profile | The sensitivity of the releasable output. |
 
 The processing floor applies even when the output floor is less restrictive.
-For example, a public representation cannot conceal a non-public source column through a transform.
+For example, a public access profile cannot conceal a non-public source column through a transform.
 It must instead read a reviewed pre-derived public column from the SQLite view.
 
 Classifications may reduce availability, but do not grant access.
@@ -79,7 +79,7 @@ They do not create a scope, purpose, row authority, lawful basis, consent decisi
 Resource defaults can make authoring concise, but compilation expands every property and processed
 source column to a complete effective classification.
 `relayctl generate` produces deterministic, value-free identification, classification inventory,
-representation, and contextual-finding reports, plus a classification-review starter.
+operation-explanation, and contextual-finding reports, plus a classification-review starter.
 
 The closed `ClassificationReview` sidecar binds the Registry identifier and classification-inventory
 digest to a reviewer, date, rationale, status, and one method: `generated`, `imported`, or `manual`.
@@ -87,21 +87,24 @@ Generated review also binds the accepted copied identification report and rule p
 Imported and manual reviews are first-class methods and do not require an identification report.
 Production compilation fails for a missing, unreviewed, stale, or digest-mismatched sidecar.
 
-## Use finite governed representations
+## Use finite governed access profiles
 
-An operation has a finite ordered map of named representations and exactly one default.
-Each representation owns one access rule and one disclosure profile.
+An operation has a finite ordered map of named access profiles and exactly one default.
+Each access profile owns one access rule and one disclosure profile.
 The profile is the largest set of published properties it may disclose.
 
-The request parameter `representation` selects a named representation.
+The request parameter `accessProfile` selects a named access profile.
 When absent, Relay uses the declared default.
-When present, Relay authorizes that exact representation: an invalid bearer, denied request, or
-unknown name does not fall back to another representation.
+When present, Relay authorizes that exact access profile: an invalid bearer, denied request, or
+unknown name does not fall back to another access profile.
 A syntactically valid unknown name and a scope-hidden name share the generic
-`404 resource.not_found` response, so the finite representation map is not enumerable.
-After selection, `fields` may request only a non-empty subset of that representation's properties.
+`404 resource.not_found` response, so the finite access-profile map is not enumerable.
+After selection, `fields` may request only a non-empty subset of that profile's properties.
 It cannot select a source column, switch profiles, change a transform, bypass a row boundary,
 or lower the compiled handling, audit, quota, metadata, or cache controls.
+
+The `Accept` header and optional `formatProfile` select serialization only after access and
+disclosure are fixed. They cannot grant a scope, widen fields, or select a different query.
 
 This is requester minimization, not dynamic per-request masking or attribute authorization.
 Relay has no free-form policy engine or arbitrary expression language.
@@ -126,7 +129,7 @@ Optional null input omits the transformed property.
 
 Relay does not provide hashing, pseudonyms, encryption, regular-expression replacement, geographic
 or numeric transformations, codelist remapping, caller-defined masks, or dynamic masking policy.
-A public representation cannot use a transform to conceal a non-public source column. It must read
+A public access profile cannot use a transform to conceal a non-public source column. It must read
 a reviewed pre-derived public value from the SQLite view.
 Transformed properties also cannot be list filters or fixed-order keys. Queryable derived values
 must be separate reviewed pre-derived source properties, so filters and ordering never operate on
@@ -140,22 +143,22 @@ reviewed source-column bindings. Relay validates both coordinates as one complet
 releasing any response, and a malformed selected row fails closed as value-free
 `503 source.unavailable`.
 
-The selected representation controls whether the Point is disclosed. Ordinary JSON and JSON-LD
+The selected access profile controls whether the Point is disclosed. Ordinary JSON and JSON-LD
 place the Point in `domainData`. GeoJSON moves the same selected Point to the Feature `geometry`
 member and leaves Registry Core plus the other selected properties in Feature `properties`.
 If the caller narrows `fields` to omit the Point, GeoJSON uses an explicit `null` geometry rather
 than reintroducing the coordinates elsewhere.
 
 Generated vocabulary, JSON Schema, SHACL, classification, and capability artifacts describe the
-Point only for audiences that can receive the selected representation. The JSON-LD context types
+Point only for audiences that can receive the selected access profile. The JSON-LD context types
 the bounded GeoJSON value as RDF JSON. Relay does not claim GeoSPARQL inference, geometry
-conversion, or an OGC API Features service. The [generated artifact tests](https://github.com/registrystack/registry-stack/blob/d7b96d7d4aa89754c0f2ca6fe3d4d697e9e9e8ad/crates/registry-relay-v2/src/artifacts.rs)
-pin those limits.
+conversion, or an OGC API Features service. Generated schemas and the synthetic HTTP journey pin
+those limits.
 
 ## Generate semantics without pretending equivalence
 
 Relay generates a local JSON for Linked Data (JSON-LD) vocabulary and context, JSON Schema, SHACL,
-codelist schemas, capability metadata, and representation-specific artifacts.
+codelist schemas, capability metadata, and operation-specific response artifacts.
 The context expands response `data` and `items` as RDF graph containers, aliases `domainData` to
 JSON-LD `@nest`, emits the resource semantic class as `@type`, and applies the same IRI and XML
 Schema datatypes required by the operation-bound SHACL shape.

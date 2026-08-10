@@ -139,12 +139,12 @@
     - Relay V2 governed Point responses
     - Relay V2 bounded Point collection responses
   evidence_docs:
-    - label: Relay V2 spatial response acceptance tests
-      url: https://github.com/registrystack/registry-stack/blob/545efaf9597647744ada29fdb43759a4d1fac996/crates/registry-relay-v2/tests/acceptance_http.rs
-    - label: Relay V2 generated GeoJSON schema tests
-      url: https://github.com/registrystack/registry-stack/blob/545efaf9597647744ada29fdb43759a4d1fac996/crates/registry-relay-v2/src/artifacts.rs
+    - label: Relay V2 governed SQLite tutorial
+      url: /tutorials/publish-governed-sqlite-registry/
+    - label: Relay V2 authoring guide
+      url: /configure/relay/
   last_checked: 2026-08-10
-  notes: Relay V2 emits RFC 7946-shaped Point Features and FeatureCollections only when the selected governed representation discloses the primary geometry. The profile uses exact CRS84 longitude-latitude coordinates and does not claim an OGC API Features service.
+  notes: Relay V2 emits RFC 7946-shaped Point Features and FeatureCollections only when the selected access profile discloses the primary geometry. The profile uses exact CRS84 longitude-latitude coordinates and does not claim an OGC API Features service.
 - id: json-fg
   name: OGC Features and Geometries JSON
   standards_body: Open Geospatial Consortium
@@ -158,12 +158,12 @@
   surfaces:
     - Relay V2 governed JSON-FG Point responses
   evidence_docs:
-    - label: Relay V2 spatial response acceptance tests
-      url: https://github.com/registrystack/registry-stack/blob/545efaf9597647744ada29fdb43759a4d1fac996/crates/registry-relay-v2/tests/acceptance_http.rs
-    - label: Relay V2 generated GeoJSON schema tests
-      url: https://github.com/registrystack/registry-stack/blob/545efaf9597647744ada29fdb43759a4d1fac996/crates/registry-relay-v2/src/artifacts.rs
+    - label: Relay V2 governed SQLite tutorial
+      url: /tutorials/publish-governed-sqlite-registry/
+    - label: Relay V2 authoring guide
+      url: /configure/relay/
   last_checked: 2026-08-10
-  notes: Relay V2 adds the JSON-FG Core and Types-Schemas identifiers plus a governed feature type to the same Point representation. It does not implement extended JSON-FG geometries or a generic feature API.
+  notes: Relay V2 adds the JSON-FG Core and Types-Schemas identifiers plus a governed feature type to the same Point wire format. It does not implement extended JSON-FG geometries or a generic feature API.
 - id: openapi
   name: OpenAPI
   standards_body: OpenAPI Initiative

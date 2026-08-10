@@ -14,7 +14,7 @@ standards_referenced:
 ---
 
 Deploy one reviewed Relay package without allowing deployment configuration to change Registry
-identity, Registry Core, source bindings, representations, access, classifications, or disclosure.
+identity, Registry Core, source bindings, access profiles, wire formats, classifications, or disclosure.
 This guide is for the operator who owns service paths, sources, secrets, issuers, audit retention,
 limits, readiness, and replacement of complete revisions.
 
@@ -33,7 +33,7 @@ administrative trust boundary.
 Prepare a dedicated Unix service identity, a private listener behind Transport Layer Security
 (TLS) termination, a sealed package, the matching snapshot or live read-only source, an audit
 location, independent audit-integrity and cursor-encryption keys, and a token issuer for protected
-representations.
+access profiles.
 Do not place the package, source, secret, or audit path in a shared writable directory.
 For snapshot mode, make the SQLite file immutable outside Relay, preferably with a read-only mount.
 Relay verifies its captured digest before and after every statement, but a process cannot exclude a
@@ -64,17 +64,17 @@ limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 32}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```
 
-`authentication.issuer: null` is valid only when every compiled representation is public.
-A package with a protected representation needs the configured issuer at startup.
+`authentication.issuer: null` is valid only when every compiled access profile is public.
+A package with a protected access profile needs the configured issuer at startup.
 The issuer's verified claims may establish scopes, purpose, and row authority, but cannot enable an
-operation or representation the package did not compile.
-A syntactically valid unknown representation and a valid principal without the selected
-representation scope receive the same concealed `404 resource.not_found` response. Relay does not
-fall back to a less restrictive representation.
+operation or access profile the package did not compile.
+A syntactically valid unknown access profile and a valid principal without its scope receive the
+same concealed `404 resource.not_found` response. Relay does not fall back to a less restrictive
+access profile.
 
 Relay authenticates and encrypts the complete cursor payload with a fresh nonce. The payload binds
-the source and contract revisions, operation, representation, disclosure profile, filters, fixed
-order, selected fields, authorization context, optional bbox, response format, GeoJSON profile,
+the source and contract revisions, operation, access profile, disclosure profile, filters, fixed
+order, selected fields, authorization context, optional bbox, wire format, format profile,
 and expiry. Treat cursors as opaque continuation tokens even though they contain no plaintext
 filter, order, or bbox values.
 
@@ -85,8 +85,8 @@ There is no deployment switch that disables fail-closed audit behavior.
 
 Quota configuration has two values for the whole Relay deployment. `requestsPerMinute` sets the
 refill rate and `burst` sets the short-term capacity. Relay keeps a separate bucket for each
-compiled operation, so one busy operation cannot exhaust another. Every representation of an
-operation shares that operation's bucket. Version 1 does not add per-representation, per-client,
+compiled operation, so one busy operation cannot exhaust another. Every access profile of an
+operation shares that operation's bucket. Version 1 does not add per-profile, per-client,
 or distributed quota modes. Put those controls at the trusted gateway when the deployment needs
 them.
 
@@ -100,14 +100,14 @@ Runtime cannot change it.
 | Publisher updates while Relay runs | No | Yes, through a separate trusted publisher. |
 | Source revision | Captured content digest | Explicitly unversioned. |
 | List and cursor pagination | Supported | Not supported. |
-| Cache revalidation | Available only for eligible public representations | Disabled. |
+| Cache revalidation | Available only for eligible public access profiles | Disabled. |
 | Request consistency | Immutable file | One read transaction. |
 
 Both profiles pin the SQLite schema fingerprint and deny writes, arbitrary SQL, schema drift, and
 unbounded result behavior.
 Live resources support only identifier read and named exact lookup.
-Bounded bbox consultation is a list operation, so it uses a reviewed snapshot source in this
-profile. GeoJSON and JSON-FG do not change the source, access, audit, or cache rules. Their exact
+Bounded bbox consultation is a named collection search, so it uses a reviewed snapshot source in
+this profile. GeoJSON and JSON-FG do not change the source, access, audit, or cache rules. Their exact
 response bytes receive distinct cache validators where public snapshot revalidation is eligible.
 
 ## Start and verify the service
@@ -138,7 +138,7 @@ SQLite access and a terminal release, unresolved, or source-failed event before 
 The release event covers the exact response bytes.
 An audit failure blocks source access or withholds the response.
 
-Audit binds the Registry, resource, operation, representation, disclosure profile, selected
+Audit binds the Registry, resource, operation, access profile, disclosure profile, selected
 property identifiers or digest, processing handling, disclosure handling, transform identifiers,
 contract revision, and source revision.
 It excludes tokens, selectors, raw principals, source values, response values, and raw Record
@@ -168,6 +168,6 @@ Rollback activates a complete prior package only with its compatible source and 
 | --- | --- | --- |
 | Startup refuses a path | A component is a symlink, has the wrong owner, or is writable | Move the deployment to trusted Unix paths and correct ownership and modes. |
 | Startup reports a package or schema error | The package, source, or review revision does not match | Stop deployment and return the change to the authoring workflow. |
-| A protected representation returns `404 resource.not_found` | The issuer or token does not satisfy that representation's exact scope | Correct the issuer or caller authority. Do not expose a weaker representation as fallback. |
-| A spatial request returns `406 representation.unsupported` | The selected representation does not disclose a primary geometry or the `Accept` value is unsupported | Select an entitled geometry-bearing representation or request JSON or JSON-LD. |
+| A protected access profile returns `404 resource.not_found` | The issuer or token does not satisfy that profile's exact scope | Correct the issuer or caller authority. Do not expose a weaker profile as fallback. |
+| A spatial request returns `406 format.unsupported` | The selected access profile does not disclose a primary geometry or the format request is unsupported | Select an entitled geometry-bearing profile or request JSON or JSON-LD. |
 | A response is withheld | The terminal audit write failed | Restore the audit sink and verify its integrity before accepting traffic. |
