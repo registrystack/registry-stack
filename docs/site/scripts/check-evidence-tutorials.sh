@@ -86,6 +86,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
 	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
+	issue-fhir-evidence-as-vcs                        # needs the public SMART Health IT FHIR server; live and opt-in, not replayed in CI
 	issue-evidence-access-tokens-with-registry-mint  # drift-checked by evidence-production-build-docs.test.mjs; needs a Registry Mint deployment
 	issue-immunization-evidence-from-dhis2           # needs the public DHIS2 demo; live and opt-in, not replayed in CI
 	manage-evidence-verifier-trust                   # how-to against the reader's own deployment; no fixed scenario this gate can replay

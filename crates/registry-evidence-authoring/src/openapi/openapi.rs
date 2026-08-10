@@ -243,6 +243,59 @@ impl Spec {
         })
     }
 
+    /// The first response schema carried under one of `media_types`, in the
+    /// caller's preference order.
+    ///
+    /// Selection inspects the response content map before resolving a schema,
+    /// so a malformed preferred representation is never silently rescued by
+    /// a less-preferred one.
+    pub fn response_schema_for_media_types<'a>(
+        &self,
+        key: &OperationKey,
+        status: &str,
+        media_types: &'a [&str],
+    ) -> Result<(&'a str, ResolvedResponse)> {
+        let operation = self.find_operation(key)?;
+        let responses = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("{} {} declares no `responses`", key.method, key.path))?;
+        let response_raw = responses
+            .get(status)
+            .ok_or_else(|| anyhow!("{} {} has no `{status}` response", key.method, key.path))?;
+        let response = self
+            .resolve_top_ref(response_raw, &mut Vec::new())
+            .with_context(|| {
+                format!(
+                    "resolving the `{status}` response of {} {}",
+                    key.method, key.path
+                )
+            })?;
+        let content = response
+            .get("content")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} {} `{status}` response declares no `content`",
+                    key.method,
+                    key.path
+                )
+            })?;
+        let media_type = media_types
+            .iter()
+            .copied()
+            .find(|media_type| content.contains_key(*media_type))
+            .ok_or_else(|| {
+                anyhow!(
+                    "{} {} `{status}` response has none of the supported content types: {}",
+                    key.method,
+                    key.path,
+                    media_types.join(", ")
+                )
+            })?;
+        Ok((media_type, self.response_schema(key, status, media_type)?))
+    }
+
     /// Base URLs from the document's top-level `servers` array, in document
     /// order. Empty when the document declares none.
     pub fn servers(&self) -> Vec<String> {

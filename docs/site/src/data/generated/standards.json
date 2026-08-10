@@ -630,13 +630,16 @@
     "name": "HL7 FHIR",
     "standards_body": "HL7",
     "official_url": "https://hl7.org/fhir/R4/",
-    "version_or_profile": "FHIR R4 (no profile implemented)",
-    "status": "referenced",
-    "claim_level": "compares_against",
-    "adoption_mode": "not adopted",
-    "used_by": [],
+    "version_or_profile": "FHIR R4 bounded Evidence source profile",
+    "status": "used",
+    "claim_level": "maps_to",
+    "adoption_mode": "profiled",
+    "used_by": [
+      "registry-evidence"
+    ],
     "surfaces": [
-      "source integration boundary"
+      "source integration boundary",
+      "Evidence fixed HTTP source and minimum-disclosure question authoring"
     ],
     "evidence_docs": [
       {
@@ -646,10 +649,14 @@
       {
         "label": "Retired Relay V1 protocol helper",
         "url": "https://github.com/registrystack/registry-stack/tree/066bd89ea3e4f1ce0bba5d0e696374199d275b73/crates/registry-relay/src/source_plan"
+      },
+      {
+        "label": "Evidence Gateway FHIR source limitations",
+        "url": "/explanation/known-limitations/"
       }
     ],
     "last_checked": "2026-08-11",
-    "notes": "No maintained Registry Stack surface parses or serves FHIR. The bounded R4 search-set parser was exposed to Rhai scripts by the retired Relay V1 runtime, and the pinned helper and authoring fixture are the record of it. The contract-compiled Relay runs no script and reads only local read-only SQLite sources with no outbound request, so a FHIR server is not a source it reaches. Registry Stack has never claimed to implement a FHIR server or broad FHIR conformance."
+    "notes": "No maintained Registry Stack surface parses or serves FHIR. The bounded R4 search-set parser was exposed to Rhai scripts by the retired Relay V1 runtime, and the pinned helper and authoring fixture are the record of it. The contract-compiled Relay runs no script and reads only local read-only SQLite sources with no outbound request, so a FHIR server is not a source it reaches. Evidence Gateway accepts FHIR JSON from fixed governed HTTP operations and projects reviewed leaves into minimum-disclosure answers; project code owns profile-specific matching and projections. Registry Stack has never claimed to implement a FHIR server or broad FHIR conformance."
   },
   {
     "id": "govstack-digital-registries",

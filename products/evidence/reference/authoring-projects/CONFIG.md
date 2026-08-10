@@ -295,7 +295,8 @@ must say `combine: exactly-one`. Either mismatch is rejected by name, so a
 finding says which fact disagrees with its own path.
 
 A well-formed path still has to land on a value the response offers. The leaves
-are read from the selected operation's exact `200` `application/json` response
+are read from the selected operation's exact `200` `application/json` or
+`application/fhir+json` response
 schema, with no `default` or wildcard response standing in for it, and a
 container is never one of them.
 `crates/registry-evidence-authoring/src/openapi/flatten.rs` produces no leaf

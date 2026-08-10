@@ -26,11 +26,11 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::bundle::{ArtifactFault, Bundle, SourceExtract};
 use crate::config::{
-    is_http_token_byte, is_uri_byte, validate_local_unauthenticated_source_origin,
-    AcquisitionPosture, CredentialPlacement, FixedRequest, HttpMethod, OutboundTlsConfig,
-    PathBindingConfig, PreparationChannelPolicy, SchemaFault, SecretRef, SelectorInput,
-    SourceAuthentication, SourceConfig, SourceSelectorSet, SqliteParameterBinding, SqliteRequest,
-    RESERVED_SQL_PARAMETER,
+    is_http_token_byte, is_uri_byte, validate_anonymous_https_demo_source_origin,
+    validate_local_unauthenticated_source_origin, AcquisitionPosture, CredentialPlacement,
+    FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig, PreparationChannelPolicy,
+    SchemaFault, SecretRef, SelectorInput, SourceAuthentication, SourceConfig, SourceSelectorSet,
+    SqliteParameterBinding, SqliteRequest, RESERVED_SQL_PARAMETER,
 };
 use crate::model::SelectorValue;
 use crate::rhai_runtime::{RequestParts, StatementParameters};
@@ -44,6 +44,7 @@ const PRIVATE_CA_MAXIMUM_BYTES: u64 = 1024 * 1024;
 const PROJECTED_RESPONSE_MAXIMUM_BYTES: usize = 65_536;
 const JSON_MEDIA_TYPE: &str = "application/json";
 const GRAPHQL_JSON_MEDIA_TYPE: &str = "application/graphql-response+json";
+const FHIR_JSON_MEDIA_TYPE: &str = "application/fhir+json";
 /// Scheme used when a source states no other, and the only scheme RFC 6750
 /// admits for an access token the runtime acquired itself.
 const DEFAULT_AUTHORIZATION_SCHEME: &str = "Bearer";
@@ -843,6 +844,14 @@ impl HttpTransport {
         if matches!(**configured_authentication, SourceAuthentication::None {})
             && (tls_trust_profile.is_some()
                 || validate_local_unauthenticated_source_origin(configured_base_url).is_err())
+        {
+            return Err(SourceError::InvalidPlan);
+        }
+        if matches!(
+            **configured_authentication,
+            SourceAuthentication::AnonymousHttpsDemo {}
+        ) && (tls_trust_profile.is_some()
+            || validate_anonymous_https_demo_source_origin(configured_base_url).is_err())
         {
             return Err(SourceError::InvalidPlan);
         }
@@ -1646,7 +1655,9 @@ fn compile_authentication(
     admission_timeout: Duration,
 ) -> Result<AuthenticationPlan, SourceError> {
     match authentication {
-        SourceAuthentication::None {} => Ok(AuthenticationPlan::None),
+        SourceAuthentication::None {} | SourceAuthentication::AnonymousHttpsDemo {} => {
+            Ok(AuthenticationPlan::None)
+        }
         SourceAuthentication::Basic {
             username_ref,
             password_ref,
@@ -2258,7 +2269,10 @@ async fn parse_data_response(
 ) -> Result<JsonValue, SourceError> {
     reject_response_status(&response)?;
     let media_type = response_media_type(&response)?;
-    if media_type != JSON_MEDIA_TYPE && media_type != GRAPHQL_JSON_MEDIA_TYPE {
+    if !matches!(
+        media_type,
+        JSON_MEDIA_TYPE | GRAPHQL_JSON_MEDIA_TYPE | FHIR_JSON_MEDIA_TYPE
+    ) {
         return Err(SourceError::WrongMediaType);
     }
     let bytes = Zeroizing::new(
@@ -2391,6 +2405,8 @@ fn response_media_type(response: &reqwest::Response) -> Result<&str, SourceError
         Ok(JSON_MEDIA_TYPE)
     } else if media_type.eq_ignore_ascii_case(GRAPHQL_JSON_MEDIA_TYPE) {
         Ok(GRAPHQL_JSON_MEDIA_TYPE)
+    } else if media_type.eq_ignore_ascii_case(FHIR_JSON_MEDIA_TYPE) {
+        Ok(FHIR_JSON_MEDIA_TYPE)
     } else {
         Ok(media_type)
     }

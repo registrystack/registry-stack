@@ -54,6 +54,12 @@ const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 
+#[derive(Debug)]
+struct AuthoringServer {
+    base_url: String,
+    authentication_kind: &'static str,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompiledConceptForm {
     Boolean,
@@ -371,6 +377,7 @@ struct SubjectPlan {
     selector_field: String,
     selector_profile: String,
     selector_profile_value: Value,
+    source: bool,
     derivation: bool,
 }
 
@@ -385,6 +392,7 @@ struct ConceptPlan {
 }
 
 struct CompiledFacts {
+    response_media_type: String,
     response_schema: Value,
     fact_schema: Value,
     extract_script: String,
@@ -713,7 +721,11 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                 let authenticated = source
                     .pointer("/authentication/kind")
                     .and_then(Value::as_str)
-                    .is_some_and(|kind| kind != "none" && kind != "review-required");
+                    .is_some_and(|kind| {
+                        kind != "none"
+                            && kind != "anonymous-https-demo"
+                            && kind != "review-required"
+                    });
                 if !https || !authenticated {
                     bail!("every production source must use authenticated HTTPS");
                 }
@@ -991,7 +1003,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
         .questions
         .iter()
         .any(|authored| authored.question.source.source_ref.is_none());
-    let (spec, base_url) = if has_inline_source {
+    let (spec, server) = if has_inline_source {
         reject_unsupported_keys(
             inputs
                 .openapi
@@ -1008,7 +1020,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
                 inputs.openapi.clone(),
                 "retained OpenAPI document",
             )?),
-            Some(exact_loopback_server(&inputs.openapi)?),
+            Some(exact_authoring_server(&inputs.openapi)?),
         )
     } else {
         (None, None)
@@ -1018,7 +1030,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
         questions.push(compile_question_plan(
             &inputs.openapi,
             spec.as_ref(),
-            base_url.as_deref(),
+            server.as_ref(),
             &inputs.selectors,
             &inputs.sources,
             &inputs.schemas,
@@ -1056,7 +1068,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
 fn compile_question_plan(
     openapi: &Value,
     spec: Option<&Spec>,
-    base_url: Option<&str>,
+    server: Option<&AuthoringServer>,
     selectors: &BTreeMap<String, Value>,
     sources: &BTreeMap<String, Value>,
     schemas: &BTreeMap<String, Value>,
@@ -1101,13 +1113,23 @@ fn compile_question_plan(
         "selected OpenAPI operation",
     )?;
 
-    exact_path_selectors(
-        &operation,
-        &authored_subjects
-            .iter()
-            .map(|subject| subject.selector.as_str())
-            .collect::<Vec<_>>(),
-    )?;
+    let source_selector_fields = authored_subjects
+        .iter()
+        .filter(|subject| {
+            let placeholder = format!("{{{}}}", subject.selector);
+            operation
+                .path
+                .split('/')
+                .any(|segment| segment == placeholder)
+        })
+        .map(|subject| subject.selector.as_str())
+        .collect::<Vec<_>>();
+    for subject in &authored_subjects {
+        if !source_selector_fields.contains(&subject.selector.as_str()) && !subject.derivation {
+            bail!("every question subject must be used by the source or declared for derivation");
+        }
+    }
+    exact_path_selectors(&operation, &source_selector_fields)?;
     let compiled_facts = compile_facts(
         spec.expect("inline source needs parsed OpenAPI"),
         &operation,
@@ -1135,6 +1157,7 @@ fn compile_question_plan(
             }
         });
 
+    let response_media_type = compiled_facts.response_media_type;
     let response_schema = compiled_facts.response_schema;
     let fact_schema = compiled_facts.fact_schema;
     let adapter_parameters_schema = json!({
@@ -1172,6 +1195,7 @@ fn compile_question_plan(
                         }
                     },
                 }),
+                source: source_selector_fields.contains(&authored_subject.selector.as_str()),
                 derivation: authored_subject.derivation,
             }
         })
@@ -1179,9 +1203,10 @@ fn compile_question_plan(
     let source_id = local_source_id(&question.id);
     let (source_value, grant, requirement) = render_question_bundle_parts(
         question,
-        base_url.expect("inline source needs local base URL"),
+        server.expect("inline source needs an authoring server"),
         operation.path,
         &subjects,
+        &response_media_type,
         &source_id,
         &BundleRequirement {
             requirement_uri: requirement_uri.clone(),
@@ -1333,6 +1358,7 @@ fn compile_referenced_subjects(
             selector_field: subject.selector.clone(),
             selector_profile,
             selector_profile_value,
+            source: used_by_source,
             derivation: subject.derivation,
         });
     }
@@ -1599,47 +1625,67 @@ fn compile_concept(
     })
 }
 
-fn exact_loopback_server(document: &Value) -> Result<String> {
+fn exact_authoring_server(document: &Value) -> Result<AuthoringServer> {
     let servers = document
         .get("servers")
         .and_then(Value::as_array)
         .filter(|servers| servers.len() == 1)
-        .ok_or_else(|| anyhow!("OpenAPI must declare exactly one local server"))?;
+        .ok_or_else(|| anyhow!("OpenAPI must declare exactly one authoring server"))?;
     let server = servers[0]
         .as_object()
         .filter(|server| server.len() == 1)
-        .ok_or_else(|| anyhow!("the local OpenAPI server must contain only its fixed URL"))?;
+        .ok_or_else(|| anyhow!("the authoring OpenAPI server must contain only its fixed URL"))?;
     let value = server
         .get("url")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("the local OpenAPI server URL is missing"))?;
-    let url = Url::parse(value).context("parsing the local OpenAPI server URL")?;
-    let port = url
-        .port()
-        .filter(|port| *port != 0)
-        .ok_or_else(|| anyhow!("the local OpenAPI server needs an explicit non-zero port"))?;
-    if url.scheme() != "http"
-        || !url.username().is_empty()
+        .ok_or_else(|| anyhow!("the authoring OpenAPI server URL is missing"))?;
+    let url = Url::parse(value).context("parsing the authoring OpenAPI server URL")?;
+    if !url.username().is_empty()
         || url.password().is_some()
         || url.path() != "/"
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        bail!("the local OpenAPI server must be one canonical HTTP loopback origin");
+        bail!("the authoring OpenAPI server must be one exact origin");
     }
-    let canonical = match url.host() {
-        Some(Host::Ipv4(address)) if address.is_loopback() => {
-            format!("http://{address}:{port}")
+    let (canonical, authentication_kind) = match url.scheme() {
+        "http" => {
+            let port = url.port().filter(|port| *port != 0).ok_or_else(|| {
+                anyhow!("an HTTP authoring server needs an explicit non-zero port")
+            })?;
+            let canonical = match url.host() {
+                Some(Host::Ipv4(address)) if address.is_loopback() => {
+                    format!("http://{address}:{port}")
+                }
+                Some(Host::Ipv6(address)) if address == std::net::Ipv6Addr::LOCALHOST => {
+                    format!("http://[{address}]:{port}")
+                }
+                _ => bail!("an HTTP authoring server must use a numeric loopback address"),
+            };
+            (canonical, "none")
         }
-        Some(Host::Ipv6(address)) if address == std::net::Ipv6Addr::LOCALHOST => {
-            format!("http://[{address}]:{port}")
+        "https" => {
+            let host = match url.host() {
+                Some(Host::Domain(host)) => host.to_owned(),
+                Some(Host::Ipv4(host)) => host.to_string(),
+                Some(Host::Ipv6(host)) => format!("[{host}]"),
+                None => bail!("the HTTPS authoring server must name a host"),
+            };
+            let canonical = match url.port() {
+                Some(port) => format!("https://{host}:{port}"),
+                None => format!("https://{host}"),
+            };
+            (canonical, "anonymous-https-demo")
         }
-        _ => bail!("the local OpenAPI server must use a numeric loopback address"),
+        _ => bail!("the authoring OpenAPI server must use HTTPS or numeric-loopback HTTP"),
     };
     if canonical != value {
-        bail!("the local OpenAPI server must use its exact canonical origin spelling");
+        bail!("the authoring OpenAPI server must use its exact canonical origin spelling");
     }
-    Ok(canonical)
+    Ok(AuthoringServer {
+        base_url: canonical,
+        authentication_kind,
+    })
 }
 
 fn unique_operation<'a>(document: &'a Value, operation_id: &str) -> Result<Operation<'a>> {
@@ -1696,7 +1742,9 @@ fn exact_path_selectors(operation: &Operation<'_>, expected: &[&str]) -> Result<
         }
     }
     if parameters.len() != expected.len() {
-        bail!("the local tutorial operation must declare exactly one path selector per subject");
+        bail!(
+            "the local tutorial operation must declare exactly one path selector per source-bound subject"
+        );
     }
     let expected = expected.iter().copied().collect::<BTreeSet<_>>();
     if expected.len() != parameters.len() {
@@ -1767,7 +1815,8 @@ fn compile_facts(
         method: operation.method.to_ascii_uppercase(),
         path: operation.path.to_owned(),
     };
-    let resolved = spec.response_schema(&operation_key, "200", "application/json")?;
+    let (response_media_type, resolved) =
+        registry_evidence_authoring::openapi::json_response_schema(spec, &operation_key)?;
     for fact in &source.facts {
         validate_selected_schema_path(&resolved.schema.0, &fact.path)?;
     }
@@ -1779,7 +1828,7 @@ fn compile_facts(
     for fact in &source.facts {
         if !offered.contains(fact.path.as_str()) {
             bail!(
-                "source fact `{}` path `{}` is not a selectable scalar leaf in the 200 application/json response",
+                "source fact `{}` path `{}` is not a selectable scalar leaf in the supported 200 JSON response",
                 fact.name,
                 fact.path
             );
@@ -1895,6 +1944,7 @@ fn compile_facts(
     });
 
     Ok(CompiledFacts {
+        response_media_type: response_media_type.to_owned(),
         response_schema,
         fact_schema,
         extract_script: render_fact_extraction(&source.facts),
@@ -2234,13 +2284,15 @@ fn render_derivation(authored: &str, concepts: &[ConceptPlan]) -> String {
 
 fn render_question_bundle_parts(
     question: &Question,
-    base_url: &str,
+    server: &AuthoringServer,
     path_template: &str,
     subjects: &[SubjectPlan],
+    response_media_type: &str,
     source_id: &str,
     requirement: &BundleRequirement,
 ) -> (Value, Value, Value) {
-    let path_bindings = Value::Object(Map::from_iter(subjects.iter().map(|subject| {
+    let source_subjects = subjects.iter().filter(|subject| subject.source);
+    let path_bindings = Value::Object(Map::from_iter(source_subjects.clone().map(|subject| {
         (
             subject.selector_field.clone(),
             json!({
@@ -2251,8 +2303,7 @@ fn render_question_bundle_parts(
             }),
         )
     })));
-    let selector_inputs = subjects
-        .iter()
+    let selector_inputs = source_subjects
         .map(|subject| {
             json!({
                 "role": subject.role,
@@ -2272,14 +2323,14 @@ fn render_question_bundle_parts(
 
     let source_value = json!({
         "transport": "http-json",
-        "baseUrl": base_url,
+        "baseUrl": server.base_url,
         "posture": "field-projected",
-        "authentication": {"kind": "none"},
+        "authentication": {"kind": server.authentication_kind},
         "request": {
             "method": "GET",
             "pathTemplate": path_template,
             "pathBindings": path_bindings,
-            "fixedHeaders": [{"name": "Accept", "value": "application/json"}],
+            "fixedHeaders": [{"name": "Accept", "value": response_media_type}],
             "selectorInputs": selector_inputs,
             "prepareScript": format!("adapters/{}-source-prepare.rhai", question.id),
             "adapterParameters": {"operationId": question.source.operation.as_deref().expect("inline source")},
@@ -3635,6 +3686,83 @@ properties:
     }
 
     #[test]
+    fn inline_openapi_derivation_only_subject_never_widens_the_source_request() {
+        let question = QUESTION.replace(
+            "subject:\n  role: person\n  selector: person_id",
+            "subjects:\n  - role: person\n    selector: person_id\n    derivation: true\n  - role: expected-beneficiary\n    selector: beneficiary_id\n    derivation: true",
+        );
+        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
+
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("derivation-only subject compiles");
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        let source = &bundle["sources"][local_source_id("adult-status")];
+        assert_eq!(
+            source["request"]["pathBindings"]
+                .as_object()
+                .expect("path bindings")
+                .len(),
+            1
+        );
+        assert!(source["request"]["pathBindings"]
+            .get("beneficiary_id")
+            .is_none());
+        assert_eq!(
+            source["request"]["selectorInputs"]
+                .as_array()
+                .expect("source selector inputs")
+                .len(),
+            1,
+            "the derivation-only beneficiary never reaches the provider request"
+        );
+        assert_eq!(
+            bundle["requirements"][0]["derivation"]["selectorInputs"]
+                .as_array()
+                .expect("derivation selector inputs")
+                .len(),
+            2
+        );
+        assert_eq!(
+            bundle["requirements"][0]["subjectRoles"]
+                .as_array()
+                .expect("subject roles")
+                .len(),
+            2
+        );
+
+        let without_derivation = question.replace(
+            "  - role: expected-beneficiary\n    selector: beneficiary_id\n    derivation: true",
+            "  - role: expected-beneficiary\n    selector: beneficiary_id",
+        );
+        let fixture = Fixture::new(OPENAPI, &without_derivation, ANSWER, true);
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("an unused subject needs explicit derivation access");
+        assert!(error.to_string().contains(
+            "every question subject must be used by the source or declared for derivation"
+        ));
+    }
+
+    #[test]
+    fn inline_openapi_uses_the_fhir_json_response_and_accept_header() {
+        let openapi = OPENAPI.replace("application/json:", "application/fhir+json:");
+        let fixture = Fixture::new(&openapi, QUESTION, ANSWER, true);
+
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("FHIR JSON response compiles");
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        assert_eq!(
+            bundle["sources"][local_source_id("adult-status")]["request"]["fixedHeaders"],
+            json!([{"name": "Accept", "value": "application/fhir+json"}])
+        );
+    }
+
+    #[test]
     fn compiles_one_closed_controlled_category() {
         let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
         let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
@@ -4024,9 +4152,11 @@ factSchema: schemas/source-facts.schema.yaml
         plaintext["baseUrl"] = json!("http://records.example.test");
         let mut unauthenticated = production_http_source();
         unauthenticated["authentication"] = json!({"kind": "none"});
+        let mut anonymous_demo = production_http_source();
+        anonymous_demo["authentication"] = json!({"kind": "anonymous-https-demo"});
         let mut unreviewed = production_http_source();
         unreviewed["authentication"] = json!({"kind": "review-required"});
-        for broken in [plaintext, unauthenticated, unreviewed] {
+        for broken in [plaintext, unauthenticated, anonymous_demo, unreviewed] {
             let bundle = json!({"sources": {"people": broken}});
             assert_eq!(
                 validate_production_sources(&bundle)
@@ -4035,6 +4165,29 @@ factSchema: schemas/source-facts.schema.yaml
                 "every production source must use authenticated HTTPS"
             );
         }
+    }
+
+    #[test]
+    fn local_compiler_marks_an_exact_https_server_as_anonymous_demo_only() {
+        let openapi = OPENAPI.replace("http://127.0.0.1:8000", "https://r4.smarthealthit.org");
+        let fixture = Fixture::new(&openapi, QUESTION, ANSWER, true);
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("exact HTTPS authoring server compiles for local assurance");
+
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        let source_id = local_source_id("adult-status");
+        assert_eq!(bundle["assuranceProfile"], "local");
+        assert_eq!(
+            bundle["sources"][&source_id]["baseUrl"],
+            "https://r4.smarthealthit.org"
+        );
+        assert_eq!(
+            bundle["sources"][&source_id]["authentication"],
+            json!({"kind": "anonymous-https-demo"})
+        );
     }
 
     #[test]

@@ -45,7 +45,7 @@ evidence_data_request:
   owner: Core runtime.
   method_allowlist: [GET, POST]
   request_media_types: [application/json]
-  response_media_types: [application/json, application/graphql-response+json]
+  response_media_types: [application/json, application/graphql-response+json, application/fhir+json]
   redirects: deny
   maximum_response_bytes: {required: true, upper_bound: 1048576, applied: before parsing and projection}
   timeout_milliseconds: {required: true, range: [1, 30000], applies_to: [source-concurrency-admission, OAuth-single-flight-admission, HTTP-exchange]}
@@ -116,6 +116,7 @@ evidence_data_request:
     production: HTTPS only.
     deterministic_local_mock: HTTP only when the parsed host is a numeric address in 127.0.0.0/8 or exactly ::1.
     unauthenticated_local_source: The none authentication kind is admitted only by assuranceProfile local, only at an exact canonical HTTP numeric-loopback origin with an explicit non-zero port, and never with a TLS trust profile.
+    anonymous_https_demo_source: The anonymous-https-demo kind is admitted only by assuranceProfile local, only at one exact canonical HTTPS origin using system roots, and never with a TLS trust profile. It is an authoring convenience for synthetic public demos, not provider authentication.
     prohibited: [arbitrary-insecure-http, DNS-localhost-alias, userinfo, fragment, ambiguous-host-encoding, product-specific-insecure-transport-flag]
 projection:
   owner: Core runtime.
@@ -159,6 +160,14 @@ authentication:
       - The containing governed bundle must declare assuranceProfile local.
       - The source baseUrl must be an exact canonical numeric-loopback HTTP origin with an explicit non-zero port and no userinfo, path, query, or fragment.
       - Production and evidence-grade bundles reject this kind at startup; it is not a generic unauthenticated source profile.
+  anonymous-https-demo:
+    inputs: []
+    placement: No authentication header is sent.
+    rules:
+      - The containing governed bundle must declare assuranceProfile local.
+      - The source baseUrl must be one exact canonical HTTPS origin with no userinfo, path, query, or fragment, and system roots are the only trust source.
+      - Redirects remain denied and the request method, path, projection, bounds, and count remain fixed by the bundle.
+      - Production and evidence-grade bundles reject this kind at startup; it is not provider authentication.
   basic:
     inputs: [username_secret_ref, password_secret_ref]
     placement: Authorization header.

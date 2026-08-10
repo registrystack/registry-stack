@@ -1,0 +1,469 @@
+---
+title: Issue minimum-disclosure credentials from FHIR
+description: Connect Evidence Gateway to a public FHIR R4 server and verify patient-coverage and healthcare-establishment answers as SD-JWT VC responses.
+status: draft
+draft: true
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-10"
+doc_type: tutorial
+persona:
+  - assertion provider
+locale: en
+standards_referenced:
+  - fhir-r4
+  - sd-jwt-vc
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Connect Evidence Gateway directly to the public SMART Health IT FHIR R4 server, then verify two
+minimum-disclosure answers as Selective Disclosure JSON Web Token Verifiable Credential
+(SD-JWT VC) responses. One answer protects a patient by disclosing a coverage result rather than a
+FHIR resource. The other demonstrates the same pattern for a healthcare establishment.
+
+<QuickstartMeta
+  outcome="Two verified SD-JWT VC responses derived from live FHIR R4 Coverage and Organization resources."
+  time="About 25 minutes"
+  level="Local development against a public synthetic-data server"
+  prerequisites={['The Evidence Gateway toolset', 'A shell with curl', 'Python 3', 'An editor', 'Internet access', 'Linux or macOS']}
+/>
+
+## Before you start
+
+Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) if you have not
+used `evidencectl` before.
+
+This tutorial was verified against the [SMART Health IT R4 open
+endpoint](https://docs.smarthealthit.org/) at `https://r4.smarthealthit.org` on 10 August 2026. It
+is a public demonstration server containing synthetic data. Its operator can add, change, or reset
+records, so the identifiers and expected `true` results below may change. Do not send real patient
+identifiers or other sensitive data to it.
+
+This tutorial works with this server as written. Another FHIR server may use different resource
+profiles, data, authorization, search behavior, or JSON shapes. Do not replace only the server URL
+and assume the same evidence claim remains valid.
+
+The two questions return narrow administrative facts:
+
+| Subject | FHIR resource | Governed answer |
+| --- | --- | --- |
+| Patient and coverage record | `Coverage` | The selected record reports `active` and names the selected patient as beneficiary. |
+| Healthcare establishment | `Organization` | The selected record reports `active` and carries the standard healthcare-provider organization type. |
+
+An active `Coverage` record is not an independent insurance-eligibility decision. An active
+healthcare-provider `Organization` is not facility accreditation or a professional licence. A real
+deployment can rely on either answer only when its FHIR server is authoritative for that fact and
+the governing rule has been reviewed.
+
+## Confirm the live records
+
+Create a working directory:
+
+```sh
+mkdir fhir-evidence-credentials
+cd fhir-evidence-credentials
+```
+
+Confirm that the server and the exact synthetic records used below are available without printing
+their contents:
+
+```sh
+for resource in \
+  metadata \
+  Coverage/cov-humana-happy-res-001 \
+  Patient/b361ebbe-5dd5-4dee-a178-773d774fc04d \
+  Organization/12c9daf5-a29c-36c9-ac55-28972463e566; do
+  curl --silent --show-error --fail \
+    --header 'Accept: application/fhir+json' \
+    --output /dev/null \
+    --write-out "$resource HTTP %{http_code}\n" \
+    "https://r4.smarthealthit.org/$resource"
+done
+```
+
+```text
+metadata HTTP 200
+Coverage/cov-humana-happy-res-001 HTTP 200
+Patient/b361ebbe-5dd5-4dee-a178-773d774fc04d HTTP 200
+Organization/12c9daf5-a29c-36c9-ac55-28972463e566 HTTP 200
+```
+
+If a record no longer returns `200`, use the troubleshooting section before continuing.
+
+## Describe the exact FHIR reads
+
+A FHIR `CapabilityStatement` describes FHIR capabilities, but it is not an OpenAPI description.
+Evidence Gateway compiles a narrow OpenAPI contract so the origin, paths, response media type,
+projected fields, and bounds are explicit.
+
+Save this reviewed subset as `fhir-smart-r4.openapi.yaml`:
+
+```yaml
+openapi: 3.1.0
+info:
+  title: SMART Health IT public FHIR R4 tutorial subset
+  version: 1.0.0
+servers:
+  - url: https://r4.smarthealthit.org
+paths:
+  /Coverage/{coverage_id}:
+    get:
+      operationId: getCoverage
+      parameters:
+        - name: coverage_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: One FHIR R4 Coverage resource
+          content:
+            application/fhir+json:
+              schema:
+                type: object
+                required: [resourceType, id, status, beneficiary]
+                properties:
+                  resourceType: {type: string, const: Coverage}
+                  id: {type: string, minLength: 1, maxLength: 64}
+                  status:
+                    type: string
+                    enum: [active, cancelled, draft, entered-in-error]
+                  beneficiary:
+                    type: object
+                    required: [reference]
+                    properties:
+                      reference: {type: string, minLength: 1, maxLength: 128}
+  /Organization/{organization_id}:
+    get:
+      operationId: getOrganization
+      parameters:
+        - name: organization_id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: One FHIR R4 Organization resource
+          content:
+            application/fhir+json:
+              schema:
+                type: object
+                required: [resourceType, id, active, type]
+                properties:
+                  resourceType: {type: string, const: Organization}
+                  id: {type: string, minLength: 1, maxLength: 64}
+                  active: {type: boolean}
+                  type:
+                    type: array
+                    minItems: 1
+                    maxItems: 4
+                    items:
+                      type: object
+                      required: [coding]
+                      properties:
+                        coding:
+                          type: array
+                          minItems: 1
+                          maxItems: 8
+                          items:
+                            type: object
+                            required: [system, code]
+                            properties:
+                              system:
+                                type: string
+                                const: http://terminology.hl7.org/CodeSystem/organization-type
+                              code: {type: string, minLength: 1, maxLength: 64}
+```
+
+Create an editable local project from that contract:
+
+```sh
+evidencectl new fhir-record-evidence \
+  --openapi fhir-smart-r4.openapi.yaml \
+  --profile local
+cd fhir-record-evidence
+```
+
+```text
+Created an editable OpenAPI authoring project in fhir-record-evidence
+```
+
+The local compiler recognizes the exact HTTPS server as an
+`anonymous-https-demo` source. This posture sends no authentication header, trusts normal system
+roots, denies redirects, and is accepted only under local assurance. Production and
+evidence-grade builds reject it.
+
+## Author the patient coverage question
+
+Create `questions/fhir-coverage-status.yaml`:
+
+```yaml
+id: fhir-coverage-status
+question: Does this coverage record report active coverage for the selected patient?
+purpose: coverage-record-verification
+subjects:
+  - role: patient
+    selector: patient_id
+    derivation: true
+  - role: coverage-record
+    selector: coverage_id
+    derivation: true
+source:
+  operation: getCoverage
+  facts:
+    - {name: resource_id, path: /id, combine: exactly-one}
+    - {name: status, path: /status, combine: exactly-one}
+    - {name: beneficiary_reference, path: /beneficiary/reference, combine: exactly-one}
+  collectionBounds: {}
+answers:
+  - concept: coverage_record_reports_active
+    type: boolean
+responseFormats: [signed-jws, sd-jwt-vc]
+derivation: derivations/fhir-coverage-status.rhai
+disclosure:
+  allow: [coverage_record_reports_active]
+```
+
+Only `coverage_id` fills the FHIR path. The patient identifier is derivation-only, so it does not
+widen the source request or cause Evidence Gateway to fetch a Patient resource.
+
+Create `derivations/fhir-coverage-status.rhai`:
+
+```rhai
+fn answer(facts, selectors, context) {
+    let coverage_id = selectors["coverage-record"]["values"]["coverage_id"];
+    let patient_id = selectors["patient"]["values"]["patient_id"];
+    if required(facts.resource_id, "coverage_id_missing") != coverage_id {
+        throw("derivation_input_error");
+    }
+    if required(facts.beneficiary_reference, "beneficiary_missing") !=
+       "Patient/" + patient_id {
+        throw("derivation_input_error");
+    }
+    #{
+        coverage_record_reports_active:
+            required(facts.status, "coverage_status_missing") == "active"
+    }
+}
+```
+
+A beneficiary mismatch fails closed. It never becomes a signed `false` answer about a different
+patient. The source projection retains only `id`, `status`, and `beneficiary.reference`; it drops
+the payor, subscriber identifier, coverage class, period, and every other source field.
+
+## Author the healthcare-establishment question
+
+Create `questions/fhir-healthcare-establishment.yaml`:
+
+```yaml
+id: fhir-healthcare-establishment
+question: Does this organization record report an active healthcare provider?
+purpose: healthcare-establishment-verification
+subject:
+  role: organization
+  selector: organization_id
+  derivation: true
+source:
+  operation: getOrganization
+  facts:
+    - {name: resource_id, path: /id, combine: exactly-one}
+    - {name: active, path: /active, combine: exactly-one}
+    - {name: type_systems, path: /type/*/coding/*/system, combine: collect}
+    - {name: type_codes, path: /type/*/coding/*/code, combine: collect}
+  collectionBounds:
+    /type: 4
+    /type/*/coding: 8
+answers:
+  - concept: healthcare_provider_record_active
+    type: boolean
+responseFormats: [signed-jws, sd-jwt-vc]
+derivation: derivations/fhir-healthcare-establishment.rhai
+disclosure:
+  allow: [healthcare_provider_record_active]
+```
+
+Create `derivations/fhir-healthcare-establishment.rhai`:
+
+```rhai
+fn answer(facts, selectors, context) {
+    let organization_id = selectors["organization"]["values"]["organization_id"];
+    if required(facts.resource_id, "organization_id_missing") != organization_id {
+        throw("derivation_input_error");
+    }
+    let type_systems = required(facts.type_systems, "organization_type_system_missing");
+    let type_codes = required(facts.type_codes, "organization_type_code_missing");
+    #{
+        healthcare_provider_record_active:
+            required(facts.active, "organization_active_missing") &&
+            type_systems.len == 1 &&
+            type_systems[0] ==
+                "http://terminology.hl7.org/CodeSystem/organization-type" &&
+            type_codes.len == 1 &&
+            type_codes[0] == "prov"
+    }
+}
+```
+
+The result reports only what this FHIR record says. It does not claim that a regulator has
+licensed the organization, that a particular practitioner works there, or that the facility is
+accredited.
+
+## Start the project
+
+Compile the two questions and start Evidence Gateway and Registry Mint:
+
+```sh
+evidencectl dev --detach
+```
+
+```text
+Evidence ready at http://127.0.0.1:8080
+Mint ready at http://127.0.0.1:8081
+```
+
+Evidence Gateway now reads the live SMART server. It fixes one GET path per question, asks for
+`application/fhir+json`, applies response-size and timeout bounds, denies redirects, and projects
+the response before the derivation runs.
+
+## Request the patient coverage credential
+
+Prepare a request bound to the patient and coverage-record roles:
+
+```sh
+evidencectl request prepare fhir-coverage-status \
+  --purpose coverage-record-verification \
+  --subject patient:patient_id=b361ebbe-5dd5-4dee-a178-773d774fc04d \
+  --subject coverage-record:coverage_id=cov-humana-happy-res-001 \
+  --format sd-jwt-vc \
+  --name fhir-coverage-vc
+```
+
+```text
+Prepared request: .evidence/requests/fhir-coverage-vc/request.json
+Prepared verification context: .evidence/requests/fhir-coverage-vc/verification.json
+Prepared authorization: .evidence/requests/fhir-coverage-vc/authorization.curl
+```
+
+Request and verify the credential:
+
+```sh
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/fhir-coverage-vc/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/dc+sd-jwt' \
+  --data-binary @.evidence/requests/fhir-coverage-vc/request.json \
+  --output fhir-coverage.sd-jwt \
+  --write-out 'HTTP %{http_code}\n'
+
+evidencectl verify fhir-coverage.sd-jwt \
+  --context .evidence/requests/fhir-coverage-vc/verification.json \
+  --output fhir-coverage.verified.json
+```
+
+```text
+HTTP 200
+VERIFIED
+```
+
+Inspect the verified payload, not the unverified credential:
+
+```sh
+python3 -m json.tool fhir-coverage.verified.json
+```
+
+The relevant supported value is:
+
+```json
+{
+  "providesValueFor": "urn:registrystack:evidence:local:concept:fhir-coverage-status:coverage_record_reports_active",
+  "value": true
+}
+```
+
+The payload carries pseudonymous bindings for `patient` and `coverage-record`. It contains neither
+FHIR identifier, the beneficiary reference, nor the unselected Coverage fields.
+
+## Request the healthcare-establishment credential
+
+Prepare, request, and verify the second credential:
+
+```sh
+evidencectl request prepare fhir-healthcare-establishment \
+  --purpose healthcare-establishment-verification \
+  --subject organization:organization_id=12c9daf5-a29c-36c9-ac55-28972463e566 \
+  --format sd-jwt-vc \
+  --name fhir-healthcare-establishment-vc
+
+curl --silent --show-error --fail-with-body \
+  --config .evidence/requests/fhir-healthcare-establishment-vc/authorization.curl \
+  --request POST \
+  --url http://127.0.0.1:8080/v1/evidence \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/dc+sd-jwt' \
+  --data-binary @.evidence/requests/fhir-healthcare-establishment-vc/request.json \
+  --output fhir-healthcare-establishment.sd-jwt \
+  --write-out 'HTTP %{http_code}\n'
+
+evidencectl verify fhir-healthcare-establishment.sd-jwt \
+  --context .evidence/requests/fhir-healthcare-establishment-vc/verification.json \
+  --output fhir-healthcare-establishment.verified.json
+```
+
+```text
+Prepared request: .evidence/requests/fhir-healthcare-establishment-vc/request.json
+HTTP 200
+VERIFIED
+```
+
+The verified value is `healthcare_provider_record_active: true`. The credential does not repeat
+the organization name, source identifier, contact details, address, or FHIR type code.
+
+## Inspect the audit and clean up
+
+Stop the local services, inspect the last completed operation, and remove generated local state:
+
+```sh
+evidencectl dev stop
+evidencectl audit show --last-operation
+evidencectl dev clean
+```
+
+The audit identifies the authorized question, purpose, requester pseudonym, and disclosed concept.
+It does not record the selected FHIR identifiers, source resources, or boolean values.
+
+## What you built
+
+- Evidence Gateway read two real resources from one public FHIR R4 server.
+- The patient question checked the Coverage-to-Patient relationship without fetching or disclosing
+  the Patient resource.
+- The establishment question demonstrated the same bounded pattern outside patient data.
+- Two verified SD-JWT VC responses carried boolean answers and pseudonymous subject bindings
+  instead of FHIR resources or identifiers.
+- The anonymous public-server posture remained local-only and cannot be promoted as production
+  source authentication.
+
+## Next
+
+- [Connect an institution source from OpenAPI](../connect-an-institution-source/) when the FHIR
+  server belongs to an institution and requires reviewed schemas and credentials.
+- [Configure Evidence Gateway](../../configure/evidence/) for SMART on FHIR Backend Services
+  private-key authentication and production source trust.
+- Model a practitioner licence only after identifying an authoritative FHIR profile, code system,
+  issuer relationship, and revocation semantics. A generic `Practitioner.qualification` entry is
+  not automatically a licence.
+- [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/) when another
+  application will make the trust decision.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| A record probe returns `404` or `410` | The public demo data changed or was reset. | Search only synthetic data on the same server, choose a coherent replacement, update the request selector, and re-review the expected answer. Do not weaken the relationship checks. |
+| `evidencectl dev` rejects `anonymous-https-demo` | The project is not using local assurance, the URL is not one exact HTTPS origin, or a custom TLS profile was added. | Recreate the tutorial project with `--profile local` and retain `https://r4.smarthealthit.org` exactly. |
+| Evidence Gateway reports a source dependency failure | The record changed shape, no longer matches the narrow schema, timed out, redirected, or returned a non-success status. | Probe the exact read again. Update the OpenAPI subset only after comparing it with the server's current FHIR profile and reviewing the claim semantics. |
+| The verified answer is `false` | The live record no longer reports the governed status or type. | Treat `false` as the server's current administrative answer. Do not edit the derivation merely to recover the tutorial's former output. |
+| A production FHIR server refuses the request | This tutorial uses an explicitly local, anonymous demo posture. | Configure the institution's HTTPS trust and supported authentication, commonly SMART Backend Services, then build under production or evidence-grade assurance. |

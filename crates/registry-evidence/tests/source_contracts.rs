@@ -937,6 +937,58 @@ async fn local_unauthenticated_loopback_source_sends_no_authentication_header() 
     }
 }
 
+#[test]
+fn anonymous_https_demo_source_has_no_credentials_and_keeps_request_controls() {
+    let (_root, secrets) = resolver(&[]);
+    let source = fixed_source(
+        "https://r4.smarthealthit.org",
+        json!({"kind": "anonymous-https-demo"}),
+    );
+    let executor = SourceExecutor::new(&source, secrets).expect("demo source plan compiles");
+    let materialized = executor
+        .materialize_request(&[selector("synthetic")], &prepared_http_request(&parts()))
+        .expect("fixed demo request materializes without credentials");
+    assert_eq!(materialized.path(), Some("/data"));
+
+    for invalid_origin in [
+        "http://127.0.0.1:18081",
+        "http://demo.example.test",
+        "https://demo.example.test/",
+        "https://demo.example.test/fhir",
+    ] {
+        let invalid = fixed_source(invalid_origin, json!({"kind": "anonymous-https-demo"}));
+        assert_eq!(
+            SourceExecutor::new(&invalid, resolver(&[]).1).err(),
+            Some(SourceError::InvalidPlan),
+            "executor rejected malformed demo origin {invalid_origin}"
+        );
+    }
+
+    let mut with_tls_profile = fixed_source(
+        "https://r4.smarthealthit.org",
+        json!({"kind": "anonymous-https-demo"}),
+    );
+    *tls_trust_profile_mut(&mut with_tls_profile) = Some("private-demo-ca".to_owned());
+    assert_eq!(
+        SourceExecutor::new(&with_tls_profile, resolver(&[]).1).err(),
+        Some(SourceError::InvalidPlan),
+        "demo mode cannot replace system roots with a private trust profile"
+    );
+
+    let forbidden_header = source_config(
+        "https://r4.smarthealthit.org",
+        json!({"kind": "anonymous-https-demo"}),
+        json!(["record_id"]),
+        json!([{"name": "Authorization", "value": "caller-controlled"}]),
+        json!(["/ok"]),
+    );
+    assert_eq!(
+        SourceExecutor::new(&forbidden_header, resolver(&[]).1).err(),
+        Some(SourceError::InvalidPlan),
+        "fixed headers cannot recreate authentication in demo mode"
+    );
+}
+
 #[tokio::test]
 async fn hostile_path_values_and_malformed_preparation_fail_before_transport_and_redact() {
     let server = MockServer::start().await;
@@ -2534,6 +2586,43 @@ async fn projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_ex
                 )
                 .await,
             expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn data_sources_accept_generic_graphql_and_fhir_json_media_types() {
+    for media_type in [
+        "application/json",
+        "application/graphql-response+json",
+        "application/fhir+json",
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/data"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(r#"{"ok":true}"#, media_type))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (_root, secrets) = resolver(&[("token", "token")]);
+        let source = fixed_source(
+            &server.uri(),
+            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
+        );
+        let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
+        assert_eq!(
+            executor
+                .execute(
+                    &[selector("record")],
+                    &prepared_http_request(&RequestParts {
+                        query: vec![],
+                        body: Some(json!({})),
+                    }),
+                    Utc::now(),
+                )
+                .await,
+            Ok(json!({"ok": true})),
+            "{media_type} remains inside the same bounded JSON parser and projection"
         );
     }
 }

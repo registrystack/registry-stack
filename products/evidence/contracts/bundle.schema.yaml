@@ -309,7 +309,9 @@ allOf:
                     - kind
                   properties:
                     kind:
-                      const: none
+                      enum:
+                        - none
+                        - anonymous-https-demo
   - if:
       properties:
         assuranceProfile:
@@ -772,7 +774,8 @@ $defs:
         description: >-
           Fixed HTTPS origin the source's evidence-data requests target, with no path, query,
           fragment, user information, or runtime substitution. An HTTP numeric-loopback origin
-          is accepted only when `sources.*.authentication.kind` is `none`.
+          is accepted only when `sources.*.authentication.kind` is `none`. Anonymous access to
+          one HTTPS demo origin requires `anonymous-https-demo` in a local bundle.
         oneOf:
           - type: string
             pattern: ^https://[^/?#]+$
@@ -792,7 +795,7 @@ $defs:
         description: >-
           Logical name resolved to an exact private certificate authority file bound in `runtime.yaml`.
           Omission trusts only configured system roots, and the profile is rejected outright
-          when `sources.*.authentication.kind` is `none`.
+          when `sources.*.authentication.kind` is `none` or `anonymous-https-demo`.
         $ref: '#/$defs/local-id'
       authentication:
         description: >-
@@ -856,6 +859,25 @@ $defs:
               type: string
               pattern: >-
                 ^http://(?:127\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])|\[::1\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$
+          not:
+            required:
+              - tlsTrustProfile
+      - if:
+          required:
+            - authentication
+          properties:
+            authentication:
+              type: object
+              required:
+                - kind
+              properties:
+                kind:
+                  const: anonymous-https-demo
+        then:
+          properties:
+            baseUrl:
+              type: string
+              pattern: ^https://[^/?#]+$
           not:
             required:
               - tlsTrustProfile
@@ -960,6 +982,17 @@ $defs:
               by a `local` assurance bundle at a canonical numeric-loopback origin; production
               and evidence-grade bundles reject that kind.
             const: none
+      - type: object
+        additionalProperties: false
+        required:
+          - kind
+        properties:
+          kind:
+            description: >-
+              Sends no credential to one exact HTTPS demo origin, using system roots.
+              Only a `local` assurance bundle may use this authoring convenience; production
+              and evidence-grade bundles reject it.
+            const: anonymous-https-demo
       - type: object
         additionalProperties: false
         required:

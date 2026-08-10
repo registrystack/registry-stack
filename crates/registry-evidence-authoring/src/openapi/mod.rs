@@ -22,12 +22,24 @@ pub mod openapi;
 pub mod types;
 
 use openapi::Spec;
-use types::{CandidateLeaf, OperationKey};
+use types::{CandidateLeaf, OperationKey, ResolvedResponse};
+
+pub const JSON_RESPONSE_MEDIA_TYPES: [&str; 2] = ["application/json", "application/fhir+json"];
+
+/// Resolve the preferred JSON representation Evidence authoring supports.
+/// Generic JSON remains first for existing APIs; FHIR JSON is the one
+/// registered structured-syntax representation admitted in addition.
+pub fn json_response_schema(
+    spec: &Spec,
+    operation: &OperationKey,
+) -> Result<(&'static str, ResolvedResponse)> {
+    spec.response_schema_for_media_types(operation, "200", &JSON_RESPONSE_MEDIA_TYPES)
+}
 
 /// The leaves of `operation`'s success response that an author may select.
 ///
 /// One operation has many responses, and an Evidence source reads exactly one
-/// of them: the `200 application/json` body. Naming that pair in one place
+/// of them: the `200 application/json` or `application/fhir+json` body. Naming that pair in one place
 /// keeps the drafting pipeline and the authoring checks offering the same set,
 /// because a check that offered a different set from the one the draft was
 /// built against would reject documents this tooling itself wrote.
@@ -37,7 +49,7 @@ use types::{CandidateLeaf, OperationKey};
 /// are absent from it, which is the answer. A caller that wants the reasons
 /// calls [`flatten::candidate_leaves`] directly.
 pub fn selectable_leaves(spec: &Spec, operation: &OperationKey) -> Result<Vec<CandidateLeaf>> {
-    let resolved = spec.response_schema(operation, "200", "application/json")?;
+    let (_, resolved) = json_response_schema(spec, operation)?;
     let (leaves, _) = flatten::candidate_leaves(&resolved.schema);
     Ok(leaves)
 }
