@@ -28,8 +28,8 @@ use zeroize::Zeroizing;
 use crate::audit::RelayAudit;
 use crate::auth::RelayAuthenticator;
 use crate::contract::{
-    runtime_cursor_configuration_is_valid, AccessRule, IssuerAlgorithm, IssuerRuntime,
-    RegistryContract, RelayRuntime,
+    contract_has_protected_access, runtime_cursor_configuration_is_valid, IssuerAlgorithm,
+    IssuerRuntime, RegistryContract, RelayRuntime, MAXIMUM_RUNTIME_BYTES,
 };
 use crate::cursor::CursorKey;
 use crate::package::{load_package, VerifiedPackage};
@@ -39,7 +39,6 @@ use crate::server::{
 use crate::source_observation::observe_sources;
 use crate::sqlite_runtime::{RuntimeSourceBinding, SqliteRuntime, SqliteRuntimeLimits};
 
-const MAXIMUM_RUNTIME_BYTES: u64 = 1024 * 1024;
 const MAXIMUM_AUDIT_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_CURSOR_MAXIMUM_AGE: Duration = Duration::from_secs(300);
 const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
@@ -479,32 +478,7 @@ fn validate_runtime_contract(
     if !runtime_cursor_configuration_is_valid(contract, runtime) {
         return Err(StartupError::CursorInvalid);
     }
-    let protected = contract.resources.iter().any(|resource| {
-        resource
-            .operations
-            .list
-            .iter()
-            .flat_map(|operation| {
-                operation
-                    .access_profiles
-                    .iter()
-                    .map(|(_, item)| &item.access)
-            })
-            .chain(resource.operations.read.iter().flat_map(|operation| {
-                operation
-                    .access_profiles
-                    .iter()
-                    .map(|(_, item)| &item.access)
-            }))
-            .chain(resource.operations.lookups.iter().flat_map(|operation| {
-                operation
-                    .access_profiles
-                    .iter()
-                    .map(|(_, item)| &item.access)
-            }))
-            .any(|access| matches!(access, AccessRule::Protected(_)))
-    });
-    if protected && runtime.authentication.issuer.is_none() {
+    if contract_has_protected_access(contract) && runtime.authentication.issuer.is_none() {
         return Err(StartupError::IssuerUnavailable);
     }
     let has_lookup = contract
@@ -998,6 +972,34 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         .expect("closed runtime");
         assert_eq!(
             validate_runtime_contract(&protected_runtime, &protected),
+            Err(StartupError::IssuerUnavailable)
+        );
+
+        let protected_search = contract(
+            "{searches: [{id: within-area, query: {kind: point-bbox, maximumLongitudeSpanDegrees: 10, maximumLatitudeSpanDegrees: 10}, defaultAccessProfile: default, accessProfiles: {default: {access: {scope: registry:record:search}, disclosureProfile: default}}, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}]}",
+        );
+        let mut protected_search_runtime = protected_runtime.clone();
+        protected_search_runtime.cursor = Some(crate::contract::CursorRuntime {
+            integrity_key_ref: "secret:env/CURSOR_KEY".into(),
+            maximum_age_seconds: 300,
+        });
+        assert_eq!(
+            validate_runtime_contract(&protected_search_runtime, &protected_search),
+            Err(StartupError::IssuerUnavailable)
+        );
+
+        let mut protected_statistics =
+            RegistryContract::parse_yaml(crate::compiler::tests::statistical_contract())
+                .expect("statistical contract");
+        protected_statistics.statistical_datasets[0].access =
+            serde_norway::from_str("{scope: registry:statistics:read}")
+                .expect("protected statistical access");
+        let protected_statistics_runtime = RelayRuntime::parse_yaml(
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18084'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+        )
+        .expect("closed runtime");
+        assert_eq!(
+            validate_runtime_contract(&protected_statistics_runtime, &protected_statistics),
             Err(StartupError::IssuerUnavailable)
         );
 

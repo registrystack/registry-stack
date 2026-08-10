@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit as _, Payload};
+use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
@@ -225,6 +225,15 @@ pub fn encode(key: &CursorKey, payload: &CursorPayload) -> Result<String, Cursor
     Ok(URL_SAFE_NO_PAD.encode(envelope))
 }
 
+/// Whether a fully populated cursor payload can be protected within the
+/// product's plaintext bound. This permits request validation before source
+/// access without fabricating an encrypted cursor or consuming a nonce.
+#[must_use]
+pub fn payload_within_bound(payload: &CursorPayload) -> bool {
+    serde_json::to_vec(payload)
+        .is_ok_and(|plaintext| !plaintext.is_empty() && plaintext.len() <= MAX_CURSOR_BYTES)
+}
+
 pub fn decode(
     key: &CursorKey,
     encoded: &str,
@@ -365,6 +374,16 @@ mod tests {
         let first = encode(&key, &payload()).expect("first cursor encodes");
         let second = encode(&key, &payload()).expect("second cursor encodes");
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn payload_bound_rejects_context_before_cursor_encryption() {
+        let mut bounded = payload();
+        bounded.filters.insert(
+            "status".to_owned(),
+            CursorValue::String("x".repeat(MAX_CURSOR_BYTES)),
+        );
+        assert!(!payload_within_bound(&bounded));
     }
 
     #[test]

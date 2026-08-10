@@ -6,9 +6,10 @@
 //! statement. There is deliberately no storage trait or caller-authored SQL.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use registry_platform_sqlite::{
     schema_fingerprint, CapturedSnapshot, ColumnContract, ColumnType, DatabaseProfile,
@@ -16,7 +17,7 @@ use registry_platform_sqlite::{
     SchemaBinding, SqliteError, StatementContract, StatementLimits, Value,
 };
 use thiserror::Error;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::auth::RowAuthority;
 use crate::contract::{DataType, SourceProfile, StatisticalValueType};
@@ -162,11 +163,52 @@ struct ReadinessSource {
     expected_schema_fingerprint: String,
 }
 
+#[derive(Default)]
+struct ReadinessCoordinator {
+    in_flight: AsyncMutex<Option<watch::Receiver<Option<bool>>>>,
+}
+
+impl ReadinessCoordinator {
+    async fn check<F, Fut>(self: &Arc<Self>, check: F) -> bool
+    where
+        F: FnOnce(watch::Sender<Option<bool>>) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let mut receiver = {
+            let mut in_flight = self.in_flight.lock().await;
+            if let Some(receiver) = in_flight.as_ref() {
+                receiver.clone()
+            } else {
+                let (sender, receiver) = watch::channel(None);
+                *in_flight = Some(receiver.clone());
+                let coordinator = Arc::clone(self);
+                tokio::spawn(async move {
+                    if tokio::spawn(check(sender.clone())).await.is_err() {
+                        let _ = sender.send(Some(false));
+                    }
+                    coordinator.in_flight.lock().await.take();
+                });
+                receiver
+            }
+        };
+
+        loop {
+            if let Some(result) = *receiver.borrow() {
+                return result;
+            }
+            if receiver.changed().await.is_err() {
+                return false;
+            }
+        }
+    }
+}
+
 /// Fixed operation inventory over one compiled Registry.
 pub struct SqliteRuntime {
     operations: BTreeMap<String, OperationInventory>,
     statistical_operations: BTreeMap<String, StatisticalExecutor>,
     readiness_sources: Vec<ReadinessSource>,
+    readiness: Arc<ReadinessCoordinator>,
     admission: Arc<Semaphore>,
     timeout: Duration,
 }
@@ -315,6 +357,7 @@ impl SqliteRuntime {
             operations,
             statistical_operations,
             readiness_sources,
+            readiness: Arc::new(ReadinessCoordinator::default()),
             admission: Arc::new(Semaphore::new(limits.concurrent_queries)),
             timeout: limits.request_timeout,
         })
@@ -324,29 +367,11 @@ impl SqliteRuntime {
     /// Failures remain categorical so callers cannot expose a source identifier,
     /// path, schema, or value through readiness.
     pub async fn is_ready(&self) -> bool {
-        for source in &self.readiness_sources {
-            let source = source.clone();
-            let timeout = self.timeout;
-            let check = tokio::task::spawn_blocking(move || {
-                if let DatabaseProfile::Snapshot(snapshot) = &source.profile {
-                    snapshot.verify_unchanged()?;
-                }
-                let observed = schema_fingerprint(
-                    &source.profile,
-                    &InspectionLimits {
-                        maximum_objects: SCHEMA_MAXIMUM_OBJECTS,
-                        maximum_sql_bytes: SCHEMA_MAXIMUM_SQL_BYTES,
-                        maximum_statement_steps: SCHEMA_MAXIMUM_STEPS,
-                        timeout,
-                    },
-                )?;
-                Ok::<bool, SqliteError>(observed == source.expected_schema_fingerprint)
-            });
-            if !matches!(check.await, Ok(Ok(true))) {
-                return false;
-            }
-        }
-        true
+        let sources = self.readiness_sources.clone();
+        let timeout = self.timeout;
+        self.readiness
+            .check(move |sender| verify_readiness_sources(sources, timeout, sender))
+            .await
     }
 
     #[must_use]
@@ -372,9 +397,10 @@ impl SqliteRuntime {
             .get(operation)
             .and_then(|inventory| inventory.access_profiles.get(access_profile))
             .ok_or(SqliteRuntimeError::UnknownOperation)?;
-        let permit = self.acquire().await?;
+        let deadline = self.request_deadline()?;
+        let permit = self.acquire_before(deadline).await?;
         let values = bind_operation_values(&executor.operation, &executor.access_profile, query)?;
-        let result = executor.statement.execute(&values).await;
+        let result = executor.statement.execute_before(&values, deadline).await;
         drop(permit);
         let mut rows = result?.rows;
         if let Some(column) = &executor.list_identifier_count_column {
@@ -400,9 +426,10 @@ impl SqliteRuntime {
             .statistical_operations
             .get(operation_identifier)
             .ok_or(SqliteRuntimeError::UnknownOperation)?;
-        let permit = self.acquire().await?;
+        let deadline = self.request_deadline()?;
+        let permit = self.acquire_before(deadline).await?;
         let values = bind_statistical_values(&executor.dataset, &query, row_authority)?;
-        let result = executor.statement.execute(&values).await;
+        let result = executor.statement.execute_before(&values, deadline).await;
         drop(permit);
 
         let raw_rows = result?.rows;
@@ -422,11 +449,79 @@ impl SqliteRuntime {
         })
     }
 
-    async fn acquire(&self) -> Result<OwnedSemaphorePermit, SqliteRuntimeError> {
-        tokio::time::timeout(self.timeout, Arc::clone(&self.admission).acquire_owned())
-            .await
-            .map_err(|_| SqliteRuntimeError::AdmissionTimeout)?
-            .map_err(|_| SqliteRuntimeError::InvalidPlan)
+    fn request_deadline(&self) -> Result<Instant, SqliteRuntimeError> {
+        Instant::now()
+            .checked_add(self.timeout)
+            .ok_or(SqliteRuntimeError::InvalidPlan)
+    }
+
+    async fn acquire_before(
+        &self,
+        deadline: Instant,
+    ) -> Result<OwnedSemaphorePermit, SqliteRuntimeError> {
+        tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            Arc::clone(&self.admission).acquire_owned(),
+        )
+        .await
+        .map_err(|_| SqliteRuntimeError::AdmissionTimeout)?
+        .map_err(|_| SqliteRuntimeError::InvalidPlan)
+    }
+}
+
+async fn verify_readiness_sources(
+    sources: Vec<ReadinessSource>,
+    timeout: Duration,
+    result: watch::Sender<Option<bool>>,
+) {
+    let Some(deadline) = Instant::now().checked_add(timeout) else {
+        let _ = result.send(Some(false));
+        return;
+    };
+    let mut check = tokio::task::spawn_blocking(move || {
+        for source in sources {
+            if let DatabaseProfile::Snapshot(snapshot) = &source.profile {
+                if snapshot.verify_unchanged_before(deadline).is_err() {
+                    return false;
+                }
+            }
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return false;
+            };
+            if remaining.is_zero() {
+                return false;
+            }
+            let Ok(observed) = schema_fingerprint(
+                &source.profile,
+                &InspectionLimits {
+                    maximum_objects: SCHEMA_MAXIMUM_OBJECTS,
+                    maximum_sql_bytes: SCHEMA_MAXIMUM_SQL_BYTES,
+                    maximum_statement_steps: SCHEMA_MAXIMUM_STEPS,
+                    timeout: remaining,
+                },
+            ) else {
+                return false;
+            };
+            if observed != source.expected_schema_fingerprint {
+                return false;
+            }
+        }
+        true
+    });
+    match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut check).await {
+        Ok(Ok(ready)) => {
+            let _ = result.send(Some(ready));
+        }
+        Ok(Err(_)) => {
+            let _ = result.send(Some(false));
+        }
+        Err(_) => {
+            // Publish the bounded result immediately, but keep the readiness
+            // flight occupied until the worker observes the same deadline and
+            // exits. A following probe therefore cannot start a second hash.
+            let _ = result.send(Some(false));
+            let _ = check.await;
+        }
     }
 }
 
@@ -1383,6 +1478,8 @@ fn bind_operation_values(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use registry_platform_sqlite::{materialize_fixture, CapturedSnapshot};
 
     use super::*;
@@ -1394,6 +1491,161 @@ mod tests {
         CompiledStatisticalMeasure, CompiledStatisticalTimeDimension, ConsultationPattern,
         EffectiveClassification, QueryPlan, RowAuthoritySource,
     };
+
+    #[tokio::test]
+    async fn concurrent_readiness_calls_share_one_in_flight_check() {
+        let coordinator = Arc::new(ReadinessCoordinator::default());
+        let checks = Arc::new(AtomicUsize::new(0));
+        let call = || {
+            let coordinator = Arc::clone(&coordinator);
+            let checks = Arc::clone(&checks);
+            async move {
+                coordinator
+                    .check(move |result| async move {
+                        checks.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        let _ = result.send(Some(true));
+                    })
+                    .await
+            }
+        };
+
+        let (first, second, third) = tokio::join!(call(), call(), call());
+        assert!(first && second && third);
+        assert_eq!(checks.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn snapshot_readiness_returns_false_at_the_request_deadline() {
+        let temp = tempfile::tempdir().expect("temporary fixture");
+        let database = temp.path().join("readiness.sqlite");
+        materialize_fixture(&database, "CREATE TABLE records (id TEXT NOT NULL);")
+            .expect("fixture materializes");
+        let snapshot = CapturedSnapshot::capture(&database).expect("fixture captures");
+        let profile = DatabaseProfile::Snapshot(snapshot);
+        let expected_schema_fingerprint = schema_fingerprint(
+            &profile,
+            &InspectionLimits {
+                maximum_objects: SCHEMA_MAXIMUM_OBJECTS,
+                maximum_sql_bytes: SCHEMA_MAXIMUM_SQL_BYTES,
+                maximum_statement_steps: SCHEMA_MAXIMUM_STEPS,
+                timeout: Duration::from_secs(1),
+            },
+        )
+        .expect("fixture schema fingerprints");
+        let runtime = SqliteRuntime {
+            operations: BTreeMap::new(),
+            statistical_operations: BTreeMap::new(),
+            readiness_sources: vec![ReadinessSource {
+                profile,
+                expected_schema_fingerprint,
+            }],
+            readiness: Arc::new(ReadinessCoordinator::default()),
+            admission: Arc::new(Semaphore::new(1)),
+            timeout: Duration::from_nanos(1),
+        };
+
+        let ready = tokio::time::timeout(Duration::from_millis(250), runtime.is_ready())
+            .await
+            .expect("readiness is request-bounded");
+        assert!(!ready);
+    }
+
+    #[tokio::test]
+    async fn record_and_statistical_execution_share_the_global_admission_deadline() {
+        let temp = tempfile::tempdir().expect("temporary fixture");
+        let record_database = temp.path().join("records.sqlite");
+        materialize_fixture(
+            &record_database,
+            "CREATE TABLE records (id TEXT NOT NULL); INSERT INTO records VALUES ('record-1');",
+        )
+        .expect("record fixture materializes");
+        let statistical_database = temp.path().join("statistics.sqlite");
+        materialize_fixture(
+            &statistical_database,
+            "CREATE TABLE observations (ref_area TEXT, time_period TEXT, obs_value REAL, unit_measure TEXT);\
+             INSERT INTO observations VALUES ('AREA', '2025', 7.0, 'PERCENT');",
+        )
+        .expect("statistical fixture materializes");
+
+        let timeout = Duration::from_millis(400);
+        let record = Arc::new(record_runtime(&record_database, timeout));
+        let dataset = statistical_dataset(10);
+        let statistical = Arc::new(statistical_runtime_with_timeout(
+            &statistical_database,
+            dataset.clone(),
+            timeout,
+        ));
+        let record_statement =
+            Arc::clone(&record.operations["record.list"].access_profiles["default"].statement);
+        let statistical_statement = Arc::clone(
+            &statistical.statistical_operations[&dataset.operation_identifier()].statement,
+        );
+        let record_statement_permit = record_statement
+            .hold_all_permits_for_test()
+            .await
+            .expect("record statement permit is held");
+        let statistical_statement_permit = statistical_statement
+            .hold_all_permits_for_test()
+            .await
+            .expect("statistical statement permit is held");
+        let record_global_permit = Arc::clone(&record.admission)
+            .acquire_owned()
+            .await
+            .expect("record global permit is held");
+        let statistical_global_permit = Arc::clone(&statistical.admission)
+            .acquire_owned()
+            .await
+            .expect("statistical global permit is held");
+
+        let record_call = {
+            let runtime = Arc::clone(&record);
+            tokio::spawn(async move {
+                runtime
+                    .execute(
+                        "record.list",
+                        "default",
+                        OperationQuery {
+                            fetch_limit: Some(1),
+                            ..OperationQuery::default()
+                        },
+                    )
+                    .await
+            })
+        };
+        let statistical_call = {
+            let runtime = Arc::clone(&statistical);
+            tokio::spawn(async move {
+                runtime
+                    .execute_statistical(
+                        &dataset.operation_identifier(),
+                        statistical_query("AREA", 0, 10, true),
+                        None,
+                    )
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        drop(record_global_permit);
+        drop(statistical_global_permit);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(record_statement_permit);
+        drop(statistical_statement_permit);
+
+        for error in [
+            record_call.await.expect("record task joins").unwrap_err(),
+            statistical_call
+                .await
+                .expect("statistical task joins")
+                .unwrap_err(),
+        ] {
+            assert!(matches!(
+                error,
+                SqliteRuntimeError::Source(ref source)
+                    if source.kind() == registry_platform_sqlite::ErrorKind::Timeout
+            ));
+        }
+    }
 
     #[tokio::test]
     async fn sdmx_sqlite_predicates_preserve_declared_storage_classes() {
@@ -1513,8 +1765,16 @@ mod tests {
         database: &std::path::Path,
         dataset: CompiledStatisticalDataset,
     ) -> SqliteRuntime {
+        statistical_runtime_with_timeout(database, dataset, Duration::from_secs(2))
+    }
+
+    fn statistical_runtime_with_timeout(
+        database: &std::path::Path,
+        dataset: CompiledStatisticalDataset,
+        timeout: Duration,
+    ) -> SqliteRuntime {
         let limits = SqliteRuntimeLimits {
-            request_timeout: Duration::from_secs(2),
+            request_timeout: timeout,
             concurrent_queries: 1,
         };
         let mut prepared = statistical_statement_contract(
@@ -1541,8 +1801,56 @@ mod tests {
                 },
             )]),
             readiness_sources: Vec::new(),
+            readiness: Arc::new(ReadinessCoordinator::default()),
             admission: Arc::new(Semaphore::new(1)),
             timeout: limits.request_timeout,
+        }
+    }
+
+    fn record_runtime(database: &std::path::Path, timeout: Duration) -> SqliteRuntime {
+        let resource = resource();
+        let operation = list_operation();
+        let access_profile = operation.access_profiles[0].clone();
+        let limits = SqliteRuntimeLimits {
+            request_timeout: timeout,
+            concurrent_queries: 1,
+        };
+        let mut prepared = statement_contract(
+            &resource,
+            &operation,
+            &access_profile,
+            &limits,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("record statement compiles");
+        prepared.contract.schema = None;
+        let snapshot = CapturedSnapshot::capture(database).expect("fixture captures");
+        let revision = SourceRevision::Snapshot(snapshot.digest().to_owned());
+        let statement =
+            ReadOnlyStatement::open(DatabaseProfile::Snapshot(snapshot), prepared.contract)
+                .expect("record statement opens");
+        SqliteRuntime {
+            operations: BTreeMap::from([(
+                operation.identifier.clone(),
+                OperationInventory {
+                    source_revision: revision.clone(),
+                    access_profiles: BTreeMap::from([(
+                        access_profile.id.clone(),
+                        OperationExecutor {
+                            statement: Arc::new(statement),
+                            operation,
+                            access_profile,
+                            source_revision: revision,
+                            list_identifier_count_column: prepared.list_identifier_count_column,
+                        },
+                    )]),
+                },
+            )]),
+            statistical_operations: BTreeMap::new(),
+            readiness_sources: Vec::new(),
+            readiness: Arc::new(ReadinessCoordinator::default()),
+            admission: Arc::new(Semaphore::new(1)),
+            timeout,
         }
     }
 

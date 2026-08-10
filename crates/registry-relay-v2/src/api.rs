@@ -21,10 +21,12 @@ use crate::audit::{
     AuditContext, AuditOutcome, OperationSurface, PrincipalKind, RelayAudit, RowBoundaryKind,
 };
 use crate::auth::{bearer_token, Authorization, AuthorizationError, Principal};
-use crate::contract::{DataType, Handling, OrderedMap, Visibility};
+use crate::contract::{
+    DataType, Handling, OrderedMap, Visibility, MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES,
+};
 use crate::cursor::{
-    decode as decode_cursor, encode as encode_cursor, now_unix_seconds, require_same_request,
-    CursorBindings, CursorPayload, CursorValue,
+    decode as decode_cursor, encode as encode_cursor, now_unix_seconds, payload_within_bound,
+    require_same_request, CursorBindings, CursorPayload, CursorValue,
 };
 use crate::format_capabilities::{
     response_format_capabilities, supports_geojson, CRS84_URI, JSON_FG_CORE_CONFORMANCE,
@@ -166,7 +168,7 @@ pub async fn service_metadata(
         capabilities.extend(
             visible_statistical_datasets(&service, principal.as_ref())
                 .into_iter()
-                .map(statistical_capability),
+                .map(|dataset| statistical_capability(&service, dataset)),
         );
     }
     let alignment_targets = service
@@ -308,13 +310,15 @@ pub async fn resource_list(
         .into_iter()
         .map(|(resource, operations)| resource_document(&service, resource, &operations))
         .collect::<Vec<_>>();
+    let response_cacheable = next_cursor.is_none()
+        && service.registry.metadata_visibility.resources == Visibility::Public;
     json_metadata_response(
         json!({
             "items": items,
             "pageInfo": {"nextCursor": next_cursor},
             "meta": {"registryIdentifier": service.registry.registry_identifier},
         }),
-        service.registry.metadata_visibility.resources == Visibility::Public,
+        response_cacheable,
         &headers,
         &trace,
     )
@@ -517,6 +521,7 @@ async fn record_collection(
         operation,
         uri.query(),
         principal,
+        true,
         &trace,
     )
     .await
@@ -585,6 +590,18 @@ async fn record_collection(
             .await
         }
     };
+    if !cursor_context_within_bound(service, operation, &access, &query) {
+        return refuse_known(
+            service,
+            resource,
+            operation,
+            Some(&access),
+            AuditOutcome::InvalidRequest,
+            ProblemCode::ConsultationInvalidRequest,
+            &trace,
+        )
+        .await;
+    }
     if let Some(response) = quota_refusal(
         service,
         resource,
@@ -692,6 +709,8 @@ async fn record_collection(
         &query.selected_fields,
         &result.source_revision,
     );
+    let response_cacheable =
+        next_cursor.is_none() && cacheable(&access.access_profile, &result.source_revision);
     let mut document = match query.response_format {
         ResponseFormat::GeoJson(profile) => {
             geojson_collection(service, resource, items, next_cursor, meta, profile)
@@ -714,7 +733,7 @@ async fn record_collection(
         &audit,
         document,
         query.response_format,
-        cacheable(&access.access_profile, &result.source_revision),
+        response_cacheable,
         &headers,
         &trace,
     )
@@ -750,6 +769,7 @@ pub async fn record_read(
         operation,
         uri.query(),
         principal,
+        false,
         &trace,
     )
     .await
@@ -831,6 +851,7 @@ pub async fn record_lookup(
         operation,
         request.uri().query(),
         principal,
+        false,
         &trace,
     )
     .await
@@ -1136,9 +1157,10 @@ async fn access_operation(
     operation: &CompiledOperation,
     query: Option<&str>,
     principal: Option<Principal>,
+    cursor_continuation: bool,
     trace: &TraceContext,
 ) -> Result<Access, Response<Body>> {
-    let selected = match select_access_profile(operation, query) {
+    let selected = match select_access_profile(service, operation, query, cursor_continuation) {
         Ok(value) => value,
         Err(ProblemCode::ResourceNotFound) => {
             return Err(refuse_unknown(
@@ -1631,12 +1653,20 @@ struct SelectedAccessProfile<'a> {
 }
 
 fn select_access_profile<'a>(
+    service: &RelayService,
     operation: &'a CompiledOperation,
     query: Option<&str>,
+    cursor_continuation: bool,
 ) -> Result<SelectedAccessProfile<'a>, ProblemCode> {
     let requested = access_profile_parameter(query)?;
+    let cursor_profile = if requested.is_none() && cursor_continuation {
+        cursor_access_profile(service, operation, query)
+    } else {
+        None
+    };
     let identifier = requested
         .as_deref()
+        .or(cursor_profile.as_deref())
         .unwrap_or(&operation.default_access_profile);
     if !valid_access_profile_identifier(identifier) {
         return Err(ProblemCode::AccessProfileInvalid);
@@ -1651,6 +1681,45 @@ fn select_access_profile<'a>(
             explicit,
         })
         .ok_or(ProblemCode::ResourceNotFound)
+}
+
+/// Return a cursor-selected profile only after the cursor has been authenticated
+/// and has named a profile still available on this operation. Malformed, expired,
+/// or stale cursors deliberately remain ordinary cursor-shape failures after the
+/// default-profile authorization path, preserving the established concealment
+/// ordering for untrusted cursor text.
+fn cursor_access_profile(
+    service: &RelayService,
+    operation: &CompiledOperation,
+    query: Option<&str>,
+) -> Option<String> {
+    let cursor = cursor_parameter(query)?;
+    let key = service.cursor_key.as_ref()?;
+    let payload = decode_cursor(key, &cursor, now_unix_seconds()).ok()?;
+    if payload.operation != operation.identifier
+        || payload.contract_revision != service.registry.contract_revision
+    {
+        return None;
+    }
+    valid_access_profile_identifier(&payload.access_profile)
+        .then_some(payload.access_profile)
+        .filter(|identifier| {
+            operation
+                .access_profiles
+                .iter()
+                .any(|profile| profile.id == *identifier)
+        })
+}
+
+fn cursor_parameter(query: Option<&str>) -> Option<String> {
+    let query = query?;
+    if query.len() > 16 * 1024 {
+        return None;
+    }
+    let mut cursors = url::form_urlencoded::parse(query.as_bytes())
+        .filter_map(|(name, value)| (name == "cursor").then_some(value));
+    let cursor = cursors.next()?;
+    cursors.next().is_none().then_some(cursor.into_owned())
 }
 
 /// Extract only the access-profile selector before URI-shape refusal.
@@ -1715,7 +1784,7 @@ fn decode_bounded_query_component(
 
 fn valid_access_profile_identifier(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 128
+        && value.len() <= MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES
         && !value.starts_with('-')
         && !value.ends_with('-')
         && !value.contains("--")
@@ -3024,6 +3093,60 @@ fn cursor_order_values(order_by: &[String], row: &ResultRow) -> Option<Vec<Curso
         .collect()
 }
 
+/// Verify the exact request-controlled portion of a continuation payload
+/// before starting its audit/source transaction. Fixed binding material is
+/// built through the same path as `next_cursor`; one empty entry per fixed
+/// keyset column reserves the serialized array shape without inventing a
+/// source value.
+fn cursor_context_within_bound(
+    service: &RelayService,
+    operation: &CompiledOperation,
+    access: &Access,
+    query: &PreparedCollection,
+) -> bool {
+    let Some(source_revision) = service
+        .sqlite
+        .source_revision(&operation.identifier)
+        .map(SourceRevision::cursor_value)
+    else {
+        return false;
+    };
+    let Ok(mut payload) = cursor_template(
+        service,
+        operation,
+        access,
+        CursorQueryContext {
+            filters: &query.filters,
+            selected_fields: &query.selected_fields,
+            source_revision: &source_revision,
+            bbox: query.bbox,
+            response_format: query.response_format,
+        },
+    ) else {
+        return false;
+    };
+    let Some(expires_at_unix_seconds) =
+        now_unix_seconds().checked_add(service.cursor_maximum_age.as_secs())
+    else {
+        return false;
+    };
+    payload.expires_at_unix_seconds = expires_at_unix_seconds;
+    payload.page_size = query.page_size;
+    payload.filters = query
+        .filters
+        .iter()
+        .filter_map(|(name, value)| sql_to_cursor(value.clone()).map(|value| (name.clone(), value)))
+        .collect();
+    payload.selected_fields = query.selected_fields.clone();
+    payload.last_order_values = operation
+        .query
+        .order_by
+        .iter()
+        .map(|_| CursorValue::String(String::new()))
+        .collect();
+    payload_within_bound(&payload)
+}
+
 fn cursor_template(
     service: &RelayService,
     operation: &CompiledOperation,
@@ -3316,7 +3439,7 @@ fn visible_statistical_datasets<'a>(
     }
 }
 
-fn statistical_capability(dataset: &CompiledStatisticalDataset) -> Value {
+fn statistical_capability(service: &RelayService, dataset: &CompiledStatisticalDataset) -> Value {
     let data = format!(
         "/sdmx/v2/data/dataflow/{}/{}/{}",
         dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
@@ -3337,16 +3460,16 @@ fn statistical_capability(dataset: &CompiledStatisticalDataset) -> Value {
             {"id": "sdmx-csv", "mediaType": DATA_CSV_MEDIA_TYPE},
             {"id": "sdmx-structure-json", "mediaType": STRUCTURE_JSON_MEDIA_TYPE},
         ],
-        "href": data,
+        "href": absolute(&service.registry.base_uri, &data),
         "structureLinks": {
-            "dataflow": format!(
+            "dataflow": absolute(&service.registry.base_uri, &format!(
                 "/sdmx/v2/structure/dataflow/{}/{}/{}",
                 dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
-            ),
-            "datastructure": format!(
+            )),
+            "datastructure": absolute(&service.registry.base_uri, &format!(
                 "/sdmx/v2/structure/datastructure/{}/{}/{}",
                 dataset.sdmx.agency_id, dataset.sdmx.data_structure_id, dataset.sdmx.version
-            ),
+            )),
         },
     })
 }
@@ -3401,12 +3524,12 @@ fn capability(
         "schemaReference": access_profile.schema_reference,
         "semanticModelReference": access_profile.semantic_model_reference,
         "contextReference": access_profile.context_reference,
-        "href": match &operation.kind {
+        "href": absolute(&service.registry.base_uri, &match &operation.kind {
             OperationKind::List => format!("/v2/resources/{}/records", resource.id),
             OperationKind::Read => format!("/v2/resources/{}/records/{{recordIdentifier}}", resource.id),
             OperationKind::Lookup {name} => format!("/v2/resources/{}/lookups/{name}", resource.id),
             OperationKind::Search {name} => format!("/v2/resources/{}/searches/{name}", resource.id),
-        }
+        })
     });
     let stem = format!(
         "{}--access-profile-{}",

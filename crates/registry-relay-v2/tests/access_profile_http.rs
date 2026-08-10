@@ -962,6 +962,36 @@ async fn cursor_and_etag_are_bound_to_selected_access_profile() {
     let cursor = document["pageInfo"]["nextCursor"]
         .as_str()
         .expect("limited cursor");
+    let cursor_only_uri = format!("/v2/resources/record/records?cursor={cursor}");
+    let (status, headers, body) = harness
+        .send(Method::GET, &cursor_only_uri, Some(&all), None, &[])
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get(CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    assert!(headers.get(ETAG).is_none());
+    assert!(
+        serde_json::from_slice::<Value>(&body).expect("cursor page JSON")["items"]
+            .as_array()
+            .is_some()
+    );
+
+    let caseworker_only = harness.token(&["registry:caseworker"], "review", "area-a");
+    let (status, _, body) = harness
+        .send(
+            Method::GET,
+            &cursor_only_uri,
+            Some(&caseworker_only),
+            None,
+            &[],
+        )
+        .await;
+    assert_problem(status, &body, StatusCode::NOT_FOUND, "resource.not_found");
+
     let uri = format!("/v2/resources/record/records?accessProfile=caseworker&cursor={cursor}");
     let (status, _, body) = harness.send(Method::GET, &uri, Some(&all), None, &[]).await;
     assert_problem(
@@ -970,6 +1000,56 @@ async fn cursor_and_etag_are_bound_to_selected_access_profile() {
         StatusCode::BAD_REQUEST,
         "query.cursor_invalid",
     );
+}
+
+#[tokio::test]
+async fn public_cursor_pages_are_not_cacheable() {
+    let valid_core_fixture = FIXTURE_SQL.replace("'not-a-core-date'", "'2026-08-01T12:00:00Z'");
+    let harness = Harness::open_with_fixture(
+        None,
+        Arc::new(RecordingSink::default()),
+        &valid_core_fixture,
+    )
+    .await;
+    let (status, headers, body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records?pageSize=1",
+            None,
+            None,
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get(CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    assert!(headers.get(ETAG).is_none());
+    let cursor = serde_json::from_slice::<Value>(&body).expect("first page JSON")["pageInfo"]
+        ["nextCursor"]
+        .as_str()
+        .expect("first page cursor")
+        .to_owned();
+    let (status, headers, _) = harness
+        .send(
+            Method::GET,
+            &format!("/v2/resources/record/records?cursor={cursor}"),
+            None,
+            None,
+            &[],
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get(CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    assert!(headers.get(ETAG).is_none());
 }
 
 #[tokio::test]

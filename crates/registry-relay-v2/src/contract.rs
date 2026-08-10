@@ -14,6 +14,16 @@ use url::Url;
 
 const OIDC_DISCOVERY_SUFFIX: &str = "/.well-known/openid-configuration";
 
+pub(crate) const MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES: usize = 128;
+pub(crate) const MAXIMUM_RUNTIME_BYTES: u64 = 1024 * 1024;
+
+// A JSON string byte can expand to six bytes (`\u00XX`). Capping the authored
+// audience at 8 KiB therefore leaves more than 16,000 bytes in the 64 KiB
+// decoded JWT claims segment for object syntax and registered claims. Its
+// base64url form also remains well inside the 128 KiB complete-token ceiling,
+// with ample room for the protected header, signature, and separators.
+const MAXIMUM_ISSUER_AUDIENCE_BYTES: usize = 8 * 1024;
+
 /// A duplicate-free insertion-ordered YAML mapping.
 ///
 /// Property and selector order is authored behavior, while ordinary map
@@ -165,10 +175,30 @@ pub(crate) fn runtime_cursor_configuration_is_valid(
             <= 1)
 }
 
+pub(crate) fn contract_has_protected_access(contract: &RegistryContract) -> bool {
+    contract
+        .resources
+        .iter()
+        .flat_map(resource_access_rules)
+        .chain(
+            contract
+                .statistical_datasets
+                .iter()
+                .map(|dataset| &dataset.access),
+        )
+        .any(|access| matches!(access, AccessRule::Protected(_)))
+}
+
 fn resource_can_appear_in_metadata(resource: &ResourceDefinition, visibility: Visibility) -> bool {
     if visibility == Visibility::OperatorOnly {
         return false;
     }
+    resource_access_rules(resource).any(|access| {
+        visibility == Visibility::OperationBound || matches!(access, AccessRule::Public(_))
+    })
+}
+
+fn resource_access_rules(resource: &ResourceDefinition) -> impl Iterator<Item = &AccessRule> {
     resource
         .operations
         .list
@@ -197,9 +227,6 @@ fn resource_can_appear_in_metadata(resource: &ResourceDefinition, visibility: Vi
                 .iter()
                 .map(|(_, item)| &item.access)
         }))
-        .any(|access| {
-            visibility == Visibility::OperationBound || matches!(access, AccessRule::Public(_))
-        })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1189,6 +1216,7 @@ impl IssuerRuntime {
     pub(crate) fn profile(&self) -> Option<IssuerProfile> {
         if !valid_runtime_id(&self.id)
             || self.audience.trim().is_empty()
+            || self.audience.len() > MAXIMUM_ISSUER_AUDIENCE_BYTES
             || self.token_types.as_slice() != ["at+jwt"]
         {
             return None;
@@ -1367,6 +1395,35 @@ disclosureProfiles: {}
             assert!(RelayRuntime::parse_yaml(&runtime(&format!("[{algorithm}]"))).is_ok());
         }
         assert!(RelayRuntime::parse_yaml(&runtime("[EdDSA, ES256]")).is_err());
+    }
+
+    #[test]
+    fn issuer_audience_is_bounded_inside_the_authentication_envelope() {
+        let runtime = |audience: &str| {
+            format!(
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\n    audience: '{audience}'\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+            )
+        };
+
+        let boundary = "a".repeat(MAXIMUM_ISSUER_AUDIENCE_BYTES);
+        assert!(RelayRuntime::parse_yaml(&runtime(&boundary)).is_ok());
+        assert!(
+            RelayRuntime::parse_yaml(&runtime(&format!("{boundary}a"))).is_err(),
+            "one audience byte above the ceiling must be refused"
+        );
+
+        let maximally_escaped = "\0".repeat(MAXIMUM_ISSUER_AUDIENCE_BYTES);
+        let claims = serde_json::to_vec(&serde_json::json!({
+            "aud": maximally_escaped,
+            "exp": 2,
+            "iat": 1,
+            "iss": "https://issuer.example.invalid",
+            "sub": "s"
+        }))
+        .expect("claims serialize");
+        assert!(claims.len() < 64 * 1024);
+        let encoded_claims_upper_bound = claims.len().div_ceil(3) * 4;
+        assert!(encoded_claims_upper_bound + 16 * 1024 < 128 * 1024);
     }
 
     #[test]

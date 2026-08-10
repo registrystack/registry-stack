@@ -640,8 +640,17 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
     ] {
         let cacheable = path == "/openapi.json"
             || (path == "/v2" && registry.metadata_visibility.resources == Visibility::Public);
+        let schema = match path {
+            "/health" | "/ready" => json!({"$ref": "#/components/schemas/Status"}),
+            "/v2" => json!({"$ref": "#/components/schemas/ServiceMetadata"}),
+            "/openapi.json" => json!({"type": "object"}),
+            _ => unreachable!("fixed OpenAPI path"),
+        };
         let mut responses = json!({
-            "200": {"description": "Successful response"},
+            "200": {
+                "description": "Successful response",
+                "content": {"application/json": {"schema": schema}}
+            },
             "default": {"$ref": "#/components/responses/Problem"}
         });
         if cacheable {
@@ -679,6 +688,16 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 } else {
                     json!([{"bearerAuth": []}])
                 },
+                "parameters": [
+                    {
+                        "name": "pageSize", "in": "query", "required": false,
+                        "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}
+                    },
+                    {
+                        "name": "cursor", "in": "query", "required": false,
+                        "schema": {"type": "string", "minLength": 1}
+                    }
+                ],
                 "responses": list_responses
             }}),
         );
@@ -993,6 +1012,92 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
             },
             "schemas": {
+                "Status": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["status"],
+                    "properties": {"status": {"type": "string", "enum": ["ok", "ready"]}}
+                },
+                "ServiceMetadata": {
+                    "type": "object", "additionalProperties": false,
+                    "required": [
+                        "registryIdentifier", "name", "authority", "operator",
+                        "authoritativeScope", "product", "apiBinding", "alignmentTargets",
+                        "capabilities", "links"
+                    ],
+                    "properties": {
+                        "registryIdentifier": {"type": "string", "minLength": 1},
+                        "name": {"type": "string", "minLength": 1},
+                        "authority": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["identifier", "name"],
+                            "properties": {
+                                "identifier": {"type": "string", "minLength": 1},
+                                "name": {"type": "string", "minLength": 1}
+                            }
+                        },
+                        "operator": {
+                            "type": ["object", "null"],
+                            "additionalProperties": false,
+                            "required": ["identifier", "name"],
+                            "properties": {
+                                "identifier": {"type": "string", "minLength": 1},
+                                "name": {"type": "string", "minLength": 1}
+                            }
+                        },
+                        "authoritativeScope": {"type": "string", "minLength": 1},
+                        "product": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["name", "version"],
+                            "properties": {
+                                "name": {"type": "string", "minLength": 1},
+                                "version": {"type": "string", "minLength": 1}
+                            }
+                        },
+                        "apiBinding": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["name", "version"],
+                            "properties": {
+                                "name": {"type": "string", "minLength": 1},
+                                "version": {"type": "string", "minLength": 1}
+                            }
+                        },
+                        "alignmentTargets": {
+                            "type": "array",
+                            "items": {
+                                "type": "object", "additionalProperties": false,
+                                "required": ["name", "version", "status", "cfrTarget"],
+                                "properties": {
+                                    "name": {"type": "string", "minLength": 1},
+                                    "version": {"type": "string", "minLength": 1},
+                                    "status": {"type": "string", "minLength": 1},
+                                    "cfrTarget": {"type": ["string", "null"]}
+                                }
+                            }
+                        },
+                        "capabilities": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["family", "pattern", "operationIdentifier", "href"],
+                                "properties": {
+                                    "family": {"type": "string", "minLength": 1},
+                                    "pattern": {"type": "string", "minLength": 1},
+                                    "operationIdentifier": {"type": "string", "minLength": 1},
+                                    "href": {"type": "string", "format": "uri"}
+                                }
+                            }
+                        },
+                        "links": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["self", "resources", "openapi"],
+                            "properties": {
+                                "self": {"type": "string", "format": "uri"},
+                                "resources": {"type": "string", "format": "uri"},
+                                "openapi": {"type": "string", "format": "uri"}
+                            }
+                        }
+                    }
+                },
                 "Problem": {
                     "type": "object", "additionalProperties": false,
                     "required": ["type", "title", "status", "code", "traceId"],
@@ -1469,6 +1574,20 @@ fn capability_inventory(
                         OperationKind::Lookup { .. } => "search",
                         OperationKind::Search { .. } => "search",
                     };
+                    let href = match &operation.kind {
+                        OperationKind::List => {
+                            format!("/v2/resources/{}/records", resource.id)
+                        }
+                        OperationKind::Read => {
+                            format!("/v2/resources/{}/records/{{recordIdentifier}}", resource.id)
+                        }
+                        OperationKind::Lookup { name } => {
+                            format!("/v2/resources/{}/lookups/{name}", resource.id)
+                        }
+                        OperationKind::Search { name } => {
+                            format!("/v2/resources/{}/searches/{name}", resource.id)
+                        }
+                    };
                     Some(json!({
                         "resource": resource.id,
                         "operationIdentifier": operation.identifier,
@@ -1477,6 +1596,7 @@ fn capability_inventory(
                         "family": "consultation",
                         "pattern": pattern,
                         "profile": if matches!(&operation.kind, OperationKind::Lookup { .. }) { Value::String("exact".into()) } else { Value::Null },
+                        "href": absolute(&registry.base_uri, &href),
                         "schemaReference": access_profile.schema_reference,
                         "semanticModelReference": access_profile.semantic_model_reference,
                         "contextReference": access_profile.context_reference,
@@ -1520,18 +1640,18 @@ fn capability_inventory(
                     {"id": "sdmx-csv", "mediaType": DATA_CSV_MEDIA_TYPE},
                     {"id": "sdmx-structure-json", "mediaType": STRUCTURE_JSON_MEDIA_TYPE},
                 ],
-                "href": data,
+                "href": absolute(&registry.base_uri, &data),
                 "structureLinks": {
-                    "dataflow": format!(
+                    "dataflow": absolute(&registry.base_uri, &format!(
                         "/sdmx/v2/structure/dataflow/{}/{}/{}",
                         dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
-                    ),
-                    "datastructure": format!(
+                    )),
+                    "datastructure": absolute(&registry.base_uri, &format!(
                         "/sdmx/v2/structure/datastructure/{}/{}/{}",
                         dataset.sdmx.agency_id,
                         dataset.sdmx.data_structure_id,
                         dataset.sdmx.version
-                    ),
+                    )),
                 },
             })
         })
@@ -1557,6 +1677,10 @@ fn capability_inventory(
         "capabilities": capabilities,
         "unsupportedFamilies": unsupported_families
     })
+}
+
+fn absolute(base: &str, path: &str) -> String {
+    format!("{}{path}", base.trim_end_matches('/'))
 }
 
 fn audit_event_schema() -> Value {
@@ -1646,7 +1770,8 @@ mod tests {
 
     #[test]
     fn generated_sdmx_dataflow_and_dsd_artifacts_are_canonical_and_route_identical() {
-        let registry = compiled_statistical_registry();
+        let mut registry = compiled_statistical_registry();
+        registry.base_uri = "https://statistics.example.invalid/registry/".into();
         let dataset = &registry.statistical_datasets[0];
         let operation_identifier = dataset.operation_identifier();
         let generated = generate_artifacts(&registry).expect("statistical artifacts generate");
@@ -1787,6 +1912,33 @@ mod tests {
                     && capability["family"] == "aggregate-data"
                     && capability["pattern"] == "statistical-dataflow"
             }));
+        let capability = capabilities["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .iter()
+            .find(|capability| capability["operationIdentifier"] == operation_identifier)
+            .expect("statistical capability");
+        assert_eq!(
+            capability["href"],
+            format!(
+                "https://statistics.example.invalid/registry/sdmx/v2/data/dataflow/{}/{}/{}",
+                dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+            )
+        );
+        assert_eq!(
+            capability["structureLinks"]["dataflow"],
+            format!(
+                "https://statistics.example.invalid/registry/sdmx/v2/structure/dataflow/{}/{}/{}",
+                dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+            )
+        );
+        assert_eq!(
+            capability["structureLinks"]["datastructure"],
+            format!(
+                "https://statistics.example.invalid/registry/sdmx/v2/structure/datastructure/{}/{}/{}",
+                dataset.sdmx.agency_id, dataset.sdmx.data_structure_id, dataset.sdmx.version
+            )
+        );
         assert!(!capabilities["unsupportedFamilies"]
             .as_array()
             .expect("unsupported families")
@@ -1967,13 +2119,14 @@ mod tests {
     fn generated_inventory_covers_required_v1_artifact_classes_only() {
         let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
             .expect("contract parses");
-        let registry = compile_contract_with_governed_files(
+        let mut registry = compile_contract_with_governed_files(
             &contract,
             &[compiler_tests::observed_schema()],
             CompileProfile::Production,
             &compiler_tests::governed_files(),
         )
         .expect("contract compiles");
+        registry.base_uri = "https://registry.example.invalid/registry/".into();
         let generated = generate_artifacts(&registry).expect("artifacts generate");
         let paths = generated
             .artifacts
@@ -2070,6 +2223,37 @@ mod tests {
         ] {
             assert!(full["paths"].get(path).is_some(), "missing {path}");
         }
+        assert_eq!(
+            full["paths"]["/v2/resources"]["get"]["parameters"],
+            json!([
+                {
+                    "name": "pageSize", "in": "query", "required": false,
+                    "schema": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}
+                },
+                {
+                    "name": "cursor", "in": "query", "required": false,
+                    "schema": {"type": "string", "minLength": 1}
+                }
+            ])
+        );
+        for path in ["/health", "/ready", "/openapi.json", "/v2"] {
+            assert!(
+                full["paths"][path]["get"]["responses"]["200"]["content"]["application/json"]
+                    .is_object(),
+                "{path} must describe its JSON success body"
+            );
+        }
+        let service_metadata = &full["components"]["schemas"]["ServiceMetadata"];
+        for property in ["registryIdentifier", "authority", "capabilities", "links"] {
+            assert!(
+                service_metadata["properties"].get(property).is_some(),
+                "ServiceMetadata must expose {property} to generated clients"
+            );
+        }
+        assert_eq!(
+            service_metadata["properties"]["links"]["required"],
+            json!(["self", "resources", "openapi"])
+        );
         for (path, definition) in public["paths"].as_object().expect("public paths") {
             assert_eq!(
                 full["paths"].get(path),
@@ -2131,6 +2315,25 @@ mod tests {
             .as_array()
             .expect("ordinary JSON required array")
             .contains(&json!("@context")));
+
+        let capabilities: Value = serde_json::from_slice(
+            &generated
+                .get("artifacts/capabilities.json")
+                .expect("public capabilities")
+                .content,
+        )
+        .expect("public capabilities parse");
+        assert!(capabilities["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .iter()
+            .any(|capability| {
+                capability["href"].as_str().is_some_and(|href| {
+                    href.starts_with(
+                        "https://registry.example.invalid/registry/v2/resources/record/",
+                    )
+                })
+            }));
         assert!(json_schema["properties"].get("@context").is_none());
         assert!(json_ld_schema["required"]
             .as_array()

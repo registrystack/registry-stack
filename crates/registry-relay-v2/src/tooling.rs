@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,11 +25,12 @@ use crate::compiler::{
     referenced_governed_files, GovernedFileSet,
 };
 use crate::contract::{
-    runtime_cursor_configuration_is_valid, AccessRule, ClassificationPartial,
-    ClassificationReviewDocument, Handling, ProtectedAccess, RegistryContract, RelayRuntime,
-    ResourceSource, ReviewStatus, SdmxBindingDefinition, StatisticalAttributeDefinition,
-    StatisticalBindings, StatisticalDimensionDefinition, StatisticalMeasureDefinition,
-    StatisticalPublication, StatisticalQueryProfile, StatisticalValueType,
+    contract_has_protected_access, runtime_cursor_configuration_is_valid, AccessRule,
+    ClassificationPartial, ClassificationReviewDocument, Handling, ProtectedAccess,
+    RegistryContract, RelayRuntime, ResourceSource, ReviewStatus, SdmxBindingDefinition,
+    StatisticalAttributeDefinition, StatisticalBindings, StatisticalDimensionDefinition,
+    StatisticalMeasureDefinition, StatisticalPublication, StatisticalQueryProfile,
+    StatisticalValueType, MAXIMUM_RUNTIME_BYTES,
 };
 use crate::cursor::CursorKey;
 use crate::diff::{diff_registries, ChangeImpactReport};
@@ -1217,7 +1218,7 @@ fn compile_project(
     };
     let runtime_path = root.join("runtime.yaml");
     let runtime = if runtime_path.is_file() {
-        let yaml = read_utf8(&runtime_path)?;
+        let yaml = read_runtime_utf8(&runtime_path)?;
         match RelayRuntime::parse_yaml(&yaml) {
             Ok(runtime) => Some(runtime),
             Err(_) => {
@@ -1350,38 +1351,7 @@ fn validate_runtime(
             "a Registry with a paginated data or resource-metadata list requires an opaque-cursor key and age bound",
         ));
     }
-    let protected = contract.resources.iter().any(|resource| {
-        resource
-            .operations
-            .list
-            .iter()
-            .flat_map(|operation| {
-                operation
-                    .access_profiles
-                    .iter()
-                    .map(|(_, item)| &item.access)
-            })
-            .chain(resource.operations.read.iter().flat_map(|operation| {
-                operation
-                    .access_profiles
-                    .iter()
-                    .map(|(_, item)| &item.access)
-            }))
-            .chain(resource.operations.lookups.iter().flat_map(|operation| {
-                operation
-                    .access_profiles
-                    .iter()
-                    .map(|(_, item)| &item.access)
-            }))
-            .chain(resource.operations.searches.iter().flat_map(|operation| {
-                operation
-                    .access_profiles
-                    .iter()
-                    .map(|(_, item)| &item.access)
-            }))
-            .any(|access| matches!(access, crate::contract::AccessRule::Protected(_)))
-    });
-    if protected && runtime.authentication.issuer.is_none() {
+    if contract_has_protected_access(contract) && runtime.authentication.issuer.is_none() {
         diagnostics.push(diagnostic(
             "runtime.issuer_missing",
             "runtime.yaml.authentication.issuer",
@@ -1530,6 +1500,19 @@ fn validate_relative(value: &str) -> Result<(), ToolingError> {
 
 fn read_utf8(path: &Path) -> Result<String, ToolingError> {
     fs::read_to_string(path).map_err(|_| ToolingError::Read)
+}
+
+fn read_runtime_utf8(path: &Path) -> Result<String, ToolingError> {
+    let mut file = fs::File::open(path).map_err(|_| ToolingError::Read)?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(MAXIMUM_RUNTIME_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|_| ToolingError::Read)?;
+    if bytes.len() as u64 > MAXIMUM_RUNTIME_BYTES {
+        return Err(ToolingError::Read);
+    }
+    String::from_utf8(bytes).map_err(|_| ToolingError::Read)
 }
 
 fn diagnostic(code: &str, location: &str, message: &str) -> Diagnostic {
@@ -1688,6 +1671,47 @@ mod tests {
                 .iter()
                 .any(|item| item.code == "runtime.yaml_invalid"));
         }
+    }
+
+    #[test]
+    fn tooling_runtime_reads_match_the_startup_byte_ceiling() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let path = temporary.path().join("runtime.yaml");
+        fs::write(&path, vec![b' '; MAXIMUM_RUNTIME_BYTES as usize])
+            .expect("boundary runtime writes");
+        assert_eq!(
+            read_runtime_utf8(&path)
+                .expect("the exact startup byte ceiling reads")
+                .len(),
+            MAXIMUM_RUNTIME_BYTES as usize
+        );
+
+        fs::write(&path, vec![b' '; MAXIMUM_RUNTIME_BYTES as usize + 1])
+            .expect("oversized runtime writes");
+        assert!(matches!(read_runtime_utf8(&path), Err(ToolingError::Read)));
+        fs::write(
+            temporary.path().join("registry.yaml"),
+            compiler_tests::valid_contract(),
+        )
+        .expect("contract writes");
+        assert!(matches!(
+            compile_project(temporary.path(), CompileProfile::Authoring),
+            Err(ToolingError::Read)
+        ));
+    }
+
+    #[test]
+    fn tooling_requires_an_issuer_for_protected_statistical_access() {
+        let mut contract = RegistryContract::parse_yaml(compiler_tests::statistical_contract())
+            .expect("statistical contract");
+        contract.statistical_datasets[0].access =
+            serde_norway::from_str("{scope: registry:statistics:read}")
+                .expect("protected statistical access");
+
+        let diagnostics = validate_runtime(&contract, Some(&runtime("{issuer: null}")));
+        assert!(diagnostics
+            .iter()
+            .any(|item| item.code == "runtime.issuer_missing"));
     }
 
     #[test]

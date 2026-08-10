@@ -14,7 +14,7 @@ use crate::contract::{
     AccessProfileDefinition, AccessRule, AuthorityRowBinding, ClassificationPartial, DataType,
     DateInputType, DatePrecision, Handling, IdentificationMethod, PropertyBindingDefinition,
     RegistryContract, ReviewStatus, SearchQueryDefinition, SourceProfile, StatisticalValueType,
-    TransformDefinition,
+    TransformDefinition, MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES,
 };
 use crate::model::{
     CapabilityFamily, ColumnAccount, ColumnUse, CompileProfile, CompileReport, CompiledAccess,
@@ -2385,7 +2385,7 @@ impl<'a> Compiler<'a> {
                 "the access profile count exceeds the per-operation product ceiling",
             );
         }
-        if !valid_kebab_identifier(default_access_profile)
+        if !valid_access_profile_identifier(default_access_profile)
             || access_profile_definitions
                 .get(default_access_profile)
                 .is_none()
@@ -2412,11 +2412,11 @@ impl<'a> Compiler<'a> {
         let mut access_profiles = Vec::with_capacity(access_profile_definitions.len());
         for (access_profile_id, definition) in access_profile_definitions.iter() {
             let access_profile_location = format!("{location}.accessProfiles.{access_profile_id}");
-            if !valid_kebab_identifier(access_profile_id) {
+            if !valid_access_profile_identifier(access_profile_id) {
                 self.error(
                     "access_profile.id_invalid",
                     &access_profile_location,
-                    "access profile identifiers must be URL-safe kebab case",
+                    "access profile identifiers must be URL-safe kebab case within the runtime byte ceiling",
                 );
             }
             let Some(disclosure) = disclosures
@@ -4992,6 +4992,10 @@ fn valid_kebab_identifier(value: &str) -> bool {
         && !value.contains("--")
 }
 
+fn valid_access_profile_identifier(value: &str) -> bool {
+    value.len() <= MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES && valid_kebab_identifier(value)
+}
+
 fn has_duplicates(values: &[String]) -> bool {
     let mut seen = HashSet::new();
     values.iter().any(|value| !seen.insert(value))
@@ -6356,6 +6360,62 @@ pub(crate) mod tests {
             .map(|_| serde_json::json!("name"))
             .collect();
         assert_refused(&parse_value(order_value), "list.order_bound_exceeded");
+    }
+
+    #[test]
+    fn access_profile_identifiers_match_the_runtime_byte_ceiling() {
+        let base = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let profile_at = |value: &mut serde_json::Value, identifier: &str, replace: bool| {
+            let profiles = value
+                .pointer_mut("/resources/0/operations/read/accessProfiles")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("access profiles object");
+            let profile = profiles
+                .get("public")
+                .expect("public access profile")
+                .clone();
+            if replace {
+                profiles.remove("public");
+            }
+            profiles.insert(identifier.into(), profile);
+            if replace {
+                *value
+                    .pointer_mut("/resources/0/operations/read/defaultAccessProfile")
+                    .expect("default access profile") = serde_json::json!(identifier);
+            }
+        };
+        let compile_value = |value| {
+            let contract =
+                serde_json::from_value::<RegistryContract>(value).expect("strict contract value");
+            compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+        };
+
+        let boundary = "a".repeat(MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES);
+        let mut boundary_value = serde_json::to_value(&base).expect("contract serializes");
+        profile_at(&mut boundary_value, &boundary, true);
+        compile_value(boundary_value).expect("runtime boundary compiles");
+
+        let oversized = "a".repeat(MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES + 1);
+        let mut oversized_default = serde_json::to_value(&base).expect("contract serializes");
+        profile_at(&mut oversized_default, &oversized, true);
+        let report = compile_value(oversized_default).expect_err("oversized default is refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "access_profile.default_invalid"));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "access_profile.id_invalid"));
+
+        let mut oversized_non_default = serde_json::to_value(&base).expect("contract serializes");
+        profile_at(&mut oversized_non_default, &oversized, false);
+        let report =
+            compile_value(oversized_non_default).expect_err("oversized non-default is refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "access_profile.id_invalid"));
     }
 
     #[test]

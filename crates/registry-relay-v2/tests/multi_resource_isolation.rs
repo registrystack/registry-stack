@@ -25,6 +25,7 @@ use registry_relay_v2::compiler::{
     GovernedFileSet,
 };
 use registry_relay_v2::contract::{RegistryContract, Visibility};
+use registry_relay_v2::cursor::CursorKey;
 use registry_relay_v2::model::{
     CompileProfile, CompiledAccess, CompiledRegistry, ObservedColumn, ObservedSourceSchema,
     ObservedView, OperationKind, RowAuthoritySource,
@@ -473,7 +474,9 @@ async fn real_router_keeps_related_public_and_protected_resources_isolated() {
         sqlite,
         Some(authenticator),
         RelayAudit::new(chain, sink.clone()),
-        None,
+        Some(Arc::new(
+            CursorKey::new(vec![7; 32]).expect("fixture cursor key is valid"),
+        )),
         Duration::from_secs(300),
         Duration::from_secs(5),
         Some(QuotaConfig {

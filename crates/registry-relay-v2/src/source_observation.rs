@@ -15,7 +15,8 @@ use crate::model::{ObservedColumn, ObservedSourceSchema, ObservedView};
 const MAXIMUM_OBJECTS: usize = 10_000;
 const MAXIMUM_SQL_BYTES: usize = 8 * 1024 * 1024;
 const MAXIMUM_STEPS: u64 = 1_000_000;
-const TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(any(feature = "tooling", test))]
+const DEFAULT_INSPECTION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SourceObservationError;
@@ -42,8 +43,8 @@ pub(crate) fn observe_sources(
                 LiveDatabaseFile::bind(&path).map_err(|_| SourceObservationError)?,
             ),
         };
-        let catalog =
-            inspect_schema(&profile, &inspection_limits()).map_err(|_| SourceObservationError)?;
+        let catalog = inspect_schema(&profile, &runtime_inspection_limits(runtime))
+            .map_err(|_| SourceObservationError)?;
         let views = catalog
             .objects
             .iter()
@@ -71,12 +72,23 @@ pub(crate) fn observe_sources(
     Ok(observed)
 }
 
+#[cfg(any(feature = "tooling", test))]
 pub(crate) fn inspection_limits() -> InspectionLimits {
+    inspection_limits_with_timeout(DEFAULT_INSPECTION_TIMEOUT)
+}
+
+fn runtime_inspection_limits(runtime: &RelayRuntime) -> InspectionLimits {
+    inspection_limits_with_timeout(Duration::from_millis(
+        runtime.limits.request_timeout_milliseconds,
+    ))
+}
+
+fn inspection_limits_with_timeout(timeout: Duration) -> InspectionLimits {
     InspectionLimits {
         maximum_objects: MAXIMUM_OBJECTS,
         maximum_sql_bytes: MAXIMUM_SQL_BYTES,
         maximum_statement_steps: MAXIMUM_STEPS,
-        timeout: TIMEOUT,
+        timeout,
     }
 }
 
@@ -86,5 +98,24 @@ fn resolve_source_path(root: &Path, configured: &str) -> PathBuf {
         path.to_owned()
     } else {
         root.join(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn governed_source_observation_uses_the_runtime_request_timeout() {
+        let runtime = RelayRuntime::parse_yaml(
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:8080'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 37, concurrentQueries: 1}\n",
+        )
+        .expect("runtime parses");
+
+        assert_eq!(
+            runtime_inspection_limits(&runtime).timeout,
+            Duration::from_millis(37)
+        );
+        assert_eq!(inspection_limits().timeout, DEFAULT_INSPECTION_TIMEOUT);
     }
 }
