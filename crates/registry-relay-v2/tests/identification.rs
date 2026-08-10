@@ -592,9 +592,9 @@ fn digest(character: char) -> String {
 fn observed(reverse: bool) -> ObservedSourceSchema {
     let mut columns = [
         ("id", "TEXT", false, true),
-        ("revision", "INTEGER", false, false),
+        ("revision", "TEXT", false, false),
         ("status", "TEXT", false, false),
-        ("recorded_at", "DATETIME", false, false),
+        ("recorded_at", "TEXT", false, false),
         ("region_code", "TEXT", true, false),
         ("category_code", "TEXT", true, false),
         ("person_reference", "TEXT", true, false),

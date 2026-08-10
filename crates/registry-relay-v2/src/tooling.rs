@@ -3,6 +3,8 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write as _;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +12,7 @@ use std::time::Duration;
 use registry_platform_audit::{ChainState, JsonlFileSink};
 use registry_platform_sqlite::{
     inspect_schema as inspect_sqlite_schema, materialize_fixture, CapturedSnapshot,
-    DatabaseProfile, SchemaObjectKind,
+    DatabaseProfile, LiveDatabaseFile, SchemaObjectKind,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -22,7 +24,10 @@ use crate::compiler::{
     classification_inventory_digest, compile_contract_with_governed_files,
     referenced_governed_files, GovernedFileSet,
 };
-use crate::contract::{ClassificationReviewDocument, RegistryContract, RelayRuntime};
+use crate::contract::{
+    runtime_cursor_configuration_is_valid, ClassificationReviewDocument, RegistryContract,
+    RelayRuntime,
+};
 use crate::cursor::CursorKey;
 use crate::diff::{diff_registries, ChangeImpactReport};
 use crate::fixtures::{
@@ -55,6 +60,15 @@ pub struct InitOptions {
 pub struct InspectOptions {
     pub database_path: PathBuf,
     pub starter_output: Option<PathBuf>,
+    pub profile: InspectionProfile,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum InspectionProfile {
+    Snapshot,
+    #[default]
+    LiveReadOnly,
 }
 
 #[derive(Clone, Debug)]
@@ -273,10 +287,16 @@ pub fn init_project(options: &InitOptions) -> Result<ToolingReport, ToolingError
 }
 
 pub fn inspect_schema(options: &InspectOptions) -> Result<ToolingReport, ToolingError> {
-    let snapshot =
-        CapturedSnapshot::capture(&options.database_path).map_err(|_| ToolingError::Inspect)?;
-    let catalog = inspect_sqlite_schema(&DatabaseProfile::Snapshot(snapshot), &inspection_limits())
-        .map_err(|_| ToolingError::Inspect)?;
+    let profile = match options.profile {
+        InspectionProfile::Snapshot => DatabaseProfile::Snapshot(
+            CapturedSnapshot::capture(&options.database_path).map_err(|_| ToolingError::Inspect)?,
+        ),
+        InspectionProfile::LiveReadOnly => DatabaseProfile::LiveReadOnly(
+            LiveDatabaseFile::bind(&options.database_path).map_err(|_| ToolingError::Inspect)?,
+        ),
+    };
+    let catalog =
+        inspect_sqlite_schema(&profile, &inspection_limits()).map_err(|_| ToolingError::Inspect)?;
     let objects = catalog
         .objects
         .iter()
@@ -476,6 +496,15 @@ pub fn generate_project(options: &GenerateOptions) -> Result<ToolingReport, Tool
         .output_dir
         .clone()
         .unwrap_or_else(|| options.project_root.join("generated"));
+    if let Some(diagnostic) = generation_destination_diagnostic(&output)? {
+        return Ok(ToolingReport::refused(
+            vec![diagnostic],
+            ToolingDetails::Generate {
+                contract_revision: Some(registry.contract_revision),
+                artifacts: Vec::new(),
+            },
+        ));
+    }
     write_artifacts(&output, &artifacts)?;
     let mut generated = artifacts
         .artifacts
@@ -924,18 +953,11 @@ fn validate_runtime(
             "runtime sources must bind exactly the governed source identifiers",
         ));
     }
-    if contract
-        .resources
-        .iter()
-        .flat_map(|resource| resource.operations.list.iter())
-        .next()
-        .is_some()
-        && runtime.cursor.is_none()
-    {
+    if !runtime_cursor_configuration_is_valid(contract, runtime) {
         diagnostics.push(diagnostic(
             "runtime.cursor_missing",
             "runtime.yaml.cursor",
-            "a Registry with a list operation requires an opaque-cursor key and age bound",
+            "a Registry with a paginated data or resource-metadata list requires an opaque-cursor key and age bound",
         ));
     }
     let protected = contract.resources.iter().any(|resource| {
@@ -970,6 +992,17 @@ fn validate_runtime(
             "a Registry with protected operations requires one configured issuer",
         ));
     }
+    let has_lookup = contract
+        .resources
+        .iter()
+        .any(|resource| !resource.operations.lookups.is_empty());
+    if has_lookup && runtime.quotas.is_none() {
+        diagnostics.push(diagnostic(
+            "runtime.lookup_quota_missing",
+            "runtime.yaml.quotas",
+            "a Registry with an exact lookup requires a bounded operation quota",
+        ));
+    }
     diagnostics
 }
 
@@ -999,7 +1032,7 @@ fn write_artifacts(output: &Path, artifacts: &ArtifactSet) -> Result<(), Tooling
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|_| ToolingError::Write)?;
         }
-        fs::write(path, &artifact.content).map_err(|_| ToolingError::Write)?;
+        write_new_file(&path, &artifact.content)?;
     }
     Ok(())
 }
@@ -1015,7 +1048,42 @@ fn write_generated_relative(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|_| ToolingError::Write)?;
     }
-    fs::write(path, content).map_err(|_| ToolingError::Write)
+    write_new_file(&path, content)
+}
+
+fn generation_destination_diagnostic(output: &Path) -> Result<Option<Diagnostic>, ToolingError> {
+    let metadata = match fs::symlink_metadata(output) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(ToolingError::Read),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(ToolingError::UnsafePath);
+    }
+    if !metadata.is_dir() {
+        return Ok(Some(diagnostic(
+            "generation.destination_not_empty",
+            ".",
+            "generation requires a new or empty output directory",
+        )));
+    }
+    let mut entries = fs::read_dir(output).map_err(|_| ToolingError::Read)?;
+    Ok(entries.next().map(|_| {
+        diagnostic(
+            "generation.destination_not_empty",
+            ".",
+            "generation requires a new or empty output directory",
+        )
+    }))
+}
+
+fn write_new_file(path: &Path, content: &[u8]) -> Result<(), ToolingError> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|_| ToolingError::Write)?;
+    file.write_all(content).map_err(|_| ToolingError::Write)
 }
 
 fn reject_existing_symlink_components(root: &Path, relative: &Path) -> Result<(), ToolingError> {
@@ -1155,6 +1223,15 @@ const STARTER_CODELIST: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler::tests as compiler_tests;
+
+    fn runtime(authentication: &str) -> RelayRuntime {
+        let mut runtime =
+            RelayRuntime::parse_yaml(STARTER_RUNTIME).expect("starter runtime parses");
+        runtime.authentication =
+            serde_norway::from_str(authentication).expect("authentication parses");
+        runtime
+    }
 
     #[test]
     fn errors_never_render_paths() {
@@ -1174,6 +1251,160 @@ mod tests {
     fn initialized_contract_is_strictly_parseable() {
         assert!(RegistryContract::parse_yaml(STARTER_REGISTRY).is_ok());
         assert!(RelayRuntime::parse_yaml(STARTER_RUNTIME).is_ok());
+    }
+
+    #[test]
+    fn tooling_runtime_loading_matches_the_startup_issuer_profile() {
+        let runtime = |discovery_url: &str| {
+            STARTER_RUNTIME.replace(
+                "authentication: {issuer: null}",
+                &format!(
+                    "authentication:\n  issuer:\n    id: issuer\n    discoveryUrl: {discovery_url}\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]"
+                ),
+            )
+        };
+        let valid = "https://identity.example.invalid/.well-known/openid-configuration";
+        assert!(RelayRuntime::parse_yaml(&runtime(valid)).is_ok());
+
+        let temporary = tempfile::tempdir().expect("temporary root");
+        fs::write(
+            temporary.path().join("registry.yaml"),
+            compiler_tests::valid_contract(),
+        )
+        .expect("contract writes");
+        for invalid in [
+            "https://operator:credential@identity.example.invalid/.well-known/openid-configuration",
+            "https://identity.example.invalid/.well-known/openid-configuration?tenant=x",
+            "https://identity.example.invalid/.well-known/openid-configuration#fragment",
+            "https://identity.example.invalid/.well-known/oauth-authorization-server",
+            "https:///.well-known/openid-configuration",
+        ] {
+            fs::write(temporary.path().join("runtime.yaml"), runtime(invalid))
+                .expect("runtime writes");
+            let ProjectCompilation::Refused(report) =
+                compile_project(temporary.path(), CompileProfile::Authoring)
+                    .expect("invalid runtime is a tooling refusal")
+            else {
+                panic!("invalid issuer profile compiled: {invalid}");
+            };
+            assert!(report
+                .diagnostics
+                .iter()
+                .any(|item| item.code == "runtime.yaml_invalid"));
+        }
+    }
+
+    #[test]
+    fn ordinary_writable_publisher_database_can_be_inspected_live_without_values() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let database = temporary.path().join("publisher.sqlite");
+        materialize_fixture(
+            &database,
+            "CREATE TABLE registry_records (identifier TEXT PRIMARY KEY, label TEXT NOT NULL);\nINSERT INTO registry_records VALUES ('private-id', 'private-value');",
+        )
+        .expect("publisher database materializes");
+
+        let report = inspect_schema(&InspectOptions {
+            database_path: database,
+            starter_output: None,
+            profile: InspectionProfile::LiveReadOnly,
+        })
+        .expect("live structure inspection succeeds");
+        assert!(report.is_success());
+        let rendered = serde_json::to_string(&report).expect("inspection serializes");
+        assert!(!rendered.contains("private-id"));
+        assert!(!rendered.contains("private-value"));
+        assert!(rendered.contains("registry_records"));
+        assert!(rendered.contains("identifier"));
+    }
+
+    #[test]
+    fn generation_refuses_a_nonempty_destination_without_changing_user_files() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let output = temporary.path().join("generated");
+        fs::create_dir(&output).expect("output directory");
+        let marker = output.join("operator-notes.txt");
+        fs::write(&marker, b"keep me").expect("marker writes");
+
+        let refusal = generation_destination_diagnostic(&output)
+            .expect("destination is inspected")
+            .expect("nonempty destination is refused");
+        assert_eq!(refusal.code, "generation.destination_not_empty");
+        assert_eq!(fs::read(marker).expect("marker remains"), b"keep me");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn generation_refuses_a_symlink_destination() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let destination = temporary.path().join("destination");
+        fs::create_dir(&destination).expect("destination directory");
+        let output = temporary.path().join("generated");
+        symlink(&destination, &output).expect("output symlink");
+
+        assert!(matches!(
+            generation_destination_diagnostic(&output),
+            Err(ToolingError::UnsafePath)
+        ));
+    }
+
+    #[test]
+    fn production_runtime_validation_matches_lookup_and_metadata_requirements() {
+        let mut lookup_contract =
+            RegistryContract::parse_yaml(compiler_tests::valid_contract()).expect("contract");
+        lookup_contract.resources[0].operations.lookups.push(
+            serde_norway::from_str(
+                "id: by-name\nrequestBody:\n  maximumBytes: 128\n  selectors:\n    name: {sourceColumn: name, type: string, minimumBytes: 1, maximumBytes: 32}\ndefaultRepresentation: public\nrepresentations:\n  public: {access: public, disclosureProfile: public}\n",
+            )
+            .expect("lookup parses"),
+        );
+        let lookup_diagnostics =
+            validate_runtime(&lookup_contract, Some(&runtime("{issuer: null}")));
+        assert!(lookup_diagnostics
+            .iter()
+            .any(|item| item.code == "runtime.lookup_quota_missing"));
+
+        let mut metadata_contract =
+            RegistryContract::parse_yaml(compiler_tests::valid_contract()).expect("contract");
+        let template = metadata_contract.resources[0].clone();
+        let mut second = template;
+        second.id = "second-record".into();
+        metadata_contract.resources.push(second);
+        let metadata_diagnostics =
+            validate_runtime(&metadata_contract, Some(&runtime("{issuer: null}")));
+        assert!(metadata_diagnostics
+            .iter()
+            .any(|item| item.code == "runtime.cursor_missing"));
+
+        metadata_contract.metadata_visibility.resources = crate::contract::Visibility::OperatorOnly;
+        let operator_only_diagnostics =
+            validate_runtime(&metadata_contract, Some(&runtime("{issuer: null}")));
+        assert!(!operator_only_diagnostics
+            .iter()
+            .any(|item| item.code == "runtime.cursor_missing"));
+
+        metadata_contract.metadata_visibility.resources = crate::contract::Visibility::Public;
+        metadata_contract.resources[1].operations.read = Some(
+            serde_norway::from_str(
+                "defaultRepresentation: protected\nrepresentations:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
+            )
+            .expect("protected read operation"),
+        );
+        let one_public_diagnostics =
+            validate_runtime(&metadata_contract, Some(&runtime("{issuer: null}")));
+        assert!(!one_public_diagnostics
+            .iter()
+            .any(|item| item.code == "runtime.cursor_missing"));
+
+        metadata_contract.metadata_visibility.resources =
+            crate::contract::Visibility::OperationBound;
+        let operation_bound_diagnostics =
+            validate_runtime(&metadata_contract, Some(&runtime("{issuer: null}")));
+        assert!(operation_bound_diagnostics
+            .iter()
+            .any(|item| item.code == "runtime.cursor_missing"));
     }
 
     #[test]

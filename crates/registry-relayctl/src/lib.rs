@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 mod shared;
@@ -64,9 +64,20 @@ struct InspectArgs {
     #[arg(value_name = "DATABASE")]
     database: std::path::PathBuf,
 
+    /// Source posture to use while opening the database read-only.
+    #[arg(long, value_enum, default_value_t)]
+    profile: InspectionProfileArg,
+
     /// Write compiler-derived, visibly unreviewed starters to this directory.
     #[arg(long, value_name = "DIRECTORY")]
     starters: Option<std::path::PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum InspectionProfileArg {
+    Snapshot,
+    #[default]
+    LiveReadOnly,
 }
 
 #[derive(Debug, Args)]
@@ -232,6 +243,19 @@ mod tests {
         for forbidden in ["--sample", "--rows", "--values", "--limit"] {
             assert!(!help.contains(forbidden), "unexpected option {forbidden}");
         }
+        assert!(help.contains("--profile <PROFILE>"));
+        assert!(help.contains("live-read-only"));
+        assert!(help.contains("snapshot"));
+    }
+
+    #[test]
+    fn inspection_defaults_to_the_ordinary_live_read_only_profile() {
+        let cli = Cli::try_parse_from(["relayctl", "inspect", "registry.sqlite"])
+            .expect("inspection parses");
+        let Command::Inspect(args) = cli.command else {
+            panic!("inspect command is retained");
+        };
+        assert!(matches!(args.profile, InspectionProfileArg::LiveReadOnly));
     }
 
     #[test]

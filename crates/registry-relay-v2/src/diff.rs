@@ -45,8 +45,12 @@ pub enum ChangeImpact {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChangeClass {
+    RegistryIdentityChanged,
+    CompiledModelChanged,
+    GovernanceIdentityChanged,
     ResourceAdded,
     ResourceRemoved,
+    ResourceMeaningChanged,
     PropertyAdded,
     PropertyRemoved,
     PropertyMeaningChanged,
@@ -55,6 +59,7 @@ pub enum ChangeClass {
     HandlingTightened,
     OperationAdded,
     OperationRemoved,
+    OperationChanged,
     RepresentationAdded,
     RepresentationRemoved,
     DefaultRepresentationChanged,
@@ -84,6 +89,8 @@ pub enum ChangeClass {
     MetadataVisibilityRelaxed,
     MetadataVisibilityTightened,
     SemanticAlignmentChanged,
+    SemanticModelChanged,
+    SemanticClassChanged,
     ClassificationChanged,
     ClassificationReviewChanged,
     ProcessingChanged,
@@ -95,6 +102,50 @@ pub fn diff_registries(
     current: &CompiledRegistry,
 ) -> ChangeImpactReport {
     let mut changes = Vec::new();
+    if previous.contract_id != current.contract_id
+        || previous.contract_version != current.contract_version
+        || previous.registry_identifier != current.registry_identifier
+        || previous.registry_name != current.registry_name
+        || previous.authority_identifier != current.authority_identifier
+        || previous.authority_name != current.authority_name
+        || previous.operator_identifier != current.operator_identifier
+        || previous.operator_name != current.operator_name
+        || previous.authoritative_scope != current.authoritative_scope
+        || previous.base_uri != current.base_uri
+        || previous.identifier_lifecycle_policy_ref != current.identifier_lifecycle_policy_ref
+        || previous.alignment_targets != current.alignment_targets
+    {
+        push(
+            &mut changes,
+            ChangeClass::RegistryIdentityChanged,
+            ChangeImpact::Breaking,
+            "registry".into(),
+            "the contract or Registry identity, authority, scope, base URI, lifecycle policy, or alignment targets changed",
+        );
+    }
+    if previous.controller_identifier != current.controller_identifier
+        || previous.publisher_identifier != current.publisher_identifier
+        || previous.audit_owner_identifier != current.audit_owner_identifier
+    {
+        push(
+            &mut changes,
+            ChangeClass::GovernanceIdentityChanged,
+            ChangeImpact::Breaking,
+            "governance".into(),
+            "the Registry controller, publisher, or audit owner changed",
+        );
+    }
+    if previous.local_vocabulary != current.local_vocabulary
+        || previous.codelists != current.codelists
+    {
+        push(
+            &mut changes,
+            ChangeClass::SemanticModelChanged,
+            ChangeImpact::Breaking,
+            "semantics".into(),
+            "the local vocabulary or governed codelist model changed",
+        );
+    }
     let previous_sources = previous
         .sources
         .iter()
@@ -111,16 +162,13 @@ pub fn diff_registries(
         .collect::<BTreeSet<_>>()
     {
         match (previous_sources.get(*id), current_sources.get(*id)) {
-            (Some(before), Some(after))
-                if before.profile != after.profile
-                    || before.expected_schema_fingerprint != after.expected_schema_fingerprint =>
-            {
+            (Some(before), Some(after)) if before != after => {
                 push(
                     &mut changes,
                     ChangeClass::SourceSchemaChanged,
                     ChangeImpact::Breaking,
                     format!("sources.{id}"),
-                    "the governed source profile or expected schema fingerprint changed",
+                    "the governed source profile, expected schema fingerprint, or observed schema changed",
                 );
             }
             (None, Some(_)) | (Some(_), None) => push(
@@ -205,6 +253,15 @@ pub fn diff_registries(
             );
         }
     }
+    if compiled_models_differ(previous, current) {
+        push(
+            &mut changes,
+            ChangeClass::CompiledModelChanged,
+            ChangeImpact::Breaking,
+            "compiledRegistry".into(),
+            "the compiled Registry changed; granular entries classify currently recognized impacts",
+        );
+    }
     changes.sort_by(|left, right| {
         left.location
             .cmp(&right.location)
@@ -216,6 +273,14 @@ pub fn diff_registries(
         current_revision: current.contract_revision.clone(),
         changes,
     }
+}
+
+fn compiled_models_differ(previous: &CompiledRegistry, current: &CompiledRegistry) -> bool {
+    let mut previous = previous.clone();
+    let mut current = current.clone();
+    previous.contract_revision.clear();
+    current.contract_revision.clear();
+    previous != current
 }
 
 fn resource_map(registry: &CompiledRegistry) -> BTreeMap<&str, &CompiledResource> {
@@ -239,6 +304,33 @@ fn diff_resource(
             ChangeImpact::Breaking,
             format!("{root}.source"),
             "the reviewed source or view changed",
+        );
+    }
+    if previous.title != current.title {
+        push(
+            changes,
+            ChangeClass::ResourceMeaningChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.title"),
+            "the published resource title changed",
+        );
+    }
+    if previous.description != current.description {
+        push(
+            changes,
+            ChangeClass::ResourceMeaningChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.description"),
+            "the published resource description changed",
+        );
+    }
+    if previous.semantic_class != current.semantic_class {
+        push(
+            changes,
+            ChangeClass::SemanticClassChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.semanticClass"),
+            "the published resource semantic class changed",
         );
     }
     if previous.record_context != current.record_context {
@@ -266,6 +358,15 @@ fn diff_resource(
             ChangeImpact::Breaking,
             format!("{root}.processingDescriptions"),
             "the reviewed processing description set changed",
+        );
+    }
+    if previous.disclosure_profiles != current.disclosure_profiles {
+        push(
+            changes,
+            ChangeClass::DisclosureProfileChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.disclosureProfiles"),
+            "a named disclosure profile, its property order, or its handling ceiling changed",
         );
     }
 
@@ -301,6 +402,24 @@ fn diff_resource(
                 "a publishable property was removed",
             ),
             (Some(before), Some(after)) => {
+                if before.label != after.label {
+                    push(
+                        changes,
+                        ChangeClass::PropertyMeaningChanged,
+                        ChangeImpact::Breaking,
+                        format!("{location}.label"),
+                        "the published property label changed",
+                    );
+                }
+                if before.description != after.description {
+                    push(
+                        changes,
+                        ChangeClass::PropertyMeaningChanged,
+                        ChangeImpact::Breaking,
+                        format!("{location}.description"),
+                        "the published property description changed",
+                    );
+                }
                 if before.semantic_iri != after.semantic_iri
                     || before.data_type != after.data_type
                     || before.codelist != after.codelist
@@ -402,6 +521,27 @@ fn diff_operation(
     location: &str,
     changes: &mut Vec<ContractChange>,
 ) {
+    if previous.family != current.family
+        || previous.pattern != current.pattern
+        || previous.kind != current.kind
+    {
+        push(
+            changes,
+            ChangeClass::OperationChanged,
+            ChangeImpact::Breaking,
+            location.into(),
+            "the operation family, consultation pattern, or operation kind changed",
+        );
+    }
+    if previous.query.source != current.query.source || previous.query.view != current.query.view {
+        push(
+            changes,
+            ChangeClass::SourceViewChanged,
+            ChangeImpact::Breaking,
+            format!("{location}.source"),
+            "the operation source or view changed",
+        );
+    }
     if previous.default_representation != current.default_representation {
         push(
             changes,
@@ -571,6 +711,17 @@ fn diff_representation(
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
+    if previous.selectable_properties != current.selectable_properties
+        && previous_properties == current_properties
+    {
+        push(
+            changes,
+            ChangeClass::DisclosureProfileChanged,
+            ChangeImpact::Breaking,
+            format!("{location}.selectableProperties"),
+            "the deterministic disclosure property order changed",
+        );
+    }
     if current_properties
         .difference(&previous_properties)
         .next()
@@ -606,6 +757,27 @@ fn diff_representation(
             "the representation transformation inventory changed",
         );
     }
+    if previous.projected_columns != current.projected_columns {
+        push(
+            changes,
+            ChangeClass::DisclosureProfileChanged,
+            ChangeImpact::Breaking,
+            format!("{location}.projectedColumns"),
+            "the reviewed source projection changed",
+        );
+    }
+    if previous.schema_reference != current.schema_reference
+        || previous.semantic_model_reference != current.semantic_model_reference
+        || previous.context_reference != current.context_reference
+    {
+        push(
+            changes,
+            ChangeClass::SemanticModelChanged,
+            ChangeImpact::Breaking,
+            format!("{location}.semanticReferences"),
+            "the representation schema, semantic model, or JSON-LD context reference changed",
+        );
+    }
     if previous.processing_handling != current.processing_handling
         || previous.disclosure_handling != current.disclosure_handling
     {
@@ -629,6 +801,8 @@ fn classification_context(
     &str,
     &str,
     &str,
+    &str,
+    &str,
     crate::contract::ReviewStatus,
     &str,
 ) {
@@ -639,6 +813,8 @@ fn classification_context(
         &value.institutional,
         &value.institutional_scheme,
         &value.institutional_version,
+        &value.handling_scheme,
+        &value.handling_version,
         value.status,
         &value.provenance_ref,
     )
@@ -920,6 +1096,17 @@ mod tests {
         .expect("contract compiles")
     }
 
+    fn compiled_model_change() -> ContractChange {
+        ContractChange {
+            class: ChangeClass::CompiledModelChanged,
+            impact: ChangeImpact::Breaking,
+            location: "compiledRegistry".into(),
+            description:
+                "the compiled Registry changed; granular entries classify currently recognized impacts"
+                    .into(),
+        }
+    }
+
     #[test]
     fn visibility_order_is_security_monotonic() {
         assert!(visibility_rank(Visibility::Public) < visibility_rank(Visibility::OperationBound));
@@ -944,6 +1131,277 @@ mod tests {
             .changes
             .iter()
             .any(|change| change.class == ChangeClass::ProcessingChanged));
+    }
+
+    #[test]
+    fn classification_handling_scheme_or_version_change_is_reported() {
+        let previous = compiled();
+        for current in [
+            {
+                let mut current = previous.clone();
+                current.resources[0].properties[0]
+                    .classification
+                    .handling_scheme = "https://example.invalid/handling-scheme".into();
+                current
+            },
+            {
+                let mut current = previous.clone();
+                current.resources[0].properties[0]
+                    .classification
+                    .handling_version = "replacement".into();
+                current
+            },
+        ] {
+            let report = diff_registries(&previous, &current);
+            assert!(report
+                .changes
+                .iter()
+                .any(|change| change.class == ChangeClass::ClassificationChanged));
+        }
+    }
+
+    #[test]
+    fn resource_title_change_is_reported_as_a_breaking_meaning_change() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.resources[0].title = "Replacement title".into();
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.contains(&ContractChange {
+            class: ChangeClass::ResourceMeaningChanged,
+            impact: ChangeImpact::Breaking,
+            location: format!("resources.{}.title", current.resources[0].id),
+            description: "the published resource title changed".into(),
+        }));
+        assert!(report.changes.contains(&compiled_model_change()));
+    }
+
+    #[test]
+    fn resource_description_change_is_reported_as_a_breaking_meaning_change() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.resources[0].description = "Replacement description".into();
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.contains(&ContractChange {
+            class: ChangeClass::ResourceMeaningChanged,
+            impact: ChangeImpact::Breaking,
+            location: format!("resources.{}.description", current.resources[0].id),
+            description: "the published resource description changed".into(),
+        }));
+        assert!(report.changes.contains(&compiled_model_change()));
+    }
+
+    #[test]
+    fn property_label_change_is_reported_as_a_breaking_meaning_change() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.resources[0].properties[0].label = "Replacement label".into();
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.contains(&ContractChange {
+            class: ChangeClass::PropertyMeaningChanged,
+            impact: ChangeImpact::Breaking,
+            location: format!(
+                "resources.{}.properties.{}.label",
+                current.resources[0].id, current.resources[0].properties[0].name
+            ),
+            description: "the published property label changed".into(),
+        }));
+        assert!(report.changes.contains(&compiled_model_change()));
+    }
+
+    #[test]
+    fn property_description_change_is_reported_as_a_breaking_meaning_change() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.resources[0].properties[0].description = "Replacement description".into();
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.contains(&ContractChange {
+            class: ChangeClass::PropertyMeaningChanged,
+            impact: ChangeImpact::Breaking,
+            location: format!(
+                "resources.{}.properties.{}.description",
+                current.resources[0].id, current.resources[0].properties[0].name
+            ),
+            description: "the published property description changed".into(),
+        }));
+        assert!(report.changes.contains(&compiled_model_change()));
+    }
+
+    #[test]
+    fn unchanged_resource_and_property_meaning_fields_do_not_report_changes() {
+        let previous = compiled();
+        let current = previous.clone();
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn local_vocabulary_change_is_reported_as_a_semantic_model_change() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.local_vocabulary = "https://example.invalid/replacement-vocabulary#".into();
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.contains(&ContractChange {
+            class: ChangeClass::SemanticModelChanged,
+            impact: ChangeImpact::Breaking,
+            location: "semantics".into(),
+            description: "the local vocabulary or governed codelist model changed".into(),
+        }));
+        assert!(report.changes.contains(&compiled_model_change()));
+    }
+
+    #[test]
+    fn unused_disclosure_profile_change_is_reported() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        let property = &current.resources[0].properties[0];
+        let property_name = property.name.clone();
+        let maximum_handling = property.classification.handling;
+        current.resources[0]
+            .disclosure_profiles
+            .push(crate::model::CompiledDisclosureProfile {
+                id: "unused".into(),
+                properties: vec![property_name],
+                maximum_handling,
+            });
+
+        let report = diff_registries(&previous, &current);
+        assert!(report
+            .changes
+            .iter()
+            .any(|change| change.class == ChangeClass::DisclosureProfileChanged));
+    }
+
+    #[test]
+    fn disclosure_property_order_change_is_reported() {
+        let mut previous = compiled();
+        let representation = &mut previous.resources[0].operations[0].representations[0];
+        representation.selectable_properties = vec!["first".into(), "second".into()];
+        let mut current = previous.clone();
+        current.resources[0].operations[0].representations[0]
+            .selectable_properties
+            .reverse();
+
+        let report = diff_registries(&previous, &current);
+        assert_eq!(report.changes.len(), 2);
+        assert!(report
+            .changes
+            .iter()
+            .any(|change| change.class == ChangeClass::DisclosureProfileChanged));
+        assert!(report.changes.contains(&compiled_model_change()));
+    }
+
+    #[test]
+    fn future_compiled_fields_cannot_produce_a_silent_diff() {
+        let mut previous = compiled();
+        previous.governed_files.extend([
+            crate::model::CompiledGovernedFile {
+                path: "governance/fallback-a.yaml".into(),
+                sha256: format!("sha256:{}", "a".repeat(64)),
+                roles: vec!["test".into()],
+            },
+            crate::model::CompiledGovernedFile {
+                path: "governance/fallback-b.yaml".into(),
+                sha256: format!("sha256:{}", "b".repeat(64)),
+                roles: vec!["test".into()],
+            },
+        ]);
+        let mut current = previous.clone();
+        current.governed_files.reverse();
+
+        let report = diff_registries(&previous, &current);
+        assert_eq!(report.changes, vec![compiled_model_change()]);
+    }
+
+    #[test]
+    fn compiled_summary_survives_a_mixed_known_and_residual_change() {
+        let mut previous = compiled();
+        previous.governed_files.extend([
+            crate::model::CompiledGovernedFile {
+                path: "governance/mixed-a.yaml".into(),
+                sha256: format!("sha256:{}", "a".repeat(64)),
+                roles: vec!["test".into()],
+            },
+            crate::model::CompiledGovernedFile {
+                path: "governance/mixed-b.yaml".into(),
+                sha256: format!("sha256:{}", "b".repeat(64)),
+                roles: vec!["test".into()],
+            },
+        ]);
+        let mut current = previous.clone();
+        current.governed_files.reverse();
+        current.resources[0].title = "Replacement title".into();
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.contains(&compiled_model_change()));
+        assert!(report
+            .changes
+            .iter()
+            .any(|change| change.class == ChangeClass::ResourceMeaningChanged));
+    }
+
+    #[test]
+    fn revision_only_change_does_not_claim_a_compiled_model_change() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.contract_revision = format!("sha256:{}", "f".repeat(64));
+
+        let report = diff_registries(&previous, &current);
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn registry_governance_and_resource_semantic_identity_changes_are_reported() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.registry_identifier = "urn:example:registry:replacement".into();
+        current.controller_identifier = "urn:example:controller:replacement".into();
+        current.resources[0].semantic_class =
+            "https://example.invalid/vocab/ReplacementRecord".into();
+
+        let report = diff_registries(&previous, &current);
+        for class in [
+            ChangeClass::RegistryIdentityChanged,
+            ChangeClass::GovernanceIdentityChanged,
+            ChangeClass::SemanticClassChanged,
+        ] {
+            assert!(
+                report.changes.iter().any(|change| change.class == class),
+                "missing {class:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn authority_and_operator_display_name_only_changes_are_registry_identity_changes() {
+        let mut previous = compiled();
+        previous.operator_identifier = Some("urn:example:operator".into());
+        previous.operator_name = Some("Original Operator".into());
+
+        for current in [
+            {
+                let mut current = previous.clone();
+                current.authority_name = "Renamed Authority".into();
+                current
+            },
+            {
+                let mut current = previous.clone();
+                current.operator_name = Some("Renamed Operator".into());
+                current
+            },
+        ] {
+            let report = diff_registries(&previous, &current);
+            assert!(!report.changes.is_empty());
+            assert!(report
+                .changes
+                .iter()
+                .any(|change| change.class == ChangeClass::RegistryIdentityChanged));
+        }
     }
 
     #[test]

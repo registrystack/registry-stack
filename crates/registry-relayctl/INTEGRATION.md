@@ -11,7 +11,9 @@ The shared facade must provide:
   compiler-derived semantics, classifications, processing metadata, and
   lifecycle-policy suggestions are marked unreviewed;
 - `inspect_schema(&InspectOptions)` through the Relay wrapper over
-  `registry-platform-sqlite`, returning structural metadata only;
+  `registry-platform-sqlite`, returning structural metadata only; ordinary
+  publisher databases default to a read-only live inspection profile, while
+  `--profile snapshot` explicitly requests immutable snapshot checks;
 - `check_project(&CheckOptions)`, including a production profile that refuses
   every unreviewed suggestion;
 - `generate_project`, `test_project`, `diff_projects`, and `package_project`

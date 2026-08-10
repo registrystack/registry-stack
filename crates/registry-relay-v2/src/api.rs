@@ -11,7 +11,7 @@ use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATC
 use axum::http::{HeaderMap, HeaderValue, Request, Response, StatusCode, Uri};
 use chrono::{DateTime, NaiveDate};
 use registry_platform_canonical_json::canonicalize_json;
-use registry_platform_sqlite::{ResultRow, Value as SqlValue};
+use registry_platform_sqlite::{ErrorKind as SqliteErrorKind, ResultRow, Value as SqlValue};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -396,8 +396,14 @@ pub async fn record_list(
     let Some((resource, operation)) = find_operation(&service, &resource_id, |kind| {
         matches!(kind, OperationKind::List)
     }) else {
-        return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::List)
-            .await;
+        return unknown_data_route(
+            &service,
+            principal.as_ref(),
+            uri.query(),
+            &trace,
+            OperationClass::List,
+        )
+        .await;
     };
     let access = match access_operation(
         &service,
@@ -508,13 +514,11 @@ pub async fn record_list(
         Err(error) => return source_failure(&service.audit, &audit, error, &trace).await,
     };
     let mut rows = result.rows;
-    let has_next = rows.len() > usize::try_from(query.page_size).unwrap_or(usize::MAX);
-    if has_next {
-        rows.pop();
-    }
-    let mut items = Vec::with_capacity(rows.len());
-    for row in &rows {
-        if !valid_cursor_order_values(&operation.query.order_by, row) {
+    let page_size = usize::try_from(query.page_size).unwrap_or(usize::MAX);
+    let has_next = rows.len() > page_size;
+    let mut items = Vec::with_capacity(rows.len().min(page_size));
+    for (index, row) in rows.iter().enumerate() {
+        if cursor_order_values(&operation.query.order_by, row).is_none() {
             return source_shape_failure(&service.audit, &audit, &trace).await;
         }
         let record = match record_value(
@@ -532,7 +536,12 @@ pub async fn record_list(
                 return source_shape_failure(&service.audit, &audit, &trace).await
             }
         };
-        items.push(record);
+        if index < page_size {
+            items.push(record);
+        }
+    }
+    if has_next {
+        rows.truncate(page_size);
     }
     let next_cursor = if has_next {
         let Some(last) = rows.last() else {
@@ -604,8 +613,14 @@ pub async fn record_read(
     let Some((resource, operation)) = find_operation(&service, &resource_id, |kind| {
         matches!(kind, OperationKind::Read)
     }) else {
-        return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::Read)
-            .await;
+        return unknown_data_route(
+            &service,
+            principal.as_ref(),
+            uri.query(),
+            &trace,
+            OperationClass::Read,
+        )
+        .await;
     };
     let access = match access_operation(
         &service,
@@ -679,8 +694,14 @@ pub async fn record_lookup(
         &resource_id,
         |kind| matches!(kind, OperationKind::Lookup { name } if name == &lookup_id),
     ) else {
-        return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::Lookup)
-            .await;
+        return unknown_data_route(
+            &service,
+            principal.as_ref(),
+            request.uri().query(),
+            &trace,
+            OperationClass::Lookup,
+        )
+        .await;
     };
     let access = match access_operation(
         &service,
@@ -954,6 +975,9 @@ async fn single_operation(
         Ok(value) => value,
         Err(error) => return source_failure(&service.audit, &audit, error, trace).await,
     };
+    if result.rows.len() > 1 && matches!(&operation.kind, OperationKind::Read) {
+        return source_shape_failure(&service.audit, &audit, trace).await;
+    }
     if result.rows.len() != 1 {
         if service
             .audit
@@ -1174,9 +1198,34 @@ enum OperationClass {
 async fn unknown_data_route(
     service: &RelayService,
     principal: Option<&Principal>,
+    query: Option<&str>,
     trace: &TraceContext,
     class: OperationClass,
 ) -> Response<Body> {
+    let explicit_representation = match representation_parameter(query) {
+        Ok(Some(identifier)) if valid_representation_identifier(&identifier) => true,
+        Ok(Some(_)) | Err(_) => {
+            return refuse_unknown(
+                service,
+                principal_kind(principal),
+                AuditOutcome::InvalidRequest,
+                ProblemCode::RepresentationInvalid,
+                trace,
+            )
+            .await;
+        }
+        Ok(None) => false,
+    };
+    if explicit_representation {
+        return refuse_unknown(
+            service,
+            principal_kind(principal),
+            AuditOutcome::NotFound,
+            ProblemCode::ResourceNotFound,
+            trace,
+        )
+        .await;
+    }
     let protected = service.registry.resources.iter().any(|resource| {
         resource.operations.iter().any(|operation| {
             class_matches(&operation.kind, class)
@@ -2289,11 +2338,15 @@ async fn source_failure(
 ) -> Response<Body> {
     let (outcome, code) = match error {
         SqliteRuntimeError::AdmissionTimeout => (AuditOutcome::TimedOut, ProblemCode::Timeout),
+        SqliteRuntimeError::Source(error) if sqlite_error_is_timeout(error.kind()) => {
+            (AuditOutcome::TimedOut, ProblemCode::Timeout)
+        }
         SqliteRuntimeError::UnknownOperation | SqliteRuntimeError::InvalidPlan => {
             (AuditOutcome::InternalFailed, ProblemCode::Internal)
         }
         SqliteRuntimeError::MissingSource
         | SqliteRuntimeError::SchemaMismatch
+        | SqliteRuntimeError::InvalidSourceShape
         | SqliteRuntimeError::Source(_) => {
             (AuditOutcome::SourceFailed, ProblemCode::SourceUnavailable)
         }
@@ -2302,6 +2355,15 @@ async fn source_failure(
         return ProblemCode::AuditUnavailable.response(trace);
     }
     code.response(trace)
+}
+
+const fn sqlite_error_is_timeout(kind: SqliteErrorKind) -> bool {
+    // `Timeout` is the platform's queue-and-async-deadline category;
+    // `TimeBudgetExceeded` is the engine deadline category.
+    matches!(
+        kind,
+        SqliteErrorKind::Timeout | SqliteErrorKind::TimeBudgetExceeded
+    )
 }
 
 async fn source_shape_failure(
@@ -2339,33 +2401,91 @@ fn cacheable(representation: &CompiledRepresentation, source: &SourceRevision) -
 }
 
 fn negotiate(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
-    let Some(value) = headers.get(ACCEPT) else {
+    if !headers.contains_key(ACCEPT) {
         return Ok(ResponseFormat::Json);
-    };
-    let value = value
-        .to_str()
-        .map_err(|_| ProblemCode::UnsupportedRepresentation)?;
-    let mut json = false;
-    let mut json_ld = false;
-    for item in value.split(',') {
-        let mut parts = item.trim().split(';');
-        let media = parts.next().unwrap_or_default().trim();
-        let refused = parts.any(|parameter| parameter.trim() == "q=0");
-        if refused {
-            continue;
-        }
-        match media {
-            "application/json" | "application/*" | "*/*" => json = true,
-            "application/ld+json" => json_ld = true,
-            _ => {}
+    }
+
+    let mut json = None;
+    let mut json_ld = None;
+    for value in headers.get_all(ACCEPT) {
+        let value = value
+            .to_str()
+            .map_err(|_| ProblemCode::UnsupportedRepresentation)?;
+        for item in value.split(',') {
+            let mut parts = item.trim().split(';');
+            let media = parts.next().unwrap_or_default().trim();
+            let Some(quality) = accept_quality(parts) else {
+                continue;
+            };
+            if media.eq_ignore_ascii_case("application/json") {
+                update_preference(&mut json, 2, quality);
+            } else if media.eq_ignore_ascii_case("application/ld+json") {
+                update_preference(&mut json_ld, 2, quality);
+            } else if media.eq_ignore_ascii_case("application/*") {
+                update_preference(&mut json, 1, quality);
+                update_preference(&mut json_ld, 1, quality);
+            } else if media == "*/*" {
+                update_preference(&mut json, 0, quality);
+                update_preference(&mut json_ld, 0, quality);
+            }
         }
     }
-    if json_ld {
-        Ok(ResponseFormat::JsonLd)
-    } else if json {
-        Ok(ResponseFormat::Json)
-    } else {
-        Err(ProblemCode::UnsupportedRepresentation)
+
+    let json = json.map_or(0, |(_, quality)| quality);
+    let json_ld = json_ld.map_or(0, |(_, quality)| quality);
+    match (json, json_ld) {
+        (0, 0) => Err(ProblemCode::UnsupportedRepresentation),
+        (json, json_ld) if json_ld > json => Ok(ResponseFormat::JsonLd),
+        _ => Ok(ResponseFormat::Json),
+    }
+}
+
+fn update_preference(preference: &mut Option<(u8, u16)>, specificity: u8, quality: u16) {
+    match preference {
+        Some((current_specificity, current_quality)) if *current_specificity > specificity => {}
+        Some((current_specificity, current_quality)) if *current_specificity == specificity => {
+            *current_quality = (*current_quality).max(quality);
+        }
+        _ => *preference = Some((specificity, quality)),
+    }
+}
+
+fn accept_quality<'a>(parameters: impl Iterator<Item = &'a str>) -> Option<u16> {
+    let mut quality = None;
+    for parameter in parameters {
+        let parameter = parameter.trim();
+        let Some((name, value)) = parameter.split_once('=') else {
+            if parameter.eq_ignore_ascii_case("q") {
+                return None;
+            }
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("q") {
+            if quality.is_some() {
+                return None;
+            }
+            quality = Some(parse_quality(value.trim())?);
+        }
+    }
+    Some(quality.unwrap_or(1_000))
+}
+
+fn parse_quality(value: &str) -> Option<u16> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    match whole {
+        "0" => {
+            let parsed = if fraction.is_empty() {
+                0
+            } else {
+                fraction.parse::<u16>().ok()?
+            };
+            Some(parsed * 10_u16.pow(u32::try_from(3_usize.saturating_sub(fraction.len())).ok()?))
+        }
+        "1" if fraction.bytes().all(|byte| byte == b'0') => Some(1_000),
+        _ => None,
     }
 }
 
@@ -2430,10 +2550,11 @@ fn next_cursor(
     encode_cursor(key, &payload).map_err(|_| ())
 }
 
-fn valid_cursor_order_values(order_by: &[String], row: &ResultRow) -> bool {
+fn cursor_order_values(order_by: &[String], row: &ResultRow) -> Option<Vec<CursorValue>> {
     order_by
         .iter()
-        .all(|column| row.get(column).cloned().and_then(sql_to_cursor).is_some())
+        .map(|column| row.get(column).cloned().and_then(sql_to_cursor))
+        .collect()
 }
 
 fn cursor_template(
@@ -2916,15 +3037,111 @@ fn exact_etag(bytes: &[u8]) -> String {
 }
 
 fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
+    let Some(current) = weak_entity_tag(etag) else {
+        return false;
+    };
     headers
-        .get(IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(',').any(|item| item.trim() == etag))
+        .get_all(IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|candidate| candidate == "*" || weak_entity_tag(candidate) == Some(current))
+}
+
+fn weak_entity_tag(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let value = value.strip_prefix("W/").unwrap_or(value);
+    (value.len() >= 2 && value.starts_with('"') && value.ends_with('"')).then_some(value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn headers(name: http::header::HeaderName, values: &[&str]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for value in values {
+            headers.append(name.clone(), value.parse().expect("valid test header"));
+        }
+        headers
+    }
+
+    #[test]
+    fn accept_negotiation_obeys_quality_specificity_case_and_ows() {
+        assert_eq!(negotiate(&HeaderMap::new()), Ok(ResponseFormat::Json));
+        assert_eq!(
+            negotiate(&headers(
+                ACCEPT,
+                &["Application/LD+JSON ; Q = 0.5, application/json; q=0.4"]
+            )),
+            Ok(ResponseFormat::JsonLd)
+        );
+        assert_eq!(
+            negotiate(&headers(
+                ACCEPT,
+                &["application/ld+json;q=0.000", "application/json;q=0.50"]
+            )),
+            Ok(ResponseFormat::Json)
+        );
+        assert_eq!(
+            negotiate(&headers(
+                ACCEPT,
+                &["application/json;q=0, */*;q=0.9, application/ld+json;q=0.5"]
+            )),
+            Ok(ResponseFormat::JsonLd)
+        );
+        assert_eq!(
+            negotiate(&headers(
+                ACCEPT,
+                &["application/ld+json;q=0.5, application/json;q=0.500"]
+            )),
+            Ok(ResponseFormat::Json)
+        );
+        for zero in ["0", "0.", "0.0", "0.00", "0.000"] {
+            let value = format!("application/json;q={zero}");
+            assert_eq!(
+                negotiate(&headers(ACCEPT, &[&value])),
+                Err(ProblemCode::UnsupportedRepresentation)
+            );
+        }
+        for malformed in ["q", "q=", "q=.5", "q=1.1", "q=0.0000", "q=0.5;q=0.4"] {
+            let value = format!("application/json;{malformed}");
+            assert_eq!(
+                negotiate(&headers(ACCEPT, &[&value])),
+                Err(ProblemCode::UnsupportedRepresentation)
+            );
+        }
+    }
+
+    #[test]
+    fn if_none_match_uses_weak_comparison_across_every_field_value() {
+        let etag = "\"current\"";
+        assert!(if_none_match(&headers(IF_NONE_MATCH, &["*"]), etag));
+        assert!(if_none_match(
+            &headers(IF_NONE_MATCH, &["W/\"current\""]),
+            etag
+        ));
+        assert!(if_none_match(
+            &headers(IF_NONE_MATCH, &["\"other\"", "W/\"absent\", \"current\""]),
+            etag
+        ));
+        assert!(!if_none_match(
+            &headers(IF_NONE_MATCH, &["\"other\", W/\"absent\""]),
+            etag
+        ));
+    }
+
+    #[test]
+    fn only_platform_time_and_deadline_categories_map_to_timeout() {
+        assert!(sqlite_error_is_timeout(SqliteErrorKind::Timeout));
+        assert!(sqlite_error_is_timeout(SqliteErrorKind::TimeBudgetExceeded));
+        assert!(!sqlite_error_is_timeout(
+            SqliteErrorKind::StepBudgetExceeded
+        ));
+        assert!(!sqlite_error_is_timeout(SqliteErrorKind::Concurrency));
+        assert!(!sqlite_error_is_timeout(SqliteErrorKind::ExecutionFailed));
+    }
 
     #[test]
     fn cursor_order_values_must_be_present_non_null_supported_scalars() {
@@ -2936,15 +3153,15 @@ mod tests {
                 SqlValue::String("record-7".to_owned()),
             ),
         ]);
-        assert!(valid_cursor_order_values(&order, &valid));
+        assert!(cursor_order_values(&order, &valid).is_some());
 
         let mut null = valid.clone();
         null.insert("rank".to_owned(), SqlValue::Null);
-        assert!(!valid_cursor_order_values(&order, &null));
+        assert!(cursor_order_values(&order, &null).is_none());
 
         let mut unsupported = valid;
         unsupported.insert("rank".to_owned(), SqlValue::Number(7.5));
-        assert!(!valid_cursor_order_values(&order, &unsupported));
+        assert!(cursor_order_values(&order, &unsupported).is_none());
     }
 
     #[test]

@@ -217,6 +217,7 @@ pub fn build_package(
         &serde_json::to_value(&manifest).map_err(|_| PackageError::CanonicalJson)?,
     )
     .map_err(|_| PackageError::CanonicalJson)?;
+    validate_package_bounds(&manifest.files, final_manifest.len())?;
 
     fs::create_dir(output_dir).map_err(|_| PackageError::Write)?;
     let write_result = (|| {
@@ -238,6 +239,28 @@ pub fn build_package(
     }
     harden_package_permissions(output_dir)?;
     Ok(manifest)
+}
+
+fn validate_package_bounds(
+    files: &[PackageFile],
+    manifest_bytes: usize,
+) -> Result<(), PackageError> {
+    if files.len() > MAX_PACKAGE_FILES {
+        return Err(PackageError::ClosureBound);
+    }
+    let manifest_bytes = u64::try_from(manifest_bytes).map_err(|_| PackageError::ClosureBound)?;
+    if manifest_bytes > MAX_MANIFEST_BYTES {
+        return Err(PackageError::ClosureBound);
+    }
+    let total = files.iter().try_fold(manifest_bytes, |total, file| {
+        total
+            .checked_add(file.size)
+            .ok_or(PackageError::ClosureBound)
+    })?;
+    if total > MAX_PACKAGE_BYTES {
+        return Err(PackageError::ClosureBound);
+    }
+    Ok(())
 }
 
 fn validate_build_inputs(
@@ -953,6 +976,58 @@ fn media_type(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bounded_file(size: u64) -> PackageFile {
+        PackageFile {
+            path: "bounded-fixture".into(),
+            size,
+            sha256: digest(b""),
+            media_type: "application/octet-stream".into(),
+            visibility: Visibility::OperatorOnly,
+            generated: true,
+        }
+    }
+
+    #[test]
+    fn package_file_count_bound_matches_the_loader() {
+        let files = vec![bounded_file(0); MAX_PACKAGE_FILES];
+        assert!(validate_package_bounds(&files, 1).is_ok());
+
+        let files = vec![bounded_file(0); MAX_PACKAGE_FILES + 1];
+        assert!(matches!(
+            validate_package_bounds(&files, 1),
+            Err(PackageError::ClosureBound)
+        ));
+    }
+
+    #[test]
+    fn package_manifest_byte_bound_matches_the_loader() {
+        let files = [bounded_file(0)];
+        assert!(validate_package_bounds(
+            &files,
+            usize::try_from(MAX_MANIFEST_BYTES).expect("manifest cap fits usize")
+        )
+        .is_ok());
+        assert!(matches!(
+            validate_package_bounds(
+                &files,
+                usize::try_from(MAX_MANIFEST_BYTES + 1).expect("manifest cap plus one fits usize")
+            ),
+            Err(PackageError::ClosureBound)
+        ));
+    }
+
+    #[test]
+    fn package_total_byte_bound_matches_the_loader() {
+        let at_cap = [bounded_file(MAX_PACKAGE_BYTES - 1)];
+        assert!(validate_package_bounds(&at_cap, 1).is_ok());
+
+        let above_cap = [bounded_file(MAX_PACKAGE_BYTES)];
+        assert!(matches!(
+            validate_package_bounds(&above_cap, 1),
+            Err(PackageError::ClosureBound)
+        ));
+    }
 
     fn reseal_manifest(package_path: &Path, manifest: &mut PackageManifest) {
         let unsigned = UnsignedManifest {

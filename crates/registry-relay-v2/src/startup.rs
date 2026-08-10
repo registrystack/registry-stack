@@ -27,7 +27,10 @@ use zeroize::Zeroizing;
 
 use crate::audit::RelayAudit;
 use crate::auth::RelayAuthenticator;
-use crate::contract::{AccessRule, IssuerRuntime, RegistryContract, RelayRuntime};
+use crate::contract::{
+    runtime_cursor_configuration_is_valid, AccessRule, IssuerAlgorithm, IssuerRuntime,
+    RegistryContract, RelayRuntime,
+};
 use crate::cursor::CursorKey;
 use crate::package::{load_package, VerifiedPackage};
 use crate::server::{
@@ -43,7 +46,6 @@ const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 const ISSUER_NETWORK_TIMEOUT: Duration = Duration::from_secs(5);
 const MAXIMUM_TOKEN_LIFETIME: Duration = Duration::from_secs(15 * 60);
 const TOKEN_CLOCK_LEEWAY: Duration = Duration::from_secs(30);
-const DISCOVERY_SUFFIX: &str = "/.well-known/openid-configuration";
 const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const MAXIMUM_HEALTH_BODY_BYTES: usize = 128;
 const HEALTH_BODY: &[u8] = br#"{"status":"ok"}"#;
@@ -474,11 +476,7 @@ fn validate_runtime_contract(
     if governed != bound {
         return Err(StartupError::RuntimeInvalid);
     }
-    let has_list = contract
-        .resources
-        .iter()
-        .any(|resource| resource.operations.list.is_some());
-    if has_list && runtime.cursor.is_none() {
+    if !runtime_cursor_configuration_is_valid(contract, runtime) {
         return Err(StartupError::CursorInvalid);
     }
     let protected = contract.resources.iter().any(|resource| {
@@ -539,10 +537,7 @@ async fn build_authenticator(
     let Some(issuer) = issuer else {
         return Ok(None);
     };
-    if issuer.algorithms.len() != 1 || issuer.token_types.as_slice() != ["at+jwt"] {
-        return Err(StartupError::RuntimeInvalid);
-    }
-    let (issuer_identifier, discovery_url) = parse_discovery_url(&issuer.discovery_url)?;
+    let (issuer_identifier, algorithm) = verifier_issuer_profile(issuer)?;
     let discovery = fetch_discovery(&OidcDiscoveryConfig {
         issuer: issuer_identifier.clone(),
         jwks_uri_override: None,
@@ -551,7 +546,7 @@ async fn build_authenticator(
     })
     .await
     .map_err(|_| StartupError::IssuerUnavailable)?;
-    if discovery.issuer != issuer_identifier || discovery_url != issuer.discovery_url {
+    if discovery.issuer != issuer_identifier {
         return Err(StartupError::IssuerUnavailable);
     }
     let fetcher = Arc::new(JwksFetcher::new(
@@ -565,12 +560,6 @@ async fn build_authenticator(
         .ensure_key_set()
         .await
         .map_err(|_| StartupError::IssuerUnavailable)?;
-    let algorithm = match issuer.algorithms[0].as_str() {
-        "EdDSA" => Algorithm::EdDSA,
-        "ES256" => Algorithm::ES256,
-        "RS256" => Algorithm::RS256,
-        _ => return Err(StartupError::RuntimeInvalid),
-    };
     let verifier = TokenVerifier::new(
         TokenVerifierConfig::registry_relay_access_profile(
             issuer_identifier,
@@ -589,25 +578,14 @@ async fn build_authenticator(
     )))
 }
 
-fn parse_discovery_url(value: &str) -> Result<(String, String), StartupError> {
-    let url = Url::parse(value).map_err(|_| StartupError::RuntimeInvalid)?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || !url.path().ends_with(DISCOVERY_SUFFIX)
-    {
-        return Err(StartupError::RuntimeInvalid);
-    }
-    let canonical = url.to_string();
-    let issuer = canonical
-        .strip_suffix(DISCOVERY_SUFFIX)
-        .filter(|value| !value.is_empty())
-        .ok_or(StartupError::RuntimeInvalid)?
-        .to_owned();
-    Ok((issuer, canonical))
+fn verifier_issuer_profile(issuer: &IssuerRuntime) -> Result<(String, Algorithm), StartupError> {
+    let profile = issuer.profile().ok_or(StartupError::RuntimeInvalid)?;
+    let algorithm = match profile.algorithm {
+        IssuerAlgorithm::EdDsa => Algorithm::EdDSA,
+        IssuerAlgorithm::Es256 => Algorithm::ES256,
+        IssuerAlgorithm::Rs256 => Algorithm::RS256,
+    };
+    Ok((profile.issuer_identifier, algorithm))
 }
 
 async fn build_audit(
@@ -785,26 +763,33 @@ mod tests {
 
     #[test]
     fn issuer_discovery_is_one_exact_https_profile() {
+        let issuer = |discovery_url: &str| {
+            serde_norway::from_str::<IssuerRuntime>(&format!(
+                "id: issuer\ndiscoveryUrl: {discovery_url}\naudience: registry\ntokenTypes: [at+jwt]\nalgorithms: [EdDSA]\n"
+            ))
+            .expect("issuer shape parses")
+        };
+        let valid = "https://identity.example.invalid/.well-known/openid-configuration";
         assert_eq!(
-            parse_discovery_url(
-                "https://identity.example.invalid/.well-known/openid-configuration"
-            )
-            .expect("valid discovery")
-            .0,
-            "https://identity.example.invalid"
+            verifier_issuer_profile(&issuer(valid)),
+            Ok((
+                "https://identity.example.invalid".to_owned(),
+                Algorithm::EdDSA
+            ))
         );
-        assert!(parse_discovery_url(
-            "http://identity.example.invalid/.well-known/openid-configuration"
-        )
-        .is_err());
-        assert!(parse_discovery_url(
-            "https://identity.example.invalid/.well-known/oauth-authorization-server"
-        )
-        .is_err());
-        assert!(parse_discovery_url(
-            "https://identity.example.invalid/.well-known/openid-configuration?tenant=x"
-        )
-        .is_err());
+
+        for invalid in [
+            "https://operator:credential@identity.example.invalid/.well-known/openid-configuration",
+            "https://identity.example.invalid/.well-known/openid-configuration?tenant=x",
+            "https://identity.example.invalid/.well-known/openid-configuration#fragment",
+            "https://identity.example.invalid/.well-known/oauth-authorization-server",
+            "https:///.well-known/openid-configuration",
+        ] {
+            assert_eq!(
+                verifier_issuer_profile(&issuer(invalid)),
+                Err(StartupError::RuntimeInvalid)
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -1044,6 +1029,54 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             burst: 10,
         });
         assert_eq!(validate_runtime_contract(&lookup_runtime, &lookup), Ok(()));
+    }
+
+    #[test]
+    fn metadata_cursor_requirement_counts_only_potentially_visible_resources() {
+        let mut contract = RegistryContract::parse_yaml(crate::compiler::tests::valid_contract())
+            .expect("base contract");
+        let mut second_resource = contract.resources[0].clone();
+        second_resource.id = "second-record".into();
+        contract.resources.push(second_resource);
+        let mut runtime = RelayRuntime::parse_yaml(
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18084'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+        )
+        .expect("closed runtime");
+
+        assert_eq!(
+            validate_runtime_contract(&runtime, &contract),
+            Err(StartupError::CursorInvalid)
+        );
+
+        contract.metadata_visibility.resources = crate::contract::Visibility::OperatorOnly;
+        assert_eq!(validate_runtime_contract(&runtime, &contract), Ok(()));
+
+        contract.metadata_visibility.resources = crate::contract::Visibility::Public;
+        contract.resources[1].operations.read = Some(
+            serde_norway::from_str(
+                "defaultRepresentation: protected\nrepresentations:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
+            )
+            .expect("protected read operation"),
+        );
+        runtime.authentication.issuer = Some(
+            serde_norway::from_str(
+                "id: issuer\ndiscoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\naudience: registry\ntokenTypes: [at+jwt]\nalgorithms: [EdDSA]\n",
+            )
+            .expect("issuer runtime"),
+        );
+        assert_eq!(validate_runtime_contract(&runtime, &contract), Ok(()));
+
+        contract.metadata_visibility.resources = crate::contract::Visibility::OperationBound;
+        assert_eq!(
+            validate_runtime_contract(&runtime, &contract),
+            Err(StartupError::CursorInvalid)
+        );
+
+        runtime.cursor = Some(crate::contract::CursorRuntime {
+            integrity_key_ref: "secret:env/CURSOR_KEY".into(),
+            maximum_age_seconds: 300,
+        });
+        assert_eq!(validate_runtime_contract(&runtime, &contract), Ok(()));
     }
 
     #[test]

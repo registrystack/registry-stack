@@ -530,23 +530,48 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
             "Registry service metadata",
         ),
     ] {
+        let cacheable = path == "/openapi.json"
+            || (path == "/v2" && registry.metadata_visibility.resources == Visibility::Public);
+        let mut responses = json!({
+            "200": {"description": "Successful response"},
+            "default": {"$ref": "#/components/responses/Problem"}
+        });
+        if cacheable {
+            add_not_modified_response(&mut responses);
+        }
         paths.insert(
             path.into(),
             json!({"get": {
                 "operationId": operation_id,
                 "description": description,
                 "security": [],
-                "responses": {"200": {"description": "Successful response"}, "default": {"$ref": "#/components/responses/Problem"}}
+                "responses": responses
             }}),
         );
     }
     if !public_only || registry.metadata_visibility.resources == Visibility::Public {
+        let mut list_responses = json!({
+            "200": {"description": "Visible Registry resources"},
+            "default": {"$ref": "#/components/responses/Problem"}
+        });
+        let mut retrieve_responses = json!({
+            "200": {"description": "Visible Registry resource metadata"},
+            "default": {"$ref": "#/components/responses/Problem"}
+        });
+        if registry.metadata_visibility.resources == Visibility::Public {
+            add_not_modified_response(&mut list_responses);
+            add_not_modified_response(&mut retrieve_responses);
+        }
         paths.insert(
             "/v2/resources".into(),
             json!({"get": {
                 "operationId": "relay.resources.list",
-                "security": [],
-                "responses": {"200": {"description": "Visible Registry resources"}, "default": {"$ref": "#/components/responses/Problem"}}
+                "security": if registry.metadata_visibility.resources == Visibility::Public {
+                    json!([])
+                } else {
+                    json!([{"bearerAuth": []}])
+                },
+                "responses": list_responses
             }}),
         );
         paths.insert(
@@ -562,7 +587,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "name": "resource", "in": "path", "required": true,
                     "schema": {"type": "string", "minLength": 1}
                 }],
-                "responses": {"200": {"description": "Visible Registry resource metadata"}, "default": {"$ref": "#/components/responses/Problem"}}
+                "responses": retrieve_responses
             }}),
         );
     }
@@ -686,13 +711,26 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "200": {
                         "description": "A validated minimum-disclosure Registry response",
                         "content": {
-                            "application/json": {"schema": operation_response_schema(operation, &visible_representations)},
-                            "application/ld+json": {"schema": operation_response_schema(operation, &visible_representations)}
+                            "application/json": {"schema": operation_response_schema(operation, &visible_representations, false)},
+                            "application/ld+json": {"schema": operation_response_schema(operation, &visible_representations, true)}
                         }
                     },
                     "default": {"$ref": "#/components/responses/Problem"}
                 }
             });
+            let source_is_snapshot = registry
+                .sources
+                .iter()
+                .find(|source| source.id == operation.query.source)
+                .is_some_and(|source| source.profile == crate::contract::SourceProfile::Snapshot);
+            let has_cacheable_representation =
+                visible_representations.iter().any(|representation| {
+                    matches!(&representation.access, CompiledAccess::Public)
+                        && representation.processing_handling == crate::contract::Handling::Public
+                });
+            if method == "get" && source_is_snapshot && has_cacheable_representation {
+                add_not_modified_response(&mut operation_value["responses"]);
+            }
             let required_scopes = visible_representations
                 .iter()
                 .filter_map(|representation| match &representation.access {
@@ -715,10 +753,16 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     let mut schema = openapi_type(selector.data_type);
                     if let Value::Object(schema) = &mut schema {
                         if let Some(minimum) = selector.minimum_bytes {
-                            schema.insert("minLength".into(), json!(minimum));
+                            schema.insert("x-registry-minimum-bytes".into(), json!(minimum));
                         }
                         if let Some(maximum) = selector.maximum_bytes {
-                            schema.insert("maxLength".into(), json!(maximum));
+                            schema.insert("x-registry-maximum-bytes".into(), json!(maximum));
+                        }
+                        if selector.minimum_bytes.is_some() || selector.maximum_bytes.is_some() {
+                            schema.insert(
+                                "description".into(),
+                                json!("Selector bounds are measured over its UTF-8 encoded bytes, not Unicode code points."),
+                            );
                         }
                     }
                     selector_properties.insert(selector.name.clone(), schema);
@@ -733,8 +777,15 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                             "content": {"application/json": {"schema": {
                                 "type": "object",
                                 "additionalProperties": false,
-                                "required": operation.query.selectors.iter().map(|selector| selector.name.clone()).collect::<Vec<_>>(),
-                                "properties": selector_properties,
+                                "required": ["selectors"],
+                                "properties": {
+                                    "selectors": {
+                                        "type": "object",
+                                        "additionalProperties": false,
+                                        "required": operation.query.selectors.iter().map(|selector| selector.name.clone()).collect::<Vec<_>>(),
+                                        "properties": selector_properties,
+                                    }
+                                },
                             }}}
                         }),
                     );
@@ -757,7 +808,11 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 "name": "artifactIdentifier", "in": "path", "required": true,
                 "schema": {"type": "string", "minLength": 1}
             }],
-            "responses": {"200": {"description": "Generated artifact"}, "default": {"$ref": "#/components/responses/Problem"}}
+            "responses": {
+                "200": {"description": "Generated artifact"},
+                "304": {"$ref": "#/components/responses/NotModified"},
+                "default": {"$ref": "#/components/responses/Problem"}
+            }
         }}),
     );
     json!({
@@ -788,6 +843,20 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 }
             },
             "responses": {
+                "NotModified": {
+                    "description": "Not modified; the response body is empty",
+                    "headers": {
+                        "Cache-Control": {
+                            "schema": {"type": "string", "const": "public, no-cache"}
+                        },
+                        "ETag": {
+                            "schema": {"type": "string", "pattern": "^\"[0-9a-f]{64}\"$"}
+                        },
+                        "Vary": {
+                            "schema": {"type": "string", "const": "Accept, Authorization"}
+                        }
+                    }
+                },
                 "Problem": {
                     "description": "Registry Stack problem",
                     "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
@@ -797,9 +866,20 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
     })
 }
 
+fn add_not_modified_response(responses: &mut Value) {
+    responses
+        .as_object_mut()
+        .expect("OpenAPI responses object")
+        .insert(
+            "304".into(),
+            json!({"$ref": "#/components/responses/NotModified"}),
+        );
+}
+
 fn operation_response_schema(
     operation: &crate::model::CompiledOperation,
     representations: &[&crate::model::CompiledRepresentation],
+    json_ld: bool,
 ) -> Value {
     let meta = json!({"type": "object"});
     let record = if representations.len() == 1 {
@@ -811,7 +891,7 @@ fn operation_response_schema(
             }).collect::<Vec<_>>()
         })
     };
-    match &operation.kind {
+    let mut schema = match &operation.kind {
         OperationKind::List => json!({
             "type": "object", "additionalProperties": false,
             "required": ["items", "pageInfo", "meta"],
@@ -833,7 +913,23 @@ fn operation_response_schema(
                 "meta": meta
             }
         }),
+    };
+    if json_ld {
+        let context_references = representations
+            .iter()
+            .map(|representation| representation.context_reference.clone())
+            .collect::<BTreeSet<_>>();
+        let context_schema = json!({"type": "string", "enum": context_references});
+        schema["required"]
+            .as_array_mut()
+            .expect("response required array")
+            .push(json!("@context"));
+        schema["properties"]
+            .as_object_mut()
+            .expect("response properties object")
+            .insert("@context".into(), context_schema);
     }
+    schema
 }
 
 fn openapi_type(data_type: crate::contract::DataType) -> Value {
@@ -1091,6 +1187,213 @@ mod tests {
         assert!(full["components"]["securitySchemes"]
             .get("oauth2")
             .is_none());
+        let not_modified = &full["components"]["responses"]["NotModified"];
+        assert_eq!(
+            not_modified,
+            &json!({
+                "description": "Not modified; the response body is empty",
+                "headers": {
+                    "Cache-Control": {
+                        "schema": {"type": "string", "const": "public, no-cache"}
+                    },
+                    "ETag": {
+                        "schema": {"type": "string", "pattern": "^\"[0-9a-f]{64}\"$"}
+                    },
+                    "Vary": {
+                        "schema": {"type": "string", "const": "Accept, Authorization"}
+                    }
+                }
+            })
+        );
+        assert!(not_modified.get("content").is_none());
+        for path in [
+            "/openapi.json",
+            "/v2",
+            "/v2/resources",
+            "/v2/resources/{resource}",
+            "/v2/resources/record/records/{recordIdentifier}",
+            "/v2/artifacts/{artifactIdentifier}",
+        ] {
+            assert_eq!(
+                full["paths"][path]["get"]["responses"]["304"],
+                json!({"$ref": "#/components/responses/NotModified"}),
+                "cacheable GET {path} must document its empty 304 response"
+            );
+        }
+        for path in ["/health", "/ready"] {
+            assert!(
+                full["paths"][path]["get"]["responses"].get("304").is_none(),
+                "non-cacheable GET {path} must not document 304"
+            );
+        }
+        let json_schema = &full["paths"]["/v2/resources/record/records/{recordIdentifier}"]["get"]
+            ["responses"]["200"]["content"]["application/json"]["schema"];
+        let json_ld_schema = &full["paths"]["/v2/resources/record/records/{recordIdentifier}"]
+            ["get"]["responses"]["200"]["content"]["application/ld+json"]["schema"];
+        assert!(!json_schema["required"]
+            .as_array()
+            .expect("ordinary JSON required array")
+            .contains(&json!("@context")));
+        assert!(json_schema["properties"].get("@context").is_none());
+        assert!(json_ld_schema["required"]
+            .as_array()
+            .expect("JSON-LD required array")
+            .contains(&json!("@context")));
+        assert_eq!(
+            json_ld_schema["properties"]["@context"]["enum"],
+            json!([registry.resources[0].operations[0].representations[0].context_reference])
+        );
+    }
+
+    #[test]
+    fn operation_bound_resource_metadata_requires_bearer_in_the_full_contract() {
+        let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
+            .expect("contract parses");
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files(),
+        )
+        .expect("contract compiles");
+        registry.metadata_visibility.resources = Visibility::OperationBound;
+
+        let generated = generate_artifacts(&registry).expect("artifacts generate");
+        let full: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.full.yaml")
+                .expect("full OpenAPI")
+                .content,
+        )
+        .expect("full OpenAPI parses");
+        let public: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.public.json")
+                .expect("public OpenAPI")
+                .content,
+        )
+        .expect("public OpenAPI parses");
+
+        assert_eq!(
+            full["paths"]["/v2/resources"]["get"]["security"],
+            json!([{"bearerAuth": []}])
+        );
+        assert_eq!(
+            full["paths"]["/v2/resources/{resource}"]["get"]["security"],
+            json!([{"bearerAuth": []}])
+        );
+        for path in ["/v2", "/v2/resources", "/v2/resources/{resource}"] {
+            assert!(
+                full["paths"][path]["get"]["responses"].get("304").is_none(),
+                "non-public metadata GET {path} must not document 304"
+            );
+        }
+        assert!(public["paths"].get("/v2/resources").is_none());
+        assert!(public["paths"].get("/v2/resources/{resource}").is_none());
+    }
+
+    #[test]
+    fn non_cacheable_consultation_get_omits_not_modified_response() {
+        let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
+            .expect("contract parses");
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files(),
+        )
+        .expect("contract compiles");
+
+        registry.sources[0].profile = crate::contract::SourceProfile::LiveReadOnly;
+        let generated = generate_artifacts(&registry).expect("live artifacts generate");
+        let full: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.full.yaml")
+                .expect("full OpenAPI")
+                .content,
+        )
+        .expect("full OpenAPI parses");
+        let operation = &full["paths"]["/v2/resources/record/records/{recordIdentifier}"]["get"];
+        assert!(operation["responses"].get("304").is_none());
+        assert_eq!(operation["security"], json!([]));
+
+        registry.sources[0].profile = crate::contract::SourceProfile::Snapshot;
+        registry.resources[0].operations[0].representations[0].access = CompiledAccess::Protected {
+            scope: "records:read".into(),
+            purpose: None,
+            row_binding: None,
+        };
+        let generated = generate_artifacts(&registry).expect("protected artifacts generate");
+        let full: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.full.yaml")
+                .expect("full OpenAPI")
+                .content,
+        )
+        .expect("full OpenAPI parses");
+        let operation = &full["paths"]["/v2/resources/record/records/{recordIdentifier}"]["get"];
+        assert!(operation["responses"].get("304").is_none());
+        assert_eq!(operation["security"], json!([{"bearerAuth": []}]));
+    }
+
+    #[test]
+    fn lookup_openapi_matches_the_nested_body_and_utf8_byte_bounds() {
+        use crate::model::CompiledSelector;
+
+        let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
+            .expect("contract parses");
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files(),
+        )
+        .expect("contract compiles");
+        let operation = &mut registry.resources[0].operations[0];
+        operation.identifier = "record.lookup.by-name".into();
+        operation.kind = OperationKind::Lookup {
+            name: "by-name".into(),
+        };
+        operation.query.selectors = vec![CompiledSelector {
+            name: "name".into(),
+            source_column: "name".into(),
+            data_type: crate::contract::DataType::String,
+            minimum_bytes: Some(2),
+            maximum_bytes: Some(32),
+            codelist: None,
+        }];
+        operation.query.maximum_request_body_bytes = Some(128);
+
+        let generated = generate_artifacts(&registry).expect("artifacts generate");
+        let full: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.full.yaml")
+                .expect("full OpenAPI")
+                .content,
+        )
+        .expect("full OpenAPI parses");
+        assert!(
+            full["paths"]["/v2/resources/record/lookups/by-name"]["post"]["responses"]
+                .get("304")
+                .is_none()
+        );
+        let body = &full["paths"]["/v2/resources/record/lookups/by-name"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"];
+        assert_eq!(body["required"], json!(["selectors"]));
+        assert!(body["properties"].get("name").is_none());
+        let selectors = &body["properties"]["selectors"];
+        assert_eq!(selectors["required"], json!(["name"]));
+        assert_eq!(selectors["additionalProperties"], false);
+        let name = &selectors["properties"]["name"];
+        assert_eq!(name["type"], "string");
+        assert_eq!(name["x-registry-minimum-bytes"], 2);
+        assert_eq!(name["x-registry-maximum-bytes"], 32);
+        assert!(name["description"]
+            .as_str()
+            .expect("byte-bound description")
+            .contains("UTF-8"));
+        assert!(name.get("minLength").is_none());
+        assert!(name.get("maxLength").is_none());
     }
 
     #[test]

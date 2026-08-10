@@ -59,8 +59,8 @@ CREATE TABLE source_records (
 ) STRICT;
 
 INSERT INTO source_records VALUES
-('record-1', '1', 'ACTIVE', '2026-08-01T00:00:00Z', 'Public one', 'PRE-1', 'ABCD', '2026-08-10', NULL, 'lookup-1', 'area-a'),
-('record-1a', '1', 'ACTIVE', 'not-a-core-date', 'Public invalid core', 'PRE-CORE', 'CORE', '2026-08-10', NULL, 'lookup-core', 'area-a'),
+('record-1', '1', 'ACTIVE', '2026-08-01T00:00:00Z', 'Public one', 'PRE-1', 'SENSITIVE-SOURCE-VALUE-7341', '2042-09-17', NULL, 'lookup-1', 'area-a'),
+('record-1a', '1', 'ACTIVE', 'not-a-core-date', 'Public invalid core', 'PRE-CORE', 'CORE', '2042-09-17', NULL, 'lookup-core', 'area-a'),
 ('record-2', '1', 'ACTIVE', '2026-08-02T00:00:00Z', 'Public two', 'PRE-2', 'ABCDEF', '2026-09-11', 'OPTIONAL-9', 'lookup-2', 'area-a'),
 ('record-bad-date', '1', 'ACTIVE', '2026-08-03T00:00:00Z', 'Public bad date', 'PRE-3', 'ABCDEFGH', 'not-a-date', NULL, 'lookup-3', 'area-a'),
 ('record-null', '1', 'ACTIVE', '2026-08-04T00:00:00Z', 'Public null', 'PRE-4', NULL, '2026-10-12', NULL, 'lookup-4', 'area-a'),
@@ -148,9 +148,26 @@ struct Harness {
 
 impl Harness {
     async fn open(quota: Option<QuotaConfig>, sink: Arc<RecordingSink>) -> Self {
+        Self::open_with_fixture(quota, sink, FIXTURE_SQL).await
+    }
+
+    async fn open_with_fixture(
+        quota: Option<QuotaConfig>,
+        sink: Arc<RecordingSink>,
+        fixture_sql: &str,
+    ) -> Self {
+        Self::open_with_fixture_and_list_order(quota, sink, fixture_sql, &["record_id"]).await
+    }
+
+    async fn open_with_fixture_and_list_order(
+        quota: Option<QuotaConfig>,
+        sink: Arc<RecordingSink>,
+        fixture_sql: &str,
+        list_order: &[&str],
+    ) -> Self {
         let temp = tempfile::tempdir().expect("temporary fixture");
         let database = temp.path().join("fixture.sqlite");
-        materialize_fixture(&database, FIXTURE_SQL).expect("fixture materializes");
+        materialize_fixture(&database, fixture_sql).expect("fixture materializes");
         let captured = CapturedSnapshot::capture(&database).expect("fixture captures");
         let fingerprint = inspect_schema(
             &DatabaseProfile::Snapshot(captured),
@@ -163,7 +180,14 @@ impl Harness {
         )
         .expect("fixture schema inspects")
         .fingerprint;
-        let registry = Arc::new(compiled_registry(fingerprint));
+        let mut registry = compiled_registry(fingerprint);
+        let list = registry.resources[0]
+            .operations
+            .iter_mut()
+            .find(|operation| matches!(&operation.kind, OperationKind::List))
+            .expect("list operation exists");
+        list.query.order_by = list_order.iter().map(|column| (*column).into()).collect();
+        let registry = Arc::new(registry);
         let artifacts = Arc::new(generate_artifacts(&registry).expect("artifacts generate"));
         let sqlite = Arc::new(
             SqliteRuntime::open(
@@ -286,7 +310,7 @@ impl Harness {
             );
         }
         for (name, value) in headers {
-            request.headers_mut().insert(
+            request.headers_mut().append(
                 name.parse::<http::HeaderName>().expect("header name"),
                 value.parse().expect("header value"),
             );
@@ -372,6 +396,169 @@ async fn representation_selection_authenticates_then_authorizes_the_exact_profil
 }
 
 #[tokio::test]
+async fn anonymous_explicit_protected_representation_conceals_known_and_unknown_routes() {
+    let sink = Arc::new(RecordingSink::default());
+    let harness = Harness::open(None, Arc::clone(&sink)).await;
+
+    for (method, known, unknown) in [
+        (
+            Method::GET,
+            "/v2/resources/record/records?representation=caseworker",
+            "/v2/resources/unknown/records?representation=caseworker",
+        ),
+        (
+            Method::GET,
+            "/v2/resources/record/records/record-1?representation=caseworker",
+            "/v2/resources/unknown/records/record-1?representation=caseworker",
+        ),
+        (
+            Method::POST,
+            "/v2/resources/record/lookups/by-key?representation=caseworker",
+            "/v2/resources/unknown/lookups/by-key?representation=caseworker",
+        ),
+    ] {
+        let mut normalized = None;
+        for uri in [known, unknown] {
+            let (status, _, body) = harness.send(method.clone(), uri, None, None, &[]).await;
+            assert_problem(status, &body, StatusCode::NOT_FOUND, "resource.not_found");
+            assert!(!String::from_utf8_lossy(&body).contains("caseworker"));
+            let mut document: Value = serde_json::from_slice(&body).expect("problem JSON");
+            document
+                .as_object_mut()
+                .expect("problem object")
+                .remove("traceId");
+            if let Some(expected) = &normalized {
+                assert_eq!(&document, expected);
+            } else {
+                normalized = Some(document);
+            }
+        }
+    }
+
+    let records = sink.values();
+    assert_eq!(records.len(), 6);
+    assert!(records.iter().all(|event| {
+        event["phase"] == "refusal"
+            && event["outcome"] == "not-found"
+            && event["principalKind"] == "anonymous"
+            && event.get("resourceIdentifier").is_none()
+            && event.get("operationIdentifier").is_none()
+            && event.get("representation").is_none()
+    }));
+    assert!(!serde_json::to_string(&records)
+        .expect("audit serializes")
+        .contains("caseworker"));
+}
+
+#[tokio::test]
+async fn malformed_explicit_representation_is_identical_for_known_and_unknown_routes() {
+    let sink = Arc::new(RecordingSink::default());
+    let harness = Harness::open(None, Arc::clone(&sink)).await;
+
+    for (method, known, unknown) in [
+        (
+            Method::GET,
+            "/v2/resources/record/records",
+            "/v2/resources/unknown/records",
+        ),
+        (
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            "/v2/resources/unknown/records/record-1",
+        ),
+        (
+            Method::POST,
+            "/v2/resources/record/lookups/by-key",
+            "/v2/resources/unknown/lookups/by-key",
+        ),
+    ] {
+        for selector in [
+            "representation=",
+            "representation=limited&representation=caseworker",
+            "representation=%GG",
+            "representation=Caseworker",
+        ] {
+            let mut normalized = None;
+            for route in [known, unknown] {
+                let uri = format!("{route}?{selector}");
+                let (status, _, body) = harness.send(method.clone(), &uri, None, None, &[]).await;
+                assert_problem(
+                    status,
+                    &body,
+                    StatusCode::BAD_REQUEST,
+                    "request.representation_invalid",
+                );
+                let document = problem_without_trace(&body);
+                if let Some(expected) = &normalized {
+                    assert_eq!(&document, expected);
+                } else {
+                    normalized = Some(document);
+                }
+            }
+        }
+    }
+
+    let records = sink.values();
+    assert_eq!(records.len(), 24);
+    for event in records.iter().skip(1).step_by(2) {
+        assert_eq!(event["phase"], "refusal");
+        assert_eq!(event["outcome"], "invalid-request");
+        assert_eq!(event["principalKind"], "anonymous");
+        assert!(event.get("resourceIdentifier").is_none());
+        assert!(event.get("operationIdentifier").is_none());
+        assert!(event.get("representation").is_none());
+    }
+    let audit_wire = serde_json::to_string(&records).expect("audit serializes");
+    for rejected in ["caseworker", "%GG", "Caseworker"] {
+        assert!(!audit_wire.contains(rejected));
+    }
+}
+
+#[tokio::test]
+async fn unknown_route_representation_preflight_preserves_authentication_precedence() {
+    let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
+
+    for (method, known, unknown) in [
+        (
+            Method::GET,
+            "/v2/resources/record/records",
+            "/v2/resources/unknown/records",
+        ),
+        (
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            "/v2/resources/unknown/records/record-1",
+        ),
+        (
+            Method::POST,
+            "/v2/resources/record/lookups/by-key",
+            "/v2/resources/unknown/lookups/by-key",
+        ),
+    ] {
+        let (status, _, body) = harness.send(method.clone(), unknown, None, None, &[]).await;
+        assert_problem(
+            status,
+            &body,
+            StatusCode::UNAUTHORIZED,
+            "auth.missing_credential",
+        );
+
+        for route in [known, unknown] {
+            let uri = format!("{route}?representation=%GG");
+            let (status, _, body) = harness
+                .send(method.clone(), &uri, Some("not-a-jwt"), None, &[])
+                .await;
+            assert_problem(
+                status,
+                &body,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credential",
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn oversized_uri_still_conceals_exact_representation_authorization() {
     let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
@@ -386,6 +573,93 @@ async fn oversized_uri_still_conceals_exact_representation_authorization() {
             .await;
         assert_problem(status, &body, StatusCode::NOT_FOUND, "resource.not_found");
     }
+}
+
+#[tokio::test]
+async fn oversized_unknown_route_preserves_representation_preflight_ordering() {
+    let sink = Arc::new(RecordingSink::default());
+    let harness = Harness::open(None, Arc::clone(&sink)).await;
+    let padding = "x".repeat(20_000);
+
+    for (method, known, unknown) in [
+        (
+            Method::GET,
+            "/v2/resources/record/records",
+            "/v2/resources/unknown/records",
+        ),
+        (
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            "/v2/resources/unknown/records/record-1",
+        ),
+        (
+            Method::POST,
+            "/v2/resources/record/lookups/by-key",
+            "/v2/resources/unknown/lookups/by-key",
+        ),
+    ] {
+        let mut normalized = None;
+        for route in [known, unknown] {
+            let uri = format!("{route}?padding={padding}&representation=caseworker");
+            let (status, _, body) = harness.send(method.clone(), &uri, None, None, &[]).await;
+            assert_problem(status, &body, StatusCode::NOT_FOUND, "resource.not_found");
+            let document = problem_without_trace(&body);
+            if let Some(expected) = &normalized {
+                assert_eq!(&document, expected);
+            } else {
+                normalized = Some(document);
+            }
+        }
+
+        for selector in ["representation=", "representation=%GG"] {
+            let mut normalized = None;
+            for route in [known, unknown] {
+                let uri = format!("{route}?padding={padding}&{selector}");
+                let (status, _, body) = harness.send(method.clone(), &uri, None, None, &[]).await;
+                assert_problem(
+                    status,
+                    &body,
+                    StatusCode::BAD_REQUEST,
+                    "request.representation_invalid",
+                );
+                let document = problem_without_trace(&body);
+                if let Some(expected) = &normalized {
+                    assert_eq!(&document, expected);
+                } else {
+                    normalized = Some(document);
+                }
+            }
+        }
+
+        let uri = format!("{unknown}?padding={padding}");
+        let (status, _, body) = harness.send(method.clone(), &uri, None, None, &[]).await;
+        assert_problem(
+            status,
+            &body,
+            StatusCode::UNAUTHORIZED,
+            "auth.missing_credential",
+        );
+
+        for route in [known, unknown] {
+            let uri = format!("{route}?padding={padding}&representation=%GG");
+            let (status, _, body) = harness
+                .send(method.clone(), &uri, Some("not-a-jwt"), None, &[])
+                .await;
+            assert_problem(
+                status,
+                &body,
+                StatusCode::UNAUTHORIZED,
+                "auth.invalid_credential",
+            );
+        }
+    }
+
+    let records = sink.values();
+    assert_eq!(records.len(), 27);
+    let audit_wire = serde_json::to_string(&records).expect("audit serializes");
+    assert!(!audit_wire.contains(&padding));
+    assert!(!audit_wire.contains("caseworker"));
+    assert!(!audit_wire.contains("%GG"));
 }
 
 #[tokio::test]
@@ -499,7 +773,10 @@ async fn fields_only_minimize_the_selected_representation() {
 
 #[tokio::test]
 async fn cursor_and_etag_are_bound_to_selected_representation() {
-    let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
+    let sink = Arc::new(RecordingSink::default());
+    let valid_core_fixture = FIXTURE_SQL.replace("'not-a-core-date'", "'2026-08-01T12:00:00Z'");
+    assert_ne!(valid_core_fixture, FIXTURE_SQL);
+    let harness = Harness::open_with_fixture(None, Arc::clone(&sink), &valid_core_fixture).await;
     let all = harness.token(
         &["registry:limited", "registry:caseworker"],
         "review",
@@ -536,6 +813,55 @@ async fn cursor_and_etag_are_bound_to_selected_representation() {
     );
     assert!(!body.is_empty());
 
+    for value in ["*".to_owned(), format!("W/{etag}")] {
+        let (status, _, body) = harness
+            .send(
+                Method::GET,
+                "/v2/resources/record/records/record-1",
+                None,
+                None,
+                &[(IF_NONE_MATCH.as_str(), &value)],
+            )
+            .await;
+        assert_eq!(status, StatusCode::NOT_MODIFIED);
+        assert!(body.is_empty());
+    }
+    let repeated = format!("\"absent\", W/{etag}");
+    let (status, _, body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            None,
+            None,
+            &[
+                (IF_NONE_MATCH.as_str(), "\"other\""),
+                (IF_NONE_MATCH.as_str(), &repeated),
+            ],
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+    assert!(body.is_empty());
+
+    let terminal = sink
+        .values()
+        .into_iter()
+        .filter(|event| event["phase"] == "terminal")
+        .collect::<Vec<_>>();
+    assert_eq!(terminal.len(), 5);
+    assert_eq!(terminal[0]["outcome"], "released");
+    assert!(terminal[1..]
+        .iter()
+        .all(|event| event["outcome"] == "not-modified"));
+    let audit_wire = serde_json::to_string(&terminal).expect("audit serializes");
+    for source_value in [
+        "record-1",
+        "Public one",
+        "SENSITIVE-SOURCE-VALUE-7341",
+        "2042-09-17",
+    ] {
+        assert!(!audit_wire.contains(source_value));
+    }
+
     let (status, headers, body) = harness
         .send(
             Method::GET,
@@ -565,6 +891,224 @@ async fn cursor_and_etag_are_bound_to_selected_representation() {
         StatusCode::BAD_REQUEST,
         "query.cursor_invalid",
     );
+}
+
+#[tokio::test]
+async fn malformed_list_lookahead_fails_atomically_without_value_disclosure() {
+    let sink = Arc::new(RecordingSink::default());
+    let harness = Harness::open(None, Arc::clone(&sink)).await;
+
+    let (status, _, body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records?pageSize=1",
+            None,
+            None,
+            &[],
+        )
+        .await;
+    assert_problem(
+        status,
+        &body,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "source.unavailable",
+    );
+
+    let records = sink.values();
+    let terminal = records
+        .iter()
+        .filter(|event| event["phase"] == "terminal")
+        .collect::<Vec<_>>();
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0]["outcome"], "source-failed");
+    let response_and_audit = format!(
+        "{}{}",
+        String::from_utf8_lossy(&body),
+        serde_json::to_string(&records).expect("audit serializes")
+    );
+    for source_value in [
+        "record-1",
+        "record-1a",
+        "Public one",
+        "Public invalid core",
+        "not-a-core-date",
+    ] {
+        assert!(!response_and_audit.contains(source_value));
+    }
+}
+
+#[tokio::test]
+async fn accept_negotiation_uses_quality_and_json_tie_break_without_leaking_values() {
+    let sink = Arc::new(RecordingSink::default());
+    let harness = Harness::open(None, Arc::clone(&sink)).await;
+
+    for (accept, expected_type, expects_context) in [
+        (
+            "Application/LD+JSON ; Q = 0.5, application/json; q=0.4",
+            "application/ld+json",
+            true,
+        ),
+        (
+            "application/ld+json;q=0.5, application/json;q=0.500",
+            "application/json",
+            false,
+        ),
+        (
+            "application/ld+json;q=0.000, application/json;q=0.50",
+            "application/json",
+            false,
+        ),
+    ] {
+        let (status, headers, body) = harness
+            .send(
+                Method::GET,
+                "/v2/resources/record/records/record-1",
+                None,
+                None,
+                &[(http::header::ACCEPT.as_str(), accept)],
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_type)
+        );
+        let document: Value = serde_json::from_slice(&body).expect("response JSON");
+        assert_eq!(document.get("@context").is_some(), expects_context);
+    }
+
+    let (status, _, read_body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            None,
+            None,
+            &[
+                (http::header::ACCEPT.as_str(), "application/json;q=0.00"),
+                (
+                    http::header::ACCEPT.as_str(),
+                    "application/ld+json; q=0.000",
+                ),
+            ],
+        )
+        .await;
+    assert_problem(
+        status,
+        &read_body,
+        StatusCode::NOT_ACCEPTABLE,
+        "representation.unsupported",
+    );
+    let records = sink.values();
+    assert_eq!(records.last().expect("refusal exists")["phase"], "refusal");
+    assert_eq!(
+        records.last().expect("refusal exists")["outcome"],
+        "invalid-request"
+    );
+    let audit_wire = serde_json::to_string(&records).expect("audit serializes");
+    for source_value in [
+        "record-1",
+        "Public one",
+        "SENSITIVE-SOURCE-VALUE-7341",
+        "2042-09-17",
+    ] {
+        assert!(!audit_wire.contains(source_value));
+    }
+}
+
+#[tokio::test]
+async fn duplicate_identifier_fails_read_and_page_boundary_but_lookup_stays_unresolved() {
+    let duplicate_fixture = FIXTURE_SQL.replace(
+        "FROM source_records;",
+        "FROM source_records\nUNION ALL\n\
+         SELECT record_id, revision, lifecycle, '2026-08-01T12:00:00Z',\n\
+                'DUPLICATE-LIST-CANARY-9073', prederived_mask, secret_value, event_date,\n\
+                optional_value, lookup_key, authority\n\
+         FROM source_records WHERE record_id = 'record-1';",
+    );
+    assert_ne!(duplicate_fixture, FIXTURE_SQL);
+    let sink = Arc::new(RecordingSink::default());
+    let harness = Harness::open_with_fixture_and_list_order(
+        None,
+        Arc::clone(&sink),
+        &duplicate_fixture,
+        &["recorded_at", "record_id"],
+    )
+    .await;
+
+    let (status, _, list_body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records?pageSize=1",
+            None,
+            None,
+            &[],
+        )
+        .await;
+    assert_problem(
+        status,
+        &list_body,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "source.unavailable",
+    );
+    let (status, _, read_body) = harness
+        .send(
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            None,
+            None,
+            &[],
+        )
+        .await;
+    assert_problem(
+        status,
+        &read_body,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "source.unavailable",
+    );
+    let (status, _, lookup_body) = harness
+        .send(
+            Method::POST,
+            "/v2/resources/record/lookups/by-key",
+            None,
+            Some(json!({"selectors": {"lookupKey": "lookup-1"}})),
+            &[],
+        )
+        .await;
+    assert_problem(
+        status,
+        &lookup_body,
+        StatusCode::NOT_FOUND,
+        "consultation.unresolved",
+    );
+
+    let records = sink.values();
+    let terminal = records
+        .iter()
+        .filter(|event| event["phase"] == "terminal")
+        .collect::<Vec<_>>();
+    assert_eq!(terminal.len(), 3);
+    assert_eq!(terminal[0]["outcome"], "source-failed");
+    assert_eq!(terminal[1]["outcome"], "source-failed");
+    assert_eq!(terminal[2]["outcome"], "unresolved");
+    let response_and_audit = format!(
+        "{}{}{}{}",
+        String::from_utf8_lossy(&list_body),
+        String::from_utf8_lossy(&read_body),
+        String::from_utf8_lossy(&lookup_body),
+        serde_json::to_string(&records).expect("audit serializes")
+    );
+    for source_value in [
+        "record-1",
+        "lookup-1",
+        "Public one",
+        "DUPLICATE-LIST-CANARY-9073",
+        "SENSITIVE-SOURCE-VALUE-7341",
+        "2042-09-17",
+    ] {
+        assert!(!response_and_audit.contains(source_value));
+    }
 }
 
 #[tokio::test]
@@ -677,8 +1221,8 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
         .await;
     assert_eq!(status, StatusCode::OK);
     let document: Value = serde_json::from_slice(&body).expect("JSON response");
-    assert_eq!(document["data"]["domainData"]["maskedSecret"], "***");
-    assert_eq!(document["data"]["domainData"]["eventYear"], "2026");
+    assert_eq!(document["data"]["domainData"]["maskedSecret"], "***7341");
+    assert_eq!(document["data"]["domainData"]["eventYear"], "2042");
     assert!(document["data"]["domainData"]
         .get("maskedOptional")
         .is_none());
@@ -705,7 +1249,12 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
         );
     }
     let audit_wire = serde_json::to_string(&records).expect("audit serializes");
-    for canary in ["ABCD", "***", "2026-08-10", "OPTIONAL-9"] {
+    for canary in [
+        "SENSITIVE-SOURCE-VALUE-7341",
+        "***7341",
+        "2042-09-17",
+        "OPTIONAL-9",
+    ] {
         assert!(!audit_wire.contains(canary), "audit disclosed value canary");
     }
 
@@ -864,6 +1413,15 @@ fn assert_problem(actual: StatusCode, body: &[u8], expected: StatusCode, code: &
     }
 }
 
+fn problem_without_trace(body: &[u8]) -> Value {
+    let mut document: Value = serde_json::from_slice(body).expect("problem JSON");
+    document
+        .as_object_mut()
+        .expect("problem object")
+        .remove("traceId");
+    document
+}
+
 fn compiled_registry(fingerprint: String) -> CompiledRegistry {
     let core_columns = ["record_id", "revision", "lifecycle", "recorded_at"];
     let public = representation(
@@ -994,7 +1552,9 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
         registry_identifier: "urn:example:registry:representations".into(),
         registry_name: "Representation test Registry".into(),
         authority_identifier: "urn:example:authority".into(),
+        authority_name: "Example Authority".into(),
         operator_identifier: None,
+        operator_name: None,
         authoritative_scope: "Synthetic representation tests".into(),
         base_uri: "https://registry.example.invalid/".into(),
         identifier_lifecycle_policy_ref: "governance/lifecycle.yaml".into(),

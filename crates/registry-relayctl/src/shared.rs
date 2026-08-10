@@ -2,11 +2,11 @@
 //! The only dependency seam from adopter presentation into Relay semantics.
 
 use registry_relay_v2::tooling::{
-    self, CheckOptions, DiffOptions, GenerateOptions, InitOptions, InspectOptions, PackageOptions,
-    TestOptions, ToolingError, ToolingReport,
+    self, CheckOptions, DiffOptions, GenerateOptions, InitOptions, InspectOptions,
+    InspectionProfile, PackageOptions, TestOptions, ToolingError, ToolingReport,
 };
 
-use crate::Command;
+use crate::{Command, InspectionProfileArg};
 
 pub(crate) fn execute(command: Command) -> Result<ToolingReport, ToolingError> {
     match command {
@@ -16,6 +16,10 @@ pub(crate) fn execute(command: Command) -> Result<ToolingReport, ToolingError> {
         Command::Inspect(args) => tooling::inspect_schema(&InspectOptions {
             database_path: args.database,
             starter_output: args.starters,
+            profile: match args.profile {
+                InspectionProfileArg::Snapshot => InspectionProfile::Snapshot,
+                InspectionProfileArg::LiveReadOnly => InspectionProfile::LiveReadOnly,
+            },
         }),
         Command::Check(args) => tooling::check_project(&CheckOptions {
             project_root: args.project,

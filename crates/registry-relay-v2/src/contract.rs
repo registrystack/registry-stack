@@ -10,6 +10,9 @@ use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
+use url::Url;
+
+const OIDC_DISCOVERY_SUFFIX: &str = "/.well-known/openid-configuration";
 
 /// A duplicate-free insertion-ordered YAML mapping.
 ///
@@ -133,6 +136,60 @@ impl RegistryContract {
     pub fn parse_yaml(input: &str) -> Result<Self, ContractParseError> {
         serde_norway::from_str(input).map_err(|source| ContractParseError { source })
     }
+}
+
+pub(crate) fn runtime_cursor_configuration_is_valid(
+    contract: &RegistryContract,
+    runtime: &RelayRuntime,
+) -> bool {
+    runtime.cursor.is_some()
+        || (!contract
+            .resources
+            .iter()
+            .any(|resource| resource.operations.list.is_some())
+            && contract
+                .resources
+                .iter()
+                .filter(|resource| {
+                    resource_can_appear_in_metadata(
+                        resource,
+                        contract.metadata_visibility.resources,
+                    )
+                })
+                .take(2)
+                .count()
+                <= 1)
+}
+
+fn resource_can_appear_in_metadata(resource: &ResourceDefinition, visibility: Visibility) -> bool {
+    if visibility == Visibility::OperatorOnly {
+        return false;
+    }
+    resource
+        .operations
+        .list
+        .iter()
+        .flat_map(|operation| {
+            operation
+                .representations
+                .iter()
+                .map(|(_, item)| &item.access)
+        })
+        .chain(resource.operations.read.iter().flat_map(|operation| {
+            operation
+                .representations
+                .iter()
+                .map(|(_, item)| &item.access)
+        }))
+        .chain(resource.operations.lookups.iter().flat_map(|operation| {
+            operation
+                .representations
+                .iter()
+                .map(|(_, item)| &item.access)
+        }))
+        .any(|access| {
+            visibility == Visibility::OperationBound || matches!(access, AccessRule::Public(_))
+        })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -655,30 +712,10 @@ impl RelayRuntime {
         {
             return false;
         }
-        self.authentication.issuer.as_ref().is_none_or(|issuer| {
-            valid_runtime_id(&issuer.id)
-                && UrlLike::https(&issuer.discovery_url)
-                && !issuer.audience.trim().is_empty()
-                && !issuer.token_types.is_empty()
-                && !issuer.algorithms.is_empty()
-                && unique_nonempty(&issuer.token_types)
-                && unique_nonempty(&issuer.algorithms)
-                && issuer.token_types.iter().all(|value| value == "at+jwt")
-                && issuer
-                    .algorithms
-                    .iter()
-                    .all(|value| matches!(value.as_str(), "EdDSA" | "ES256" | "RS256"))
-        })
-    }
-}
-
-struct UrlLike;
-
-impl UrlLike {
-    fn https(value: &str) -> bool {
-        value.starts_with("https://")
-            && value.len() > "https://".len()
-            && !value.chars().any(char::is_whitespace)
+        self.authentication
+            .issuer
+            .as_ref()
+            .is_none_or(|issuer| issuer.profile().is_some())
     }
 }
 
@@ -713,13 +750,6 @@ fn valid_runtime_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn unique_nonempty(values: &[String]) -> bool {
-    let mut seen = HashSet::new();
-    values
-        .iter()
-        .all(|value| !value.trim().is_empty() && seen.insert(value.as_str()))
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ServerRuntime {
@@ -746,6 +776,60 @@ pub struct IssuerRuntime {
     pub audience: String,
     pub token_types: Vec<String>,
     pub algorithms: Vec<String>,
+}
+
+pub(crate) struct IssuerProfile {
+    pub(crate) issuer_identifier: String,
+    pub(crate) algorithm: IssuerAlgorithm,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IssuerAlgorithm {
+    EdDsa,
+    Es256,
+    Rs256,
+}
+
+impl IssuerRuntime {
+    pub(crate) fn profile(&self) -> Option<IssuerProfile> {
+        if !valid_runtime_id(&self.id)
+            || self.audience.trim().is_empty()
+            || self.token_types.as_slice() != ["at+jwt"]
+        {
+            return None;
+        }
+        let algorithm = match self.algorithms.as_slice() {
+            [algorithm] if algorithm == "EdDSA" => IssuerAlgorithm::EdDsa,
+            [algorithm] if algorithm == "ES256" => IssuerAlgorithm::Es256,
+            [algorithm] if algorithm == "RS256" => IssuerAlgorithm::Rs256,
+            _ => return None,
+        };
+        let discovery_url = Url::parse(&self.discovery_url).ok()?;
+        if discovery_url.scheme() != "https"
+            || discovery_url.host_str().is_none()
+            || !discovery_url.username().is_empty()
+            || discovery_url.password().is_some()
+            || discovery_url.query().is_some()
+            || discovery_url.fragment().is_some()
+            || !discovery_url.path().ends_with(OIDC_DISCOVERY_SUFFIX)
+        {
+            return None;
+        }
+        let canonical_discovery_url = discovery_url.to_string();
+        if canonical_discovery_url != self.discovery_url {
+            return None;
+        }
+        let issuer_identifier = canonical_discovery_url
+            .strip_suffix(OIDC_DISCOVERY_SUFFIX)?
+            .to_owned();
+        if issuer_identifier.is_empty() || issuer_identifier.ends_with('/') {
+            return None;
+        }
+        Some(IssuerProfile {
+            issuer_identifier,
+            algorithm,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -874,6 +958,86 @@ disclosureProfiles: {}
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn runtime_accepts_exactly_one_startup_supported_issuer_algorithm() {
+        let runtime = |algorithms: &str| {
+            format!(
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: {algorithms}\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+            )
+        };
+
+        for algorithm in ["EdDSA", "ES256", "RS256"] {
+            assert!(RelayRuntime::parse_yaml(&runtime(&format!("[{algorithm}]"))).is_ok());
+        }
+        assert!(RelayRuntime::parse_yaml(&runtime("[EdDSA, ES256]")).is_err());
+    }
+
+    #[test]
+    fn runtime_issuer_discovery_matches_the_exact_startup_profile() {
+        let runtime = |discovery_url: &str| {
+            format!(
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    discoveryUrl: {discovery_url}\n    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+            )
+        };
+        let valid = "https://identity.example.invalid/.well-known/openid-configuration";
+        let parsed = RelayRuntime::parse_yaml(&runtime(valid)).expect("exact discovery URL");
+        assert_eq!(
+            parsed
+                .authentication
+                .issuer
+                .as_ref()
+                .and_then(IssuerRuntime::profile)
+                .map(|profile| profile.issuer_identifier),
+            Some("https://identity.example.invalid".to_owned())
+        );
+
+        for invalid in [
+            "https://operator:credential@identity.example.invalid/.well-known/openid-configuration",
+            "https://identity.example.invalid/.well-known/openid-configuration?tenant=x",
+            "https://identity.example.invalid/.well-known/openid-configuration#fragment",
+            "https://identity.example.invalid/.well-known/oauth-authorization-server",
+            "https:///.well-known/openid-configuration",
+        ] {
+            assert!(
+                RelayRuntime::parse_yaml(&runtime(invalid)).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_requirement_counts_only_potentially_visible_metadata_resources() {
+        let mut contract = RegistryContract::parse_yaml(crate::compiler::tests::valid_contract())
+            .expect("base contract");
+        let mut runtime = RelayRuntime::parse_yaml(
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:8080'}\npackagePath: package\nsources: {db: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
+        )
+        .expect("runtime without cursor");
+        let mut protected_resource = contract.resources[0].clone();
+        protected_resource.id = "protected-record".into();
+        protected_resource.operations.read = Some(
+            serde_norway::from_str(
+                "defaultRepresentation: protected\nrepresentations:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
+            )
+            .expect("protected read operation"),
+        );
+        contract.resources.push(protected_resource);
+
+        assert!(runtime_cursor_configuration_is_valid(&contract, &runtime));
+
+        contract.metadata_visibility.resources = Visibility::OperatorOnly;
+        assert!(runtime_cursor_configuration_is_valid(&contract, &runtime));
+
+        contract.metadata_visibility.resources = Visibility::OperationBound;
+        assert!(!runtime_cursor_configuration_is_valid(&contract, &runtime));
+
+        runtime.cursor = Some(CursorRuntime {
+            integrity_key_ref: "secret:env/CURSOR_KEY".into(),
+            maximum_age_seconds: 300,
+        });
+        assert!(runtime_cursor_configuration_is_valid(&contract, &runtime));
     }
 
     #[test]

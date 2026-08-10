@@ -39,6 +39,25 @@ const MAXIMUM_LOOKUP_REQUEST_BODY_BYTES: u32 = 1024 * 1024;
 const MAXIMUM_LOOKUP_SELECTORS: usize = 32;
 const MAXIMUM_SELECTOR_BYTES: u32 = 4 * 1024;
 const MAXIMUM_PARTIAL_STRING_CHARACTERS: u16 = 64;
+// Keep governed purpose values inside the exact direct-string claim ceiling
+// enforced by `auth::direct_string_value` at request time.
+const MAXIMUM_DIRECT_CLAIM_BYTES: usize = 512;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceRuntimeType {
+    Text,
+    Boolean,
+    Integer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SqliteTypeAffinity {
+    Integer,
+    Text,
+    Blob,
+    Real,
+    Numeric,
+}
 
 pub type GovernedFileSet = BTreeMap<String, Vec<u8>>;
 
@@ -129,11 +148,17 @@ pub fn compile_contract(
         registry_identifier: contract.registry.registry_identifier.clone(),
         registry_name: contract.registry.name.clone(),
         authority_identifier: contract.registry.authority.identifier.clone(),
+        authority_name: contract.registry.authority.name.clone(),
         operator_identifier: contract
             .registry
             .operator
             .as_ref()
             .map(|operator| operator.identifier.clone()),
+        operator_name: contract
+            .registry
+            .operator
+            .as_ref()
+            .map(|operator| operator.name.clone()),
         authoritative_scope: contract.registry.authoritative_scope.clone(),
         base_uri: contract.registry.base_uri.clone(),
         identifier_lifecycle_policy_ref: contract.registry.identifier_lifecycle_policy_ref.clone(),
@@ -177,8 +202,9 @@ pub fn compile_contract_with_governed_files(
     files: &GovernedFileSet,
 ) -> Result<CompiledRegistry, CompileReport> {
     let mut registry = compile_contract(contract, observed, profile)?;
-    let (codelists, file_digests, classification_review, report) =
+    let (codelists, file_digests, classification_review, mut report) =
         validate_governed_files(contract, files, profile, &registry);
+    validate_governed_lookup_body_bounds(contract, &codelists, &mut report);
     if report.has_errors() {
         return Err(report);
     }
@@ -445,18 +471,18 @@ impl<'a> Compiler<'a> {
                 "the Registry identifier must be a globally scoped URI",
             );
         }
-        if !valid_absolute_url(&self.contract.registry.base_uri) {
+        if !valid_artifact_base_url(&self.contract.registry.base_uri) {
             self.error(
                 "registry.base_uri_invalid",
                 "registry.baseUri",
-                "the Registry base URI must be an absolute HTTP or HTTPS URL",
+                "the Registry base URI must be an absolute HTTP or HTTPS URL without credentials, a query, or a fragment",
             );
         }
-        if !valid_absolute_url(&self.contract.semantics.local_vocabulary) {
+        if !valid_turtle_iri(&self.contract.semantics.local_vocabulary) {
             self.error(
                 "semantics.local_vocabulary_invalid",
                 "semantics.localVocabulary",
-                "the local vocabulary must be an absolute HTTP or HTTPS URL",
+                "the local vocabulary must be an absolute HTTP or HTTPS IRI safe for Turtle serialization",
             );
         }
         if !valid_relative_reference(&self.contract.registry.identifier_lifecycle_policy_ref) {
@@ -976,6 +1002,46 @@ impl<'a> Compiler<'a> {
                     );
                 }
             }
+            for (column, field) in [
+                (
+                    resource
+                        .record_context
+                        .record_identifier
+                        .source_column
+                        .as_str(),
+                    "recordIdentifier",
+                ),
+                (
+                    resource
+                        .record_context
+                        .revision_identifier
+                        .source_column
+                        .as_str(),
+                    "revisionIdentifier",
+                ),
+                (
+                    resource
+                        .record_context
+                        .lifecycle_state
+                        .source_column
+                        .as_str(),
+                    "lifecycleState",
+                ),
+                (
+                    resource.record_context.recorded_at.source_column.as_str(),
+                    "recordedAt",
+                ),
+            ] {
+                if observed_column(observed_view, column)
+                    .is_some_and(|observed| !has_sqlite_text_affinity(&observed.declared_type))
+                {
+                    self.error(
+                        "record.declared_type_incompatible",
+                        &format!("{root}.recordContext.{field}.sourceColumn"),
+                        "Registry Core columns require a reviewed SQLite declaration with TEXT affinity",
+                    );
+                }
+            }
 
             let mut operations = Vec::new();
             if let Some(list) = &resource.operations.list {
@@ -1004,6 +1070,7 @@ impl<'a> Compiler<'a> {
                     resource,
                     &properties,
                     &disclosures,
+                    observed_view,
                     observed_columns.as_ref(),
                     &root,
                     "read",
@@ -1080,6 +1147,17 @@ impl<'a> Compiler<'a> {
                         selector.codelist.as_deref(),
                         &selector_location,
                     );
+                    if observed_column(observed_view, &selector.source_column).is_some_and(
+                        |observed| {
+                            !compatible_declared_type(selector.data_type, &observed.declared_type)
+                        },
+                    ) {
+                        self.error(
+                            "lookup.selector_declared_type_incompatible",
+                            &format!("{selector_location}.type"),
+                            "the selector datatype is incompatible with the reviewed SQLite declaration",
+                        );
+                    }
                     let bounds_invalid = match selector.data_type {
                         DataType::String => {
                             selector.maximum_bytes.is_none()
@@ -1111,10 +1189,20 @@ impl<'a> Compiler<'a> {
                         codelist: selector.codelist.clone(),
                     });
                 }
+                let minimum_body_bytes =
+                    minimum_lookup_body_bytes(lookup.request_body.selectors.iter());
+                if u64::from(lookup.request_body.maximum_bytes) < minimum_body_bytes {
+                    self.error(
+                        "lookup.body_bound_too_small",
+                        &format!("{location}.requestBody.maximumBytes"),
+                        "the lookup request-body bound cannot contain the smallest valid JSON body for all required selectors",
+                    );
+                }
                 if let Some(mut operation) = self.compile_simple_operation(
                     resource,
                     &properties,
                     &disclosures,
+                    observed_view,
                     observed_columns.as_ref(),
                     &location,
                     "lookup",
@@ -1138,6 +1226,8 @@ impl<'a> Compiler<'a> {
                     "a resource must compile at least one operation",
                 );
             }
+
+            self.validate_source_type_interpretations(resource, &properties, &operations, &root);
 
             self.validate_processing(resource, &operations, &root);
             let column_accounting = self.compile_column_accounting(
@@ -1219,6 +1309,7 @@ impl<'a> Compiler<'a> {
         resource: &crate::contract::ResourceDefinition,
         properties: &[CompiledProperty],
         disclosures: &[CompiledDisclosureProfile],
+        observed_view: Option<&crate::model::ObservedView>,
         observed_columns: Option<&BTreeSet<&str>>,
         root: &str,
         operation_location: &str,
@@ -1291,6 +1382,7 @@ impl<'a> Compiler<'a> {
             };
             let Some(access) = self.compile_access(
                 &definition.access,
+                observed_view,
                 observed_columns,
                 &representation_location,
             ) else {
@@ -1392,6 +1484,7 @@ impl<'a> Compiler<'a> {
             resource,
             properties,
             disclosures,
+            observed_view,
             observed_columns,
             root,
             "list",
@@ -1680,6 +1773,7 @@ impl<'a> Compiler<'a> {
     fn compile_access(
         &mut self,
         access: &AccessRule,
+        observed_view: Option<&crate::model::ObservedView>,
         observed_columns: Option<&BTreeSet<&str>>,
         location: &str,
     ) -> Option<CompiledAccess> {
@@ -1701,6 +1795,12 @@ impl<'a> Compiler<'a> {
                         &format!("{location}.access.scope"),
                         "protected operations require one non-empty scope",
                     );
+                } else if !valid_scope_token(&protected.scope) {
+                    self.error(
+                        "access.scope_invalid",
+                        &format!("{location}.access.scope"),
+                        "protected operations require exactly one RFC 6749 scope-token",
+                    );
                 } else if !self.scopes.insert(protected.scope.clone()) {
                     self.error(
                         "access.scope_duplicate",
@@ -1721,6 +1821,15 @@ impl<'a> Compiler<'a> {
                             "access.purpose_duplicate",
                             &format!("{location}.access.purpose.allowed"),
                             "allowed purpose values must be unique",
+                        );
+                    }
+                    if purpose.allowed.iter().any(|value| {
+                        value.is_empty() || value.len() > MAXIMUM_DIRECT_CLAIM_BYTES
+                    }) {
+                        self.error(
+                            "access.purpose_value_invalid",
+                            &format!("{location}.access.purpose.allowed"),
+                            "every allowed purpose must be a non-empty direct-string claim value within the runtime byte ceiling",
                         );
                     }
                     CompiledPurpose {
@@ -1754,6 +1863,14 @@ impl<'a> Compiler<'a> {
                             &format!("{location}.access.authorityRowBinding.sourceColumn"),
                             "the row-binding column is absent from the reviewed view",
                         );
+                    } else if observed_column(observed_view, &column)
+                        .is_some_and(|observed| !has_sqlite_text_affinity(&observed.declared_type))
+                    {
+                        self.error(
+                            "access.row_binding_declared_type_incompatible",
+                            &format!("{location}.access.authorityRowBinding.sourceColumn"),
+                            "row-authority binding columns require a reviewed SQLite declaration with TEXT affinity",
+                        );
                     }
                     CompiledRowBinding {
                         source,
@@ -1766,6 +1883,97 @@ impl<'a> Compiler<'a> {
                     row_binding,
                 })
             }
+        }
+    }
+
+    fn validate_source_type_interpretations(
+        &mut self,
+        resource: &crate::contract::ResourceDefinition,
+        properties: &[CompiledProperty],
+        operations: &[CompiledOperation],
+        root: &str,
+    ) {
+        let mut interpretations = BTreeMap::<String, (SourceRuntimeType, String)>::new();
+        let core = [
+            (
+                resource
+                    .record_context
+                    .record_identifier
+                    .source_column
+                    .as_str(),
+                DataType::String,
+                format!("{root}.recordContext.recordIdentifier"),
+            ),
+            (
+                resource
+                    .record_context
+                    .revision_identifier
+                    .source_column
+                    .as_str(),
+                DataType::String,
+                format!("{root}.recordContext.revisionIdentifier"),
+            ),
+            (
+                resource
+                    .record_context
+                    .lifecycle_state
+                    .source_column
+                    .as_str(),
+                DataType::ControlledCode,
+                format!("{root}.recordContext.lifecycleState"),
+            ),
+            (
+                resource.record_context.recorded_at.source_column.as_str(),
+                DataType::DateTime,
+                format!("{root}.recordContext.recordedAt"),
+            ),
+        ];
+        for (column, data_type, location) in core {
+            self.record_source_type(&mut interpretations, column, data_type, &location);
+        }
+        for property in properties {
+            self.record_source_type(
+                &mut interpretations,
+                &property.source_column,
+                transform_source_type(property.transform.as_ref(), property.data_type),
+                &format!("{root}.properties.{}", property.name),
+            );
+        }
+        for operation in operations {
+            for selector in &operation.query.selectors {
+                self.record_source_type(
+                    &mut interpretations,
+                    &selector.source_column,
+                    selector.data_type,
+                    &format!(
+                        "{root}.operations.{}.selectors.{}",
+                        operation.identifier, selector.name
+                    ),
+                );
+            }
+        }
+    }
+
+    fn record_source_type(
+        &mut self,
+        interpretations: &mut BTreeMap<String, (SourceRuntimeType, String)>,
+        column: &str,
+        data_type: DataType,
+        location: &str,
+    ) {
+        let data_type = source_runtime_type(data_type);
+        if let Some((existing, existing_location)) = interpretations.get(column) {
+            if *existing != data_type {
+                self.error(
+                    "source.column_type_interpretation_conflict",
+                    location,
+                    &format!(
+                        "one raw source column cannot have incompatible datatype interpretations; it is already bound at {existing_location}"
+                    ),
+                );
+            }
+        } else {
+            interpretations.insert(column.to_owned(), (data_type, location.to_owned()));
         }
     }
 
@@ -2864,6 +3072,13 @@ fn column_exists(columns: Option<&BTreeSet<&str>>, column: &str) -> bool {
     columns.is_none_or(|columns| columns.contains(column))
 }
 
+fn observed_column<'a>(
+    view: Option<&'a crate::model::ObservedView>,
+    column: &str,
+) -> Option<&'a crate::model::ObservedColumn> {
+    view?.columns.iter().find(|item| item.name == column)
+}
+
 fn valid_sha256(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -2874,6 +3089,28 @@ fn valid_absolute_url(value: &str) -> bool {
     Url::parse(value)
         .ok()
         .is_some_and(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
+}
+
+fn valid_artifact_base_url(value: &str) -> bool {
+    Url::parse(value).ok().is_some_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.has_host()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
+}
+
+fn valid_turtle_iri(value: &str) -> bool {
+    valid_absolute_url(value)
+        && !value.chars().any(|character| {
+            character <= '\u{20}'
+                || matches!(
+                    character,
+                    '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\'
+                )
+        })
 }
 
 fn valid_global_identifier(value: &str) -> bool {
@@ -2899,20 +3136,154 @@ fn valid_sql_identifier(value: &str) -> bool {
 }
 
 fn compatible_declared_type(data_type: DataType, declared_type: &str) -> bool {
-    let declared = declared_type.trim().to_ascii_uppercase();
+    let affinity = sqlite_declared_type_affinity(declared_type);
     match data_type {
-        DataType::Boolean | DataType::Integer => declared.contains("INT") || declared == "BOOLEAN",
+        // Relay's boolean and integer runtime shapes are both backed by exact
+        // SQLite INTEGER values. The canonical BOOLEAN declaration is retained
+        // as the one intentional NUMERIC-affinity exception for existing
+        // governed schemas; arbitrary NUMERIC declarations remain incompatible.
+        DataType::Boolean | DataType::Integer => {
+            affinity == SqliteTypeAffinity::Integer
+                || declared_type.trim().eq_ignore_ascii_case("BOOLEAN")
+        }
         DataType::String
         | DataType::Date
         | DataType::DateTime
         | DataType::Year
         | DataType::YearMonth
-        | DataType::ControlledCode => {
-            declared.contains("CHAR")
-                || declared.contains("CLOB")
-                || declared.contains("TEXT")
-                || declared == "DATE"
-                || declared == "DATETIME"
+        | DataType::ControlledCode => affinity == SqliteTypeAffinity::Text,
+    }
+}
+
+fn has_sqlite_text_affinity(declared_type: &str) -> bool {
+    sqlite_declared_type_affinity(declared_type) == SqliteTypeAffinity::Text
+}
+
+fn sqlite_declared_type_affinity(declared_type: &str) -> SqliteTypeAffinity {
+    let declared = declared_type.trim().to_ascii_uppercase();
+    // This order is SQLite's declared-type affinity algorithm. Precedence is
+    // significant: for example, INTTEXT and CHARINT both have INTEGER affinity.
+    if declared.contains("INT") {
+        SqliteTypeAffinity::Integer
+    } else if declared.contains("CHAR") || declared.contains("CLOB") || declared.contains("TEXT") {
+        SqliteTypeAffinity::Text
+    } else if declared.is_empty() || declared.contains("BLOB") {
+        SqliteTypeAffinity::Blob
+    } else if declared.contains("REAL") || declared.contains("FLOA") || declared.contains("DOUB") {
+        SqliteTypeAffinity::Real
+    } else {
+        SqliteTypeAffinity::Numeric
+    }
+}
+
+fn valid_scope_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
+        })
+}
+
+fn minimum_lookup_body_bytes<'a>(
+    selectors: impl Iterator<Item = (&'a str, &'a crate::contract::SelectorDefinition)>,
+) -> u64 {
+    // `{"selectors":{` plus the two closing braces.
+    let mut bytes = 16_u64;
+    for (index, (name, selector)) in selectors.enumerate() {
+        if index != 0 {
+            bytes += 1; // comma
+        }
+        bytes += name.len() as u64 + 3; // quoted key and colon
+        bytes += minimum_selector_json_bytes(selector);
+    }
+    bytes
+}
+
+fn minimum_selector_json_bytes(selector: &crate::contract::SelectorDefinition) -> u64 {
+    match selector.data_type {
+        DataType::String => u64::from(selector.minimum_bytes.unwrap_or(1)) + 2,
+        DataType::ControlledCode => 3, // shortest possible non-empty string
+        DataType::Boolean => 4,        // true
+        DataType::Integer => 1,        // 0
+        DataType::Date => 12,          // "1970-01-01"
+        DataType::DateTime => 22,      // "1970-01-01T00:00:00Z"
+        DataType::Year => 6,           // "1970"
+        DataType::YearMonth => 9,      // "1970-01"
+    }
+}
+
+fn validate_governed_lookup_body_bounds(
+    contract: &RegistryContract,
+    codelists: &[CompiledCodelist],
+    report: &mut CompileReport,
+) {
+    let codelists = codelists
+        .iter()
+        .map(|codelist| (codelist.path.as_str(), codelist))
+        .collect::<BTreeMap<_, _>>();
+    for (resource_index, resource) in contract.resources.iter().enumerate() {
+        for (lookup_index, lookup) in resource.operations.lookups.iter().enumerate() {
+            if !lookup
+                .request_body
+                .selectors
+                .iter()
+                .any(|(_, selector)| selector.data_type == DataType::ControlledCode)
+            {
+                continue;
+            }
+            let location =
+                format!("resources[{resource_index}].operations.lookups[{lookup_index}]");
+            let mut minimum_body_bytes = 16_u64;
+            let mut complete = true;
+            for (selector_index, (name, selector)) in
+                lookup.request_body.selectors.iter().enumerate()
+            {
+                if selector_index != 0 {
+                    minimum_body_bytes += 1;
+                }
+                minimum_body_bytes += name.len() as u64 + 3;
+                if selector.data_type != DataType::ControlledCode {
+                    minimum_body_bytes += minimum_selector_json_bytes(selector);
+                    continue;
+                }
+                let Some(path) = selector.codelist.as_deref() else {
+                    complete = false;
+                    continue;
+                };
+                let Some(codelist) = codelists.get(path) else {
+                    complete = false;
+                    continue;
+                };
+                let Some(minimum_value_bytes) = codelist
+                    .values
+                    .iter()
+                    .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+                    .map(|value| {
+                        serde_json::to_vec(value).expect("a string always serializes as JSON")
+                    })
+                    .map(|value| value.len() as u64)
+                    .min()
+                else {
+                    report.diagnostics.push(Diagnostic {
+                        severity: DiagnosticSeverity::Error,
+                        code: "lookup.selector_codelist_unusable".into(),
+                        location: format!(
+                            "{location}.requestBody.selectors.{name}.codelist"
+                        ),
+                        message: "the selector codelist contains no runtime-acceptable controlled-code value".into(),
+                    });
+                    complete = false;
+                    continue;
+                };
+                minimum_body_bytes += minimum_value_bytes;
+            }
+            if complete && u64::from(lookup.request_body.maximum_bytes) < minimum_body_bytes {
+                report.diagnostics.push(Diagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: "lookup.body_bound_too_small".into(),
+                    location: format!("{location}.requestBody.maximumBytes"),
+                    message: "the lookup request-body bound cannot contain the smallest runtime-acceptable JSON body for all required selectors".into(),
+                });
+            }
         }
     }
 }
@@ -2929,6 +3300,19 @@ fn transform_source_type(transform: Option<&CompiledTransform>, output_type: Dat
             ..
         }) => DataType::DateTime,
         None => output_type,
+    }
+}
+
+fn source_runtime_type(data_type: DataType) -> SourceRuntimeType {
+    match data_type {
+        DataType::Boolean => SourceRuntimeType::Boolean,
+        DataType::Integer => SourceRuntimeType::Integer,
+        DataType::String
+        | DataType::Date
+        | DataType::DateTime
+        | DataType::Year
+        | DataType::YearMonth
+        | DataType::ControlledCode => SourceRuntimeType::Text,
     }
 }
 
@@ -2988,16 +3372,22 @@ fn expand_local_term(base: &str, term: &str) -> Option<String> {
         if local.is_empty() || local.contains(|character: char| character.is_whitespace()) {
             return None;
         }
-        return Some(format!("{base}{local}"));
+        let expanded = format!("{base}{local}");
+        return valid_turtle_iri(&expanded).then_some(expanded);
     }
-    valid_absolute_url(term).then(|| term.to_owned())
+    valid_turtle_iri(term).then(|| term.to_owned())
 }
 
 fn artifact_url(base: &str, artifact_id: &str) -> String {
     Url::parse(base).map_or_else(
         |_| format!("{base}v2/artifacts/{artifact_id}"),
         |mut url| {
-            url.set_path(&format!("/v2/artifacts/{artifact_id}"));
+            if let Ok(mut segments) = url.path_segments_mut() {
+                segments.pop_if_empty();
+                segments.push("v2");
+                segments.push("artifacts");
+                segments.push(artifact_id);
+            }
             url.set_query(None);
             url.set_fragment(None);
             url.to_string()
@@ -3139,6 +3529,21 @@ pub(crate) mod tests {
             .find(|artifact| representation.schema_reference.ends_with(&artifact.id))
             .expect("operation schema is mounted by its exact artifact identifier");
         assert_eq!(schema.visibility, crate::contract::Visibility::Public);
+    }
+
+    #[test]
+    fn authority_and_operator_display_names_are_carried_into_the_compiled_registry() {
+        let yaml = valid_contract().replace(
+            "  authority: {identifier: urn:example:authority, name: Registry Authority}",
+            "  authority: {identifier: urn:example:authority, name: Registry Authority}\n  operator: {identifier: urn:example:operator, name: Registry Operator}",
+        );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+        let compiled =
+            compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                .expect("contract compiles");
+
+        assert_eq!(compiled.authority_name, "Registry Authority");
+        assert_eq!(compiled.operator_name.as_deref(), Some("Registry Operator"));
     }
 
     #[test]
@@ -3639,6 +4044,411 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn artifact_base_is_closed_and_preserves_its_path_prefix() {
+        for base in [
+            "https://user@example.invalid/registry/",
+            "https://example.invalid/registry/?tenant=one",
+            "https://example.invalid/registry/#tenant",
+        ] {
+            let yaml = valid_contract().replace(
+                "baseUri: https://registry.example.invalid/registry/",
+                &format!("baseUri: \"{base}\""),
+            );
+            let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+            let report =
+                compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                    .expect_err("ambiguous artifact base refused");
+            assert!(report
+                .diagnostics
+                .iter()
+                .any(|item| item.code == "registry.base_uri_invalid"));
+        }
+
+        let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let compiled =
+            compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                .expect("contract compiles");
+        assert!(compiled.resources[0]
+            .record_context
+            .schema_reference
+            .starts_with("https://registry.example.invalid/registry/v2/artifacts/"));
+    }
+
+    #[test]
+    fn semantic_iris_unsafe_for_turtle_are_refused_before_artifact_generation() {
+        let invalid_vocabulary = valid_contract().replace(
+            "localVocabulary: https://registry.example.invalid/vocabulary/",
+            "localVocabulary: \"https://registry.example.invalid/vocabulary/>\"",
+        );
+        let invalid_term =
+            valid_contract().replace("semanticTerm: local:name", "semanticTerm: \"local:bad>\"");
+        for (yaml, code) in [
+            (invalid_vocabulary, "semantics.local_vocabulary_invalid"),
+            (invalid_term, "semantics.term_invalid"),
+        ] {
+            let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+            let report =
+                compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                    .expect_err("Turtle-unsafe IRI refused");
+            assert!(report.diagnostics.iter().any(|item| item.code == code));
+        }
+    }
+
+    #[test]
+    fn every_registry_core_column_requires_sqlite_text_affinity() {
+        for (column, declared_type) in [
+            ("id", "DATE"),
+            ("revision", "DATETIME"),
+            ("lifecycle", "STRING"),
+            ("recorded_at", "INTTEXT"),
+        ] {
+            let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+            let mut observed = observed_schema();
+            observed.views[0]
+                .columns
+                .iter_mut()
+                .find(|item| item.name == column)
+                .expect("core column")
+                .declared_type = declared_type.into();
+            let report = compile_contract(&contract, &[observed], CompileProfile::Production)
+                .expect_err("non-TEXT-affinity Registry Core declaration refused");
+            assert!(report
+                .diagnostics
+                .iter()
+                .any(|item| item.code == "record.declared_type_incompatible"));
+        }
+    }
+
+    #[test]
+    fn sqlite_declared_type_affinity_follows_sqlite_precedence() {
+        for (declared_type, expected) in [
+            ("INTTEXT", SqliteTypeAffinity::Integer),
+            ("CHARINT", SqliteTypeAffinity::Integer),
+            ("VARCHAR(255)", SqliteTypeAffinity::Text),
+            ("CLOB", SqliteTypeAffinity::Text),
+            ("TEXT", SqliteTypeAffinity::Text),
+            ("", SqliteTypeAffinity::Blob),
+            ("BLOB", SqliteTypeAffinity::Blob),
+            ("REAL", SqliteTypeAffinity::Real),
+            ("FLOAT", SqliteTypeAffinity::Real),
+            ("DOUBLE PRECISION", SqliteTypeAffinity::Real),
+            ("DATE", SqliteTypeAffinity::Numeric),
+            ("DATETIME", SqliteTypeAffinity::Numeric),
+            ("NUMERIC", SqliteTypeAffinity::Numeric),
+            ("STRING", SqliteTypeAffinity::Numeric),
+        ] {
+            assert_eq!(
+                sqlite_declared_type_affinity(declared_type),
+                expected,
+                "unexpected affinity for {declared_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_text_runtime_datatype_requires_sqlite_text_affinity() {
+        let text_runtime_types = [
+            DataType::String,
+            DataType::Date,
+            DataType::DateTime,
+            DataType::Year,
+            DataType::YearMonth,
+            DataType::ControlledCode,
+        ];
+        // These are SQLite's documented TEXT-affinity declaration families.
+        let text_declarations = [
+            "CHARACTER(20)",
+            "VARCHAR(255)",
+            "VARYING CHARACTER(255)",
+            "NCHAR(55)",
+            "NATIVE CHARACTER(70)",
+            "NVARCHAR(100)",
+            "TEXT",
+            "CLOB",
+        ];
+        let incompatible_declarations = [
+            "INTTEXT", "DATE", "DATETIME", "STRING", "", "BLOB", "REAL", "NUMERIC",
+        ];
+
+        for data_type in text_runtime_types {
+            for declared_type in text_declarations {
+                assert!(
+                    compatible_declared_type(data_type, declared_type),
+                    "{data_type:?} should accept {declared_type:?}"
+                );
+            }
+            for declared_type in incompatible_declarations {
+                assert!(
+                    !compatible_declared_type(data_type, declared_type),
+                    "{data_type:?} should refuse {declared_type:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn integer_backed_datatypes_accept_only_integer_affinity_or_boolean() {
+        // Every INT-containing declaration has INTEGER affinity. BOOLEAN is
+        // the intentional compatibility exception retained from version one.
+        let compatible_declarations = [
+            "INT",
+            "INTEGER",
+            "TINYINT",
+            "SMALLINT",
+            "MEDIUMINT",
+            "BIGINT",
+            "UNSIGNED BIG INT",
+            "INT2",
+            "INT8",
+            "INTTEXT",
+            "BOOLEAN",
+        ];
+        let incompatible_declarations = ["NUMERIC", "DATE", "REAL", "TEXT", "BLOB", ""];
+
+        for data_type in [DataType::Boolean, DataType::Integer] {
+            for declared_type in compatible_declarations {
+                assert!(
+                    compatible_declared_type(data_type, declared_type),
+                    "{data_type:?} should accept {declared_type:?}"
+                );
+            }
+            for declared_type in incompatible_declarations {
+                assert!(
+                    !compatible_declared_type(data_type, declared_type),
+                    "{data_type:?} should refuse {declared_type:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_selector_type_and_smallest_json_body_are_closed() {
+        let lookup = |maximum: u32, data_type: &str| {
+            valid_contract()
+                .replace(
+                    "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                    &format!(
+                        "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: {maximum}\n            selectors:\n              name: {{sourceColumn: name, type: {data_type}, minimumBytes: 1, maximumBytes: 32}}\n          defaultRepresentation: public\n          representations:\n            public: {{access: public, disclosureProfile: public}}"
+                    ),
+                )
+                .replace("operationRefs: [read]", "operationRefs: [lookup:by-name]")
+        };
+
+        let too_small = RegistryContract::parse_yaml(&lookup(25, "string")).expect("contract");
+        let report = compile_contract(&too_small, &[observed_schema()], CompileProfile::Production)
+            .expect_err("body unable to contain its required selector refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "lookup.body_bound_too_small"));
+
+        let exact = RegistryContract::parse_yaml(&lookup(26, "string")).expect("contract");
+        compile_contract(&exact, &[observed_schema()], CompileProfile::Production)
+            .expect("exact minimum JSON body bound compiles");
+
+        let incompatible = RegistryContract::parse_yaml(&lookup(64, "integer")).expect("contract");
+        let report = compile_contract(
+            &incompatible,
+            &[observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect_err("selector/SQLite type mismatch refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| { item.code == "lookup.selector_declared_type_incompatible" }));
+
+        let adversarial = RegistryContract::parse_yaml(&lookup(64, "string")).expect("contract");
+        let mut observed = observed_schema();
+        observed.views[0]
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "name")
+            .expect("selector column")
+            .declared_type = "INTTEXT".into();
+        let report = compile_contract(&adversarial, &[observed], CompileProfile::Production)
+            .expect_err("INTEGER-affinity string selector refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "lookup.selector_declared_type_incompatible"));
+    }
+
+    #[test]
+    fn list_filter_source_columns_inherit_property_affinity_validation() {
+        let yaml = valid_contract()
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict filter contract");
+        let mut observed = observed_schema();
+        observed.views[0]
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "name")
+            .expect("filter property column")
+            .declared_type = "INTTEXT".into();
+
+        let report = compile_contract(&contract, &[observed], CompileProfile::Production)
+            .expect_err("INTEGER-affinity string filter source refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "property.declared_type_incompatible"));
+    }
+
+    #[test]
+    fn governed_controlled_codes_set_the_exact_production_lookup_body_boundary() {
+        let lookup = |maximum: u32| {
+            valid_contract()
+                .replace(
+                    "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                    &format!(
+                        "lookups:\n        - id: verify-registration\n          requestBody:\n            maximumBytes: {maximum}\n            selectors:\n              registrationNumber: {{sourceColumn: name, type: string, minimumBytes: 12, maximumBytes: 96}}\n              eventType: {{sourceColumn: name, type: controlled-code, codelist: codelists/selector-types.yaml}}\n          defaultRepresentation: public\n          representations:\n            public: {{access: public, disclosureProfile: public}}"
+                    ),
+                )
+                .replace(
+                    "operationRefs: [read]",
+                    "operationRefs: [lookup:verify-registration]",
+                )
+        };
+        let governed_selector_codes =
+            b"id: selector-types\nversion: 1\nstatus: reviewed\nvalues: ['\"', \xc3\xa9]\n";
+        let compile_with_codes = |maximum| {
+            let contract = RegistryContract::parse_yaml(&lookup(maximum)).expect("strict contract");
+            let mut files = governed_files_for(&contract);
+            files.insert(
+                "codelists/selector-types.yaml".into(),
+                governed_selector_codes.to_vec(),
+            );
+            compile_contract_with_governed_files(
+                &contract,
+                &[observed_schema()],
+                CompileProfile::Production,
+                &files,
+            )
+        };
+
+        let provisional = RegistryContract::parse_yaml(&lookup(67)).expect("strict contract");
+        compile_contract(
+            &provisional,
+            &[observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("the pre-codelist lower bound remains provisional");
+        let report = compile_with_codes(67)
+            .expect_err("a bound below the actual governed JSON minimum is refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "lookup.body_bound_too_small"));
+
+        compile_with_codes(68)
+            .expect("the exact UTF-8 and JSON-escaping-aware production boundary compiles");
+    }
+
+    #[test]
+    fn protected_scope_and_purpose_values_match_runtime_token_bounds() {
+        let with_scope = |scope: &str| {
+            let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+            let mut value = serde_json::to_value(contract).expect("contract serializes");
+            *value
+                .pointer_mut("/resources/0/operations/read/representations/public/access")
+                .expect("representation access") = serde_json::json!({"scope": scope});
+            serde_json::from_value(value).expect("strict contract")
+        };
+        compile_contract(
+            &with_scope("!#$%&'()*+,-./012:;<=>?@AZ[]^_`az{|}~"),
+            &[observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("every permitted RFC 6749 scope-token byte compiles");
+        for (kind, scope) in [
+            ("quote", "registry:records:\"read"),
+            ("backslash", "registry:records:\\read"),
+            ("control", "registry:records:\u{1f}read"),
+            ("delete control", "registry:records:\u{7f}read"),
+            ("non-ASCII", "registry:records:r\u{e9}ad"),
+            ("whitespace", "registry:records read"),
+        ] {
+            let report = compile_contract(
+                &with_scope(scope),
+                &[observed_schema()],
+                CompileProfile::Production,
+            )
+            .expect_err(kind);
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|item| item.code == "access.scope_invalid"),
+                "missing scope diagnostic for {kind}"
+            );
+        }
+
+        let with_access =
+            |access: &str| valid_contract().replace("access: public", &format!("access: {access}"));
+        let maximum = "x".repeat(MAXIMUM_DIRECT_CLAIM_BYTES);
+        let valid = with_access(&format!(
+            "{{scope: registry:records:read, purpose: {{claim: purpose, allowed: [\"{maximum}\"]}}}}"
+        ));
+        let contract = RegistryContract::parse_yaml(&valid).expect("strict contract");
+        compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect("runtime maximum direct purpose value compiles");
+
+        let oversized = format!("{maximum}x");
+        let invalid = with_access(&format!(
+            "{{scope: registry:records:read, purpose: {{claim: purpose, allowed: [\"{oversized}\"]}}}}"
+        ));
+        let contract = RegistryContract::parse_yaml(&invalid).expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("oversized direct purpose value refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "access.purpose_value_invalid"));
+    }
+
+    #[test]
+    fn multiply_bound_columns_require_one_runtime_scalar_interpretation() {
+        let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let mut value = serde_json::to_value(contract).expect("contract serializes");
+        let properties = value
+            .pointer_mut("/resources/0/properties")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("properties");
+        let name = properties
+            .get_mut("name")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("name property");
+        name.insert("type".into(), serde_json::json!("boolean"));
+        let mut count = serde_json::Value::Object(name.clone());
+        let count = count.as_object_mut().expect("count property");
+        count.insert("label".into(), serde_json::json!("Count"));
+        count.insert("description".into(), serde_json::json!("Count"));
+        count.insert("type".into(), serde_json::json!("integer"));
+        count.insert("semanticTerm".into(), serde_json::json!("local:count"));
+        properties.insert("count".into(), serde_json::Value::Object(count.clone()));
+        let contract: RegistryContract = serde_json::from_value(value).expect("strict contract");
+        let mut observed = observed_schema();
+        observed.views[0]
+            .columns
+            .iter_mut()
+            .find(|item| item.name == "name")
+            .expect("name column")
+            .declared_type = "BOOLEAN".into();
+
+        let report = compile_contract(&contract, &[observed], CompileProfile::Production)
+            .expect_err("incompatible raw scalar interpretations refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| { item.code == "source.column_type_interpretation_conflict" }));
+    }
+
+    #[test]
     fn governed_structure_counts_cannot_exceed_product_ceilings() {
         let parse_value = |value: serde_json::Value| {
             serde_json::from_value::<RegistryContract>(value).expect("strict contract value")
@@ -3957,6 +4767,38 @@ pub(crate) mod tests {
         assert!(openapi["paths"]
             .get("/v2/resources/record/records/{recordIdentifier}")
             .is_none());
+    }
+
+    #[test]
+    fn row_authority_binding_requires_sqlite_text_affinity() {
+        let yaml = valid_contract().replace(
+            "access: public",
+            "access: {scope: registry:records:read, authorityRowBinding: {claim: region, sourceColumn: name}}",
+        );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+        let mut observed = observed_schema();
+        observed.views[0]
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "name")
+            .expect("row-binding column")
+            .declared_type = "DATE".into();
+
+        let report = compile_contract(&contract, &[observed], CompileProfile::Production)
+            .expect_err("NUMERIC-affinity row binding refused");
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "access.row_binding_declared_type_incompatible")
+            .expect("stable row-binding declaration diagnostic");
+        assert_eq!(
+            diagnostic.location,
+            "resources[0].operations.read.representations.public.access.authorityRowBinding.sourceColumn"
+        );
+        assert_eq!(
+            diagnostic.message,
+            "row-authority binding columns require a reviewed SQLite declaration with TEXT affinity"
+        );
     }
 
     #[test]

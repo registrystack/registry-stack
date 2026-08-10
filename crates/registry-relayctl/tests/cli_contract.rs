@@ -27,6 +27,9 @@ fn schema_inspection_offers_no_row_or_value_sampling_surface() {
 
     let help = String::from_utf8(output.stdout).expect("help is UTF-8");
     assert!(help.contains("without reading row values"));
+    assert!(help.contains("--profile <PROFILE>"));
+    assert!(help.contains("live-read-only"));
+    assert!(help.contains("snapshot"));
     for forbidden in ["--sample", "--rows", "--values", "--limit"] {
         assert!(!help.contains(forbidden), "unexpected option {forbidden}");
     }
