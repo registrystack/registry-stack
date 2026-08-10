@@ -24,9 +24,13 @@ use crate::cursor::{
     decode as decode_cursor, encode as encode_cursor, now_unix_seconds, require_same_request,
     CursorBindings, CursorPayload, CursorValue,
 };
+use crate::format_capabilities::{
+    response_format_capabilities, supports_geojson, CRS84_URI, JSON_FG_CORE_CONFORMANCE,
+    JSON_FG_PROFILE_URI, JSON_FG_TYPES_CONFORMANCE, RFC7946_PROFILE_URI,
+};
 use crate::model::{
-    CompiledAccess, CompiledOperation, CompiledRepresentation, CompiledResource,
-    ConsultationPattern, OperationKind, RepresentationProfile, RowAuthoritySource,
+    CompiledAccess, CompiledAccessProfile, CompiledOperation, CompiledResource,
+    ConsultationPattern, OperationKind, RowAuthoritySource,
 };
 use crate::problem::{ProblemCode, TraceContext};
 use crate::server::{uri_within_bound, RelayService};
@@ -40,12 +44,6 @@ const API_BINDING_VERSION: &str = "v2";
 const METADATA_DEFAULT_PAGE_SIZE: usize = 50;
 const METADATA_MAXIMUM_PAGE_SIZE: usize = 100;
 const MAXIMUM_SERIALIZED_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-const JSON_FG_PROFILE_URI: &str = "http://www.opengis.net/def/profile/OGC/0/jsonfg";
-const RFC_7946_PROFILE_URI: &str = "http://www.opengis.net/def/profile/OGC/0/rfc7946";
-const CRS84_URI: &str = "http://www.opengis.net/def/crs/OGC/0/CRS84";
-const JSON_FG_CORE_CONFORMANCE: &str = "http://www.opengis.net/spec/json-fg-1/1.0/conf/core";
-const JSON_FG_TYPES_SCHEMAS_CONFORMANCE: &str =
-    "http://www.opengis.net/spec/json-fg-1/1.0/conf/types-schemas";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResponseFormat {
@@ -88,7 +86,7 @@ impl ResponseFormat {
     const fn profile_link(self) -> Option<&'static str> {
         match self {
             Self::GeoJson(GeoJsonProfile::JsonFg) => Some(JSON_FG_PROFILE_URI),
-            Self::GeoJson(GeoJsonProfile::Rfc7946) => Some(RFC_7946_PROFILE_URI),
+            Self::GeoJson(GeoJsonProfile::Rfc7946) => Some(RFC7946_PROFILE_URI),
             Self::Json | Self::JsonLd => None,
         }
     }
@@ -98,7 +96,7 @@ impl ResponseFormat {
 struct Access {
     principal: Option<Principal>,
     authorization: Authorization,
-    representation: CompiledRepresentation,
+    access_profile: CompiledAccessProfile,
 }
 
 pub async fn health() -> Response<Body> {
@@ -156,8 +154,8 @@ pub async fn service_metadata(
                 Err(ProblemCode::MissingCredential) => Vec::new(),
                 Err(code) => return code.response(&trace),
             };
-            capabilities.extend(operations.into_iter().map(|(operation, representation)| {
-                capability(&service, resource, operation, representation)
+            capabilities.extend(operations.into_iter().map(|(operation, access_profile)| {
+                capability(&service, resource, operation, access_profile)
             }));
         }
     }
@@ -389,14 +387,14 @@ pub async fn artifact(
             let Some(operation) = find_operation_by_id(&service, identifier) else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
-            let Some(representation_identifier) = artifact.representation_identifier.as_deref()
+            let Some(access_profile_identifier) = artifact.access_profile_identifier.as_deref()
             else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
-            let Some(representation) = operation
-                .representations
+            let Some(access_profile) = operation
+                .access_profiles
                 .iter()
-                .find(|representation| representation.id == representation_identifier)
+                .find(|access_profile| access_profile.id == access_profile_identifier)
             else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
@@ -404,7 +402,7 @@ pub async fn artifact(
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
             if authenticator
-                .authorize(&representation.access, Some(principal))
+                .authorize(&access_profile.access, Some(principal))
                 .is_err()
             {
                 return ProblemCode::ResourceNotFound.response(&trace);
@@ -437,8 +435,42 @@ pub async fn record_list(
         return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::List)
             .await;
     };
-    let access = match access_operation(
+    record_collection(&service, resource, operation, principal, headers, uri).await
+}
+
+pub async fn record_search(
+    State(service): State<Arc<RelayService>>,
+    Path((resource_id, search_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response<Body> {
+    let trace = TraceContext::from_headers(&headers);
+    let principal = match authenticate_data_request(&service, &headers, &trace).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let Some((resource, operation)) = find_operation(
         &service,
+        &resource_id,
+        |kind| matches!(kind, OperationKind::Search { name } if name == &search_id),
+    ) else {
+        return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::Search)
+            .await;
+    };
+    record_collection(&service, resource, operation, principal, headers, uri).await
+}
+
+async fn record_collection(
+    service: &RelayService,
+    resource: &CompiledResource,
+    operation: &CompiledOperation,
+    principal: Option<Principal>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response<Body> {
+    let trace = TraceContext::from_headers(&headers);
+    let access = match access_operation(
+        service,
         resource,
         operation,
         uri.query(),
@@ -452,7 +484,7 @@ pub async fn record_list(
     };
     if !uri_within_bound(&uri) {
         return refuse_known(
-            &service,
+            service,
             resource,
             operation,
             Some(&access),
@@ -464,7 +496,7 @@ pub async fn record_list(
     }
     if rejects_caller_purpose(&headers) {
         return refuse_known(
-            &service,
+            service,
             resource,
             operation,
             Some(&access),
@@ -474,11 +506,11 @@ pub async fn record_list(
         )
         .await;
     }
-    let response_format = match negotiate(&headers, resource, &access.representation) {
+    let response_format = match negotiate(&headers, resource, &access.access_profile) {
         Ok(value) => value,
         Err(code) => {
             return refuse_known(
-                &service,
+                service,
                 resource,
                 operation,
                 Some(&access),
@@ -489,8 +521,8 @@ pub async fn record_list(
             .await
         }
     };
-    let query = match prepare_list(
-        &service,
+    let query = match prepare_collection(
+        service,
         resource,
         operation,
         &access,
@@ -500,7 +532,7 @@ pub async fn record_list(
         Ok(value) => value,
         Err(code) => {
             return refuse_known(
-                &service,
+                service,
                 resource,
                 operation,
                 Some(&access),
@@ -512,7 +544,7 @@ pub async fn record_list(
         }
     };
     if let Some(response) = quota_refusal(
-        &service,
+        service,
         resource,
         operation,
         &access,
@@ -524,7 +556,7 @@ pub async fn record_list(
         return response;
     }
     let audit = audit_context(
-        &service,
+        service,
         resource,
         operation,
         Some(&access),
@@ -538,7 +570,7 @@ pub async fn record_list(
         .sqlite
         .execute(
             &operation.identifier,
-            &access.representation.id,
+            &access.access_profile.id,
             OperationQuery {
                 filters: query.filters.clone(),
                 row_authority: access.authorization.row_authority.clone(),
@@ -564,9 +596,9 @@ pub async fn record_list(
             return source_shape_failure(&service.audit, &audit, &trace).await;
         }
         let record = match record_value(
-            &service,
+            service,
             resource,
-            &access.representation,
+            &access.access_profile,
             row,
             &query.selected_fields,
         ) {
@@ -592,7 +624,7 @@ pub async fn record_list(
             .await;
         };
         match next_cursor(
-            &service,
+            service,
             operation,
             &access,
             &query,
@@ -606,16 +638,16 @@ pub async fn record_list(
         None
     };
     let meta = record_meta(
-        &service,
+        service,
         resource,
         operation,
-        &access.representation,
+        &access.access_profile,
         &query.selected_fields,
         &result.source_revision,
     );
     let mut document = match query.response_format {
         ResponseFormat::GeoJson(profile) => {
-            geojson_collection(&service, resource, items, next_cursor, meta, profile)
+            geojson_collection(service, resource, items, next_cursor, meta, profile)
         }
         ResponseFormat::Json | ResponseFormat::JsonLd => json!({
             "items": items,
@@ -624,18 +656,18 @@ pub async fn record_list(
         }),
     };
     apply_json_ld(
-        &service,
+        service,
         resource,
-        &access.representation,
+        &access.access_profile,
         query.response_format,
         &mut document,
     );
     release_document(
-        &service,
+        service,
         &audit,
         document,
         query.response_format,
-        cacheable(&access.representation, &result.source_revision),
+        cacheable(&access.access_profile, &result.source_revision),
         &headers,
         &trace,
     )
@@ -774,7 +806,7 @@ pub async fn record_lookup(
     let (response_format, fields) = match prepare_single_request(
         resource,
         operation,
-        &access.representation,
+        &access.access_profile,
         request.headers(),
         request.uri().query(),
     ) {
@@ -926,7 +958,7 @@ async fn single_operation(
             let (representation, fields) = match prepare_single_request(
                 resource,
                 operation,
-                &access.representation,
+                &access.access_profile,
                 headers,
                 request.query_text,
             ) {
@@ -970,7 +1002,7 @@ async fn single_operation(
         .sqlite
         .execute(
             &operation.identifier,
-            &access.representation.id,
+            &access.access_profile.id,
             request.query,
         )
         .await;
@@ -992,7 +1024,7 @@ async fn single_operation(
     let record = match record_value(
         service,
         resource,
-        &access.representation,
+        &access.access_profile,
         &result.rows[0],
         &fields,
     ) {
@@ -1005,7 +1037,7 @@ async fn single_operation(
         service,
         resource,
         operation,
-        &access.representation,
+        &access.access_profile,
         &fields,
         &result.source_revision,
     );
@@ -1021,7 +1053,7 @@ async fn single_operation(
     apply_json_ld(
         service,
         resource,
-        &access.representation,
+        &access.access_profile,
         representation,
         &mut document,
     );
@@ -1030,7 +1062,7 @@ async fn single_operation(
         &audit,
         document,
         representation,
-        cacheable(&access.representation, &result.source_revision),
+        cacheable(&access.access_profile, &result.source_revision),
         headers,
         trace,
     )
@@ -1045,7 +1077,7 @@ async fn access_operation(
     principal: Option<Principal>,
     trace: &TraceContext,
 ) -> Result<Access, Response<Body>> {
-    let selected = match select_representation(operation, query) {
+    let selected = match select_access_profile(operation, query) {
         Ok(value) => value,
         Err(ProblemCode::ResourceNotFound) => {
             return Err(refuse_unknown(
@@ -1058,7 +1090,7 @@ async fn access_operation(
             .await);
         }
         Err(code) => {
-            return Err(refuse_before_representation(
+            return Err(refuse_before_access_profile(
                 service,
                 resource,
                 operation,
@@ -1070,11 +1102,11 @@ async fn access_operation(
             .await);
         }
     };
-    let representation = selected.representation;
+    let access_profile = selected.access_profile;
     let explicit = selected.explicit;
     let authorization = match &service.authenticator {
-        Some(authenticator) => authenticator.authorize(&representation.access, principal.as_ref()),
-        None => match representation.access {
+        Some(authenticator) => authenticator.authorize(&access_profile.access, principal.as_ref()),
+        None => match access_profile.access {
             CompiledAccess::Public => Ok(Authorization {
                 row_authority: None,
                 purpose: None,
@@ -1086,7 +1118,7 @@ async fn access_operation(
         Ok(authorization) => Ok(Access {
             principal,
             authorization,
-            representation: representation.clone(),
+            access_profile: access_profile.clone(),
         }),
         Err(error) => {
             if error == AuthorizationError::AuthenticationRequired && explicit {
@@ -1126,7 +1158,7 @@ async fn access_operation(
                     row_authority: None,
                     purpose: None,
                 },
-                representation: representation.clone(),
+                access_profile: access_profile.clone(),
             };
             Err(refuse_known(
                 service,
@@ -1199,6 +1231,7 @@ enum OperationClass {
     List,
     Read,
     Lookup,
+    Search,
 }
 
 async fn unknown_data_route(
@@ -1210,8 +1243,8 @@ async fn unknown_data_route(
     let protected = service.registry.resources.iter().any(|resource| {
         resource.operations.iter().any(|operation| {
             class_matches(&operation.kind, class)
-                && operation.representations.iter().any(|representation| {
-                    matches!(representation.access, CompiledAccess::Protected { .. })
+                && operation.access_profiles.iter().any(|access_profile| {
+                    matches!(access_profile.access, CompiledAccess::Protected { .. })
                 })
         })
     });
@@ -1245,6 +1278,7 @@ fn class_matches(kind: &OperationKind, class: OperationClass) -> bool {
         (OperationKind::List, OperationClass::List)
             | (OperationKind::Read, OperationClass::Read)
             | (OperationKind::Lookup { .. }, OperationClass::Lookup)
+            | (OperationKind::Search { .. }, OperationClass::Search)
     )
 }
 
@@ -1278,7 +1312,7 @@ async fn refuse_known(
     code.response(trace)
 }
 
-async fn refuse_before_representation(
+async fn refuse_before_access_profile(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
@@ -1343,21 +1377,21 @@ fn audit_context(
         registry_identifier: service.registry.registry_identifier.clone(),
         resource_identifier: Some(resource.id.clone()),
         operation_identifier: Some(operation.identifier.clone()),
-        access_rule_revision: access.map(|access| access_revision(&access.representation)),
+        access_rule_revision: access.map(|access| access_revision(&access.access_profile)),
         purpose: access.and_then(|access| access.authorization.purpose.clone()),
         row_boundary_kind: access.map_or(RowBoundaryKind::Unknown, |access| {
-            row_boundary(&access.representation)
+            row_boundary(&access.access_profile)
         }),
-        representation: access.map(|access| access.representation.id.clone()),
-        disclosure_profile: access.map(|access| access.representation.disclosure_profile.clone()),
+        access_profile: access.map(|access| access.access_profile.id.clone()),
+        disclosure_profile: access.map(|access| access.access_profile.disclosure_profile.clone()),
         processing_description_identifiers: processing_description_identifiers(resource, operation),
         selected_properties,
         processing_handling: access
-            .map(|access| handling_label(access.representation.processing_handling).into()),
+            .map(|access| handling_label(access.access_profile.processing_handling).into()),
         disclosure_handling: access
-            .map(|access| handling_label(access.representation.disclosure_handling).into()),
+            .map(|access| handling_label(access.access_profile.disclosure_handling).into()),
         transform_identifiers: access.map_or_else(Vec::new, |access| {
-            transform_identifiers(&access.representation)
+            transform_identifiers(&access.access_profile)
         }),
         contract_revision: service.registry.contract_revision.clone(),
         source_revision: service
@@ -1392,7 +1426,7 @@ fn unknown_audit_context(
         access_rule_revision: None,
         purpose: None,
         row_boundary_kind: RowBoundaryKind::Unknown,
-        representation: None,
+        access_profile: None,
         disclosure_profile: None,
         processing_description_identifiers: Vec::new(),
         selected_properties: Vec::new(),
@@ -1413,6 +1447,7 @@ fn processing_description_identifiers(
         OperationKind::List => "list".to_owned(),
         OperationKind::Read => "read".to_owned(),
         OperationKind::Lookup { name } => format!("lookup:{name}"),
+        OperationKind::Search { name } => format!("search:{name}"),
     };
     resource
         .processing_descriptions
@@ -1424,15 +1459,15 @@ fn processing_description_identifiers(
         .collect()
 }
 
-fn access_revision(representation: &CompiledRepresentation) -> String {
-    let value = serde_json::to_value(&representation.access)
-        .expect("compiled representation access serializes");
-    let bytes = canonicalize_json(&value).expect("compiled representation access canonicalizes");
+fn access_revision(access_profile: &CompiledAccessProfile) -> String {
+    let value = serde_json::to_value(&access_profile.access)
+        .expect("compiled access-profile rule serializes");
+    let bytes = canonicalize_json(&value).expect("compiled access-profile rule canonicalizes");
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
-fn transform_identifiers(representation: &CompiledRepresentation) -> Vec<String> {
-    representation
+fn transform_identifiers(access_profile: &CompiledAccessProfile) -> Vec<String> {
+    access_profile
         .transform_inventory
         .iter()
         .filter_map(|entry| {
@@ -1445,8 +1480,8 @@ fn transform_identifiers(representation: &CompiledRepresentation) -> Vec<String>
         .collect()
 }
 
-fn row_boundary(representation: &CompiledRepresentation) -> RowBoundaryKind {
-    match &representation.access {
+fn row_boundary(access_profile: &CompiledAccessProfile) -> RowBoundaryKind {
+    match &access_profile.access {
         CompiledAccess::Protected {
             row_binding: Some(binding),
             ..
@@ -1470,7 +1505,7 @@ fn handling_label(value: Handling) -> &'static str {
     }
 }
 
-struct PreparedList {
+struct PreparedCollection {
     page_size: u32,
     filters: BTreeMap<String, SqlValue>,
     selected_fields: Vec<String>,
@@ -1487,42 +1522,42 @@ struct CursorQueryContext<'a> {
     response_format: ResponseFormat,
 }
 
-struct SelectedRepresentation<'a> {
-    representation: &'a CompiledRepresentation,
+struct SelectedAccessProfile<'a> {
+    access_profile: &'a CompiledAccessProfile,
     explicit: bool,
 }
 
-fn select_representation<'a>(
+fn select_access_profile<'a>(
     operation: &'a CompiledOperation,
     query: Option<&str>,
-) -> Result<SelectedRepresentation<'a>, ProblemCode> {
-    let requested = representation_parameter(query)?;
+) -> Result<SelectedAccessProfile<'a>, ProblemCode> {
+    let requested = access_profile_parameter(query)?;
     let identifier = requested
         .as_deref()
-        .unwrap_or(&operation.default_representation);
-    if !valid_representation_identifier(identifier) {
-        return Err(ProblemCode::RepresentationInvalid);
+        .unwrap_or(&operation.default_access_profile);
+    if !valid_access_profile_identifier(identifier) {
+        return Err(ProblemCode::AccessProfileInvalid);
     }
     let explicit = requested.is_some();
     operation
-        .representations
+        .access_profiles
         .iter()
-        .find(|representation| representation.id == identifier)
-        .map(|representation| SelectedRepresentation {
-            representation,
+        .find(|access_profile| access_profile.id == identifier)
+        .map(|access_profile| SelectedAccessProfile {
+            access_profile,
             explicit,
         })
         .ok_or(ProblemCode::ResourceNotFound)
 }
 
-/// Extract only the representation selector before URI-shape refusal.
+/// Extract only the access-profile selector before URI-shape refusal.
 ///
 /// This scans the already-buffered query in place and decodes only bounded
-/// candidate names and the one bounded representation value. It therefore
+/// candidate names and the one bounded access-profile value. It therefore
 /// preserves exact-profile authorization for an oversized URI without
 /// allocating or decoding unrelated attacker-controlled query values.
-fn representation_parameter(query: Option<&str>) -> Result<Option<String>, ProblemCode> {
-    const MAXIMUM_ENCODED_NAME_BYTES: usize = "representation".len() * 3;
+fn access_profile_parameter(query: Option<&str>) -> Result<Option<String>, ProblemCode> {
+    const MAXIMUM_ENCODED_NAME_BYTES: usize = "accessProfile".len() * 3;
     const MAXIMUM_ENCODED_VALUE_BYTES: usize = 128 * 3;
 
     let Some(query) = query else {
@@ -1540,14 +1575,14 @@ fn representation_parameter(query: Option<&str>) -> Result<Option<String>, Probl
             continue;
         }
         let name = decode_bounded_query_component(raw_name, MAXIMUM_ENCODED_NAME_BYTES)?;
-        if name != "representation" {
+        if name != "accessProfile" {
             continue;
         }
         if requested.is_some()
             || raw_value.len() > MAXIMUM_ENCODED_VALUE_BYTES
             || raw_value.contains('=')
         {
-            return Err(ProblemCode::RepresentationInvalid);
+            return Err(ProblemCode::AccessProfileInvalid);
         }
         requested = Some(decode_bounded_query_component(
             raw_value,
@@ -1562,15 +1597,15 @@ fn decode_bounded_query_component(
     maximum_encoded_bytes: usize,
 ) -> Result<String, ProblemCode> {
     if raw.len() > maximum_encoded_bytes || !valid_percent_encoding(raw.as_bytes()) {
-        return Err(ProblemCode::RepresentationInvalid);
+        return Err(ProblemCode::AccessProfileInvalid);
     }
     url::form_urlencoded::parse(raw.as_bytes())
         .next()
         .map(|(value, _)| value.into_owned())
-        .ok_or(ProblemCode::RepresentationInvalid)
+        .ok_or(ProblemCode::AccessProfileInvalid)
 }
 
-fn valid_representation_identifier(value: &str) -> bool {
+fn valid_access_profile_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && !value.starts_with('-')
@@ -1581,14 +1616,14 @@ fn valid_representation_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn prepare_list(
+fn prepare_collection(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
     access: &Access,
     negotiated: ResponseFormat,
     query: Option<&str>,
-) -> Result<PreparedList, ProblemCode> {
+) -> Result<PreparedCollection, ProblemCode> {
     let parameters = parse_query(query)?;
     let cursors = parameters
         .iter()
@@ -1603,7 +1638,7 @@ fn prepare_list(
         if cursors.len() != 1
             || parameters
                 .iter()
-                .any(|(name, _)| name != "cursor" && name != "representation")
+                .any(|(name, _)| name != "cursor" && name != "accessProfile")
         {
             return Err(ProblemCode::CursorInvalid);
         }
@@ -1634,11 +1669,12 @@ fn prepare_list(
         validate_selected_inventory(
             resource,
             operation,
-            &access.representation,
+            &access.access_profile,
             &payload.selected_fields,
         )?;
         let response_format =
-            response_format_from_cursor(resource, &access.representation, &payload)?;
+            response_format_from_cursor(resource, &access.access_profile, &payload)
+                .map_err(|_| ProblemCode::CursorInvalid)?;
         if response_format.cursor_kind() != negotiated.cursor_kind() {
             return Err(ProblemCode::CursorInvalid);
         }
@@ -1660,7 +1696,7 @@ fn prepare_list(
             },
         )?;
         require_same_request(&payload, &request).map_err(|_| ProblemCode::CursorInvalid)?;
-        return Ok(PreparedList {
+        return Ok(PreparedCollection {
             page_size: payload.page_size,
             filters,
             selected_fields: payload.selected_fields,
@@ -1679,7 +1715,7 @@ fn prepare_list(
     let mut page_size = pagination.default_page_size;
     let mut page_size_seen = false;
     let mut fields_text = None;
-    let mut profile_text = None;
+    let mut format_profile_text = None;
     let mut bbox_text = None;
     let declared = operation
         .query
@@ -1706,9 +1742,9 @@ fn prepare_list(
                     return Err(ProblemCode::FieldsInvalid);
                 }
             }
-            "profile" => {
-                if profile_text.replace(value).is_some() {
-                    return Err(ProblemCode::UnsupportedRepresentation);
+            "formatProfile" => {
+                if format_profile_text.replace(value).is_some() {
+                    return Err(ProblemCode::UnsupportedFormat);
                 }
             }
             "bbox" => {
@@ -1719,7 +1755,7 @@ fn prepare_list(
                     return Err(ProblemCode::InvalidFilter);
                 }
             }
-            "representation" => {}
+            "accessProfile" => {}
             _ if declared.contains(name.as_str()) => {
                 if raw_filters.insert(name, value).is_some() {
                     return Err(ProblemCode::InvalidFilter);
@@ -1732,6 +1768,9 @@ fn prepare_list(
         .as_deref()
         .map(|value| parse_bbox(operation, value))
         .transpose()?;
+    if matches!(operation.kind, OperationKind::Search { .. }) && bbox.is_none() {
+        return Err(ProblemCode::InvalidFilter);
+    }
     if raw_filters.is_empty() && bbox.is_none() && !operation.query.allow_unfiltered {
         return Err(ProblemCode::InvalidFilter);
     }
@@ -1757,16 +1796,16 @@ fn prepare_list(
     let selected_fields = fields_from_text(
         resource,
         operation,
-        &access.representation,
+        &access.access_profile,
         fields_text.as_deref(),
     )?;
-    let response_format = select_profile(
+    let response_format = select_format_profile(
         resource,
-        &access.representation,
+        &access.access_profile,
         negotiated,
-        profile_text.as_deref(),
+        format_profile_text.as_deref(),
     )?;
-    Ok(PreparedList {
+    Ok(PreparedCollection {
         page_size,
         filters,
         selected_fields,
@@ -1779,35 +1818,35 @@ fn prepare_list(
 fn prepare_single_request(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     headers: &HeaderMap,
     query: Option<&str>,
 ) -> Result<(ResponseFormat, Vec<String>), ProblemCode> {
-    let negotiated = negotiate(headers, resource, representation)?;
+    let negotiated = negotiate(headers, resource, access_profile)?;
     let parameters = parse_query(query)?;
     if parameters
         .iter()
-        .any(|(name, _)| name != "fields" && name != "profile" && name != "representation")
+        .any(|(name, _)| name != "fields" && name != "formatProfile" && name != "accessProfile")
     {
         return Err(ProblemCode::ConsultationInvalidRequest);
     }
     let fields = one_parameter(&parameters, "fields")?;
-    let profile = one_parameter(&parameters, "profile")
-        .map_err(|_| ProblemCode::UnsupportedRepresentation)?;
+    let format_profile =
+        one_parameter(&parameters, "formatProfile").map_err(|_| ProblemCode::UnsupportedFormat)?;
     Ok((
-        select_profile(resource, representation, negotiated, profile)?,
-        fields_from_text(resource, operation, representation, fields)?,
+        select_format_profile(resource, access_profile, negotiated, format_profile)?,
+        fields_from_text(resource, operation, access_profile, fields)?,
     ))
 }
 
 fn fields_from_text(
     resource: &CompiledResource,
     _operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     text: Option<&str>,
 ) -> Result<Vec<String>, ProblemCode> {
     let Some(text) = text else {
-        return Ok(representation.selectable_properties.clone());
+        return Ok(access_profile.selectable_properties.clone());
     };
     if text.is_empty() || text.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return Err(ProblemCode::FieldsInvalid);
@@ -1819,7 +1858,7 @@ fn fields_from_text(
     {
         return Err(ProblemCode::FieldsInvalid);
     }
-    let allowed = representation
+    let allowed = access_profile
         .selectable_properties
         .iter()
         .map(String::as_str)
@@ -1837,7 +1876,7 @@ fn fields_from_text(
     }) {
         return Err(ProblemCode::FieldsInvalid);
     }
-    Ok(representation
+    Ok(access_profile
         .selectable_properties
         .iter()
         .filter(|field| requested.contains(&field.as_str()))
@@ -1848,14 +1887,14 @@ fn fields_from_text(
 fn validate_selected_inventory(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     fields: &[String],
 ) -> Result<(), ProblemCode> {
     if fields.is_empty() {
         return Err(ProblemCode::CursorInvalid);
     }
     let text = fields.join(",");
-    let canonical = fields_from_text(resource, operation, representation, Some(&text))
+    let canonical = fields_from_text(resource, operation, access_profile, Some(&text))
         .map_err(|_| ProblemCode::CursorInvalid)?;
     if canonical != fields {
         return Err(ProblemCode::CursorInvalid);
@@ -1868,6 +1907,10 @@ fn validate_filter_inventory(
     filters: &BTreeMap<String, SqlValue>,
     bbox_present: bool,
 ) -> Result<(), ProblemCode> {
+    match (&operation.kind, &operation.query.spatial_bbox, bbox_present) {
+        (OperationKind::List, None, false) | (OperationKind::Search { .. }, Some(_), true) => {}
+        _ => return Err(ProblemCode::CursorInvalid),
+    }
     let declared = operation
         .query
         .filters
@@ -1882,16 +1925,16 @@ fn validate_filter_inventory(
     Ok(())
 }
 
-fn select_profile(
+fn select_format_profile(
     resource: &CompiledResource,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     negotiated: ResponseFormat,
     requested: Option<&str>,
 ) -> Result<ResponseFormat, ProblemCode> {
     match negotiated {
         ResponseFormat::Json | ResponseFormat::JsonLd => {
             if requested.is_some() {
-                return Err(ProblemCode::UnsupportedRepresentation);
+                return Err(ProblemCode::UnsupportedFormat);
             }
             Ok(negotiated)
         }
@@ -1899,12 +1942,12 @@ fn select_profile(
             let profile = match requested.unwrap_or("rfc7946") {
                 "rfc7946" => GeoJsonProfile::Rfc7946,
                 "jsonfg" => GeoJsonProfile::JsonFg,
-                _ => return Err(ProblemCode::UnsupportedRepresentation),
+                _ => return Err(ProblemCode::UnsupportedFormat),
             };
-            if supports_geojson(resource, representation) {
+            if supports_geojson(resource, access_profile) {
                 Ok(ResponseFormat::GeoJson(profile))
             } else {
-                Err(ProblemCode::UnsupportedRepresentation)
+                Err(ProblemCode::UnsupportedFormat)
             }
         }
     }
@@ -1912,32 +1955,23 @@ fn select_profile(
 
 fn response_format_from_cursor(
     resource: &CompiledResource,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     payload: &CursorPayload,
 ) -> Result<ResponseFormat, ProblemCode> {
     match (
         payload.response_format.as_str(),
-        payload.response_profile.as_deref(),
+        payload.format_profile.as_deref(),
     ) {
         ("json", None) => Ok(ResponseFormat::Json),
         ("json-ld", None) => Ok(ResponseFormat::JsonLd),
-        ("geojson", Some(profile)) => select_profile(
+        ("geojson", Some(profile)) => select_format_profile(
             resource,
-            representation,
+            access_profile,
             ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946),
             Some(profile),
         ),
         _ => Err(ProblemCode::CursorInvalid),
     }
-}
-
-fn supports_geojson(resource: &CompiledResource, representation: &CompiledRepresentation) -> bool {
-    resource.primary_geometry.as_ref().is_some_and(|geometry| {
-        representation
-            .selectable_properties
-            .iter()
-            .any(|property| property == &geometry.name)
-    })
 }
 
 fn parse_bbox(operation: &CompiledOperation, text: &str) -> Result<PointBbox, ProblemCode> {
@@ -2175,7 +2209,7 @@ enum RecordError {
 fn record_value(
     service: &RelayService,
     resource: &CompiledResource,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     row: &ResultRow,
     selected: &[String],
 ) -> Result<Value, RecordError> {
@@ -2201,9 +2235,9 @@ fn record_value(
     {
         return Err(RecordError::InvalidCore);
     }
-    // Validate the complete selected representation before requester field
+    // Validate the complete selected access profile before requester field
     // minimization. Narrowing disclosure never lowers its processing floor.
-    let properties = representation
+    let properties = access_profile
         .selectable_properties
         .iter()
         .filter_map(|name| {
@@ -2247,7 +2281,7 @@ fn record_value(
         transformed.insert(property.name.as_str(), value);
     }
     let selected_geometry = resource.primary_geometry.as_ref().filter(|geometry| {
-        representation
+        access_profile
             .selectable_properties
             .iter()
             .any(|property| property == &geometry.name)
@@ -2280,8 +2314,8 @@ fn record_value(
         "recordIdentifier": record_identifier,
         "revisionIdentifier": revision,
         "lifecycleState": lifecycle,
-        "schemaReference": representation.schema_reference,
-        "semanticModelReference": representation.semantic_model_reference,
+        "schemaReference": access_profile.schema_reference,
+        "semanticModelReference": access_profile.semantic_model_reference,
         "authorityIdentifier": service.registry.authority_identifier,
         "recordedAt": recorded_at,
         "domainData": domain,
@@ -2382,25 +2416,25 @@ fn record_meta(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     selected: &[String],
     source_revision: &SourceRevision,
 ) -> Value {
     let pattern = operation_pattern(operation.pattern);
     json!({
         "operationIdentifier": operation.identifier,
-        "representation": representation.id,
+        "accessProfile": access_profile.id,
         "family": "consultation",
         "pattern": pattern,
-        "disclosureProfile": representation.disclosure_profile,
+        "disclosureProfile": access_profile.disclosure_profile,
         "contractRevision": service.registry.contract_revision,
         "sourceRevision": source_revision_value(source_revision),
         "selectedFields": selected,
         "links": {
             "self": operation_href(service, resource, operation),
-            "context": representation.context_reference,
-            "schema": representation.schema_reference,
-            "semanticModel": representation.semantic_model_reference,
+            "context": access_profile.context_reference,
+            "schema": access_profile.schema_reference,
+            "semanticModel": access_profile.semantic_model_reference,
         }
     })
 }
@@ -2490,7 +2524,7 @@ fn add_json_fg_members(document: &mut Value, resource: &CompiledResource) {
     };
     object.insert(
         "conformsTo".into(),
-        json!([JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_SCHEMAS_CONFORMANCE,]),
+        json!([JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE,]),
     );
     object.insert("featureType".into(), Value::String(resource.id.clone()));
 }
@@ -2498,7 +2532,7 @@ fn add_json_fg_members(document: &mut Value, resource: &CompiledResource) {
 fn apply_json_ld(
     service: &RelayService,
     resource: &CompiledResource,
-    selected: &CompiledRepresentation,
+    selected: &CompiledAccessProfile,
     representation: ResponseFormat,
     document: &mut Value,
 ) {
@@ -2691,23 +2725,21 @@ async fn terminal_problem(
     code.response(trace)
 }
 
-fn cacheable(representation: &CompiledRepresentation, source: &SourceRevision) -> bool {
-    matches!(representation.access, CompiledAccess::Public)
-        && representation.processing_handling == Handling::Public
+fn cacheable(access_profile: &CompiledAccessProfile, source: &SourceRevision) -> bool {
+    matches!(access_profile.access, CompiledAccess::Public)
+        && access_profile.processing_handling == Handling::Public
         && matches!(source, SourceRevision::Snapshot(_))
 }
 
 fn negotiate(
     headers: &HeaderMap,
     resource: &CompiledResource,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> Result<ResponseFormat, ProblemCode> {
     let Some(value) = headers.get(ACCEPT) else {
         return Ok(ResponseFormat::Json);
     };
-    let value = value
-        .to_str()
-        .map_err(|_| ProblemCode::UnsupportedRepresentation)?;
+    let value = value.to_str().map_err(|_| ProblemCode::UnsupportedFormat)?;
     let mut json = false;
     let mut json_ld = false;
     let mut geojson = false;
@@ -2727,12 +2759,12 @@ fn negotiate(
     }
     if json_ld {
         Ok(ResponseFormat::JsonLd)
-    } else if geojson && supports_geojson(resource, representation) {
+    } else if geojson && supports_geojson(resource, access_profile) {
         Ok(ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946))
     } else if json {
         Ok(ResponseFormat::Json)
     } else {
-        Err(ProblemCode::UnsupportedRepresentation)
+        Err(ProblemCode::UnsupportedFormat)
     }
 }
 
@@ -2752,7 +2784,7 @@ fn next_cursor(
     service: &RelayService,
     operation: &CompiledOperation,
     access: &Access,
-    query: &PreparedList,
+    query: &PreparedCollection,
     last: &ResultRow,
     source_revision: &SourceRevision,
 ) -> Result<String, ()> {
@@ -2823,13 +2855,13 @@ fn cursor_template(
         serde_json::to_vec(context.selected_fields).map_err(|_| ProblemCode::CursorInvalid)?;
     let order_json =
         serde_json::to_vec(&operation.query.order_by).map_err(|_| ProblemCode::CursorInvalid)?;
-    let transform_json = serde_json::to_vec(&access.representation.transform_inventory)
+    let transform_json = serde_json::to_vec(&access.access_profile.transform_inventory)
         .map_err(|_| ProblemCode::CursorInvalid)?;
     let authorization_material = access
         .principal
         .as_ref()
         .map(|principal| {
-            principal.authorization_material(&access.representation.access, &access.authorization)
+            principal.authorization_material(&access.access_profile.access, &access.authorization)
         })
         .unwrap_or_else(|| b"anonymous".to_vec());
     Ok(CursorPayload::new(
@@ -2838,8 +2870,8 @@ fn cursor_template(
         context.source_revision.to_owned(),
         operation.identifier.clone(),
         CursorBindings {
-            representation: access.representation.id.clone(),
-            disclosure_profile: access.representation.disclosure_profile.clone(),
+            access_profile: access.access_profile.id.clone(),
+            disclosure_profile: access.access_profile.disclosure_profile.clone(),
             transforms_digest: key
                 .binding_digest(b"transforms", &transform_json)
                 .map_err(|_| ProblemCode::CursorInvalid)?,
@@ -2867,7 +2899,7 @@ fn cursor_template(
 
 fn metadata_cursor_template(
     service: &RelayService,
-    visible: &[(&CompiledResource, Vec<VisibleRepresentation<'_>>)],
+    visible: &[(&CompiledResource, Vec<VisibleAccessProfile<'_>>)],
 ) -> Result<CursorPayload, ProblemCode> {
     let key = service
         .cursor_key
@@ -2895,7 +2927,7 @@ fn metadata_cursor_template(
         format!("metadata:{}", service.registry.contract_revision),
         "registry.resources".to_owned(),
         CursorBindings {
-            representation: "metadata".to_owned(),
+            access_profile: "metadata".to_owned(),
             disclosure_profile: "metadata".to_owned(),
             transforms_digest: key
                 .binding_digest(b"metadata-transforms", b"none")
@@ -2919,7 +2951,7 @@ fn metadata_cursor_template(
 
 fn metadata_next_cursor(
     service: &RelayService,
-    visible: &[(&CompiledResource, Vec<VisibleRepresentation<'_>>)],
+    visible: &[(&CompiledResource, Vec<VisibleAccessProfile<'_>>)],
     page_size: usize,
     last_resource_identifier: &str,
 ) -> Result<String, ProblemCode> {
@@ -2985,7 +3017,7 @@ fn find_operation_by_id<'a>(
 async fn visible_resources<'a>(
     service: &'a RelayService,
     principal: Option<&Principal>,
-) -> Result<Vec<(&'a CompiledResource, Vec<VisibleRepresentation<'a>>)>, ProblemCode> {
+) -> Result<Vec<(&'a CompiledResource, Vec<VisibleAccessProfile<'a>>)>, ProblemCode> {
     if service.registry.metadata_visibility.resources == Visibility::OperatorOnly {
         return Err(ProblemCode::ResourceNotFound);
     }
@@ -3008,7 +3040,7 @@ async fn visible_operations<'a>(
     service: &'a RelayService,
     resource: &'a CompiledResource,
     principal: Option<&Principal>,
-) -> Result<Vec<VisibleRepresentation<'a>>, ProblemCode> {
+) -> Result<Vec<VisibleAccessProfile<'a>>, ProblemCode> {
     match service.registry.metadata_visibility.resources {
         Visibility::OperatorOnly => Ok(Vec::new()),
         Visibility::Public => Ok(resource
@@ -3016,12 +3048,12 @@ async fn visible_operations<'a>(
             .iter()
             .flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
-                    .filter(|representation| {
-                        matches!(representation.access, CompiledAccess::Public)
+                    .filter(|access_profile| {
+                        matches!(access_profile.access, CompiledAccess::Public)
                     })
-                    .map(move |representation| (operation, representation))
+                    .map(move |access_profile| (operation, access_profile))
             })
             .collect()),
         Visibility::OperationBound => {
@@ -3035,13 +3067,13 @@ async fn visible_operations<'a>(
                 .iter()
                 .flat_map(|operation| {
                     operation
-                        .representations
+                        .access_profiles
                         .iter()
-                        .filter_map(move |representation| {
+                        .filter_map(move |access_profile| {
                             authenticator
-                                .authorize(&representation.access, Some(principal))
+                                .authorize(&access_profile.access, Some(principal))
                                 .is_ok()
-                                .then_some((operation, representation))
+                                .then_some((operation, access_profile))
                         })
                 })
                 .collect())
@@ -3057,20 +3089,20 @@ fn protected_artifact(artifact: &GeneratedArtifact) -> bool {
     artifact.visibility == Visibility::OperationBound
 }
 
-type VisibleRepresentation<'a> = (&'a CompiledOperation, &'a CompiledRepresentation);
+type VisibleAccessProfile<'a> = (&'a CompiledOperation, &'a CompiledAccessProfile);
 
 fn resource_document(
     service: &RelayService,
     resource: &CompiledResource,
-    operations: &[VisibleRepresentation<'_>],
+    operations: &[VisibleAccessProfile<'_>],
 ) -> Value {
     let enumeration = if operations
         .iter()
         .any(|(operation, _)| matches!(operation.kind, OperationKind::List))
     {
-        if operations.iter().any(|(operation, representation)| {
+        if operations.iter().any(|(operation, access_profile)| {
             matches!(operation.kind, OperationKind::List)
-                && matches!(representation.access, CompiledAccess::Public)
+                && matches!(access_profile.access, CompiledAccess::Public)
         }) {
             "public"
         } else {
@@ -3085,7 +3117,7 @@ fn resource_document(
         "description": resource.description,
         "semanticClass": resource.semantic_class,
         "enumerationPosture": enumeration,
-        "capabilities": operations.iter().map(|(operation, representation)| capability(service, resource, operation, representation)).collect::<Vec<_>>(),
+        "capabilities": operations.iter().map(|(operation, access_profile)| capability(service, resource, operation, access_profile)).collect::<Vec<_>>(),
         "links": {
             "self": absolute(&service.registry.base_uri, &format!("/v2/resources/{}", resource.id)),
         }
@@ -3096,36 +3128,38 @@ fn capability(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> Value {
     let mut document = json!({
         "family": "consultation",
         "pattern": operation_pattern(operation.pattern),
         "resourceIdentifier": resource.id,
         "operationIdentifier": operation.identifier,
-        "representation": representation.id,
-        "defaultRepresentation": operation.default_representation == representation.id,
-        "disclosureProfile": representation.disclosure_profile,
-        "schemaReference": representation.schema_reference,
-        "semanticModelReference": representation.semantic_model_reference,
-        "contextReference": representation.context_reference,
+        "accessProfile": access_profile.id,
+        "defaultAccessProfile": operation.default_access_profile == access_profile.id,
+        "disclosureProfile": access_profile.disclosure_profile,
+        "schemaReference": access_profile.schema_reference,
+        "semanticModelReference": access_profile.semantic_model_reference,
+        "contextReference": access_profile.context_reference,
         "href": match &operation.kind {
             OperationKind::List => format!("/v2/resources/{}/records", resource.id),
             OperationKind::Read => format!("/v2/resources/{}/records/{{recordIdentifier}}", resource.id),
             OperationKind::Lookup {name} => format!("/v2/resources/{}/lookups/{name}", resource.id),
+            OperationKind::Search {name} => format!("/v2/resources/{}/searches/{name}", resource.id),
         }
     });
     let stem = format!(
-        "{}--representation-{}",
+        "{}--access-profile-{}",
         operation_artifact_stem(&resource.id, &operation.kind),
-        representation.id
+        access_profile.id
     );
     let object = document
         .as_object_mut()
         .expect("capability document is an object");
     object.insert(
-        "formats".into(),
-        Value::Array(response_format_documents(resource, representation)),
+        "wireFormats".into(),
+        serde_json::to_value(response_format_capabilities(resource, access_profile))
+            .expect("compiled response format capabilities serialize"),
     );
     if let Some(spatial) = &operation.query.spatial_bbox {
         object.insert(
@@ -3144,7 +3178,7 @@ fn capability(
         object.insert(
             "classificationReference".into(),
             Value::String(sibling_artifact_reference(
-                &representation.schema_reference,
+                &access_profile.schema_reference,
                 &format!("{stem}-classifications"),
             )),
         );
@@ -3153,52 +3187,12 @@ fn capability(
         object.insert(
             "processingReference".into(),
             Value::String(sibling_artifact_reference(
-                &representation.schema_reference,
+                &access_profile.schema_reference,
                 &format!("{stem}-processing"),
             )),
         );
     }
     document
-}
-
-fn response_format_documents(
-    resource: &CompiledResource,
-    representation: &CompiledRepresentation,
-) -> Vec<Value> {
-    let mut formats = vec![
-        json!({"id": "json", "mediaType": "application/json", "profiles": []}),
-        json!({"id": "json-ld", "mediaType": "application/ld+json", "profiles": []}),
-    ];
-    if supports_geojson(resource, representation) {
-        formats.push(json!({
-            "id": "geojson",
-            "mediaType": "application/geo+json",
-            "profiles": [
-                representation_profile_document(RepresentationProfile::Rfc7946),
-                representation_profile_document(RepresentationProfile::JsonFg),
-            ],
-        }));
-    }
-    formats
-}
-
-fn representation_profile_document(profile: RepresentationProfile) -> Value {
-    match profile {
-        RepresentationProfile::Rfc7946 => json!({
-            "id": "rfc7946",
-            "uri": RFC_7946_PROFILE_URI,
-            "crs": CRS84_URI,
-        }),
-        RepresentationProfile::JsonFg => json!({
-            "id": "jsonfg",
-            "uri": JSON_FG_PROFILE_URI,
-            "crs": CRS84_URI,
-            "conformsTo": [
-                JSON_FG_CORE_CONFORMANCE,
-                JSON_FG_TYPES_SCHEMAS_CONFORMANCE,
-            ],
-        }),
-    }
 }
 
 fn sibling_artifact_reference(reference: &str, artifact_identifier: &str) -> String {
@@ -3213,6 +3207,7 @@ fn operation_artifact_stem(resource: &str, kind: &OperationKind) -> String {
         OperationKind::List => format!("{resource}--list"),
         OperationKind::Read => format!("{resource}--read"),
         OperationKind::Lookup { name } => format!("{resource}--lookup-{name}"),
+        OperationKind::Search { name } => format!("{resource}--search-{name}"),
     }
 }
 
@@ -3236,6 +3231,9 @@ fn operation_href(
         }
         OperationKind::Lookup { name } => {
             format!("/v2/resources/{}/lookups/{name}", resource.id)
+        }
+        OperationKind::Search { name } => {
+            format!("/v2/resources/{}/searches/{name}", resource.id)
         }
     };
     absolute(&service.registry.base_uri, &path)
@@ -3393,30 +3391,35 @@ mod tests {
     }
 
     #[test]
-    fn representation_selection_scans_only_bounded_components() {
+    fn access_profile_selection_scans_only_bounded_components() {
         let padding = "x".repeat(20_000);
-        let query = format!("padding={padding}&representation=caseworker");
+        let query = format!("padding={padding}&accessProfile=caseworker");
         assert_eq!(
-            representation_parameter(Some(&query)).expect("selector extracts"),
+            access_profile_parameter(Some(&query)).expect("selector extracts"),
             Some("caseworker".into())
         );
         assert_eq!(
-            representation_parameter(Some("%72epresentation=limited"))
+            access_profile_parameter(Some("%61ccessProfile=limited"))
                 .expect("encoded selector extracts"),
             Some("limited".into())
         );
         assert_eq!(
-            representation_parameter(Some("%=ignored&representation=limited"))
+            access_profile_parameter(Some("%=ignored&accessProfile=limited"))
                 .expect("malformed unrelated name is deferred"),
             Some("limited".into())
         );
         assert_eq!(
-            representation_parameter(Some("representation=limited&representation=caseworker")),
-            Err(ProblemCode::RepresentationInvalid)
+            access_profile_parameter(Some("accessProfile=limited&accessProfile=caseworker")),
+            Err(ProblemCode::AccessProfileInvalid)
         );
         assert_eq!(
-            representation_parameter(Some("representation=limited=caseworker")),
-            Err(ProblemCode::RepresentationInvalid)
+            access_profile_parameter(Some("accessProfile=limited=caseworker")),
+            Err(ProblemCode::AccessProfileInvalid)
+        );
+        assert_eq!(
+            access_profile_parameter(Some("representation=legacy"))
+                .expect("legacy selector is not an alias"),
+            None
         );
     }
 }

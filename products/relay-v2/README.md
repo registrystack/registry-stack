@@ -9,8 +9,9 @@ The initial boundary is intentionally narrow:
 
 - one Relay process serves one governed Registry;
 - SQLite is read-only and is the only source profile;
-- an opted resource may expose one classified CRS84 Point and bounded exact
-  bbox search when that geometry is non-personal;
+- an opted resource may expose one classified CRS84 Point and a named bounded
+  exact Point-bbox search when that geometry is non-personal; list and search
+  access remain independent;
 - resources are Record types within the Registry;
 - compiled operations map only to Consultation Retrieve, List, and constrained
   Search;
@@ -48,5 +49,6 @@ products/relay-v2/scripts/test-http.sh
 
 Together they validate the product catalogs and configs, build each SQLite
 fixture in a temporary directory, run the canonical `relayctl test` journeys,
-reproduce generated artifacts, enforce source neutrality, and exercise all
+prove `relayctl check --explain` agrees with the generated canonical operation
+explanation, reproduce generated artifacts, enforce source neutrality, and exercise all
 three deployments through the real Relay router.

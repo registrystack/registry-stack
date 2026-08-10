@@ -1,7 +1,7 @@
 apiVersion: relay.registrystack.org/classification-review/v1
 kind: ClassificationReview
 registryIdentifier: urn:example:registry:social-assistance-enrolments
-classificationInventoryDigest: sha256:2fdc2a749325762d815001b7afa8f25acbb93b22f3e8ea96a16bc92cb9ff9b03
+classificationInventoryDigest: sha256:01b68daa7f9ed5f92d95dea53957b6970f8ce527ccfa1d43f777a9573a0e6294
 method: generated
 reviewer: urn:example:institution:social-protection-authority
 reviewDate: 2026-08-10

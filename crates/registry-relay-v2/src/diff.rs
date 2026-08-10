@@ -58,9 +58,9 @@ pub enum ChangeClass {
     HandlingTightened,
     OperationAdded,
     OperationRemoved,
-    RepresentationAdded,
-    RepresentationRemoved,
-    DefaultRepresentationChanged,
+    AccessProfileAdded,
+    AccessProfileRemoved,
+    DefaultAccessProfileChanged,
     DisclosureExpanded,
     DisclosureNarrowed,
     DisclosureProfileChanged,
@@ -475,51 +475,51 @@ fn diff_operation(
     location: &str,
     changes: &mut Vec<ContractChange>,
 ) {
-    if previous.default_representation != current.default_representation {
+    if previous.default_access_profile != current.default_access_profile {
         push(
             changes,
-            ChangeClass::DefaultRepresentationChanged,
+            ChangeClass::DefaultAccessProfileChanged,
             ChangeImpact::Breaking,
-            format!("{location}.defaultRepresentation"),
-            "the representation selected when the caller omits an explicit choice changed",
+            format!("{location}.defaultAccessProfile"),
+            "the access profile selected when the caller omits an explicit choice changed",
         );
     }
-    let before_representations = previous
-        .representations
+    let before_access_profiles = previous
+        .access_profiles
         .iter()
-        .map(|representation| (representation.id.as_str(), representation))
+        .map(|access_profile| (access_profile.id.as_str(), access_profile))
         .collect::<BTreeMap<_, _>>();
-    let after_representations = current
-        .representations
+    let after_access_profiles = current
+        .access_profiles
         .iter()
-        .map(|representation| (representation.id.as_str(), representation))
+        .map(|access_profile| (access_profile.id.as_str(), access_profile))
         .collect::<BTreeMap<_, _>>();
-    for id in before_representations
+    for id in before_access_profiles
         .keys()
-        .chain(after_representations.keys())
+        .chain(after_access_profiles.keys())
         .collect::<BTreeSet<_>>()
     {
-        let representation_location = format!("{location}.representations.{id}");
+        let access_profile_location = format!("{location}.accessProfiles.{id}");
         match (
-            before_representations.get(*id),
-            after_representations.get(*id),
+            before_access_profiles.get(*id),
+            after_access_profiles.get(*id),
         ) {
             (None, Some(_)) => push(
                 changes,
-                ChangeClass::RepresentationAdded,
+                ChangeClass::AccessProfileAdded,
                 ChangeImpact::Widening,
-                representation_location,
-                "a callable representation was added to the operation",
+                access_profile_location,
+                "a callable access profile was added to the operation",
             ),
             (Some(_), None) => push(
                 changes,
-                ChangeClass::RepresentationRemoved,
+                ChangeClass::AccessProfileRemoved,
                 ChangeImpact::Breaking,
-                representation_location,
-                "a callable representation was removed from the operation",
+                access_profile_location,
+                "a callable access profile was removed from the operation",
             ),
             (Some(before), Some(after)) => {
-                diff_representation(before, after, &representation_location, changes);
+                diff_access_profile(before, after, &access_profile_location, changes);
             }
             (None, None) => unreachable!(),
         }
@@ -625,9 +625,9 @@ fn diff_operation(
     );
 }
 
-fn diff_representation(
-    previous: &crate::model::CompiledRepresentation,
-    current: &crate::model::CompiledRepresentation,
+fn diff_access_profile(
+    previous: &crate::model::CompiledAccessProfile,
+    current: &crate::model::CompiledAccessProfile,
     location: &str,
     changes: &mut Vec<ContractChange>,
 ) {
@@ -682,7 +682,7 @@ fn diff_representation(
             ChangeClass::TransformationChanged,
             ChangeImpact::Breaking,
             format!("{location}.transforms"),
-            "the representation transformation inventory changed",
+            "the access profile transformation inventory changed",
         );
     }
     if previous.processing_handling != current.processing_handling
@@ -693,7 +693,7 @@ fn diff_representation(
             ChangeClass::ClassificationChanged,
             ChangeImpact::Breaking,
             format!("{location}.handling"),
-            "the representation processing or disclosure handling floor changed",
+            "the access profile processing or disclosure handling floor changed",
         );
     }
     diff_access(&previous.access, &current.access, location, changes);
@@ -710,18 +710,18 @@ fn diff_spatial_query(
             changes,
             ChangeClass::SpatialQueryAdded,
             ChangeImpact::Widening,
-            format!("{location}.spatialQuery.bbox"),
+            format!("{location}.query"),
             "an exact point bbox query was added",
         ),
         (Some(_), None) => push(
             changes,
             ChangeClass::SpatialQueryRemoved,
             ChangeImpact::Breaking,
-            format!("{location}.spatialQuery.bbox"),
+            format!("{location}.query"),
             "the exact point bbox query was removed",
         ),
         (Some(before), Some(after)) if before != after => {
-            let location = format!("{location}.spatialQuery.bbox");
+            let location = format!("{location}.query");
             if before.longitude_column != after.longitude_column
                 || before.latitude_column != after.latitude_column
             {
@@ -1075,6 +1075,18 @@ mod tests {
         .expect("contract compiles")
     }
 
+    fn compiled_spatial() -> CompiledRegistry {
+        let contract = compiler_tests::spatial_contract(true);
+        let governed_files = compiler_tests::governed_files_for(&contract);
+        compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::spatial_observed_schema()],
+            CompileProfile::Production,
+            &governed_files,
+        )
+        .expect("spatial contract compiles")
+    }
+
     #[test]
     fn visibility_order_is_security_monotonic() {
         assert!(visibility_rank(Visibility::Public) < visibility_rank(Visibility::OperationBound));
@@ -1102,17 +1114,17 @@ mod tests {
     }
 
     #[test]
-    fn representations_transforms_defaults_and_review_bindings_are_reported() {
+    fn access_profiles_transforms_defaults_and_review_bindings_are_reported() {
         let previous = compiled();
         let mut current = previous.clone();
         let operation = &mut current.resources[0].operations[0];
-        operation.representations[0]
+        operation.access_profiles[0]
             .transform_inventory
             .push("partial-string:suffix:4".into());
-        let mut alternate = operation.representations[0].clone();
+        let mut alternate = operation.access_profiles[0].clone();
         alternate.id = "alternate".into();
-        operation.representations.push(alternate);
-        operation.default_representation = "alternate".into();
+        operation.access_profiles.push(alternate);
+        operation.default_access_profile = "alternate".into();
         current
             .classification_review
             .as_mut()
@@ -1122,8 +1134,8 @@ mod tests {
         let report = diff_registries(&previous, &current);
         for class in [
             ChangeClass::TransformationChanged,
-            ChangeClass::RepresentationAdded,
-            ChangeClass::DefaultRepresentationChanged,
+            ChangeClass::AccessProfileAdded,
+            ChangeClass::DefaultAccessProfileChanged,
             ChangeClass::ClassificationReviewChanged,
         ] {
             assert!(
@@ -1136,7 +1148,28 @@ mod tests {
         assert!(reverse
             .changes
             .iter()
-            .any(|change| change.class == ChangeClass::RepresentationRemoved));
+            .any(|change| change.class == ChangeClass::AccessProfileRemoved));
+    }
+
+    #[test]
+    fn access_profile_authorization_changes_do_not_masquerade_as_classification_changes() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        current.resources[0].operations[0].access_profiles[0].access = CompiledAccess::Protected {
+            scope: "registry:records:read".into(),
+            purpose: None,
+            row_binding: None,
+        };
+
+        let report = diff_registries(&previous, &current);
+        assert_eq!(
+            report
+                .changes
+                .iter()
+                .map(|change| (change.class, change.impact))
+                .collect::<Vec<_>>(),
+            [(ChangeClass::ScopeChanged, ChangeImpact::Narrowing)]
+        );
     }
 
     #[test]
@@ -1246,46 +1279,28 @@ mod tests {
     }
 
     #[test]
-    fn spatial_changes_are_explicitly_classified() {
-        let previous = compiled();
-        let mut current = previous.clone();
-        let classification = current.resources[0].properties[0].classification.clone();
-        current.resources[0].primary_geometry = Some(crate::model::CompiledPrimaryGeometry {
-            name: "location".into(),
-            label: "Location".into(),
-            description: "Authoritative point".into(),
-            semantic_iri: "https://example.invalid/location".into(),
-            source_required: true,
-            crs: "http://www.opengis.net/def/crs/OGC/0/CRS84".into(),
-            longitude_column: "longitude".into(),
-            latitude_column: "latitude".into(),
-            classification,
-        });
-        let operation = &mut current.resources[0].operations[0];
-        operation.representations[0]
-            .selectable_properties
-            .push("location".into());
-        operation.representations[0]
-            .projected_columns
-            .extend(["longitude".into(), "latitude".into()]);
-        operation.query.spatial_bbox = Some(crate::model::CompiledSpatialBboxQuery {
-            longitude_column: "longitude".into(),
-            latitude_column: "latitude".into(),
-            maximum_longitude_span_degrees: 10,
-            maximum_latitude_span_degrees: 10,
-        });
-
+    fn named_search_add_remove_and_span_changes_are_explicit() {
+        let current = compiled_spatial();
+        let mut previous = current.clone();
+        previous.resources[0].operations.clear();
         let report = diff_registries(&previous, &current);
-        for class in [
-            ChangeClass::GeometryAdded,
-            ChangeClass::DisclosureExpanded,
-            ChangeClass::SpatialQueryAdded,
-        ] {
-            assert!(
-                report.changes.iter().any(|change| change.class == class),
-                "missing {class:?}"
-            );
-        }
+        assert_eq!(
+            report
+                .changes
+                .iter()
+                .map(|change| (change.class, change.impact))
+                .collect::<Vec<_>>(),
+            [(ChangeClass::OperationAdded, ChangeImpact::Widening)]
+        );
+        let report = diff_registries(&current, &previous);
+        assert_eq!(
+            report
+                .changes
+                .iter()
+                .map(|change| (change.class, change.impact))
+                .collect::<Vec<_>>(),
+            [(ChangeClass::OperationRemoved, ChangeImpact::Breaking)]
+        );
 
         let mut expanded = current.clone();
         expanded.resources[0].operations[0]
@@ -1302,35 +1317,8 @@ mod tests {
     }
 
     #[test]
-    fn spatial_query_use_changes_do_not_masquerade_as_classification_changes() {
-        let previous = compiled();
-        let mut added = previous.clone();
-        let operation_identifier = added.resources[0].operations[0].identifier.clone();
-        added.resources[0].operations[0].query.spatial_bbox =
-            Some(crate::model::CompiledSpatialBboxQuery {
-                longitude_column: "name".into(),
-                latitude_column: "name".into(),
-                maximum_longitude_span_degrees: 10,
-                maximum_latitude_span_degrees: 10,
-            });
-        added.resources[0]
-            .column_accounting
-            .iter_mut()
-            .find(|account| account.column == "name")
-            .expect("published property column is accounted")
-            .uses
-            .push(crate::model::ColumnUse::SpatialBbox(operation_identifier));
-
-        let report = diff_registries(&previous, &added);
-        assert_eq!(
-            report
-                .changes
-                .iter()
-                .map(|change| (change.class, change.impact))
-                .collect::<Vec<_>>(),
-            [(ChangeClass::SpatialQueryAdded, ChangeImpact::Widening)]
-        );
-
+    fn spatial_query_changes_do_not_masquerade_as_classification_changes() {
+        let added = compiled_spatial();
         let mut expanded = added.clone();
         expanded.resources[0].operations[0]
             .query
@@ -1363,16 +1351,6 @@ mod tests {
                 .map(|change| (change.class, change.impact))
                 .collect::<Vec<_>>(),
             [(ChangeClass::SpatialQueryNarrowed, ChangeImpact::Narrowing)]
-        );
-
-        let report = diff_registries(&added, &previous);
-        assert_eq!(
-            report
-                .changes
-                .iter()
-                .map(|change| (change.class, change.impact))
-                .collect::<Vec<_>>(),
-            [(ChangeClass::SpatialQueryRemoved, ChangeImpact::Breaking)]
         );
     }
 }

@@ -413,17 +413,17 @@ pub struct Operations {
     pub read: Option<RecordOperation>,
     #[serde(default)]
     pub lookups: Vec<LookupOperation>,
+    #[serde(default)]
+    pub searches: Vec<SearchOperation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ListOperation {
-    pub default_representation: String,
-    pub representations: OrderedMap<RepresentationDefinition>,
+    pub default_access_profile: String,
+    pub access_profiles: OrderedMap<AccessProfileDefinition>,
     #[serde(default)]
     pub filters: Vec<FilterDefinition>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spatial_query: Option<SpatialQuery>,
     pub allow_unfiltered: bool,
     pub order_by: Vec<String>,
     pub pagination: Pagination,
@@ -432,8 +432,8 @@ pub struct ListOperation {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecordOperation {
-    pub default_representation: String,
-    pub representations: OrderedMap<RepresentationDefinition>,
+    pub default_access_profile: String,
+    pub access_profiles: OrderedMap<AccessProfileDefinition>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -441,28 +441,40 @@ pub struct RecordOperation {
 pub struct LookupOperation {
     pub id: String,
     pub request_body: LookupRequestBody,
-    pub default_representation: String,
-    pub representations: OrderedMap<RepresentationDefinition>,
+    pub default_access_profile: String,
+    pub access_profiles: OrderedMap<AccessProfileDefinition>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RepresentationDefinition {
+pub struct SearchOperation {
+    pub id: String,
+    pub query: SearchQueryDefinition,
+    pub default_access_profile: String,
+    pub access_profiles: OrderedMap<AccessProfileDefinition>,
+    pub order_by: Vec<String>,
+    pub pagination: Pagination,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum SearchQueryDefinition {
+    PointBbox {
+        maximum_longitude_span_degrees: u16,
+        maximum_latitude_span_degrees: u16,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AccessProfileDefinition {
     pub access: AccessRule,
     pub disclosure_profile: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct SpatialQuery {
-    pub bbox: BboxQuery,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct BboxQuery {
-    pub maximum_longitude_span_degrees: u16,
-    pub maximum_latitude_span_degrees: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -917,9 +929,41 @@ disclosureProfiles: {}
     #[test]
     fn legacy_single_profile_operation_shape_is_not_accepted() {
         let yaml = crate::compiler::tests::valid_contract().replace(
-            "        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
             "        access: public\n        disclosureProfile: public",
         );
         assert!(RegistryContract::parse_yaml(&yaml).is_err());
+    }
+
+    #[test]
+    fn old_representation_keys_are_rejected_without_aliases() {
+        let yaml = crate::compiler::tests::valid_contract()
+            .replace("defaultAccessProfile", "defaultRepresentation")
+            .replace("accessProfiles", "representations");
+        assert!(RegistryContract::parse_yaml(&yaml).is_err());
+    }
+
+    #[test]
+    fn list_spatial_query_is_rejected_without_a_compatibility_lane() {
+        let yaml = crate::compiler::tests::valid_contract().replace(
+            "      read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+            "      list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        spatialQuery: {bbox: {maximumLongitudeSpanDegrees: 10, maximumLatitudeSpanDegrees: 10}}\n        allowUnfiltered: false\n        orderBy: [name]\n        pagination: {defaultPageSize: 10, maximumPageSize: 100}",
+        );
+        assert!(RegistryContract::parse_yaml(&yaml).is_err());
+    }
+
+    #[test]
+    fn named_search_query_is_a_closed_point_bbox_shape() {
+        let contract = crate::compiler::tests::spatial_contract(true);
+        let mut value = serde_json::to_value(contract).expect("contract serializes");
+        value["resources"][0]["operations"]["searches"][0]["query"]["predicate"] =
+            serde_json::json!("arbitrary");
+        assert!(serde_json::from_value::<RegistryContract>(value).is_err());
+
+        let contract = crate::compiler::tests::spatial_contract(true);
+        let mut value = serde_json::to_value(contract).expect("contract serializes");
+        value["resources"][0]["operations"]["searches"][0]["query"]["kind"] =
+            serde_json::json!("generic-filter");
+        assert!(serde_json::from_value::<RegistryContract>(value).is_err());
     }
 }

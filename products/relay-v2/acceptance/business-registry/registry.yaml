@@ -126,8 +126,8 @@ resources:
         properties: [registrationNumber, registrarLegalName, registrarNote, registrationStatus, legalForm, registeredJurisdiction]
     operations:
       list:
-        defaultRepresentation: public-register
-        representations:
+        defaultAccessProfile: public-register
+        accessProfiles:
           public-register: {access: public, disclosureProfile: public-register}
           registrar:
             access: {scope: registry:business:list-registrar}
@@ -139,8 +139,8 @@ resources:
         orderBy: [registrationNumber]
         pagination: {defaultPageSize: 2, maximumPageSize: 4}
       read:
-        defaultRepresentation: public-register
-        representations:
+        defaultAccessProfile: public-register
+        accessProfiles:
           public-register: {access: public, disclosureProfile: public-register}
           registrar:
             access: {scope: registry:business:read-registrar}
@@ -199,24 +199,43 @@ resources:
         description: Published name of the synthetic registered premises.
     disclosureProfiles:
       public-premises:
+        properties: [premisesIdentifier, premisesName, location]
+      registrar-premises:
         properties: [premisesIdentifier, businessRegistrationNumber, premisesName, location]
     operations:
       list:
-        defaultRepresentation: public-premises
-        representations:
-          public-premises: {access: public, disclosureProfile: public-premises}
-        allowUnfiltered: false
-        spatialQuery:
-          bbox: {maximumLongitudeSpanDegrees: 2, maximumLatitudeSpanDegrees: 2}
+        defaultAccessProfile: registrar-premises
+        accessProfiles:
+          registrar-premises:
+            access: {scope: registry:business:premises-list}
+            disclosureProfile: registrar-premises
+        allowUnfiltered: true
         orderBy: [premisesIdentifier]
         pagination: {defaultPageSize: 2, maximumPageSize: 4}
       read:
-        defaultRepresentation: public-premises
-        representations:
+        defaultAccessProfile: public-premises
+        accessProfiles:
           public-premises: {access: public, disclosureProfile: public-premises}
+          registrar-premises:
+            access: {scope: registry:business:premises-read-registrar}
+            disclosureProfile: registrar-premises
+      searches:
+        - id: within-bbox
+          query:
+            kind: point-bbox
+            maximumLongitudeSpanDegrees: 2
+            maximumLatitudeSpanDegrees: 2
+          defaultAccessProfile: public-premises
+          accessProfiles:
+            public-premises: {access: public, disclosureProfile: public-premises}
+            registrar-premises:
+              access: {scope: registry:business:premises-search-registrar}
+              disclosureProfile: registrar-premises
+          orderBy: [premisesIdentifier]
+          pagination: {defaultPageSize: 2, maximumPageSize: 4}
     processingDescriptions:
       - id: public-premises-publication
-        operationRefs: [list, read]
+        operationRefs: [list, read, search:within-bbox]
         purpose: statutory-publication
         recipientClass: public
         legalBasisRef: governance/legal-basis.yaml

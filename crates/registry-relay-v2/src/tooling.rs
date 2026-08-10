@@ -30,11 +30,11 @@ use crate::fixtures::{
 };
 use crate::identification::{
     classification_inventory_report, classification_review_starter, contextual_review_findings,
-    identify_contract, render_classification_inventory_report, render_classification_review_yaml,
-    render_contextual_review_findings, render_identification_report, render_representation_report,
-    representation_report, CLASSIFICATION_INVENTORY_REPORT_PATH,
-    CLASSIFICATION_REVIEW_STARTER_PATH, CONTEXTUAL_REVIEW_FINDINGS_PATH,
-    IDENTIFICATION_REPORT_PATH, REPRESENTATION_REPORT_PATH,
+    identify_contract, operation_explanation, render_classification_inventory_report,
+    render_classification_review_yaml, render_contextual_review_findings,
+    render_identification_report, render_operation_explanation, OperationExplanation,
+    CLASSIFICATION_INVENTORY_REPORT_PATH, CLASSIFICATION_REVIEW_STARTER_PATH,
+    CONTEXTUAL_REVIEW_FINDINGS_PATH, IDENTIFICATION_REPORT_PATH, OPERATION_EXPLANATION_PATH,
 };
 use crate::model::{
     CompileProfile, CompileReport, CompiledRegistry, Diagnostic, DiagnosticSeverity,
@@ -61,6 +61,7 @@ pub struct InspectOptions {
 pub struct CheckOptions {
     pub project_root: PathBuf,
     pub production: bool,
+    pub explain: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -139,6 +140,8 @@ pub enum ToolingDetails {
         contract_revision: Option<String>,
         production: bool,
         configuration_key_paths: Option<ConfigurationKeyPaths>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_explanation: Option<OperationExplanation>,
     },
     Generate {
         contract_revision: Option<String>,
@@ -210,6 +213,8 @@ pub enum ToolingError {
     Inspect,
     #[error("the generated artifacts could not be constructed")]
     Generate,
+    #[error("the authoring explanation could not be constructed")]
+    Explain,
     #[error("the deployment package could not be constructed")]
     Package,
 }
@@ -224,6 +229,7 @@ impl ToolingError {
             Self::UnsafePath => "the requested path is unsafe",
             Self::Inspect => "the SQLite schema could not be inspected",
             Self::Generate => "the generated artifacts could not be constructed",
+            Self::Explain => "the authoring explanation could not be constructed",
             Self::Package => "the deployment package could not be constructed",
         }
     }
@@ -335,6 +341,16 @@ pub fn check_project(options: &CheckOptions) -> Result<ToolingReport, ToolingErr
         },
     )? {
         ProjectCompilation::Compiled(project) => {
+            let operation_explanation = if options.explain {
+                let classification_digest = classification_inventory_digest(&project.registry)
+                    .map_err(|_| ToolingError::Explain)?;
+                Some(
+                    operation_explanation(&project.registry, &classification_digest)
+                        .map_err(|_| ToolingError::Explain)?,
+                )
+            } else {
+                None
+            };
             let configuration_key_paths = ConfigurationKeyPaths {
                 registry: collect_configuration_key_paths(
                     &serde_json::to_value(&project.contract).map_err(|_| ToolingError::Inspect)?,
@@ -352,6 +368,7 @@ pub fn check_project(options: &CheckOptions) -> Result<ToolingReport, ToolingErr
                 contract_revision: Some(project.registry.contract_revision),
                 production: options.production,
                 configuration_key_paths: Some(configuration_key_paths),
+                operation_explanation,
             }))
         }
         ProjectCompilation::Refused(report) => Ok(ToolingReport::refused(
@@ -360,6 +377,7 @@ pub fn check_project(options: &CheckOptions) -> Result<ToolingReport, ToolingErr
                 contract_revision: None,
                 production: options.production,
                 configuration_key_paths: None,
+                operation_explanation: None,
             },
         )),
     }
@@ -438,7 +456,7 @@ pub fn generate_project(options: &GenerateOptions) -> Result<ToolingReport, Tool
         identify_contract(&contract, &observed).map_err(|_| ToolingError::Generate)?;
     let inventory = classification_inventory_report(&registry, &classification_digest)
         .map_err(|_| ToolingError::Generate)?;
-    let representations = representation_report(&registry, &classification_digest)
+    let operation_explanation = operation_explanation(&registry, &classification_digest)
         .map_err(|_| ToolingError::Generate)?;
     let findings = contextual_review_findings(&registry, &classification_digest)
         .map_err(|_| ToolingError::Generate)?;
@@ -457,9 +475,10 @@ pub fn generate_project(options: &GenerateOptions) -> Result<ToolingReport, Tool
                 .map_err(|_| ToolingError::Generate)?,
         ),
         (
-            "representation-report",
-            REPRESENTATION_REPORT_PATH,
-            render_representation_report(&representations).map_err(|_| ToolingError::Generate)?,
+            "operation-explanation",
+            OPERATION_EXPLANATION_PATH,
+            render_operation_explanation(&operation_explanation)
+                .map_err(|_| ToolingError::Generate)?,
         ),
         (
             "contextual-review-findings",
@@ -924,18 +943,14 @@ fn validate_runtime(
             "runtime sources must bind exactly the governed source identifiers",
         ));
     }
-    if contract
-        .resources
-        .iter()
-        .flat_map(|resource| resource.operations.list.iter())
-        .next()
-        .is_some()
-        && runtime.cursor.is_none()
+    if contract.resources.iter().any(|resource| {
+        resource.operations.list.is_some() || !resource.operations.searches.is_empty()
+    }) && runtime.cursor.is_none()
     {
         diagnostics.push(diagnostic(
             "runtime.cursor_missing",
             "runtime.yaml.cursor",
-            "a Registry with a list operation requires an opaque-cursor key and age bound",
+            "a Registry with a list or search operation requires an opaque-cursor key and age bound",
         ));
     }
     let protected = contract.resources.iter().any(|resource| {
@@ -945,19 +960,25 @@ fn validate_runtime(
             .iter()
             .flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             })
             .chain(resource.operations.read.iter().flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             }))
             .chain(resource.operations.lookups.iter().flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
+                    .iter()
+                    .map(|(_, item)| &item.access)
+            }))
+            .chain(resource.operations.searches.iter().flat_map(|operation| {
+                operation
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             }))
@@ -1117,8 +1138,8 @@ resources:
     disclosureProfiles: {default: {properties: [recordValue]}}
     operations:
       read:
-        defaultRepresentation: default
-        representations:
+        defaultAccessProfile: default
+        accessProfiles:
           default: {access: {scope: "registry:record:read"}, disclosureProfile: default}
     processingDescriptions:
       - {id: consultation, operationRefs: [read], purpose: reviewed-consultation, recipientClass: authorized-client, legalBasisRef: governance/legal-basis.yaml, dpvProfileRef: governance/processing.dpv.yaml, safeguards: [property-minimization]}
@@ -1156,6 +1177,24 @@ const STARTER_CODELIST: &str =
 mod tests {
     use super::*;
 
+    fn generic_project() -> (tempfile::TempDir, PathBuf) {
+        let temporary = tempfile::tempdir().expect("temporary project root creates");
+        let project = temporary.path().join("project");
+        let report = init_project(&InitOptions {
+            project_root: project.clone(),
+        })
+        .expect("generic project initializes");
+        assert!(report.is_success());
+        fs::remove_file(project.join("runtime.yaml"))
+            .expect("runtime is optional for an authoring check");
+        fs::write(
+            project.join("fixture.sql"),
+            "-- ROW-VALUE-CANARY REQUEST-VALUE-CANARY PRINCIPAL-VALUE-CANARY\n",
+        )
+        .expect("generic value canaries write");
+        (temporary, project)
+    }
+
     #[test]
     fn errors_never_render_paths() {
         for error in [
@@ -1164,6 +1203,7 @@ mod tests {
             ToolingError::UnsafePath,
             ToolingError::Inspect,
             ToolingError::Generate,
+            ToolingError::Explain,
             ToolingError::Package,
         ] {
             assert!(!error.safe_message().contains('/'));
@@ -1174,6 +1214,129 @@ mod tests {
     fn initialized_contract_is_strictly_parseable() {
         assert!(RegistryContract::parse_yaml(STARTER_REGISTRY).is_ok());
         assert!(RelayRuntime::parse_yaml(STARTER_RUNTIME).is_ok());
+    }
+
+    #[test]
+    fn check_explanation_is_deterministic_read_only_and_value_free() {
+        let (_temporary, project) = generic_project();
+        let fixture_path = project.join("fixture.sqlite");
+        let generated_path = project.join("generated");
+        let fixture_sql = fs::read(project.join("fixture.sql")).expect("fixture canaries read");
+        assert!(!fixture_path.exists());
+        assert!(!generated_path.exists());
+
+        let options = CheckOptions {
+            project_root: project.clone(),
+            production: false,
+            explain: true,
+        };
+        let first = check_project(&options).expect("first explanation check completes");
+        let second = check_project(&options).expect("second explanation check completes");
+        assert!(first.is_success(), "{first:?}");
+        assert_eq!(first, second);
+
+        let ToolingDetails::Check {
+            operation_explanation: Some(explanation),
+            ..
+        } = &first.details
+        else {
+            panic!("successful explanation check returns its canonical explanation");
+        };
+        let rendered = render_operation_explanation(explanation)
+            .expect("operation explanation renders canonically");
+        for canary in [
+            "ROW-VALUE-CANARY",
+            "REQUEST-VALUE-CANARY",
+            "PRINCIPAL-VALUE-CANARY",
+        ] {
+            assert!(
+                !rendered
+                    .windows(canary.len())
+                    .any(|window| window == canary.as_bytes()),
+                "operation explanation leaked fixture value"
+            );
+        }
+        assert_eq!(
+            fs::read(project.join("fixture.sql")).expect("fixture canaries reread"),
+            fixture_sql
+        );
+        assert!(!fixture_path.exists());
+        assert!(!generated_path.exists());
+    }
+
+    #[test]
+    fn plain_check_omits_the_optional_explanation() {
+        let (_temporary, project) = generic_project();
+        let report = check_project(&CheckOptions {
+            project_root: project,
+            production: false,
+            explain: false,
+        })
+        .expect("plain check completes");
+        assert!(report.is_success(), "{report:?}");
+
+        let value = serde_json::to_value(report).expect("report serializes");
+        assert!(value["details"].get("operation_explanation").is_none());
+    }
+
+    #[test]
+    fn refused_check_returns_no_partial_explanation() {
+        let temporary = tempfile::tempdir().expect("temporary project creates");
+        fs::write(temporary.path().join("registry.yaml"), "not: [valid")
+            .expect("invalid contract writes");
+
+        let report = check_project(&CheckOptions {
+            project_root: temporary.path().to_path_buf(),
+            production: false,
+            explain: true,
+        })
+        .expect("invalid project produces a refusal");
+        assert!(!report.is_success());
+        let ToolingDetails::Check {
+            operation_explanation,
+            ..
+        } = report.details
+        else {
+            panic!("check returns check details");
+        };
+        assert!(operation_explanation.is_none());
+    }
+
+    #[test]
+    fn generate_writes_the_same_canonical_operation_explanation_as_check() {
+        let (_project_temporary, project) = generic_project();
+        let check = check_project(&CheckOptions {
+            project_root: project.clone(),
+            production: false,
+            explain: true,
+        })
+        .expect("explanation check completes");
+        let ToolingDetails::Check {
+            operation_explanation: Some(explanation),
+            ..
+        } = check.details
+        else {
+            panic!("check returns an explanation");
+        };
+        let expected = render_operation_explanation(&explanation)
+            .expect("operation explanation renders canonically");
+
+        let temporary = tempfile::tempdir().expect("temporary output creates");
+        let report = generate_project(&GenerateOptions {
+            project_root: project,
+            output_dir: Some(temporary.path().to_path_buf()),
+        })
+        .expect("generation completes");
+        assert!(report.is_success(), "{report:?}");
+        assert_eq!(
+            fs::read(temporary.path().join(OPERATION_EXPLANATION_PATH))
+                .expect("generated explanation reads"),
+            expected
+        );
+        assert!(!temporary
+            .path()
+            .join("reports/representation-report.json")
+            .exists());
     }
 
     #[test]

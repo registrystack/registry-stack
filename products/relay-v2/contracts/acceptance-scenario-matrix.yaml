@@ -4,11 +4,11 @@ execution: products/relay-v2/scripts/test-http.sh
 scenarios:
   - {id: social-ready, project: social-assistance, journeyStep: readiness, assertion: One local protected Registry becomes ready from a generated package.}
   - {id: social-lookup, project: social-assistance, journeyStep: lookup-success, assertion: A bounded protected lookup returns only its selected governed properties.}
-  - {id: social-lookup-default, project: social-assistance, journeyStep: lookup-default, assertion: The default representation contains exactly the compiled disclosure profile and the exact safe partial-string result rather than the source identifier.}
-  - {id: social-caseworker-representation, project: social-assistance, journeyStep: caseworker-representation, assertion: An entitled caseworker explicitly selects its full representation then narrows fields within it.}
-  - {id: social-unauthorized-representation, project: social-assistance, journeyStep: unauthorized-representation, assertion: A caller without the selected representation scope receives the same concealed resource outcome without fallback to limited.}
-  - {id: social-unknown-representation, project: social-assistance, journeyStep: unknown-representation, assertion: An unknown representation receives the same concealed resource outcome as a scope-hidden representation.}
-  - {id: social-duplicate-representation, project: social-assistance, journeyStep: duplicate-representation, assertion: A malformed representation selection is rejected before source access.}
+  - {id: social-lookup-default, project: social-assistance, journeyStep: lookup-default, assertion: The default access profile contains exactly the compiled disclosure profile and the exact safe partial-string result rather than the source identifier.}
+  - {id: social-caseworker-access-profile, project: social-assistance, journeyStep: caseworker-access-profile, assertion: An entitled caseworker explicitly selects its full access profile then narrows fields within it.}
+  - {id: social-unauthorized-access-profile, project: social-assistance, journeyStep: unauthorized-access-profile, assertion: A caller without the selected access profile scope receives the same concealed resource outcome without fallback to limited.}
+  - {id: social-unknown-access-profile, project: social-assistance, journeyStep: unknown-access-profile, assertion: An unknown access profile receives the same concealed resource outcome as a scope-hidden profile.}
+  - {id: social-duplicate-access-profile, project: social-assistance, journeyStep: duplicate-access-profile, assertion: A malformed access profile selection is rejected before source access.}
   - {id: social-lookup-second-subset, project: social-assistance, journeyStep: lookup-second-subset, assertion: A second valid field subset remains governed independently.}
   - {id: social-lookup-jsonld, project: social-assistance, journeyStep: lookup-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
   - {id: social-route, project: social-assistance, journeyStep: route-confinement, assertion: An undeclared collection route is absent.}
@@ -36,9 +36,9 @@ scenarios:
   - {id: business-filter, project: business-registry, journeyStep: filtered-page, assertion: Declared exact filters and a selected field subset remain governed.}
   - {id: business-second-subset, project: business-registry, journeyStep: second-field-subset, assertion: A second valid field subset remains governed independently.}
   - {id: business-read, project: business-registry, journeyStep: identifier-read, assertion: An identifier read is cacheable under the snapshot posture.}
-  - {id: business-registrar-read, project: business-registry, journeyStep: registrar-read, assertion: The protected registrar representation is selected explicitly and remains no-store.}
-  - {id: business-registrar-denied, project: business-registry, journeyStep: registrar-representation-denied, assertion: A caller without the registrar representation scope receives the concealed resource outcome.}
-  - {id: business-public-unknown-representation, project: business-registry, journeyStep: public-representation-unknown, assertion: Public discovery cannot enumerate an unknown representation or turn it into a fallback.}
+  - {id: business-registrar-read, project: business-registry, journeyStep: registrar-read, assertion: The protected registrar access profile is selected explicitly and remains no-store.}
+  - {id: business-registrar-denied, project: business-registry, journeyStep: registrar-access-profile-denied, assertion: A caller without the registrar access profile scope receives the concealed resource outcome.}
+  - {id: business-public-unknown-access-profile, project: business-registry, journeyStep: public-access-profile-unknown, assertion: Public discovery cannot enumerate an unknown access profile or turn it into a fallback.}
   - {id: business-read-jsonld, project: business-registry, journeyStep: identifier-read-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
   - {id: business-revalidation, project: business-registry, journeyStep: identifier-read-revalidated, assertion: A matching ETag produces an empty 304 response with the same validator.}
   - {id: business-unknown-field, project: business-registry, journeyStep: unknown-field, assertion: An unknown public property is rejected before source access.}
@@ -50,32 +50,42 @@ scenarios:
   - {id: business-operator-rejection, project: business-registry, journeyStep: unsupported-filter-operator, assertion: Callers cannot add an operator to a declared direct filter.}
   - {id: business-invalid, project: business-registry, journeyStep: invalid-source-row, invalidSourceRowClass: wrong-type, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid source row fails closed and is not released.}
   - {id: business-premises-first-page, project: business-registry, journeyStep: premises-first-page, assertion: A bounded public Point search is paginated and exposes only its governed geometry and properties.}
+  - {id: business-premises-registrar-search, project: business-registry, journeyStep: premises-registrar-search, assertion: The protected search access profile releases its additional business reference only to its exact scope.}
+  - {id: business-premises-search-access-denied, project: business-registry, journeyStep: premises-search-access-profile-denied, assertion: A caller without the selected search access-profile scope receives the concealed resource outcome.}
+  - {id: business-premises-search-access-unknown, project: business-registry, journeyStep: premises-search-access-profile-unknown, assertion: An unknown search access profile is indistinguishable from a scope-hidden profile.}
+  - {id: business-premises-list-authorized, project: business-registry, journeyStep: premises-list-authorized, assertion: A separately scoped registrar list remains a distinct compiled operation.}
+  - {id: business-premises-search-cannot-list, project: business-registry, journeyStep: premises-search-scope-cannot-list, assertion: A protected search scope cannot synthesize the separately governed list operation.}
+  - {id: business-premises-list-cannot-search, project: business-registry, journeyStep: premises-list-scope-cannot-search, assertion: A list scope cannot select the protected access profile of the named search.}
   - {id: business-premises-second-page, project: business-registry, journeyStep: premises-second-page, assertion: A Point-search cursor retrieves the remaining exact-bbox result page.}
   - {id: business-premises-boundary, project: business-registry, journeyStep: premises-boundary-point, assertion: Exact Point bbox containment includes a point on every bounding edge.}
-  - {id: business-premises-minimization, project: business-registry, journeyStep: premises-fields-omit-location, assertion: A requester can omit the classified geometry without changing the governed representation.}
+  - {id: business-premises-minimization, project: business-registry, journeyStep: premises-fields-omit-location, assertion: A requester can omit the classified geometry without changing the access profile.}
   - {id: business-premises-read, project: business-registry, journeyStep: premises-read, assertion: Identifier read returns the same governed Point field in the ordinary Registry Record.}
   - {id: business-premises-jsonld, project: business-registry, journeyStep: premises-read-jsonld, assertion: JSON-LD preserves the same governed Point data and Registry Core while applying the generated context.}
-  - {id: business-premises-geojson, project: business-registry, journeyStep: premises-feature-collection, assertion: The selected governed representation serializes as RFC 7946 GeoJSON.}
+  - {id: business-premises-geojson, project: business-registry, journeyStep: premises-feature-collection, assertion: The selected access profile serializes as RFC 7946 GeoJSON.}
+  - {id: business-premises-search-jsonld, project: business-registry, journeyStep: premises-search-jsonld, assertion: The named search serializes equivalent Records as JSON-LD without changing its access profile or query result.}
   - {id: business-premises-jsonfg, project: business-registry, journeyStep: premises-feature-collection-jsonfg, assertion: JSON-FG is an explicit response profile over the same governed Point data.}
   - {id: business-premises-feature-read, project: business-registry, journeyStep: premises-feature-read, assertion: Identifier read serializes one governed Record as a GeoJSON Feature.}
   - {id: business-premises-feature-minimization, project: business-registry, journeyStep: premises-feature-fields-omit-location, assertion: GeoJSON field minimization emits an explicit null geometry and does not reintroduce the omitted Point through Feature properties.}
   - {id: business-premises-invalid-bbox, project: business-registry, journeyStep: premises-invalid-bbox, assertion: Malformed Point bbox input fails before source access.}
+  - {id: business-premises-missing-bbox, project: business-registry, journeyStep: premises-missing-bbox, assertion: The named point-bbox search requires its complete query shape before source access.}
   - {id: business-premises-out-of-range-bbox, project: business-registry, journeyStep: premises-out-of-range-bbox, assertion: A CRS84 coordinate outside the world range is refused without echoing its value.}
   - {id: business-premises-oversize-bbox, project: business-registry, journeyStep: premises-oversize-bbox, assertion: A bbox outside the publisher span ceiling is refused.}
   - {id: business-premises-antimeridian, project: business-registry, journeyStep: premises-antimeridian-bbox, assertion: The initial Point profile refuses antimeridian-crossing bbox input.}
   - {id: business-premises-cursor-bbox, project: business-registry, journeyStep: premises-cursor-bbox-binding, assertion: A cursor cannot be combined with a first-page bbox parameter.}
-  - {id: business-premises-cursor-profile, project: business-registry, journeyStep: premises-cursor-profile-binding, assertion: A cursor cannot cross its negotiated response format or GeoJSON profile.}
-  - {id: business-nonspatial-geojson, project: business-registry, journeyStep: nonspatial-geojson-refused, assertion: GeoJSON is unavailable when the selected governed representation does not disclose a primary geometry.}
+  - {id: business-premises-cursor-format, project: business-registry, journeyStep: premises-cursor-format-binding, assertion: A cursor cannot cross its negotiated wire format or GeoJSON format profile.}
+  - {id: business-premises-cursor-access-profile, project: business-registry, journeyStep: premises-cursor-access-profile-binding, assertion: A cursor cannot cross its selected access profile even when the caller is entitled to both profiles.}
+  - {id: business-premises-cursor-operation, project: business-registry, journeyStep: premises-cursor-operation-binding, assertion: A named-search cursor cannot be replayed against the separately governed list operation.}
+  - {id: business-nonspatial-geojson, project: business-registry, journeyStep: nonspatial-geojson-refused, assertion: GeoJSON is unavailable when the selected access profile does not disclose a primary geometry.}
   - {id: business-premises-invalid-coordinate, project: business-registry, journeyStep: invalid-coordinate-row, invalidSourceRowClass: wrong-type, expectedStatus: 503, expectedCode: source.unavailable, assertion: An unsafe coordinate row fails closed without a value-bearing diagnostic.}
   - {id: civil-discovery, project: civil-event, journeyStep: registry-discovery, assertion: Discovery derives retrieve and constrained search only.}
-  - {id: civil-read, project: civil-event, journeyStep: registrar-read, assertion: The registrar scope receives its narrower requested representation.}
-  - {id: civil-read-default, project: civil-event, journeyStep: registrar-read-default, assertion: The default representation contains exactly the compiled disclosure profile.}
+  - {id: civil-read, project: civil-event, journeyStep: registrar-read, assertion: The registrar scope receives its narrower requested access profile.}
+  - {id: civil-read-default, project: civil-event, journeyStep: registrar-read-default, assertion: The default access profile contains exactly the compiled disclosure profile.}
   - {id: civil-read-second-subset, project: civil-event, journeyStep: registrar-read-second-subset, assertion: A second valid field subset remains governed independently.}
   - {id: civil-read-jsonld, project: civil-event, journeyStep: registrar-read-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
   - {id: civil-lookup, project: civil-event, journeyStep: lookup-success, assertion: The verification scope receives its distinct disclosure profile.}
-  - {id: civil-supervisory-date-precision, project: civil-event, journeyStep: supervisory-date-precision, assertion: The supervisory representation returns exact reviewed year and year-month outputs with distinct public types and semantic terms over the same exact lookup.}
-  - {id: civil-supervisory-denied, project: civil-event, journeyStep: supervisory-representation-denied, assertion: A registrar-verification grant receives the concealed resource outcome and cannot fall back from a supervisory representation.}
-  - {id: civil-invalid-representation, project: civil-event, journeyStep: invalid-representation, assertion: An unknown civil representation receives the concealed resource outcome before lookup execution.}
+  - {id: civil-supervisory-date-precision, project: civil-event, journeyStep: supervisory-date-precision, assertion: The supervisory access profile returns exact reviewed year and year-month outputs with distinct public types and semantic terms over the same exact lookup.}
+  - {id: civil-supervisory-denied, project: civil-event, journeyStep: supervisory-access-profile-denied, assertion: A registrar-verification grant receives the concealed resource outcome and cannot fall back from a supervisory access profile.}
+  - {id: civil-invalid-access-profile, project: civil-event, journeyStep: invalid-access-profile, assertion: An unknown civil access profile receives the concealed resource outcome before lookup execution.}
   - {id: civil-route, project: civil-event, journeyStep: no-list, assertion: A non-enumerable Registry has no collection route.}
   - {id: civil-scope, project: civil-event, journeyStep: scope-separation, assertion: A lookup scope cannot synthesize identifier read.}
   - {id: civil-reverse-scope, project: civil-event, journeyStep: reverse-scope-separation, assertion: A registrar read scope cannot synthesize verification lookup.}

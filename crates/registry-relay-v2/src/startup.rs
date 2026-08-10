@@ -474,11 +474,10 @@ fn validate_runtime_contract(
     if governed != bound {
         return Err(StartupError::RuntimeInvalid);
     }
-    let has_list = contract
-        .resources
-        .iter()
-        .any(|resource| resource.operations.list.is_some());
-    if has_list && runtime.cursor.is_none() {
+    let has_paginated_operation = contract.resources.iter().any(|resource| {
+        resource.operations.list.is_some() || !resource.operations.searches.is_empty()
+    });
+    if has_paginated_operation && runtime.cursor.is_none() {
         return Err(StartupError::CursorInvalid);
     }
     let protected = contract.resources.iter().any(|resource| {
@@ -488,19 +487,25 @@ fn validate_runtime_contract(
             .iter()
             .flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             })
             .chain(resource.operations.read.iter().flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             }))
             .chain(resource.operations.lookups.iter().flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
+                    .iter()
+                    .map(|(_, item)| &item.access)
+            }))
+            .chain(resource.operations.searches.iter().flat_map(|operation| {
+                operation
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             }))
@@ -959,7 +964,8 @@ mod tests {
     }
 
     #[test]
-    fn protected_contracts_require_issuer_lists_require_cursor_and_lookups_require_quota() {
+    fn protected_contracts_require_issuer_paginated_operations_require_cursor_and_lookups_require_quota(
+    ) {
         fn contract(operations: &str) -> RegistryContract {
             let yaml = r#"
 apiVersion: relay.registrystack.org/v2alpha1
@@ -1005,7 +1011,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         }
 
         let protected = contract(
-            "{read: {defaultRepresentation: default, representations: {default: {access: {scope: registry:record:read}, disclosureProfile: default}}}}",
+            "{read: {defaultAccessProfile: default, accessProfiles: {default: {access: {scope: registry:record:read}, disclosureProfile: default}}}}",
         );
         let protected_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18081'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
@@ -1017,7 +1023,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         );
 
         let list = contract(
-            "{list: {defaultRepresentation: default, representations: {default: {access: public, disclosureProfile: default}}, filters: [], allowUnfiltered: true, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}}",
+            "{list: {defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}, filters: [], allowUnfiltered: true, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}}",
         );
         let list_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18082'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
@@ -1028,8 +1034,29 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             Err(StartupError::CursorInvalid)
         );
 
+        let search = contract(
+            "{searches: [{id: within-bbox, query: {kind: point-bbox, maximumLongitudeSpanDegrees: 10, maximumLatitudeSpanDegrees: 10}, defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}]}",
+        );
+        assert_eq!(
+            validate_runtime_contract(&list_runtime, &search),
+            Err(StartupError::CursorInvalid)
+        );
+
+        let protected_search = contract(
+            "{searches: [{id: within-bbox, query: {kind: point-bbox, maximumLongitudeSpanDegrees: 10, maximumLatitudeSpanDegrees: 10}, defaultAccessProfile: default, accessProfiles: {default: {access: {scope: registry:record:search}, disclosureProfile: default}}, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}]}",
+        );
+        let mut protected_search_runtime = list_runtime.clone();
+        protected_search_runtime.cursor = Some(crate::contract::CursorRuntime {
+            integrity_key_ref: "secret:env/CURSOR_KEY".into(),
+            maximum_age_seconds: 300,
+        });
+        assert_eq!(
+            validate_runtime_contract(&protected_search_runtime, &protected_search),
+            Err(StartupError::IssuerUnavailable)
+        );
+
         let lookup = contract(
-            "{lookups: [{id: by-label, requestBody: {maximumBytes: 128, selectors: {label: {sourceColumn: label, type: string, minimumBytes: 1, maximumBytes: 32}}}, defaultRepresentation: default, representations: {default: {access: public, disclosureProfile: default}}}]}",
+            "{lookups: [{id: by-label, requestBody: {maximumBytes: 128, selectors: {label: {sourceColumn: label, type: string, minimumBytes: 1, maximumBytes: 32}}}, defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}}]}",
         );
         let mut lookup_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18083'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",

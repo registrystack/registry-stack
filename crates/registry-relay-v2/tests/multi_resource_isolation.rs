@@ -145,16 +145,16 @@ resources:
       public-view: {properties: [publicLabel]}
     operations:
       list:
-        defaultRepresentation: public
-        representations:
+        defaultAccessProfile: public
+        accessProfiles:
           public: {access: public, disclosureProfile: public-view}
         filters: []
         allowUnfiltered: true
         orderBy: [publicIdentifier]
         pagination: {defaultPageSize: 1, maximumPageSize: 1}
       read:
-        defaultRepresentation: public
-        representations:
+        defaultAccessProfile: public
+        accessProfiles:
           public: {access: public, disclosureProfile: public-view}
     processingDescriptions: []
   - id: protected-unit
@@ -190,8 +190,8 @@ resources:
       protected-view: {properties: [protectedLabel]}
     operations:
       list:
-        defaultRepresentation: protected
-        representations:
+        defaultAccessProfile: protected
+        accessProfiles:
           protected:
             access:
               scope: relay:protected:list
@@ -203,8 +203,8 @@ resources:
         orderBy: [protectedIdentifier]
         pagination: {defaultPageSize: 2, maximumPageSize: 2}
       read:
-        defaultRepresentation: protected
-        representations:
+        defaultAccessProfile: protected
+        accessProfiles:
           protected:
             access:
               scope: relay:protected:read
@@ -217,8 +217,8 @@ resources:
             maximumBytes: 128
             selectors:
               lookupKey: {sourceColumn: lookup_key, type: string, minimumBytes: 1, maximumBytes: 32}
-          defaultRepresentation: protected
-          representations:
+          defaultAccessProfile: protected
+          accessProfiles:
             protected:
               access:
                 scope: relay:protected:lookup
@@ -331,13 +331,13 @@ fn compiler_keeps_every_multi_resource_operation_boundary_local() {
         assert_eq!(list.identifier, format!("{resource_id}.list"));
         assert_eq!(list.query.source, SOURCE_ID);
         assert_eq!(list.query.view, view);
-        let representation = list
-            .representations
+        let access_profile = list
+            .access_profiles
             .iter()
-            .find(|representation| representation.id == list.default_representation)
-            .expect("default representation is compiled");
-        assert_eq!(representation.disclosure_profile, disclosure);
-        assert_eq!(representation.selectable_properties, [field]);
+            .find(|access_profile| access_profile.id == list.default_access_profile)
+            .expect("default access_profile is compiled");
+        assert_eq!(access_profile.disclosure_profile, disclosure);
+        assert_eq!(access_profile.selectable_properties, [field]);
         assert_eq!(
             list.query
                 .pagination
@@ -346,7 +346,7 @@ fn compiler_keeps_every_multi_resource_operation_boundary_local() {
                 .maximum_page_size,
             page_maximum
         );
-        match (&representation.access, scope, row_column) {
+        match (&access_profile.access, scope, row_column) {
             (CompiledAccess::Public, None, None) => {}
             (
                 CompiledAccess::Protected {
@@ -365,8 +365,8 @@ fn compiler_keeps_every_multi_resource_operation_boundary_local() {
             }
             boundary => panic!("unexpected compiled access boundary: {boundary:?}"),
         }
-        assert!(representation.schema_reference.contains(resource_id));
-        assert!(representation
+        assert!(access_profile.schema_reference.contains(resource_id));
+        assert!(access_profile
             .semantic_model_reference
             .contains(resource_id));
     }

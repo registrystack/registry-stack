@@ -20,9 +20,10 @@ The intended boundaries are firmer than the syntax:
 - SQLite views and columns are source bindings, while resources and properties are the public model;
 - one contract describes one Registry; each resource is a Record type within it;
 - every Record has mandatory Registry Core bindings in addition to selectable domain properties;
-- `sourceRequired` governs complete source-Record validation, while the public representation schema permits any compiled selectable `domainData` subset;
+- `sourceRequired` governs complete source-Record validation, while the public access-profile schema permits any compiled selectable `domainData` subset;
 - external semantic alignment is optional and file-based, pinned, and reviewed;
-- every operation declares one default and a finite ordered set of representations; an operation with any public representation uses a public default; access and disclosure belong to the representation, while the requester may only select fewer properties within the chosen representation;
+- every operation declares one default and a finite ordered set of access profiles; an operation with any public access profile uses a public default; access and disclosure belong to the access profile, while the requester may only select fewer properties within it;
+- wire format and optional `formatProfile` are serialization choices after the access-profile decision and never grant data access;
 - token issuers assign authority, but they cannot enable an operation Relay did not compile;
 - family capabilities are derived from compiled operations, never duplicated in configuration;
 - none of these examples enables response signing.
@@ -59,7 +60,7 @@ Every successful item has the same non-selectable core shape. For example:
 `fields=legalName,registrationStatus` narrowed only `domainData`. List responses
 place such items in `items`; single reads and resolved lookups place one in
 `data`. The semantic-model reference resolves to the generated local vocabulary;
-the representation `meta` links the JSON-LD context separately.
+the response `meta` links the JSON-LD context separately.
 
 Each example shows the governed and runtime documents together for readability. A real project would keep them as separately validated files and package them with synthetic fixtures and generated artifacts.
 
@@ -215,8 +216,8 @@ resources:
             selectors:
               caseReference: {sourceColumn: case_reference, type: string, minimumBytes: 8, maximumBytes: 96}
               personReference: {sourceColumn: person_reference, type: string, minimumBytes: 8, maximumBytes: 96}
-          defaultRepresentation: limited
-          representations:
+          defaultAccessProfile: limited
+          accessProfiles:
             limited:
               access:
                 scope: registry:social-assistance:limited
@@ -417,8 +418,8 @@ resources:
 
     operations:
       list:
-        defaultRepresentation: public-register
-        representations:
+        defaultAccessProfile: public-register
+        accessProfiles:
           public-register: {access: public, disclosureProfile: public-register}
           registrar: {access: {scope: registry:business:list-registrar}, disclosureProfile: registrar-register}
         filters:
@@ -428,8 +429,8 @@ resources:
         orderBy: [registrationNumber]
         pagination: {defaultPageSize: 50, maximumPageSize: 200}
       read:
-        defaultRepresentation: public-register
-        representations:
+        defaultAccessProfile: public-register
+        accessProfiles:
           public-register: {access: public, disclosureProfile: public-register}
           registrar: {access: {scope: registry:business:read-registrar}, disclosureProfile: registrar-register}
 
@@ -479,10 +480,12 @@ not a generic map service or a spatial database API. The reviewed source view
 owns the two numeric carrier columns; Relay validates and reconstructs one
 CRS84 GeoJSON Point only after its complete Record is safe to disclose. The
 geometry has a normal classification and enters the maximum disclosure profile,
-so `fields` can remove it but cannot add it. `bbox` is a fixed publisher-owned
-query shape, not an expression language. A bbox-enabled primary geometry must
-be classified `privacy: non-personal`, even for a protected list. Its maximum
-spans keep an anonymous public search local and bounded.
+so `fields` can remove it but cannot add it. `bbox` is the required input of a
+named publisher-owned search, not an expression language and not a list option.
+A searched primary geometry must be classified `privacy: non-personal`. Its
+maximum spans keep an anonymous public search local and bounded, while a
+separately scoped list demonstrates that list and search rights do not imply
+one another.
 
 ```yaml
   - id: registered-premises
@@ -521,31 +524,45 @@ spans keep an anonymous public search local and bounded.
         label: Business registration number
         description: Registered business associated with the premises
     disclosureProfiles:
-      public-premises: {properties: [premisesIdentifier, businessRegistrationNumber, location]}
+      public-premises: {properties: [premisesIdentifier, location]}
+      registrar-premises: {properties: [premisesIdentifier, businessRegistrationNumber, location]}
     operations:
       list:
-        defaultRepresentation: public-premises
-        representations:
-          public-premises: {access: public, disclosureProfile: public-premises}
-        allowUnfiltered: false
-        spatialQuery:
-          bbox: {maximumLongitudeSpanDegrees: 2, maximumLatitudeSpanDegrees: 2}
+        defaultAccessProfile: registrar-premises
+        accessProfiles:
+          registrar-premises: {access: {scope: registry:business:premises-list}, disclosureProfile: registrar-premises}
+        allowUnfiltered: true
         orderBy: [premisesIdentifier]
         pagination: {defaultPageSize: 50, maximumPageSize: 200}
       read:
-        defaultRepresentation: public-premises
-        representations:
+        defaultAccessProfile: public-premises
+        accessProfiles:
           public-premises: {access: public, disclosureProfile: public-premises}
+          registrar-premises: {access: {scope: registry:business:premises-read-registrar}, disclosureProfile: registrar-premises}
+      searches:
+        - id: within-bbox
+          query:
+            kind: point-bbox
+            maximumLongitudeSpanDegrees: 2
+            maximumLatitudeSpanDegrees: 2
+          defaultAccessProfile: public-premises
+          accessProfiles:
+            public-premises: {access: public, disclosureProfile: public-premises}
+            registrar-premises: {access: {scope: registry:business:premises-search-registrar}, disclosureProfile: registrar-premises}
+          orderBy: [premisesIdentifier]
+          pagination: {defaultPageSize: 50, maximumPageSize: 200}
 ```
 
-The `public-premises` governed representation is the access and maximum
+The `public-premises` access profile is the access and maximum
 disclosure decision. JSON and JSON-LD are always available for it; because its
 disclosure profile includes `location`, `Accept: application/geo+json` is also
 available and returns RFC 7946 by default. A client may ask for
-`profile=jsonfg` to receive JSON-FG conformance metadata. In both forms,
+`formatProfile=jsonfg` to receive JSON-FG conformance metadata. In both forms,
 Feature `properties` plus the separately selected `geometry` carry the same
 governed disclosure as ordinary JSON. A query such as
-`bbox=100,13,101,14` includes only points within that closed inclusive extent;
+`GET /v2/resources/registered-premises/searches/within-bbox?bbox=100,13,101,14`
+includes only points within that closed inclusive extent. The protected list
+and protected search profile have independent scopes;
 antimeridian-crossing boxes, arbitrary CRS requests, CQL2, tiles, EDR, spatial
 joins, and dynamic SpatiaLite functions are not part of this profile.
 
@@ -700,8 +717,8 @@ resources:
 
     operations:
       read:
-        defaultRepresentation: registrar
-        representations:
+        defaultAccessProfile: registrar
+        accessProfiles:
           registrar:
             access:
               scope: registry:civil-events:read
@@ -715,8 +732,8 @@ resources:
             selectors:
               registrationNumber: {sourceColumn: registration_number, type: string, minimumBytes: 12, maximumBytes: 96}
               eventType: {sourceColumn: event_type, type: controlled-code, codelist: codelists/civil-event-types.yaml}
-          defaultRepresentation: registrar-verification
-          representations:
+          defaultAccessProfile: registrar-verification
+          accessProfiles:
             registrar-verification:
               access:
                 scope: registry:civil-events:lookup
@@ -776,7 +793,7 @@ quotas: {requestsPerMinute: 120, burst: 20}
 
 ## Complete accepted key-path inventory
 
-The following blocks come from successful typed `relayctl check --production`
+The following blocks come from successful typed `relayctl check --production --explain`
 reports for all three coequal acceptance projects. They describe the complete
 strict configuration surface exercised by those projects. Run
 `products/relay-v2/scripts/check-configs.sh --write` after an intentional model
@@ -844,8 +861,24 @@ resources[].disclosureProfiles.*.properties[]
 resources[].id
 resources[].operations
 resources[].operations.list
+resources[].operations.list.accessProfiles
+resources[].operations.list.accessProfiles.public-register
+resources[].operations.list.accessProfiles.public-register.access
+resources[].operations.list.accessProfiles.public-register.disclosureProfile
+resources[].operations.list.accessProfiles.registrar
+resources[].operations.list.accessProfiles.registrar-premises
+resources[].operations.list.accessProfiles.registrar-premises.access
+resources[].operations.list.accessProfiles.registrar-premises.access.authorityRowBinding
+resources[].operations.list.accessProfiles.registrar-premises.access.purpose
+resources[].operations.list.accessProfiles.registrar-premises.access.scope
+resources[].operations.list.accessProfiles.registrar-premises.disclosureProfile
+resources[].operations.list.accessProfiles.registrar.access
+resources[].operations.list.accessProfiles.registrar.access.authorityRowBinding
+resources[].operations.list.accessProfiles.registrar.access.purpose
+resources[].operations.list.accessProfiles.registrar.access.scope
+resources[].operations.list.accessProfiles.registrar.disclosureProfile
 resources[].operations.list.allowUnfiltered
-resources[].operations.list.defaultRepresentation
+resources[].operations.list.defaultAccessProfile
 resources[].operations.list.filters
 resources[].operations.list.filters[]
 resources[].operations.list.filters[].name
@@ -856,72 +889,55 @@ resources[].operations.list.orderBy[]
 resources[].operations.list.pagination
 resources[].operations.list.pagination.defaultPageSize
 resources[].operations.list.pagination.maximumPageSize
-resources[].operations.list.representations
-resources[].operations.list.representations.public-premises
-resources[].operations.list.representations.public-premises.access
-resources[].operations.list.representations.public-premises.disclosureProfile
-resources[].operations.list.representations.public-register
-resources[].operations.list.representations.public-register.access
-resources[].operations.list.representations.public-register.disclosureProfile
-resources[].operations.list.representations.registrar
-resources[].operations.list.representations.registrar.access
-resources[].operations.list.representations.registrar.access.authorityRowBinding
-resources[].operations.list.representations.registrar.access.purpose
-resources[].operations.list.representations.registrar.access.scope
-resources[].operations.list.representations.registrar.disclosureProfile
-resources[].operations.list.spatialQuery
-resources[].operations.list.spatialQuery.bbox
-resources[].operations.list.spatialQuery.bbox.maximumLatitudeSpanDegrees
-resources[].operations.list.spatialQuery.bbox.maximumLongitudeSpanDegrees
 resources[].operations.lookups
 resources[].operations.lookups[]
-resources[].operations.lookups[].defaultRepresentation
+resources[].operations.lookups[].accessProfiles
+resources[].operations.lookups[].accessProfiles.caseworker
+resources[].operations.lookups[].accessProfiles.caseworker.access
+resources[].operations.lookups[].accessProfiles.caseworker.access.authorityRowBinding
+resources[].operations.lookups[].accessProfiles.caseworker.access.authorityRowBinding.claim
+resources[].operations.lookups[].accessProfiles.caseworker.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].accessProfiles.caseworker.access.purpose
+resources[].operations.lookups[].accessProfiles.caseworker.access.purpose.allowed
+resources[].operations.lookups[].accessProfiles.caseworker.access.purpose.allowed[]
+resources[].operations.lookups[].accessProfiles.caseworker.access.purpose.claim
+resources[].operations.lookups[].accessProfiles.caseworker.access.scope
+resources[].operations.lookups[].accessProfiles.caseworker.disclosureProfile
+resources[].operations.lookups[].accessProfiles.limited
+resources[].operations.lookups[].accessProfiles.limited.access
+resources[].operations.lookups[].accessProfiles.limited.access.authorityRowBinding
+resources[].operations.lookups[].accessProfiles.limited.access.authorityRowBinding.claim
+resources[].operations.lookups[].accessProfiles.limited.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].accessProfiles.limited.access.purpose
+resources[].operations.lookups[].accessProfiles.limited.access.purpose.allowed
+resources[].operations.lookups[].accessProfiles.limited.access.purpose.allowed[]
+resources[].operations.lookups[].accessProfiles.limited.access.purpose.claim
+resources[].operations.lookups[].accessProfiles.limited.access.scope
+resources[].operations.lookups[].accessProfiles.limited.disclosureProfile
+resources[].operations.lookups[].accessProfiles.registrar-verification
+resources[].operations.lookups[].accessProfiles.registrar-verification.access
+resources[].operations.lookups[].accessProfiles.registrar-verification.access.authorityRowBinding
+resources[].operations.lookups[].accessProfiles.registrar-verification.access.authorityRowBinding.claim
+resources[].operations.lookups[].accessProfiles.registrar-verification.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].accessProfiles.registrar-verification.access.purpose
+resources[].operations.lookups[].accessProfiles.registrar-verification.access.purpose.allowed
+resources[].operations.lookups[].accessProfiles.registrar-verification.access.purpose.allowed[]
+resources[].operations.lookups[].accessProfiles.registrar-verification.access.purpose.claim
+resources[].operations.lookups[].accessProfiles.registrar-verification.access.scope
+resources[].operations.lookups[].accessProfiles.registrar-verification.disclosureProfile
+resources[].operations.lookups[].accessProfiles.supervisory
+resources[].operations.lookups[].accessProfiles.supervisory.access
+resources[].operations.lookups[].accessProfiles.supervisory.access.authorityRowBinding
+resources[].operations.lookups[].accessProfiles.supervisory.access.authorityRowBinding.claim
+resources[].operations.lookups[].accessProfiles.supervisory.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].accessProfiles.supervisory.access.purpose
+resources[].operations.lookups[].accessProfiles.supervisory.access.purpose.allowed
+resources[].operations.lookups[].accessProfiles.supervisory.access.purpose.allowed[]
+resources[].operations.lookups[].accessProfiles.supervisory.access.purpose.claim
+resources[].operations.lookups[].accessProfiles.supervisory.access.scope
+resources[].operations.lookups[].accessProfiles.supervisory.disclosureProfile
+resources[].operations.lookups[].defaultAccessProfile
 resources[].operations.lookups[].id
-resources[].operations.lookups[].representations
-resources[].operations.lookups[].representations.caseworker
-resources[].operations.lookups[].representations.caseworker.access
-resources[].operations.lookups[].representations.caseworker.access.authorityRowBinding
-resources[].operations.lookups[].representations.caseworker.access.authorityRowBinding.claim
-resources[].operations.lookups[].representations.caseworker.access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].representations.caseworker.access.purpose
-resources[].operations.lookups[].representations.caseworker.access.purpose.allowed
-resources[].operations.lookups[].representations.caseworker.access.purpose.allowed[]
-resources[].operations.lookups[].representations.caseworker.access.purpose.claim
-resources[].operations.lookups[].representations.caseworker.access.scope
-resources[].operations.lookups[].representations.caseworker.disclosureProfile
-resources[].operations.lookups[].representations.limited
-resources[].operations.lookups[].representations.limited.access
-resources[].operations.lookups[].representations.limited.access.authorityRowBinding
-resources[].operations.lookups[].representations.limited.access.authorityRowBinding.claim
-resources[].operations.lookups[].representations.limited.access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].representations.limited.access.purpose
-resources[].operations.lookups[].representations.limited.access.purpose.allowed
-resources[].operations.lookups[].representations.limited.access.purpose.allowed[]
-resources[].operations.lookups[].representations.limited.access.purpose.claim
-resources[].operations.lookups[].representations.limited.access.scope
-resources[].operations.lookups[].representations.limited.disclosureProfile
-resources[].operations.lookups[].representations.registrar-verification
-resources[].operations.lookups[].representations.registrar-verification.access
-resources[].operations.lookups[].representations.registrar-verification.access.authorityRowBinding
-resources[].operations.lookups[].representations.registrar-verification.access.authorityRowBinding.claim
-resources[].operations.lookups[].representations.registrar-verification.access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].representations.registrar-verification.access.purpose
-resources[].operations.lookups[].representations.registrar-verification.access.purpose.allowed
-resources[].operations.lookups[].representations.registrar-verification.access.purpose.allowed[]
-resources[].operations.lookups[].representations.registrar-verification.access.purpose.claim
-resources[].operations.lookups[].representations.registrar-verification.access.scope
-resources[].operations.lookups[].representations.registrar-verification.disclosureProfile
-resources[].operations.lookups[].representations.supervisory
-resources[].operations.lookups[].representations.supervisory.access
-resources[].operations.lookups[].representations.supervisory.access.authorityRowBinding
-resources[].operations.lookups[].representations.supervisory.access.authorityRowBinding.claim
-resources[].operations.lookups[].representations.supervisory.access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].representations.supervisory.access.purpose
-resources[].operations.lookups[].representations.supervisory.access.purpose.allowed
-resources[].operations.lookups[].representations.supervisory.access.purpose.allowed[]
-resources[].operations.lookups[].representations.supervisory.access.purpose.claim
-resources[].operations.lookups[].representations.supervisory.access.scope
-resources[].operations.lookups[].representations.supervisory.disclosureProfile
 resources[].operations.lookups[].requestBody
 resources[].operations.lookups[].requestBody.maximumBytes
 resources[].operations.lookups[].requestBody.selectors
@@ -932,25 +948,54 @@ resources[].operations.lookups[].requestBody.selectors.*.minimumBytes
 resources[].operations.lookups[].requestBody.selectors.*.sourceColumn
 resources[].operations.lookups[].requestBody.selectors.*.type
 resources[].operations.read
-resources[].operations.read.defaultRepresentation
-resources[].operations.read.representations
-resources[].operations.read.representations.public-premises
-resources[].operations.read.representations.public-premises.access
-resources[].operations.read.representations.public-premises.disclosureProfile
-resources[].operations.read.representations.public-register
-resources[].operations.read.representations.public-register.access
-resources[].operations.read.representations.public-register.disclosureProfile
-resources[].operations.read.representations.registrar
-resources[].operations.read.representations.registrar.access
-resources[].operations.read.representations.registrar.access.authorityRowBinding
-resources[].operations.read.representations.registrar.access.authorityRowBinding.claim
-resources[].operations.read.representations.registrar.access.authorityRowBinding.sourceColumn
-resources[].operations.read.representations.registrar.access.purpose
-resources[].operations.read.representations.registrar.access.purpose.allowed
-resources[].operations.read.representations.registrar.access.purpose.allowed[]
-resources[].operations.read.representations.registrar.access.purpose.claim
-resources[].operations.read.representations.registrar.access.scope
-resources[].operations.read.representations.registrar.disclosureProfile
+resources[].operations.read.accessProfiles
+resources[].operations.read.accessProfiles.public-premises
+resources[].operations.read.accessProfiles.public-premises.access
+resources[].operations.read.accessProfiles.public-premises.disclosureProfile
+resources[].operations.read.accessProfiles.public-register
+resources[].operations.read.accessProfiles.public-register.access
+resources[].operations.read.accessProfiles.public-register.disclosureProfile
+resources[].operations.read.accessProfiles.registrar
+resources[].operations.read.accessProfiles.registrar-premises
+resources[].operations.read.accessProfiles.registrar-premises.access
+resources[].operations.read.accessProfiles.registrar-premises.access.authorityRowBinding
+resources[].operations.read.accessProfiles.registrar-premises.access.purpose
+resources[].operations.read.accessProfiles.registrar-premises.access.scope
+resources[].operations.read.accessProfiles.registrar-premises.disclosureProfile
+resources[].operations.read.accessProfiles.registrar.access
+resources[].operations.read.accessProfiles.registrar.access.authorityRowBinding
+resources[].operations.read.accessProfiles.registrar.access.authorityRowBinding.claim
+resources[].operations.read.accessProfiles.registrar.access.authorityRowBinding.sourceColumn
+resources[].operations.read.accessProfiles.registrar.access.purpose
+resources[].operations.read.accessProfiles.registrar.access.purpose.allowed
+resources[].operations.read.accessProfiles.registrar.access.purpose.allowed[]
+resources[].operations.read.accessProfiles.registrar.access.purpose.claim
+resources[].operations.read.accessProfiles.registrar.access.scope
+resources[].operations.read.accessProfiles.registrar.disclosureProfile
+resources[].operations.read.defaultAccessProfile
+resources[].operations.searches
+resources[].operations.searches[]
+resources[].operations.searches[].accessProfiles
+resources[].operations.searches[].accessProfiles.public-premises
+resources[].operations.searches[].accessProfiles.public-premises.access
+resources[].operations.searches[].accessProfiles.public-premises.disclosureProfile
+resources[].operations.searches[].accessProfiles.registrar-premises
+resources[].operations.searches[].accessProfiles.registrar-premises.access
+resources[].operations.searches[].accessProfiles.registrar-premises.access.authorityRowBinding
+resources[].operations.searches[].accessProfiles.registrar-premises.access.purpose
+resources[].operations.searches[].accessProfiles.registrar-premises.access.scope
+resources[].operations.searches[].accessProfiles.registrar-premises.disclosureProfile
+resources[].operations.searches[].defaultAccessProfile
+resources[].operations.searches[].id
+resources[].operations.searches[].orderBy
+resources[].operations.searches[].orderBy[]
+resources[].operations.searches[].pagination
+resources[].operations.searches[].pagination.defaultPageSize
+resources[].operations.searches[].pagination.maximumPageSize
+resources[].operations.searches[].query
+resources[].operations.searches[].query.kind
+resources[].operations.searches[].query.maximumLatitudeSpanDegrees
+resources[].operations.searches[].query.maximumLongitudeSpanDegrees
 resources[].primaryGeometry
 resources[].primaryGeometry.classification
 resources[].primaryGeometry.classification.handling
@@ -1089,8 +1134,9 @@ registry contract
   -> source reference and reviewed view
   -> resource and published properties
   -> compiled operation query shape
-  -> finite defaulted representations with access and disclosure
+  -> finite defaulted access profiles with access and disclosure
   -> optional requester property subset
+  -> independent wire format and optional format profile
   -> access constraints
   -> semantics, classification, and processing description
   -> deterministic query, response, revision, and audit evidence
@@ -1100,10 +1146,11 @@ The examples also freeze these boundaries:
 
 - Registry Manifest projection is later portability tooling, not a runtime input;
 - Registry Core fields are native and cannot be removed;
-- `fields` is one comma-separated property syntax across list, read, and lookup;
+- `fields` is one comma-separated property syntax across list, read, lookup, and named search;
 - a live source remains useful for read and lookup but is unversioned, `no-store`, and has no paginated list;
 - handling uses `public`, `internal`, `confidential`, and `restricted`, while purpose and row binding remain explicit constraints;
-- one explicit default and a finite ordered representation set is compiled per operation; requester `fields` only narrows the selected profile and caller-derived variants are deferred;
+- one explicit default and a finite ordered access-profile set is compiled per operation; requester `fields` only narrows the selected profile and caller-derived variants are deferred;
+- a named Point-bbox search owns its required query shape and access profiles; list access cannot synthesize search access or accept `bbox`;
 - identification is schema-only and value-free; generated, imported, and manual classification review all bind the complete classification inventory before production compilation;
 - only `partial-string` with Relay's fixed `***` marker and `date-precision` to `year` or `year-month` are transform forms; every transform produces a distinct reviewed property;
 - Mint and external issuers use one strict Relay JWT access-token profile;

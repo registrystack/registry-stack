@@ -81,7 +81,7 @@ steps:
     request:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
-      query: {representation: supervisory, fields: "eventType,registrationYear,registrationYearMonth"}
+      query: {accessProfile: supervisory, fields: "eventType,registrationYear,registrationYearMonth"}
       body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
     expect:
       status: 200
@@ -89,20 +89,20 @@ steps:
       domainDataKeys: [eventType, registrationYear, registrationYearMonth]
       domainDataValues: {registrationYear: "2026", registrationYearMonth: "2026-04"}
       cache: no-store
-  - id: supervisory-representation-denied
+  - id: supervisory-access-profile-denied
     authorizationFixture: civil-verifier-ex-a
     request:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
-      query: {representation: supervisory}
+      query: {accessProfile: supervisory}
       body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
     expect: {status: 404, code: resource.not_found}
-  - id: invalid-representation
+  - id: invalid-access-profile
     authorizationFixture: civil-verifier-ex-a
     request:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
-      query: {representation: invalid}
+      query: {accessProfile: invalid}
       body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
     expect: {status: 404, code: resource.not_found}
   - id: no-list
@@ -199,7 +199,7 @@ steps:
     request:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
-      query: {representation: supervisory}
+      query: {accessProfile: supervisory}
       body: {registrationNumber: REG-SYNTH-XFORM1, eventType: BIRTH}
     expect: {status: 503, code: source.unavailable}
   - id: quota-exhausted

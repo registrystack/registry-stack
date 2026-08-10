@@ -7,10 +7,10 @@ use registry_relay_v2::contract::{
 };
 use registry_relay_v2::identification::{
     classification_inventory_report, classification_review_starter, contextual_review_findings,
-    core_pack_reference, identification_report_digest, identify_contract,
+    core_pack_reference, identification_report_digest, identify_contract, operation_explanation,
     parse_classification_review_yaml, render_classification_inventory_report,
     render_classification_review_yaml, render_contextual_review_findings,
-    render_identification_report, render_representation_report, representation_report,
+    render_identification_report, render_operation_explanation, render_operation_explanation_text,
     validate_classification_review, CategoricalConfidence, ClassificationReviewExpectation,
     IdentificationError, IdentificationStatus, TechnicalRole, REVIEWED_IDENTIFICATION_REPORT_PATH,
 };
@@ -460,9 +460,9 @@ fn review_reports_are_canonical_value_free_and_cover_all_contextual_prompts() {
         maximum_bytes: Some(32),
         codelist: None,
     });
-    operation.representations[0].disclosure_handling =
+    operation.access_profiles[0].disclosure_handling =
         registry_relay_v2::contract::Handling::Confidential;
-    operation.representations[0].processing_handling =
+    operation.access_profiles[0].processing_handling =
         registry_relay_v2::contract::Handling::Restricted;
 
     let inventory_digest = classification_inventory_digest(&registry).expect("inventory digest");
@@ -472,22 +472,23 @@ fn review_reports_are_canonical_value_free_and_cover_all_contextual_prompts() {
     );
     let inventory =
         classification_inventory_report(&registry, &inventory_digest).expect("inventory");
-    let representations =
-        representation_report(&registry, &inventory_digest).expect("representations");
+    let explanation =
+        operation_explanation(&registry, &inventory_digest).expect("operation explanation");
     let findings = contextual_review_findings(&registry, &inventory_digest).expect("findings");
     assert_eq!(inventory.classification_inventory_digest, inventory_digest);
     assert_eq!(
-        representations.classification_inventory_digest,
+        explanation.classification_inventory_digest,
         inventory_digest
     );
     assert_eq!(findings.classification_inventory_digest, inventory_digest);
     assert_eq!(inventory.resources[0].source_columns.len(), 9);
     assert_eq!(inventory.resources[0].properties.len(), 6);
-    let boundary = &representations.resources[0].operations[0].representations[0];
+    let boundary = &explanation.operations[0].access_profiles[0];
     assert!(boundary
-        .processed_source_columns
+        .processing
+        .source_columns
         .contains(&"region_code".into()));
-    assert!(boundary.disclosed_properties.contains(&"notes".into()));
+    assert!(boundary.disclosure.properties.contains(&"notes".into()));
     let codes = findings
         .findings
         .iter()
@@ -511,9 +512,13 @@ fn review_reports_are_canonical_value_free_and_cover_all_contextual_prompts() {
         render_classification_inventory_report(&inventory).expect("inventory bytes again")
     );
     assert_eq!(
-        render_representation_report(&representations).expect("representation bytes"),
-        render_representation_report(&representations).expect("representation bytes again")
+        render_operation_explanation(&explanation).expect("explanation bytes"),
+        render_operation_explanation(&explanation).expect("explanation bytes again")
     );
+    let text = render_operation_explanation_text(&explanation);
+    assert!(text.contains("query capabilities:"));
+    assert!(text.contains("access profile: default (default)"));
+    assert!(text.contains("wire formats:"));
     let finding_bytes = render_contextual_review_findings(&findings).expect("finding bytes");
     assert_eq!(
         finding_bytes,
@@ -668,8 +673,8 @@ resources:
     disclosureProfiles: {default: {properties: [regionCode, categoryCode, personReference, emailPhone, notes]}}
     operations:
       read:
-        defaultRepresentation: default
-        representations:
+        defaultAccessProfile: default
+        accessProfiles:
           default: {access: public, disclosureProfile: default}
     processingDescriptions: []
 metadataVisibility: {service: public, resources: public, semantics: public, classifications: operator-only, processing: operation-bound}

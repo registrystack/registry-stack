@@ -120,7 +120,7 @@ pub fn json_ld_context(
     json!({"@context": context})
 }
 
-pub fn representation_schema(
+pub fn access_profile_schema(
     registry: &CompiledRegistry,
     resource: &CompiledResource,
     selected: &[String],
@@ -254,7 +254,7 @@ fn point_geometry_schema() -> Value {
     })
 }
 
-pub fn representation_shacl(
+pub fn access_profile_shacl(
     registry: &CompiledRegistry,
     resource: &CompiledResource,
     selected: &[String],
@@ -550,7 +550,7 @@ mod tests {
         });
         let selected = vec!["name".into(), "location".into()];
 
-        let schema = representation_schema(
+        let schema = access_profile_schema(
             &registry,
             &resource,
             &selected,
@@ -575,7 +575,7 @@ mod tests {
         let encoded = serde_json::to_string(&vocabulary).expect("vocabulary serializes");
         assert!(encoded.contains("rdf:JSON"));
         assert!(!encoded.to_ascii_lowercase().contains("geosparql"));
-        let shacl = representation_shacl(&registry, &resource, &selected);
+        let shacl = access_profile_shacl(&registry, &resource, &selected);
         assert!(shacl.contains("rdf-syntax-ns#JSON"));
         assert!(!shacl.to_ascii_lowercase().contains("geosparql"));
     }

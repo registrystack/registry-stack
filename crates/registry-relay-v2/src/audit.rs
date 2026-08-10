@@ -108,7 +108,7 @@ pub struct AuditContext {
     pub access_rule_revision: Option<String>,
     pub purpose: Option<String>,
     pub row_boundary_kind: RowBoundaryKind,
-    pub representation: Option<String>,
+    pub access_profile: Option<String>,
     pub disclosure_profile: Option<String>,
     pub processing_description_identifiers: Vec<String>,
     pub selected_properties: Vec<String>,
@@ -180,7 +180,7 @@ struct AuditEvent {
     purpose: Option<String>,
     row_boundary_kind: RowBoundaryKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    representation: Option<String>,
+    access_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disclosure_profile: Option<String>,
     processing_description_identifiers: Vec<String>,
@@ -215,7 +215,7 @@ impl AuditEvent {
             access_rule_revision: context.access_rule_revision.clone(),
             purpose: context.purpose.clone(),
             row_boundary_kind: context.row_boundary_kind,
-            representation: context.representation.clone(),
+            access_profile: context.access_profile.clone(),
             disclosure_profile: context.disclosure_profile.clone(),
             processing_description_identifiers: context.processing_description_identifiers.clone(),
             selected_properties: context.selected_properties.clone(),
@@ -242,5 +242,44 @@ fn source_revision(revision: &SourceRevision) -> Value {
             "status": "unversioned",
             "value": null,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audit_schema_names_the_governed_access_profile() {
+        let context = AuditContext {
+            operation_id: "operation-1".into(),
+            trace_id: TraceId::parse("0123456789abcdef0123456789abcdef").expect("trace"),
+            registry_identifier: "registry".into(),
+            resource_identifier: Some("resource".into()),
+            operation_identifier: Some("resource.search.within-bbox".into()),
+            access_rule_revision: Some("sha256:access".into()),
+            purpose: None,
+            row_boundary_kind: RowBoundaryKind::None,
+            access_profile: Some("public-premises".into()),
+            disclosure_profile: Some("public-premises".into()),
+            processing_description_identifiers: Vec::new(),
+            selected_properties: vec!["premisesIdentifier".into()],
+            processing_handling: Some("public".into()),
+            disclosure_handling: Some("public".into()),
+            transform_identifiers: Vec::new(),
+            contract_revision: "sha256:contract".into(),
+            source_revision: Some(SourceRevision::LiveUnversioned),
+            principal_kind: PrincipalKind::Anonymous,
+        };
+        let value = serde_json::to_value(AuditEvent::from_context(
+            &context,
+            AuditPhase::Attempt,
+            None,
+        ))
+        .expect("audit serializes");
+
+        assert_eq!(value["schema"], AUDIT_SCHEMA);
+        assert_eq!(value["accessProfile"], "public-premises");
+        assert!(value.get("representation").is_none());
     }
 }

@@ -10,6 +10,8 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
+use registry_relay_v2::identification::render_operation_explanation_text;
+use registry_relay_v2::tooling::{ToolingDetails, ToolingReport};
 use serde::Serialize;
 
 mod shared;
@@ -78,6 +80,10 @@ struct CheckArgs {
     /// Require all generated suggestions to have been reviewed.
     #[arg(long)]
     production: bool,
+
+    /// Explain compiled operations, access, disclosure, and wire formats.
+    #[arg(long)]
+    explain: bool,
 }
 
 #[derive(Debug, Args)]
@@ -163,7 +169,7 @@ where
         }
     };
 
-    if render_report(command_name, &report, cli.json, stdout).is_err() {
+    if render_tooling_report(command_name, &report, cli.json, stdout).is_err() {
         let _ = writeln!(stderr, "relayctl: output could not be written");
         return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
     }
@@ -189,27 +195,100 @@ impl Command {
     }
 }
 
-fn render_report<T: Serialize>(
+fn render_tooling_report(
     command: &str,
-    report: &T,
+    report: &ToolingReport,
     json: bool,
     output: &mut dyn Write,
 ) -> io::Result<()> {
     if json {
-        serde_json::to_writer_pretty(&mut *output, report).map_err(io::Error::other)?;
-        writeln!(output)
-    } else {
-        writeln!(output, "relayctl {command}")?;
-        // The shared report is the sole source of command details. Rendering
-        // it here does not reinterpret compiler outcomes or change classes.
-        serde_json::to_writer_pretty(&mut *output, report).map_err(io::Error::other)?;
-        writeln!(output)
+        return render_json(report, output);
     }
+
+    writeln!(output, "relayctl {command}")?;
+    if let ToolingDetails::Check {
+        operation_explanation: Some(explanation),
+        ..
+    } = &report.details
+    {
+        return output.write_all(render_operation_explanation_text(explanation).as_bytes());
+    }
+
+    // The shared report is the sole source of command details. Rendering it
+    // here does not reinterpret compiler outcomes or change classes.
+    render_json(report, output)
+}
+
+fn render_json<T: Serialize>(report: &T, output: &mut dyn Write) -> io::Result<()> {
+    serde_json::to_writer_pretty(&mut *output, report).map_err(io::Error::other)?;
+    writeln!(output)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMPORARY_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct TemporaryDirectory(std::path::PathBuf);
+
+    impl TemporaryDirectory {
+        fn create() -> Self {
+            let sequence = TEMPORARY_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock follows the Unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "registry-relayctl-unit-{}-{timestamp}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).expect("temporary project root creates");
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TemporaryDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn generic_project() -> (TemporaryDirectory, std::path::PathBuf) {
+        let temporary = TemporaryDirectory::create();
+        let project = temporary.path().join("project");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run_from(
+            [
+                OsString::from("relayctl"),
+                OsString::from("init"),
+                project.clone().into_os_string(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(
+            status,
+            ExitCode::SUCCESS,
+            "{}",
+            String::from_utf8_lossy(&stderr)
+        );
+        std::fs::remove_file(project.join("runtime.yaml"))
+            .expect("runtime is optional for an authoring check");
+        std::fs::write(
+            project.join("fixture.sql"),
+            "-- ROW-VALUE-CANARY REQUEST-VALUE-CANARY PRINCIPAL-VALUE-CANARY\n",
+        )
+        .expect("generic value canaries write");
+        (temporary, project)
+    }
 
     #[test]
     fn every_approved_command_is_present() {
@@ -283,13 +362,11 @@ mod tests {
         }
 
         let mut output = Vec::new();
-        render_report(
-            "inspect",
+        render_json(
             &Report {
                 status: "accepted",
                 summary: "schema structure inspected",
             },
-            true,
             &mut output,
         )
         .expect("report renders");
@@ -309,6 +386,25 @@ mod tests {
     }
 
     #[test]
+    fn operation_explanation_is_an_explicit_check_mode() {
+        let cli =
+            Cli::try_parse_from(["relayctl", "check", "project", "--explain", "--production"])
+                .expect("explanation check parses");
+        let Command::Check(args) = cli.command else {
+            panic!("check command is retained");
+        };
+        assert!(args.explain);
+        assert!(args.production);
+    }
+
+    #[test]
+    fn operation_explanation_is_not_a_mode_of_write_commands() {
+        let error = Cli::try_parse_from(["relayctl", "generate", "project", "--explain"])
+            .expect_err("explanation is confined to check");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
     fn json_rendering_is_deterministic_and_has_one_trailing_newline() {
         #[derive(Serialize)]
         struct Report<'a> {
@@ -322,11 +418,59 @@ mod tests {
             status: "accepted",
             summary: "schema structure inspected",
         };
-        render_report("inspect", &report, true, &mut first).expect("report renders");
-        render_report("inspect", &report, true, &mut second).expect("report repeats");
+        render_json(&report, &mut first).expect("report renders");
+        render_json(&report, &mut second).expect("report repeats");
 
         assert_eq!(first, second);
         assert!(first.ends_with(b"\n"));
         assert!(!first.ends_with(b"\n\n"));
+    }
+
+    #[test]
+    fn human_explanation_is_grouped_and_does_not_dump_key_paths() {
+        let (_temporary, project) = generic_project();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let status = run_from(
+            [
+                OsString::from("relayctl"),
+                OsString::from("check"),
+                project.into_os_string(),
+                OsString::from("--explain"),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(
+            status,
+            ExitCode::SUCCESS,
+            "{}",
+            String::from_utf8_lossy(&stderr)
+        );
+        assert!(stderr.is_empty());
+        let rendered = String::from_utf8(stdout).expect("human output is UTF-8");
+        for heading in [
+            "Resource: ",
+            "consultation/",
+            "query capabilities:",
+            "access profile:",
+            "processing:",
+            "disclosure:",
+            "wire formats:",
+        ] {
+            assert!(rendered.contains(heading), "missing heading {heading}");
+        }
+        assert!(!rendered.contains("configurationKeyPaths"));
+        for canary in [
+            "ROW-VALUE-CANARY",
+            "REQUEST-VALUE-CANARY",
+            "PRINCIPAL-VALUE-CANARY",
+        ] {
+            assert!(!rendered.contains(canary));
+        }
+        assert!(rendered.ends_with('\n'));
+        assert!(!rendered.ends_with("\n\n"));
     }
 }

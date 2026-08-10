@@ -56,41 +56,41 @@ steps:
       registryCoreRequired: true
       domainDataKeys: [maskedEnrolmentReference, enrolmentStatus, validThrough]
       domainDataValues: {maskedEnrolmentReference: "***0001"}
-  - id: caseworker-representation
+  - id: caseworker-access-profile
     authorizationFixture: social-caseworker-area-a
     request:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
-      query: {representation: caseworker, fields: "enrolmentReference,programmeCode"}
+      query: {accessProfile: caseworker, fields: "enrolmentReference,programmeCode"}
       body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
     expect:
       status: 200
       registryCoreRequired: true
       domainDataKeys: [enrolmentReference, programmeCode]
-  - id: unauthorized-representation
+  - id: unauthorized-access-profile
     authorizationFixture: social-caseworker-wrong-scope
     request:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
-      query: {representation: caseworker}
+      query: {accessProfile: caseworker}
       body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
     expect: {status: 404, code: resource.not_found}
-  - id: unknown-representation
+  - id: unknown-access-profile
     authorizationFixture: social-lookup-area-a
     request:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
-      query: {representation: unknown-profile}
+      query: {accessProfile: unknown-profile}
       body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
     expect: {status: 404, code: resource.not_found}
-  - id: duplicate-representation
+  - id: duplicate-access-profile
     authorizationFixture: social-lookup-area-a
     request:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
-      query: {representation: "limited,caseworker"}
+      query: {accessProfile: "limited,caseworker"}
       body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
-    expect: {status: 400, code: request.representation_invalid}
+    expect: {status: 400, code: request.access_profile_invalid}
   - id: lookup-second-subset
     authorizationFixture: social-lookup-area-a
     request:

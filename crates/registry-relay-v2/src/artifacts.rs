@@ -10,21 +10,18 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::contract::Visibility;
+use crate::format_capabilities::{
+    response_format_capabilities, supports_geojson, CRS84_URI, JSON_FG_CORE_CONFORMANCE,
+    JSON_FG_TYPES_CONFORMANCE,
+};
 use crate::model::{
     CompiledAccess, CompiledOperation, CompiledRegistry, CompiledResource, ConsultationPattern,
-    OperationKind, RepresentationProfile,
+    OperationKind,
 };
 use crate::semantics::{
-    full_record_schema, full_record_shacl, json_ld_context, local_vocabulary,
-    representation_schema, representation_shacl,
+    access_profile_schema, access_profile_shacl, full_record_schema, full_record_shacl,
+    json_ld_context, local_vocabulary,
 };
-
-const CRS84_URI: &str = "http://www.opengis.net/def/crs/OGC/0/CRS84";
-const RFC7946_PROFILE_URI: &str = "http://www.opengis.net/def/profile/OGC/0/rfc7946";
-const JSON_FG_PROFILE_URI: &str = "http://www.opengis.net/def/profile/OGC/0/jsonfg";
-const JSON_FG_CORE_CONFORMANCE: &str = "http://www.opengis.net/spec/json-fg-1/1.0/conf/core";
-const JSON_FG_TYPES_CONFORMANCE: &str =
-    "http://www.opengis.net/spec/json-fg-1/1.0/conf/types-schemas";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +48,8 @@ pub struct GeneratedArtifact {
     /// the artifact behind this exact compiled operation's static access gate.
     pub operation_identifier: Option<String>,
     /// Present with `operation_identifier` when an operation-bound artifact
-    /// belongs to one exact finite representation.
-    pub representation_identifier: Option<String>,
+    /// belongs to one exact finite access profile.
+    pub access_profile_identifier: Option<String>,
     pub sha256: String,
     pub content: Vec<u8>,
 }
@@ -61,11 +58,11 @@ pub struct GeneratedArtifact {
 #[serde(rename_all = "camelCase")]
 pub struct OperationArtifactBindings {
     pub operation_identifier: String,
-    pub representation_identifier: String,
+    pub access_profile_identifier: String,
     pub vocabulary_path: String,
     pub context_path: String,
-    pub representation_schema_path: String,
-    pub representation_shacl_path: String,
+    pub access_profile_schema_path: String,
+    pub access_profile_shacl_path: String,
     pub classification_path: String,
     pub processing_path: String,
 }
@@ -205,35 +202,35 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
         )?;
 
         for operation in &resource.operations {
-            for representation in &operation.representations {
+            for access_profile in &operation.access_profiles {
                 let disclosure = resource
                     .disclosure_profiles
                     .iter()
-                    .find(|profile| profile.id == representation.disclosure_profile)
+                    .find(|profile| profile.id == access_profile.disclosure_profile)
                     .ok_or(ArtifactError::MissingDisclosure)?;
                 let suffix =
-                    representation_artifact_stem(&resource.id, &operation.kind, &representation.id);
-                if matches!(&representation.access, CompiledAccess::Protected { .. }) {
-                    push_representation_json(
+                    access_profile_artifact_stem(&resource.id, &operation.kind, &access_profile.id);
+                if matches!(&access_profile.access, CompiledAccess::Protected { .. }) {
+                    push_access_profile_json(
                         &mut artifacts,
                         &format!("{suffix}-capability"),
                         &format!("artifacts/{suffix}.capability.json"),
                         "application/json",
                         Visibility::OperationBound,
                         &operation.identifier,
-                        &representation.id,
+                        &access_profile.id,
                         &capability_inventory(
                             registry,
-                            CapabilityProjection::Representation(
+                            CapabilityProjection::AccessProfile(
                                 &operation.identifier,
-                                &representation.id,
+                                &access_profile.id,
                             ),
                         ),
                     )?;
                 }
                 let semantic_visibility = projection_visibility(
                     registry.metadata_visibility.semantics,
-                    &representation.access,
+                    &access_profile.access,
                 );
                 let vocabulary_path = format!("artifacts/{suffix}.vocabulary.jsonld");
                 let context_path = format!("artifacts/{suffix}.context.jsonld");
@@ -241,90 +238,90 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                 let shacl_path = format!("artifacts/{suffix}.shacl.ttl");
                 let classification_path = format!("artifacts/{suffix}.classifications.json");
                 let processing_path = format!("artifacts/{suffix}.processing.json");
-                push_representation_json(
+                push_access_profile_json(
                     &mut artifacts,
                     &format!("{suffix}-vocabulary"),
                     &vocabulary_path,
                     "application/ld+json",
                     semantic_visibility,
                     &operation.identifier,
-                    &representation.id,
+                    &access_profile.id,
                     &local_vocabulary(registry, resource, &disclosure.properties),
                 )?;
-                push_representation_json(
+                push_access_profile_json(
                     &mut artifacts,
                     &format!("{suffix}-context"),
                     &context_path,
                     "application/ld+json",
                     semantic_visibility,
                     &operation.identifier,
-                    &representation.id,
+                    &access_profile.id,
                     &json_ld_context(registry, resource, &disclosure.properties),
                 )?;
-                push_representation_json(
+                push_access_profile_json(
                     &mut artifacts,
                     &format!("{suffix}-schema"),
                     &schema_path,
                     "application/schema+json",
                     semantic_visibility,
                     &operation.identifier,
-                    &representation.id,
-                    &representation_schema(
+                    &access_profile.id,
+                    &access_profile_schema(
                         registry,
                         resource,
                         &disclosure.properties,
-                        &representation.schema_reference,
-                        &representation.semantic_model_reference,
+                        &access_profile.schema_reference,
+                        &access_profile.semantic_model_reference,
                     ),
                 )?;
-                if supports_geojson(resource, representation) {
-                    push_representation_json(
+                if supports_geojson(resource, access_profile) {
+                    push_access_profile_json(
                         &mut artifacts,
                         &format!("{suffix}-geojson-schema"),
                         &format!("artifacts/{suffix}.geojson.schema.json"),
                         "application/schema+json",
                         semantic_visibility,
                         &operation.identifier,
-                        &representation.id,
+                        &access_profile.id,
                         &geojson_response_schema(
                             registry,
                             operation,
-                            representation,
+                            access_profile,
                             resource,
                             true,
                         ),
                     )?;
                 }
-                push_representation_text(
+                push_access_profile_text(
                     &mut artifacts,
                     &format!("{suffix}-shacl"),
                     &shacl_path,
                     "text/turtle",
                     semantic_visibility,
                     &operation.identifier,
-                    &representation.id,
-                    representation_shacl(registry, resource, &disclosure.properties).into_bytes(),
+                    &access_profile.id,
+                    access_profile_shacl(registry, resource, &disclosure.properties).into_bytes(),
                 );
                 let classification_visibility = projection_visibility(
                     registry.metadata_visibility.classifications,
-                    &representation.access,
+                    &access_profile.access,
                 );
-                push_representation_json(
+                push_access_profile_json(
                     &mut artifacts,
                     &format!("{suffix}-classifications"),
                     &classification_path,
                     "application/json",
                     classification_visibility,
                     &operation.identifier,
-                    &representation.id,
+                    &access_profile.id,
                     &json!({
                         "resourceIdentifier": resource.id,
                         "operationIdentifier": operation.identifier,
-                        "representationIdentifier": representation.id,
-                        "disclosureProfile": representation.disclosure_profile,
-                        "processingHandling": representation.processing_handling,
-                        "disclosureHandling": representation.disclosure_handling,
-                        "transformIdentifiers": representation.transform_inventory,
+                        "accessProfileIdentifier": access_profile.id,
+                        "disclosureProfile": access_profile.disclosure_profile,
+                        "processingHandling": access_profile.processing_handling,
+                        "disclosureHandling": access_profile.disclosure_handling,
+                        "transformIdentifiers": access_profile.transform_inventory,
                         "properties": resource.properties.iter()
                             .filter(|property| disclosure.properties.contains(&property.name))
                             .map(|property| json!({
@@ -344,24 +341,24 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                 )?;
                 let processing_visibility = projection_visibility(
                     registry.metadata_visibility.processing,
-                    &representation.access,
+                    &access_profile.access,
                 );
                 let operation_ref = operation_contract_reference(&operation.kind);
-                push_representation_json(
+                push_access_profile_json(
                     &mut artifacts,
                     &format!("{suffix}-processing"),
                     &processing_path,
                     "application/json",
                     processing_visibility,
                     &operation.identifier,
-                    &representation.id,
+                    &access_profile.id,
                     &json!({
                         "resourceIdentifier": resource.id,
                         "operationIdentifier": operation.identifier,
-                        "representationIdentifier": representation.id,
-                        "processingHandling": representation.processing_handling,
-                        "disclosureHandling": representation.disclosure_handling,
-                        "transformIdentifiers": representation.transform_inventory,
+                        "accessProfileIdentifier": access_profile.id,
+                        "processingHandling": access_profile.processing_handling,
+                        "disclosureHandling": access_profile.disclosure_handling,
+                        "transformIdentifiers": access_profile.transform_inventory,
                         "descriptions": resource.processing_descriptions.iter()
                             .filter(|description| description.operation_refs.contains(&operation_ref))
                             .collect::<Vec<_>>(),
@@ -369,11 +366,11 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                 )?;
                 bindings.push(OperationArtifactBindings {
                     operation_identifier: operation.identifier.clone(),
-                    representation_identifier: representation.id.clone(),
+                    access_profile_identifier: access_profile.id.clone(),
                     vocabulary_path,
                     context_path,
-                    representation_schema_path: schema_path,
-                    representation_shacl_path: shacl_path,
+                    access_profile_schema_path: schema_path,
+                    access_profile_shacl_path: shacl_path,
                     classification_path,
                     processing_path,
                 });
@@ -412,8 +409,8 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
         left.operation_identifier
             .cmp(&right.operation_identifier)
             .then(
-                left.representation_identifier
-                    .cmp(&right.representation_identifier),
+                left.access_profile_identifier
+                    .cmp(&right.access_profile_identifier),
             )
     });
     Ok(ArtifactSet {
@@ -438,6 +435,7 @@ fn operation_contract_reference(kind: &OperationKind) -> String {
         OperationKind::List => "list".into(),
         OperationKind::Read => "read".into(),
         OperationKind::Lookup { name } => format!("lookup:{name}"),
+        OperationKind::Search { name } => format!("search:{name}"),
     }
 }
 
@@ -446,16 +444,17 @@ fn operation_artifact_stem(resource: &str, kind: &OperationKind) -> String {
         OperationKind::List => format!("{resource}--list"),
         OperationKind::Read => format!("{resource}--read"),
         OperationKind::Lookup { name } => format!("{resource}--lookup-{name}"),
+        OperationKind::Search { name } => format!("{resource}--search-{name}"),
     }
 }
 
-fn representation_artifact_stem(
+fn access_profile_artifact_stem(
     resource: &str,
     kind: &OperationKind,
-    representation: &str,
+    access_profile: &str,
 ) -> String {
     format!(
-        "{}--representation-{representation}",
+        "{}--access-profile-{access_profile}",
         operation_artifact_stem(resource, kind)
     )
 }
@@ -484,14 +483,14 @@ fn push_json(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push_representation_json(
+fn push_access_profile_json(
     artifacts: &mut Vec<GeneratedArtifact>,
     id: &str,
     path: &str,
     media_type: &str,
     visibility: Visibility,
     operation_identifier: &str,
-    representation_identifier: &str,
+    access_profile_identifier: &str,
     value: &Value,
 ) -> Result<(), ArtifactError> {
     let bound = visibility == Visibility::OperationBound;
@@ -506,20 +505,20 @@ fn push_representation_json(
     )?;
     artifacts
         .last_mut()
-        .expect("a representation artifact was appended")
-        .representation_identifier = bound.then(|| representation_identifier.to_owned());
+        .expect("an access-profile artifact was appended")
+        .access_profile_identifier = bound.then(|| access_profile_identifier.to_owned());
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-fn push_representation_text(
+fn push_access_profile_text(
     artifacts: &mut Vec<GeneratedArtifact>,
     id: &str,
     path: &str,
     media_type: &str,
     visibility: Visibility,
     operation_identifier: &str,
-    representation_identifier: &str,
+    access_profile_identifier: &str,
     content: Vec<u8>,
 ) {
     let bound = visibility == Visibility::OperationBound;
@@ -534,8 +533,8 @@ fn push_representation_text(
     );
     artifacts
         .last_mut()
-        .expect("a representation artifact was appended")
-        .representation_identifier = bound.then(|| representation_identifier.to_owned());
+        .expect("an access-profile artifact was appended")
+        .access_profile_identifier = bound.then(|| access_profile_identifier.to_owned());
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -554,7 +553,7 @@ fn push_text(
         media_type: media_type.into(),
         visibility,
         operation_identifier,
-        representation_identifier: None,
+        access_profile_identifier: None,
         sha256: format!("sha256:{}", hex::encode(Sha256::digest(&content))),
         content,
     });
@@ -614,14 +613,14 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
     }
     for resource in &registry.resources {
         for operation in &resource.operations {
-            let visible_representations = operation
-                .representations
+            let visible_access_profiles = operation
+                .access_profiles
                 .iter()
-                .filter(|representation| {
-                    !public_only || matches!(&representation.access, CompiledAccess::Public)
+                .filter(|access_profile| {
+                    !public_only || matches!(&access_profile.access, CompiledAccess::Public)
                 })
                 .collect::<Vec<_>>();
-            if visible_representations.is_empty() {
+            if visible_access_profiles.is_empty() {
                 continue;
             }
             let (method, path) = match &operation.kind {
@@ -634,58 +633,62 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "post",
                     format!("/v2/resources/{}/lookups/{name}", resource.id),
                 ),
+                OperationKind::Search { name } => (
+                    "get",
+                    format!("/v2/resources/{}/searches/{name}", resource.id),
+                ),
             };
-            let has_public = visible_representations
+            let has_public = visible_access_profiles
                 .iter()
-                .any(|representation| matches!(&representation.access, CompiledAccess::Public));
-            let has_protected = visible_representations.iter().any(|representation| {
-                matches!(&representation.access, CompiledAccess::Protected { .. })
+                .any(|access_profile| matches!(&access_profile.access, CompiledAccess::Public));
+            let has_protected = visible_access_profiles.iter().any(|access_profile| {
+                matches!(&access_profile.access, CompiledAccess::Protected { .. })
             });
             let security = match (has_public, has_protected) {
                 (true, true) => json!([{}, {"bearerAuth": []}]),
                 (true, false) => json!([]),
                 (false, true) => json!([{"bearerAuth": []}]),
-                (false, false) => unreachable!("a visible representation exists"),
+                (false, false) => unreachable!("a visible access profile exists"),
             };
-            let visible_identifiers = visible_representations
+            let visible_identifiers = visible_access_profiles
                 .iter()
-                .map(|representation| representation.id.clone())
+                .map(|access_profile| access_profile.id.clone())
                 .collect::<Vec<_>>();
             let visible_default = visible_identifiers
-                .contains(&operation.default_representation)
-                .then(|| operation.default_representation.clone());
-            let mut representation_schema = json!({
+                .contains(&operation.default_access_profile)
+                .then(|| operation.default_access_profile.clone());
+            let mut access_profile_schema = json!({
                 "type": "string",
                 "enum": visible_identifiers,
             });
             if let Some(default) = &visible_default {
-                representation_schema
+                access_profile_schema
                     .as_object_mut()
-                    .expect("representation schema object")
+                    .expect("access-profile schema object")
                     .insert("default".into(), json!(default));
             }
             let mut parameters = vec![
                 json!({
-                    "name": "representation",
+                    "name": "accessProfile",
                     "in": "query",
                     "required": false,
-                    "schema": representation_schema,
-                    "description": "One finite compiled representation. Absence selects the declared default."
+                    "schema": access_profile_schema,
+                    "description": "One finite compiled access profile. Absence selects the declared default."
                 }),
                 json!({
                     "name": "fields",
                     "in": "query",
                     "required": false,
                     "schema": {"type": "string", "minLength": 1},
-                    "description": "Duplicate-free comma-separated subset of the selected representation"
+                    "description": "Duplicate-free comma-separated subset of the selected access profile"
                 }),
             ];
-            let has_geojson = visible_representations
+            let has_geojson = visible_access_profiles
                 .iter()
-                .any(|representation| supports_geojson(resource, representation));
+                .any(|access_profile| supports_geojson(resource, access_profile));
             if has_geojson {
                 parameters.push(json!({
-                    "name": "profile",
+                    "name": "formatProfile",
                     "in": "query",
                     "required": false,
                     "schema": {"type": "string", "enum": ["rfc7946", "jsonfg"], "default": "rfc7946"},
@@ -693,7 +696,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 }));
             }
             match &operation.kind {
-                OperationKind::List => {
+                OperationKind::List | OperationKind::Search { .. } => {
                     let pagination = operation
                         .query
                         .pagination
@@ -714,7 +717,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                         parameters.push(json!({
                             "name": "bbox",
                             "in": "query",
-                            "required": false,
+                            "required": true,
                             "style": "form",
                             "explode": false,
                             "schema": {
@@ -743,7 +746,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     registry,
                     operation,
                     resource,
-                    &visible_representations,
+                    &visible_access_profiles,
                 )
             });
             if has_geojson {
@@ -764,17 +767,17 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 "operationId": operation.identifier,
                 "x-registry-family": "consultation",
                 "x-registry-pattern": consultation_pattern(operation.pattern),
-                "x-registry-representations": visible_representations.iter().map(|representation| json!({
-                    "identifier": representation.id,
-                    "default": operation.default_representation == representation.id,
-                    "disclosureProfile": representation.disclosure_profile,
-                    "processingHandling": representation.processing_handling,
-                    "disclosureHandling": representation.disclosure_handling,
-                    "transformIdentifiers": representation.transform_inventory,
-                    "schemaReference": representation.schema_reference,
-                    "semanticModelReference": representation.semantic_model_reference,
-                    "contextReference": representation.context_reference,
-                    "formats": response_format_documents(resource, representation),
+                "x-registry-access-profiles": visible_access_profiles.iter().map(|access_profile| json!({
+                    "identifier": access_profile.id,
+                    "default": operation.default_access_profile == access_profile.id,
+                    "disclosureProfile": access_profile.disclosure_profile,
+                    "processingHandling": access_profile.processing_handling,
+                    "disclosureHandling": access_profile.disclosure_handling,
+                    "transformIdentifiers": access_profile.transform_inventory,
+                    "schemaReference": access_profile.schema_reference,
+                    "semanticModelReference": access_profile.semantic_model_reference,
+                    "contextReference": access_profile.context_reference,
+                    "wireFormats": response_format_capabilities(resource, access_profile),
                 })).collect::<Vec<_>>(),
                 "security": security,
                 "parameters": parameters,
@@ -783,12 +786,12 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "default": {"$ref": "#/components/responses/Problem"}
                 }
             });
-            let required_scopes = visible_representations
+            let required_scopes = visible_access_profiles
                 .iter()
-                .filter_map(|representation| match &representation.access {
+                .filter_map(|access_profile| match &access_profile.access {
                     CompiledAccess::Public => None,
                     CompiledAccess::Protected { scope, .. } => Some(json!({
-                        "representation": representation.id,
+                        "accessProfile": access_profile.id,
                         "scope": scope,
                     })),
                 })
@@ -889,20 +892,20 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
 
 fn operation_response_schema(
     operation: &crate::model::CompiledOperation,
-    representations: &[&crate::model::CompiledRepresentation],
+    access_profiles: &[&crate::model::CompiledAccessProfile],
 ) -> Value {
     let meta = json!({"type": "object"});
-    let record = if representations.len() == 1 {
-        json!({"$ref": representations[0].schema_reference})
+    let record = if access_profiles.len() == 1 {
+        json!({"$ref": access_profiles[0].schema_reference})
     } else {
         json!({
-            "oneOf": representations.iter().map(|representation| {
-                json!({"$ref": representation.schema_reference})
+            "oneOf": access_profiles.iter().map(|access_profile| {
+                json!({"$ref": access_profile.schema_reference})
             }).collect::<Vec<_>>()
         })
     };
     match &operation.kind {
-        OperationKind::List => json!({
+        OperationKind::List | OperationKind::Search { .. } => json!({
             "type": "object", "additionalProperties": false,
             "required": ["items", "pageInfo", "meta"],
             "properties": {
@@ -930,9 +933,9 @@ fn operation_response_content(
     registry: &CompiledRegistry,
     operation: &CompiledOperation,
     resource: &CompiledResource,
-    representations: &[&crate::model::CompiledRepresentation],
+    access_profiles: &[&crate::model::CompiledAccessProfile],
 ) -> Value {
-    let ordinary = operation_response_schema(operation, representations);
+    let ordinary = operation_response_schema(operation, access_profiles);
     let mut content = Map::from_iter([
         (
             "application/json".into(),
@@ -940,11 +943,11 @@ fn operation_response_content(
         ),
         ("application/ld+json".into(), json!({"schema": ordinary})),
     ]);
-    let spatial = representations
+    let spatial = access_profiles
         .iter()
-        .filter(|representation| supports_geojson(resource, representation))
-        .map(|representation| {
-            geojson_response_schema(registry, operation, representation, resource, false)
+        .filter(|access_profile| supports_geojson(resource, access_profile))
+        .map(|access_profile| {
+            geojson_response_schema(registry, operation, access_profile, resource, false)
         })
         .collect::<Vec<_>>();
     if !spatial.is_empty() {
@@ -961,12 +964,12 @@ fn operation_response_content(
 fn geojson_response_schema(
     registry: &CompiledRegistry,
     operation: &CompiledOperation,
-    representation: &crate::model::CompiledRepresentation,
+    access_profile: &crate::model::CompiledAccessProfile,
     resource: &CompiledResource,
     include_identity: bool,
 ) -> Value {
     let mut schema = match &operation.kind {
-        OperationKind::List => json!({
+        OperationKind::List | OperationKind::Search { .. } => json!({
             "type": "object",
             "additionalProperties": false,
             "required": ["type", "features", "pageInfo", "meta"],
@@ -974,7 +977,7 @@ fn geojson_response_schema(
                 "type": {"type": "string", "enum": ["FeatureCollection"]},
                 "features": {
                     "type": "array",
-                    "items": geojson_feature_schema(registry, representation, resource, false)
+                    "items": geojson_feature_schema(registry, access_profile, resource, false)
                 },
                 "pageInfo": {
                     "type": "object",
@@ -992,7 +995,7 @@ fn geojson_response_schema(
             }
         }),
         OperationKind::Read | OperationKind::Lookup { .. } => {
-            geojson_feature_schema(registry, representation, resource, true)
+            geojson_feature_schema(registry, access_profile, resource, true)
         }
     };
     if include_identity {
@@ -1008,11 +1011,11 @@ fn geojson_response_schema(
             .expect("GeoJSON schema object")
             .insert(
                 "$id".into(),
-                json!(representation
+                json!(access_profile
                     .schema_reference
                     .strip_suffix("-schema")
                     .map(|base| format!("{base}-geojson-schema"))
-                    .unwrap_or_else(|| format!("{}-geojson", representation.schema_reference))),
+                    .unwrap_or_else(|| format!("{}-geojson", access_profile.schema_reference))),
             );
     }
     schema
@@ -1020,7 +1023,7 @@ fn geojson_response_schema(
 
 fn geojson_feature_schema(
     registry: &CompiledRegistry,
-    representation: &crate::model::CompiledRepresentation,
+    access_profile: &crate::model::CompiledAccessProfile,
     resource: &CompiledResource,
     require_meta: bool,
 ) -> Value {
@@ -1039,7 +1042,7 @@ fn geojson_feature_schema(
         "geometry": {
             "oneOf": [point_geometry_schema(), {"type": "null"}]
         },
-        "properties": geojson_record_properties_schema(registry, representation, resource)
+        "properties": geojson_record_properties_schema(registry, access_profile, resource)
     });
     if require_meta {
         let properties = properties
@@ -1075,25 +1078,25 @@ fn geojson_feature_schema(
 
 fn geojson_record_properties_schema(
     registry: &CompiledRegistry,
-    representation: &crate::model::CompiledRepresentation,
+    access_profile: &crate::model::CompiledAccessProfile,
     resource: &CompiledResource,
 ) -> Value {
     let geometry_name = resource
         .primary_geometry
         .as_ref()
         .map(|geometry| geometry.name.as_str());
-    let selected = representation
+    let selected = access_profile
         .selectable_properties
         .iter()
         .filter(|property| Some(property.as_str()) != geometry_name)
         .cloned()
         .collect::<Vec<_>>();
-    let mut schema = representation_schema(
+    let mut schema = access_profile_schema(
         registry,
         resource,
         &selected,
-        &representation.schema_reference,
-        &representation.semantic_model_reference,
+        &access_profile.schema_reference,
+        &access_profile.semantic_model_reference,
     );
     let object = schema
         .as_object_mut()
@@ -1145,55 +1148,6 @@ fn consultation_pattern(pattern: ConsultationPattern) -> &'static str {
     }
 }
 
-fn supports_geojson(
-    resource: &CompiledResource,
-    representation: &crate::model::CompiledRepresentation,
-) -> bool {
-    resource.primary_geometry.as_ref().is_some_and(|geometry| {
-        representation
-            .selectable_properties
-            .iter()
-            .any(|property| property == &geometry.name)
-    })
-}
-
-fn response_format_documents(
-    resource: &CompiledResource,
-    representation: &crate::model::CompiledRepresentation,
-) -> Vec<Value> {
-    let mut formats = vec![
-        json!({"id": "json", "mediaType": "application/json", "profiles": []}),
-        json!({"id": "json-ld", "mediaType": "application/ld+json", "profiles": []}),
-    ];
-    if supports_geojson(resource, representation) {
-        formats.push(json!({
-            "id": "geojson",
-            "mediaType": "application/geo+json",
-            "profiles": [
-                representation_profile(RepresentationProfile::Rfc7946),
-                representation_profile(RepresentationProfile::JsonFg),
-            ],
-        }));
-    }
-    formats
-}
-
-fn representation_profile(profile: RepresentationProfile) -> Value {
-    match profile {
-        RepresentationProfile::Rfc7946 => json!({
-            "id": "rfc7946",
-            "uri": RFC7946_PROFILE_URI,
-            "crs": CRS84_URI,
-        }),
-        RepresentationProfile::JsonFg => json!({
-            "id": "jsonfg",
-            "uri": JSON_FG_PROFILE_URI,
-            "crs": CRS84_URI,
-            "conformsTo": [JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE],
-        }),
-    }
-}
-
 fn openapi_type(data_type: crate::contract::DataType) -> Value {
     use crate::contract::DataType;
     match data_type {
@@ -1219,7 +1173,7 @@ fn openapi_type(data_type: crate::contract::DataType) -> Value {
 enum CapabilityProjection<'a> {
     Public,
     Full,
-    Representation(&'a str, &'a str),
+    AccessProfile(&'a str, &'a str),
 }
 
 fn capability_inventory(
@@ -1231,18 +1185,18 @@ fn capability_inventory(
         .iter()
         .flat_map(|resource| {
             resource.operations.iter().flat_map(move |operation| {
-                operation.representations.iter().filter_map(move |representation| {
+                operation.access_profiles.iter().filter_map(move |access_profile| {
                     let include = match projection {
                         CapabilityProjection::Public => {
-                            matches!(&representation.access, CompiledAccess::Public)
+                            matches!(&access_profile.access, CompiledAccess::Public)
                         }
                         CapabilityProjection::Full => true,
-                        CapabilityProjection::Representation(
+                        CapabilityProjection::AccessProfile(
                             operation_identifier,
-                            representation_identifier,
+                            access_profile_identifier,
                         ) => {
                             operation.identifier == operation_identifier
-                                && representation.id == representation_identifier
+                                && access_profile.id == access_profile_identifier
                         }
                     };
                     if !include {
@@ -1252,19 +1206,25 @@ fn capability_inventory(
                         OperationKind::List => "list",
                         OperationKind::Read => "retrieve",
                         OperationKind::Lookup { .. } => "search",
+                        OperationKind::Search { .. } => "search",
                     };
                     Some(json!({
                         "resource": resource.id,
                         "operationIdentifier": operation.identifier,
-                        "representationIdentifier": representation.id,
-                        "defaultRepresentation": operation.default_representation == representation.id,
+                        "accessProfileIdentifier": access_profile.id,
+                        "defaultAccessProfile": operation.default_access_profile == access_profile.id,
                         "family": "consultation",
                         "pattern": pattern,
-                        "profile": if matches!(&operation.kind, OperationKind::Lookup { .. }) { Value::String("exact".into()) } else { Value::Null },
-                        "schemaReference": representation.schema_reference,
-                        "semanticModelReference": representation.semantic_model_reference,
-                        "contextReference": representation.context_reference,
-                        "formats": response_format_documents(resource, representation),
+                        "queryKind": match &operation.kind {
+                            OperationKind::List => "list",
+                            OperationKind::Read => "record-identifier",
+                            OperationKind::Lookup { .. } => "exact-lookup",
+                            OperationKind::Search { .. } => "point-bbox",
+                        },
+                        "schemaReference": access_profile.schema_reference,
+                        "semanticModelReference": access_profile.semantic_model_reference,
+                        "contextReference": access_profile.context_reference,
+                        "wireFormats": response_format_capabilities(resource, access_profile),
                         "spatialQuery": operation.query.spatial_bbox.as_ref().map(|spatial| json!({
                             "bbox": {
                                 "crs": CRS84_URI,
@@ -1313,7 +1273,7 @@ fn audit_event_schema() -> Value {
             "accessRuleRevision": {"type": "string", "minLength": 1},
             "purpose": {"type": "string", "minLength": 1},
             "rowBoundaryKind": {"enum": ["none", "principal", "verified-claim", "unknown"]},
-            "representation": {"type": "string", "minLength": 1},
+            "accessProfile": {"type": "string", "minLength": 1},
             "disclosureProfile": {"type": "string", "minLength": 1},
             "processingDescriptionIdentifiers": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
             "selectedProperties": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
@@ -1346,6 +1306,7 @@ mod tests {
     use super::*;
     use crate::compiler::{compile_contract_with_governed_files, tests as compiler_tests};
     use crate::contract::RegistryContract;
+    use crate::format_capabilities::JSON_FG_PROFILE_URI;
     use crate::model::{CompileProfile, CompiledRegistry};
 
     #[test]
@@ -1375,10 +1336,10 @@ mod tests {
             "artifacts/record.full.schema.json",
             "artifacts/record.full.shacl.ttl",
             "artifacts/record.full.vocabulary.jsonld",
-            "artifacts/record--read--representation-public.schema.json",
-            "artifacts/record--read--representation-public.shacl.ttl",
-            "artifacts/record--read--representation-public.context.jsonld",
-            "artifacts/record--read--representation-public.vocabulary.jsonld",
+            "artifacts/record--read--access-profile-public.schema.json",
+            "artifacts/record--read--access-profile-public.shacl.ttl",
+            "artifacts/record--read--access-profile-public.context.jsonld",
+            "artifacts/record--read--access-profile-public.vocabulary.jsonld",
         ] {
             assert!(paths.contains(required), "missing {required}");
         }
@@ -1471,7 +1432,7 @@ mod tests {
             &compiler_tests::governed_files(),
         )
         .expect("contract compiles");
-        registry.resources[0].operations[0].representations[0].access = CompiledAccess::Protected {
+        registry.resources[0].operations[0].access_profiles[0].access = CompiledAccess::Protected {
             scope: "records:read".into(),
             purpose: None,
             row_binding: None,
@@ -1481,12 +1442,12 @@ mod tests {
         registry.metadata_visibility.processing = Visibility::OperationBound;
         let generated = generate_artifacts(&registry).expect("artifacts generate");
         for id in [
-            "record--read--representation-public-vocabulary",
-            "record--read--representation-public-context",
-            "record--read--representation-public-schema",
-            "record--read--representation-public-shacl",
-            "record--read--representation-public-classifications",
-            "record--read--representation-public-processing",
+            "record--read--access-profile-public-vocabulary",
+            "record--read--access-profile-public-context",
+            "record--read--access-profile-public-schema",
+            "record--read--access-profile-public-shacl",
+            "record--read--access-profile-public-classifications",
+            "record--read--access-profile-public-processing",
         ] {
             let artifact = generated
                 .artifacts
@@ -1499,7 +1460,7 @@ mod tests {
                 Some("record.read")
             );
             assert_eq!(
-                artifact.representation_identifier.as_deref(),
+                artifact.access_profile_identifier.as_deref(),
                 Some("public")
             );
         }
@@ -1513,15 +1474,15 @@ mod tests {
                 .artifacts
                 .iter()
                 .find(|artifact| {
-                    artifact.id == "record--read--representation-public-vocabulary"
+                    artifact.id == "record--read--access-profile-public-vocabulary"
                 })
                 .expect("semantic projection")
                 .visibility,
             Visibility::OperationBound
         );
         for id in [
-            "record--read--representation-public-classifications",
-            "record--read--representation-public-processing",
+            "record--read--access-profile-public-classifications",
+            "record--read--access-profile-public-processing",
         ] {
             assert_eq!(
                 generated
@@ -1545,7 +1506,7 @@ mod tests {
         );
 
         let geojson_schema = generated
-            .get("artifacts/record--list--representation-public.geojson.schema.json")
+            .get("artifacts/record--search-within-bbox--access-profile-public.geojson.schema.json")
             .expect("GeoJSON wrapper schema");
         let schema: Value = serde_json::from_slice(&geojson_schema.content).expect("schema JSON");
         assert_eq!(schema["properties"]["type"]["enum"][0], "FeatureCollection");
@@ -1568,7 +1529,7 @@ mod tests {
             .expect("generated GeoJSON schema compiles");
         let resource = &registry.resources[0];
         let operation = &resource.operations[0];
-        let representation = &operation.representations[0];
+        let access_profile = &operation.access_profiles[0];
         let lifecycle = registry.codelists[0].values[0].clone();
         let point = json!({"type": "Point", "coordinates": [100.0, 13.0]});
         let record = json!({
@@ -1576,8 +1537,8 @@ mod tests {
             "recordIdentifier": "record-1",
             "revisionIdentifier": "revision-1",
             "lifecycleState": lifecycle,
-            "schemaReference": representation.schema_reference,
-            "semanticModelReference": representation.semantic_model_reference,
+            "schemaReference": access_profile.schema_reference,
+            "semanticModelReference": access_profile.semantic_model_reference,
             "authorityIdentifier": registry.authority_identifier,
             "recordedAt": "2026-08-10T00:00:00Z",
             "domainData": {"name": "Example"}
@@ -1628,7 +1589,7 @@ mod tests {
         .expect("OpenAPI JSON");
         serde_json::from_value::<utoipa::openapi::OpenApi>(openapi.clone())
             .expect("spatial OpenAPI conforms to the maintained OpenAPI model");
-        let operation = &openapi["paths"]["/v2/resources/record/records"]["get"];
+        let operation = &openapi["paths"]["/v2/resources/record/searches/within-bbox"]["get"];
         assert_eq!(operation["x-registry-pattern"], "search");
         assert!(operation["responses"]["200"]["content"]
             .get("application/geo+json")
@@ -1641,11 +1602,35 @@ mod tests {
             .expect("bbox parameter");
         assert_eq!(bbox["schema"]["minItems"], 4);
         assert_eq!(bbox["explode"], false);
+        assert_eq!(bbox["required"], true);
+        assert!(operation["parameters"]
+            .as_array()
+            .expect("parameters")
+            .iter()
+            .any(|parameter| parameter["name"] == "accessProfile"));
+        assert!(operation["parameters"]
+            .as_array()
+            .expect("parameters")
+            .iter()
+            .any(|parameter| parameter["name"] == "formatProfile"));
+        let expected_formats =
+            serde_json::to_value(response_format_capabilities(resource, access_profile))
+                .expect("format capabilities serialize");
+        assert_eq!(
+            operation["x-registry-access-profiles"][0]["wireFormats"],
+            expected_formats
+        );
 
         let capabilities = generated
             .get("artifacts/capabilities.json")
             .expect("public capabilities");
         let encoded = String::from_utf8(capabilities.content.clone()).expect("UTF-8 capability");
+        let capability_document: Value =
+            serde_json::from_slice(&capabilities.content).expect("capability JSON");
+        assert_eq!(
+            capability_document["capabilities"][0]["wireFormats"],
+            expected_formats
+        );
         assert!(encoded.contains("exact-point-intersection"));
         assert!(encoded.contains(JSON_FG_PROFILE_URI));
         assert!(!encoded.contains("longitude_col"));
@@ -1683,14 +1668,16 @@ mod tests {
         assert!(!public_openapi.contains("exact-point-intersection"));
         assert!(!public_capabilities.contains("application/geo+json"));
         assert!(!public_capabilities.contains("exact-point-intersection"));
+        assert!(!public_openapi.contains("/searches/within-bbox"));
+        assert!(!public_capabilities.contains("record.search.within-bbox"));
 
         let operation_capability = generated
-            .get("artifacts/record--list--representation-public.capability.json")
+            .get("artifacts/record--search-within-bbox--access-profile-public.capability.json")
             .expect("operation-bound capability");
         assert_eq!(operation_capability.visibility, Visibility::OperationBound);
         assert_eq!(
             operation_capability.operation_identifier.as_deref(),
-            Some("record.list")
+            Some("record.search.within-bbox")
         );
         let encoded = String::from_utf8(operation_capability.content.clone())
             .expect("UTF-8 operation capability");
@@ -1709,7 +1696,7 @@ mod tests {
             &governed_files,
         )
         .expect("contract compiles");
-        registry.resources[0].operations[0].representations[0].access = access;
+        registry.resources[0].operations[0].access_profiles[0].access = access;
         registry
     }
 }

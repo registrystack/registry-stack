@@ -10,29 +10,36 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::contract::{
-    AccessRule, AuthorityRowBinding, ClassificationPartial, DataType, DateInputType, DatePrecision,
-    Handling, IdentificationMethod, RegistryContract, RepresentationDefinition, ReviewStatus,
-    SourceProfile, TransformDefinition,
+    AccessProfileDefinition, AccessRule, AuthorityRowBinding, ClassificationPartial, DataType,
+    DateInputType, DatePrecision, Handling, IdentificationMethod, RegistryContract, ReviewStatus,
+    SearchQueryDefinition, SourceProfile, TransformDefinition,
 };
 use crate::model::{
     CapabilityFamily, ColumnAccount, ColumnUse, CompileProfile, CompileReport, CompiledAccess,
-    CompiledClassificationReview, CompiledCodelist, CompiledDisclosureProfile, CompiledFilter,
-    CompiledGeneratedIdentificationBinding, CompiledGovernedFile, CompiledMetadataVisibility,
-    CompiledOperation, CompiledPagination, CompiledPrimaryGeometry, CompiledProperty,
-    CompiledPurpose, CompiledRecordContext, CompiledRegistry, CompiledRepresentation,
-    CompiledResource, CompiledRowBinding, CompiledSelector, CompiledSource,
+    CompiledAccessProfile, CompiledClassificationReview, CompiledCodelist,
+    CompiledDisclosureProfile, CompiledFilter, CompiledGeneratedIdentificationBinding,
+    CompiledGovernedFile, CompiledMetadataVisibility, CompiledOperation, CompiledPagination,
+    CompiledPrimaryGeometry, CompiledProperty, CompiledPurpose, CompiledRecordContext,
+    CompiledRegistry, CompiledResource, CompiledRowBinding, CompiledSelector, CompiledSource,
     CompiledSpatialBboxQuery, CompiledTransform, ConsultationPattern, Diagnostic,
     DiagnosticSeverity, EffectiveClassification, ObservedSourceSchema, OperationKind, QueryPlan,
     RowAuthoritySource, StarterColumn, StarterContract,
 };
 
 const API_VERSION: &str = "relay.registrystack.org/v2alpha1";
-const RESERVED_PARAMETERS: [&str; 4] = ["pageSize", "cursor", "fields", "representation"];
+const RESERVED_PARAMETERS: [&str; 5] = [
+    "pageSize",
+    "cursor",
+    "fields",
+    "accessProfile",
+    "formatProfile",
+];
 const MAXIMUM_RESOURCES: usize = 128;
 const MAXIMUM_PROPERTIES_PER_RESOURCE: usize = 128;
 const MAXIMUM_DISCLOSURE_PROFILES_PER_RESOURCE: usize = 64;
-const MAXIMUM_REPRESENTATIONS_PER_OPERATION: usize = 16;
-const MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY: usize = 128;
+const MAXIMUM_ACCESS_PROFILES_PER_OPERATION: usize = 16;
+const MAXIMUM_ACCESS_PROFILE_EXECUTORS_PER_REGISTRY: usize = 128;
+const MAXIMUM_SEARCHES_PER_RESOURCE: usize = 32;
 const MAXIMUM_LIST_FILTERS: usize = 32;
 const MAXIMUM_LIST_ORDER_KEYS: usize = 32;
 const MAXIMUM_LIST_PAGE_SIZE: u32 = 1_000;
@@ -97,16 +104,16 @@ pub fn compile_contract(
     let mut compiler = Compiler::new(contract, observed, profile);
     compiler.validate_top_level();
     let resources = compiler.compile_resources();
-    let representation_executors = resources
+    let access_profile_executors = resources
         .iter()
         .flat_map(|resource| &resource.operations)
-        .map(|operation| operation.representations.len())
+        .map(|operation| operation.access_profiles.len())
         .sum::<usize>();
-    if representation_executors > MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY {
+    if access_profile_executors > MAXIMUM_ACCESS_PROFILE_EXECUTORS_PER_REGISTRY {
         compiler.error(
-            "representation.registry_bound_exceeded",
+            "access_profile.registry_bound_exceeded",
             "resources",
-            "the compiled representation count exceeds the Registry runtime ceiling",
+            "the compiled access profile count exceeds the Registry runtime ceiling",
         );
     }
     compiler.validate_observed_source_closure();
@@ -1199,8 +1206,8 @@ impl<'a> Compiler<'a> {
                     &root,
                     "read",
                     OperationKind::Read,
-                    &read.default_representation,
-                    &read.representations,
+                    &read.default_access_profile,
+                    &read.access_profiles,
                 ) {
                     operations.push(operation);
                 }
@@ -1313,13 +1320,57 @@ impl<'a> Compiler<'a> {
                     OperationKind::Lookup {
                         name: lookup.id.clone(),
                     },
-                    &lookup.default_representation,
-                    &lookup.representations,
+                    &lookup.default_access_profile,
+                    &lookup.access_profiles,
                 ) {
                     operation.identifier = format!("{}.lookup.{}", resource.id, lookup.id);
                     operation.query.selectors = selectors;
                     operation.query.maximum_request_body_bytes =
                         Some(lookup.request_body.maximum_bytes);
+                    operations.push(operation);
+                }
+            }
+            if resource.operations.searches.len() > MAXIMUM_SEARCHES_PER_RESOURCE {
+                self.error(
+                    "operation.search_bound_exceeded",
+                    &format!("{root}.operations.searches"),
+                    "the named search count exceeds the per-resource product ceiling",
+                );
+            }
+            let mut search_ids = HashSet::new();
+            for (search_index, search) in resource.operations.searches.iter().enumerate() {
+                let location = format!("{root}.operations.searches[{search_index}]");
+                if !search_ids.insert(search.id.as_str()) {
+                    self.error(
+                        "operation.search_id_duplicate",
+                        &format!("{location}.id"),
+                        "search identifiers must be unique within a resource",
+                    );
+                }
+                if !valid_kebab_identifier(&search.id) {
+                    self.error(
+                        "operation.search_id_invalid",
+                        &format!("{location}.id"),
+                        "search identifiers must be URL-safe kebab case",
+                    );
+                }
+                if source.profile == SourceProfile::LiveReadOnly {
+                    self.error(
+                        "operation.search_live_forbidden",
+                        &location,
+                        "Version one live sources cannot compile a collection search",
+                    );
+                }
+                if let Some(operation) = self.compile_search(
+                    resource,
+                    &properties,
+                    primary_geometry.as_ref(),
+                    &disclosures,
+                    observed_view,
+                    observed_columns.as_ref(),
+                    &location,
+                    search,
+                ) {
                     operations.push(operation);
                 }
             }
@@ -1418,59 +1469,62 @@ impl<'a> Compiler<'a> {
         root: &str,
         operation_location: &str,
         kind: OperationKind,
-        default_representation: &str,
-        representation_definitions: &crate::contract::OrderedMap<RepresentationDefinition>,
+        default_access_profile: &str,
+        access_profile_definitions: &crate::contract::OrderedMap<AccessProfileDefinition>,
     ) -> Option<CompiledOperation> {
-        let location = if operation_location == "lookup" {
+        let location = if matches!(operation_location, "lookup" | "search") {
             root.to_owned()
         } else {
             format!("{root}.operations.{operation_location}")
         };
-        if representation_definitions.is_empty() {
+        if access_profile_definitions.is_empty() {
             self.error(
-                "representation.none",
-                &format!("{location}.representations"),
-                "an operation must declare at least one finite representation",
+                "access_profile.none",
+                &format!("{location}.accessProfiles"),
+                "an operation must declare at least one finite access profile",
             );
             return None;
         }
-        if representation_definitions.len() > MAXIMUM_REPRESENTATIONS_PER_OPERATION {
+        if access_profile_definitions.len() > MAXIMUM_ACCESS_PROFILES_PER_OPERATION {
             self.error(
-                "representation.bound_exceeded",
-                &format!("{location}.representations"),
-                "the representation count exceeds the per-operation product ceiling",
+                "access_profile.bound_exceeded",
+                &format!("{location}.accessProfiles"),
+                "the access profile count exceeds the per-operation product ceiling",
             );
         }
-        if !valid_kebab_identifier(default_representation)
-            || representation_definitions
-                .get(default_representation)
+        if !valid_kebab_identifier(default_access_profile)
+            || access_profile_definitions
+                .get(default_access_profile)
                 .is_none()
         {
             self.error(
-                "representation.default_invalid",
-                &format!("{location}.defaultRepresentation"),
-                "the explicit default must name exactly one declared representation",
+                "access_profile.default_invalid",
+                &format!("{location}.defaultAccessProfile"),
+                "the explicit default must name exactly one declared access profile",
             );
         }
         let identifier = match &kind {
             OperationKind::Read => format!("{}.read", resource.id),
             OperationKind::List => format!("{}.list", resource.id),
             OperationKind::Lookup { name } => format!("{}.lookup.{name}", resource.id),
+            OperationKind::Search { name } => format!("{}.search.{name}", resource.id),
         };
         let pattern = match &kind {
             OperationKind::List => ConsultationPattern::List,
             OperationKind::Read => ConsultationPattern::Retrieve,
-            OperationKind::Lookup { .. } => ConsultationPattern::Search,
+            OperationKind::Lookup { .. } | OperationKind::Search { .. } => {
+                ConsultationPattern::Search
+            }
         };
         let artifact_stem = operation_artifact_stem(&resource.id, &kind);
-        let mut representations = Vec::with_capacity(representation_definitions.len());
-        for (representation_id, definition) in representation_definitions.iter() {
-            let representation_location = format!("{location}.representations.{representation_id}");
-            if !valid_kebab_identifier(representation_id) {
+        let mut access_profiles = Vec::with_capacity(access_profile_definitions.len());
+        for (access_profile_id, definition) in access_profile_definitions.iter() {
+            let access_profile_location = format!("{location}.accessProfiles.{access_profile_id}");
+            if !valid_kebab_identifier(access_profile_id) {
                 self.error(
-                    "representation.id_invalid",
-                    &representation_location,
-                    "representation identifiers must be URL-safe kebab case",
+                    "access_profile.id_invalid",
+                    &access_profile_location,
+                    "access profile identifiers must be URL-safe kebab case",
                 );
             }
             let Some(disclosure) = disclosures
@@ -1478,16 +1532,16 @@ impl<'a> Compiler<'a> {
                 .find(|item| item.id == definition.disclosure_profile)
             else {
                 self.error(
-                    "representation.disclosure_unknown",
-                    &format!("{representation_location}.disclosureProfile"),
-                    "the representation names no disclosure profile",
+                    "access_profile.disclosure_unknown",
+                    &format!("{access_profile_location}.disclosureProfile"),
+                    "the access profile names no disclosure profile",
                 );
                 continue;
             };
             let Some(access) = self.compile_access(
                 &definition.access,
                 observed_columns,
-                &representation_location,
+                &access_profile_location,
             ) else {
                 continue;
             };
@@ -1495,13 +1549,13 @@ impl<'a> Compiler<'a> {
                 &mut self.report,
                 disclosure,
                 &access,
-                matches!(&kind, OperationKind::List),
-                &representation_location,
+                matches!(&kind, OperationKind::List | OperationKind::Search { .. }),
+                &access_profile_location,
             );
-            let representation_artifact_stem =
-                format!("{artifact_stem}--representation-{representation_id}");
-            representations.push(CompiledRepresentation {
-                id: representation_id.to_owned(),
+            let access_profile_artifact_stem =
+                format!("{artifact_stem}--access-profile-{access_profile_id}");
+            access_profiles.push(CompiledAccessProfile {
+                id: access_profile_id.to_owned(),
                 access,
                 disclosure_profile: disclosure.id.clone(),
                 selectable_properties: disclosure.properties.clone(),
@@ -1529,32 +1583,32 @@ impl<'a> Compiler<'a> {
                     .collect(),
                 schema_reference: artifact_url(
                     &self.contract.registry.base_uri,
-                    &format!("{representation_artifact_stem}-schema"),
+                    &format!("{access_profile_artifact_stem}-schema"),
                 ),
                 semantic_model_reference: artifact_url(
                     &self.contract.registry.base_uri,
-                    &format!("{representation_artifact_stem}-vocabulary"),
+                    &format!("{access_profile_artifact_stem}-vocabulary"),
                 ),
                 context_reference: artifact_url(
                     &self.contract.registry.base_uri,
-                    &format!("{representation_artifact_stem}-context"),
+                    &format!("{access_profile_artifact_stem}-context"),
                 ),
             });
         }
-        if representations
+        if access_profiles
             .iter()
-            .any(|representation| matches!(representation.access, CompiledAccess::Public))
-            && representations
+            .any(|access_profile| matches!(access_profile.access, CompiledAccess::Public))
+            && access_profiles
                 .iter()
-                .find(|representation| representation.id == default_representation)
-                .is_some_and(|representation| {
-                    !matches!(representation.access, CompiledAccess::Public)
+                .find(|access_profile| access_profile.id == default_access_profile)
+                .is_some_and(|access_profile| {
+                    !matches!(access_profile.access, CompiledAccess::Public)
                 })
         {
             self.error(
-                "representation.public_default_required",
-                &format!("{location}.defaultRepresentation"),
-                "an operation with a public representation must use a public default",
+                "access_profile.public_default_required",
+                &format!("{location}.defaultAccessProfile"),
+                "an operation with a public access profile must use a public default",
             );
         }
         Some(CompiledOperation {
@@ -1562,8 +1616,8 @@ impl<'a> Compiler<'a> {
             family: CapabilityFamily::Consultation,
             pattern,
             kind,
-            default_representation: default_representation.to_owned(),
-            representations,
+            default_access_profile: default_access_profile.to_owned(),
+            access_profiles,
             query: QueryPlan {
                 source: resource.source.source.clone(),
                 view: resource.source.view.clone(),
@@ -1599,8 +1653,8 @@ impl<'a> Compiler<'a> {
             root,
             "list",
             OperationKind::List,
-            &list.default_representation,
-            &list.representations,
+            &list.default_access_profile,
+            &list.access_profiles,
         )?;
         let location = format!("{root}.operations.list");
         if list.filters.len() > MAXIMUM_LIST_FILTERS {
@@ -1617,48 +1671,12 @@ impl<'a> Compiler<'a> {
                 "the governed order-key count exceeds the product ceiling",
             );
         }
-        if list.filters.is_empty() && list.spatial_query.is_none() && !list.allow_unfiltered {
+        if list.filters.is_empty() && !list.allow_unfiltered {
             self.error(
                 "list.no_reachable_query",
                 &location,
                 "a list without filters must allow the empty filter set",
             );
-        }
-        if let Some(spatial_query) = &list.spatial_query {
-            let Some(geometry) = primary_geometry else {
-                self.error(
-                    "list.spatial_query_without_geometry",
-                    &format!("{location}.spatialQuery"),
-                    "a bbox query requires a compiled primary geometry",
-                );
-                return Some(operation);
-            };
-            let bbox = &spatial_query.bbox;
-            if geometry.classification.privacy != "non-personal" {
-                self.error(
-                    "list.bbox_personal_forbidden",
-                    &format!("{location}.spatialQuery.bbox"),
-                    "the initial bbox search profile permits only non-personal geometry",
-                );
-            }
-            if bbox.maximum_longitude_span_degrees == 0
-                || bbox.maximum_longitude_span_degrees > 360
-                || bbox.maximum_latitude_span_degrees == 0
-                || bbox.maximum_latitude_span_degrees > 180
-            {
-                self.error(
-                    "list.bbox_bound_invalid",
-                    &format!("{location}.spatialQuery.bbox"),
-                    "bbox spans must be positive and no larger than the CRS84 world extent",
-                );
-            }
-            operation.pattern = ConsultationPattern::Search;
-            operation.query.spatial_bbox = Some(CompiledSpatialBboxQuery {
-                longitude_column: geometry.longitude_column.clone(),
-                latitude_column: geometry.latitude_column.clone(),
-                maximum_longitude_span_degrees: bbox.maximum_longitude_span_degrees,
-                maximum_latitude_span_degrees: bbox.maximum_latitude_span_degrees,
-            });
         }
         if list.pagination.default_page_size == 0
             || list.pagination.maximum_page_size == 0
@@ -1820,6 +1838,175 @@ impl<'a> Compiler<'a> {
         operation.query.pagination = Some(CompiledPagination {
             default_page_size: list.pagination.default_page_size,
             maximum_page_size: list.pagination.maximum_page_size,
+        });
+        Some(operation)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_search(
+        &mut self,
+        resource: &crate::contract::ResourceDefinition,
+        properties: &[CompiledProperty],
+        primary_geometry: Option<&CompiledPrimaryGeometry>,
+        disclosures: &[CompiledDisclosureProfile],
+        observed_view: Option<&crate::model::ObservedView>,
+        observed_columns: Option<&BTreeSet<&str>>,
+        location: &str,
+        search: &crate::contract::SearchOperation,
+    ) -> Option<CompiledOperation> {
+        let mut operation = self.compile_simple_operation(
+            resource,
+            properties,
+            primary_geometry,
+            disclosures,
+            observed_columns,
+            location,
+            "search",
+            OperationKind::Search {
+                name: search.id.clone(),
+            },
+            &search.default_access_profile,
+            &search.access_profiles,
+        )?;
+        let Some(geometry) = primary_geometry else {
+            self.error(
+                "search.point_bbox_without_geometry",
+                &format!("{location}.query"),
+                "a point-bbox search requires one compiled primary geometry",
+            );
+            return Some(operation);
+        };
+        if geometry.classification.privacy != "non-personal" {
+            self.error(
+                "search.point_bbox_personal_forbidden",
+                &format!("{location}.query"),
+                "the point-bbox search profile permits only non-personal geometry",
+            );
+        }
+        let SearchQueryDefinition::PointBbox {
+            maximum_longitude_span_degrees,
+            maximum_latitude_span_degrees,
+        } = &search.query;
+        if *maximum_longitude_span_degrees == 0
+            || *maximum_longitude_span_degrees > 360
+            || *maximum_latitude_span_degrees == 0
+            || *maximum_latitude_span_degrees > 180
+        {
+            self.error(
+                "search.point_bbox_bound_invalid",
+                &format!("{location}.query"),
+                "point-bbox spans must be positive and no larger than the CRS84 world extent",
+            );
+        }
+        operation.query.spatial_bbox = Some(CompiledSpatialBboxQuery {
+            longitude_column: geometry.longitude_column.clone(),
+            latitude_column: geometry.latitude_column.clone(),
+            maximum_longitude_span_degrees: *maximum_longitude_span_degrees,
+            maximum_latitude_span_degrees: *maximum_latitude_span_degrees,
+        });
+
+        if search.order_by.len() > MAXIMUM_LIST_ORDER_KEYS {
+            self.error(
+                "search.order_bound_exceeded",
+                &format!("{location}.orderBy"),
+                "the governed order-key count exceeds the product ceiling",
+            );
+        }
+        let mut order = HashSet::new();
+        let mut order_columns = HashSet::new();
+        for (index, property_name) in search.order_by.iter().enumerate() {
+            if !order.insert(property_name.as_str()) {
+                self.error(
+                    "search.order_duplicate",
+                    &format!("{location}.orderBy"),
+                    "fixed search order keys must be unique",
+                );
+            }
+            match properties
+                .iter()
+                .find(|property| property.name == *property_name)
+            {
+                Some(property) => {
+                    if property.transform.is_some() {
+                        self.error(
+                            "search.order_property_transformed",
+                            &format!("{location}.orderBy[{index}]"),
+                            "transformed properties cannot be fixed search order keys",
+                        );
+                        continue;
+                    }
+                    if !property.source_required {
+                        self.error(
+                            "search.order_property_optional",
+                            &format!("{location}.orderBy"),
+                            "fixed search order properties must be required",
+                        );
+                    }
+                    if !cursor_order_type_supported(property.data_type) {
+                        self.error(
+                            "search.order_property_type_unsupported",
+                            &format!("{location}.orderBy"),
+                            "fixed search order properties must use a cursor-supported scalar shape",
+                        );
+                    }
+                    if !order_columns.insert(property.source_column.as_str()) {
+                        self.error(
+                            "search.order_column_duplicate",
+                            &format!("{location}.orderBy"),
+                            "fixed search order properties must resolve to distinct source columns",
+                        );
+                    }
+                    self.validate_cursor_order_column(
+                        observed_view,
+                        &property.source_column,
+                        property.data_type,
+                        &format!("{location}.orderBy"),
+                    );
+                    operation
+                        .query
+                        .order_by
+                        .push(property.source_column.clone());
+                }
+                None => self.error(
+                    "search.order_property_unknown",
+                    &format!("{location}.orderBy"),
+                    "a fixed search order key must name a published property",
+                ),
+            }
+        }
+        let record_identifier = &resource.record_context.record_identifier.source_column;
+        operation
+            .query
+            .order_by
+            .retain(|column| column != record_identifier);
+        operation.query.order_by.push(record_identifier.clone());
+        self.validate_cursor_order_column(
+            observed_view,
+            record_identifier,
+            DataType::String,
+            &format!("{location}.orderBy"),
+        );
+        if operation.query.order_by.len() > MAXIMUM_LIST_ORDER_KEYS {
+            self.error(
+                "search.order_bound_exceeded",
+                &format!("{location}.orderBy"),
+                "fixed search order keys plus the record-identifier tie-breaker exceed the product ceiling",
+            );
+        }
+        if search.pagination.default_page_size == 0
+            || search.pagination.maximum_page_size == 0
+            || search.pagination.maximum_page_size > MAXIMUM_LIST_PAGE_SIZE
+            || search.pagination.default_page_size > search.pagination.maximum_page_size
+        {
+            self.error(
+                "search.pagination_invalid",
+                &format!("{location}.pagination"),
+                "page bounds must be positive and the default cannot exceed the maximum",
+            );
+        }
+        operation.query.pagination = Some(CompiledPagination {
+            default_page_size: search.pagination.default_page_size,
+            maximum_page_size: search.pagination.maximum_page_size,
         });
         Some(operation)
     }
@@ -2059,16 +2246,16 @@ impl<'a> Compiler<'a> {
                     .or_default()
                     .insert(ColumnUse::Selector(selector.name.clone()));
             }
-            for representation in &operation.representations {
+            for access_profile in &operation.access_profiles {
                 if let CompiledAccess::Protected {
                     row_binding: Some(row_binding),
                     ..
-                } = &representation.access
+                } = &access_profile.access
                 {
                     uses.entry(&row_binding.source_column).or_default().insert(
                         ColumnUse::RowBinding(format!(
                             "{}:{}",
-                            operation.identifier, representation.id
+                            operation.identifier, access_profile.id
                         )),
                     );
                 }
@@ -2209,10 +2396,13 @@ impl<'a> Compiler<'a> {
                 OperationKind::Lookup { name } => {
                     format!("{root}.operations.lookups.{name}")
                 }
+                OperationKind::Search { name } => {
+                    format!("{root}.operations.searches.{name}")
+                }
             };
-            for representation in &mut operation.representations {
+            for access_profile in &mut operation.access_profiles {
                 let mut referenced = BTreeSet::new();
-                referenced.extend(representation.projected_columns.iter().map(String::as_str));
+                referenced.extend(access_profile.projected_columns.iter().map(String::as_str));
                 referenced.extend(
                     operation
                         .query
@@ -2235,34 +2425,37 @@ impl<'a> Compiler<'a> {
                 if let CompiledAccess::Protected {
                     row_binding: Some(binding),
                     ..
-                } = &representation.access
+                } = &access_profile.access
                 {
                     referenced.insert(&binding.source_column);
                 }
-                representation.processing_handling = columns
+                access_profile.processing_handling = columns
                     .iter()
                     .filter(|column| referenced.contains(column.column.as_str()))
                     .fold(Handling::Public, |maximum, column| {
                         maximum.max(column.classification.handling)
                     });
-                let representation_location =
-                    format!("{location}.representations.{}", representation.id);
-                if representation.processing_handling > Handling::Public
-                    && matches!(representation.access, CompiledAccess::Public)
+                let access_profile_location =
+                    format!("{location}.accessProfiles.{}", access_profile.id);
+                if access_profile.processing_handling > Handling::Public
+                    && matches!(access_profile.access, CompiledAccess::Public)
                 {
                     self.error(
                         "access.public_nonpublic_forbidden",
-                        &representation_location,
-                        "anonymous representations may process only public-handling reviewed columns",
+                        &access_profile_location,
+                        "anonymous access profiles may process only public-handling reviewed columns",
                     );
                 }
-                if representation.processing_handling == Handling::Restricted
-                    && matches!(&operation.kind, OperationKind::List)
+                if access_profile.processing_handling == Handling::Restricted
+                    && matches!(
+                        &operation.kind,
+                        OperationKind::List | OperationKind::Search { .. }
+                    )
                 {
                     self.error(
                         "operation.restricted_list_forbidden",
-                        &representation_location,
-                        "restricted reviewed data cannot be processed by a collection list",
+                        &access_profile_location,
+                        "restricted reviewed data cannot be processed by a collection operation",
                     );
                 }
             }
@@ -2280,9 +2473,9 @@ impl<'a> Compiler<'a> {
 
         let has_public = operations.iter().any(|operation| {
             operation
-                .representations
+                .access_profiles
                 .iter()
-                .any(|representation| matches!(representation.access, CompiledAccess::Public))
+                .any(|access_profile| matches!(access_profile.access, CompiledAccess::Public))
         });
         for (name, visibility) in [
             ("resources", self.contract.metadata_visibility.resources),
@@ -2299,7 +2492,7 @@ impl<'a> Compiler<'a> {
             }
         }
         // Classification and processing artifacts are projected per finite
-        // representation. A protected representation is operation-bound even
+        // access profile. A protected access profile is operation-bound even
         // when a public sibling permits public metadata for its own profile.
     }
 
@@ -2345,6 +2538,7 @@ impl<'a> Compiler<'a> {
                     OperationKind::List => reference == "list",
                     OperationKind::Read => reference == "read",
                     OperationKind::Lookup { name } => reference == &format!("lookup:{name}"),
+                    OperationKind::Search { name } => reference == &format!("search:{name}"),
                 });
                 if !present {
                     self.error(
@@ -2414,7 +2608,7 @@ fn revision<T: Serialize>(value: &T) -> Result<String, ()> {
 /// Digest the non-circular inventory an institutional classification review
 /// accepts. Contract revisions, governed file bytes, and review metadata are
 /// deliberately absent; processed source columns, governed properties, query
-/// uses, and finite representation disclosures are present.
+/// uses, and finite access profile disclosures are present.
 pub fn classification_inventory_digest(
     registry: &CompiledRegistry,
 ) -> Result<String, CompileReport> {
@@ -2490,13 +2684,13 @@ pub fn classification_inventory_digest(
     #[serde(rename_all = "camelCase")]
     struct OperationInventory<'a> {
         kind: &'a OperationKind,
-        default_representation: &'a str,
-        representations: Vec<RepresentationInventory<'a>>,
+        default_access_profile: &'a str,
+        access_profiles: Vec<AccessProfileInventory<'a>>,
     }
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct RepresentationInventory<'a> {
+    struct AccessProfileInventory<'a> {
         id: &'a str,
         access: &'a CompiledAccess,
         disclosure_profile: &'a str,
@@ -2569,19 +2763,19 @@ pub fn classification_inventory_digest(
                     .iter()
                     .map(|operation| OperationInventory {
                         kind: &operation.kind,
-                        default_representation: &operation.default_representation,
-                        representations: operation
-                            .representations
+                        default_access_profile: &operation.default_access_profile,
+                        access_profiles: operation
+                            .access_profiles
                             .iter()
-                            .map(|representation| RepresentationInventory {
-                                id: &representation.id,
-                                access: &representation.access,
-                                disclosure_profile: &representation.disclosure_profile,
-                                selectable_properties: &representation.selectable_properties,
-                                projected_columns: &representation.projected_columns,
-                                processing_handling: representation.processing_handling,
-                                disclosure_handling: representation.disclosure_handling,
-                                transform_inventory: &representation.transform_inventory,
+                            .map(|access_profile| AccessProfileInventory {
+                                id: &access_profile.id,
+                                access: &access_profile.access,
+                                disclosure_profile: &access_profile.disclosure_profile,
+                                selectable_properties: &access_profile.selectable_properties,
+                                projected_columns: &access_profile.projected_columns,
+                                processing_handling: access_profile.processing_handling,
+                                disclosure_handling: access_profile.disclosure_handling,
+                                transform_inventory: &access_profile.transform_inventory,
                             })
                             .collect(),
                     })
@@ -3093,8 +3287,8 @@ fn projected_columns(
     ] {
         push_unique(&mut columns, column);
     }
-    // Only the selected finite representation may widen the Registry Core
-    // projection. This is what lets a public representation prove that it
+    // Only the selected finite access profile may widen the Registry Core
+    // projection. This is what lets a public access profile prove that it
     // never processes a hidden non-public source column.
     for name in disclosure {
         if let Some(property) = properties.iter().find(|property| property.name == *name) {
@@ -3304,6 +3498,7 @@ fn operation_artifact_stem(resource: &str, kind: &OperationKind) -> String {
         OperationKind::List => format!("{resource}--list"),
         OperationKind::Read => format!("{resource}--read"),
         OperationKind::Lookup { name } => format!("{resource}--lookup-{name}"),
+        OperationKind::Search { name } => format!("{resource}--search-{name}"),
     }
 }
 
@@ -3426,11 +3621,11 @@ pub(crate) mod tests {
         let second_artifacts = crate::artifacts::generate_artifacts(&second).expect("artifacts");
         assert_eq!(first_artifacts, second_artifacts);
         let operation = &first.resources[0].operations[0];
-        let representation = &operation.representations[0];
+        let access_profile = &operation.access_profiles[0];
         let schema = first_artifacts
             .artifacts
             .iter()
-            .find(|artifact| representation.schema_reference.ends_with(&artifact.id))
+            .find(|artifact| access_profile.schema_reference.ends_with(&artifact.id))
             .expect("operation schema is mounted by its exact artifact identifier");
         assert_eq!(schema.visibility, crate::contract::Visibility::Public);
     }
@@ -3479,8 +3674,8 @@ pub(crate) mod tests {
     fn every_referenced_selector_codelist_must_be_in_the_governed_closure() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: 1024\n            selectors:\n              name: {sourceColumn: name, type: controlled-code, codelist: codelists/selector-names.yaml}\n          defaultRepresentation: public\n          representations:\n            public: {access: public, disclosureProfile: public}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: 1024\n            selectors:\n              name: {sourceColumn: name, type: controlled-code, codelist: codelists/selector-names.yaml}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {access: public, disclosureProfile: public}",
             )
             .replace("operationRefs: [read]", "operationRefs: [lookup:by-name]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict lookup contract");
@@ -3505,8 +3700,8 @@ pub(crate) mod tests {
                 "        semanticTerm: local:name\n      recordId:\n        label: Record identifier\n        description: Stable record identifier\n        sourceColumn: id\n        type: string\n        sourceRequired: true\n        semanticTerm: local:recordId\n    disclosureProfiles",
             )
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [recordId, name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [recordId, name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
@@ -3523,8 +3718,8 @@ pub(crate) mod tests {
     fn optional_and_unsupported_cursor_order_columns_are_refused() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let optional = yaml.replace(
@@ -3569,8 +3764,8 @@ pub(crate) mod tests {
 
         let filtered = transformed
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&filtered).expect("strict filter contract");
@@ -3592,8 +3787,8 @@ pub(crate) mod tests {
 
         let ordered = transformed
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&ordered).expect("strict order contract");
@@ -3618,8 +3813,8 @@ pub(crate) mod tests {
     fn sqlite_view_nullable_metadata_does_not_override_required_order_contract() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
@@ -3639,8 +3834,8 @@ pub(crate) mod tests {
     fn required_record_identifier_tie_breaker_is_included_in_order_cap() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let base = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
@@ -3699,8 +3894,8 @@ pub(crate) mod tests {
     fn classification_inventory_excludes_presentation_and_runtime_tuning() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
@@ -3722,10 +3917,10 @@ pub(crate) mod tests {
             .as_mut()
             .expect("list pagination")
             .maximum_page_size = 99;
-        operation.representations[0].schema_reference = "https://elsewhere.invalid/schema".into();
-        operation.representations[0].semantic_model_reference =
+        operation.access_profiles[0].schema_reference = "https://elsewhere.invalid/schema".into();
+        operation.access_profiles[0].semantic_model_reference =
             "https://elsewhere.invalid/vocabulary".into();
-        operation.representations[0].context_reference = "https://elsewhere.invalid/context".into();
+        operation.access_profiles[0].context_reference = "https://elsewhere.invalid/context".into();
         assert_eq!(
             classification_inventory_digest(&presentation_only).expect("narrow digest"),
             baseline
@@ -3770,7 +3965,7 @@ pub(crate) mod tests {
         );
 
         let mut transform_inventory_changed = compiled.clone();
-        transform_inventory_changed.resources[0].operations[0].representations[0]
+        transform_inventory_changed.resources[0].operations[0].access_profiles[0]
             .transform_inventory
             .push("partial-string:suffix:2".into());
         assert_ne!(
@@ -3780,7 +3975,7 @@ pub(crate) mod tests {
         );
 
         let mut access_changed = compiled.clone();
-        access_changed.resources[0].operations[0].representations[0].access =
+        access_changed.resources[0].operations[0].access_profiles[0].access =
             CompiledAccess::Protected {
                 scope: "registry:changed:read".into(),
                 purpose: None,
@@ -3792,7 +3987,7 @@ pub(crate) mod tests {
         );
 
         let mut disclosure_changed = compiled;
-        disclosure_changed.resources[0].operations[0].representations[0].disclosure_handling =
+        disclosure_changed.resources[0].operations[0].access_profiles[0].disclosure_handling =
             Handling::Internal;
         assert_ne!(
             classification_inventory_digest(&disclosure_changed).expect("disclosure digest"),
@@ -3891,9 +4086,9 @@ pub(crate) mod tests {
     #[test]
     fn governed_query_bounds_cannot_exceed_product_ceilings() {
         let oversized_list = valid_contract().replace(
-            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
             &format!(
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {{access: public, disclosureProfile: public}}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {{defaultPageSize: 1, maximumPageSize: {}}}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {{access: public, disclosureProfile: public}}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {{defaultPageSize: 1, maximumPageSize: {}}}",
                 MAXIMUM_LIST_PAGE_SIZE + 1
             ),
         );
@@ -3911,9 +4106,9 @@ pub(crate) mod tests {
             .any(|item| item.code == "list.pagination_invalid"));
 
         let oversized_lookup = valid_contract().replace(
-            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
             &format!(
-                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: {}\n            selectors:\n              name: {{sourceColumn: name, type: string, maximumBytes: 32}}\n          defaultRepresentation: public\n          representations:\n            public: {{access: {{scope: registry:records:lookup}}, disclosureProfile: public}}",
+                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: {}\n            selectors:\n              name: {{sourceColumn: name, type: string, maximumBytes: 32}}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {{access: {{scope: registry:records:lookup}}, disclosureProfile: public}}",
                 MAXIMUM_LOOKUP_REQUEST_BODY_BYTES + 1
             ),
         );
@@ -3989,44 +4184,44 @@ pub(crate) mod tests {
         }
         assert_refused(&parse_value(disclosures_value), "disclosure.bound_exceeded");
 
-        let mut representations_value = serde_json::to_value(&base).expect("contract serializes");
-        let representations = representations_value
-            .pointer_mut("/resources/0/operations/read/representations")
+        let mut access_profiles_value = serde_json::to_value(&base).expect("contract serializes");
+        let access_profiles = access_profiles_value
+            .pointer_mut("/resources/0/operations/read/accessProfiles")
             .and_then(serde_json::Value::as_object_mut)
-            .expect("representations object");
-        let representation = representations
+            .expect("access_profiles object");
+        let access_profile = access_profiles
             .get("public")
-            .expect("public representation")
+            .expect("public access profile")
             .clone();
-        for index in 1..=MAXIMUM_REPRESENTATIONS_PER_OPERATION {
-            representations.insert(format!("profile-{index}"), representation.clone());
+        for index in 1..=MAXIMUM_ACCESS_PROFILES_PER_OPERATION {
+            access_profiles.insert(format!("profile-{index}"), access_profile.clone());
         }
         assert_refused(
-            &parse_value(representations_value),
-            "representation.bound_exceeded",
+            &parse_value(access_profiles_value),
+            "access_profile.bound_exceeded",
         );
 
-        let mut registry_representations_value =
+        let mut registry_access_profiles_value =
             serde_json::to_value(&base).expect("contract serializes");
-        let registry_representations = registry_representations_value
-            .pointer_mut("/resources/0/operations/read/representations")
+        let registry_access_profiles = registry_access_profiles_value
+            .pointer_mut("/resources/0/operations/read/accessProfiles")
             .and_then(serde_json::Value::as_object_mut)
-            .expect("representations object");
-        let representation = registry_representations
+            .expect("access_profiles object");
+        let access_profile = registry_access_profiles
             .get("public")
-            .expect("public representation")
+            .expect("public access profile")
             .clone();
-        for index in 1..=MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY {
-            registry_representations.insert(format!("profile-{index}"), representation.clone());
+        for index in 1..=MAXIMUM_ACCESS_PROFILE_EXECUTORS_PER_REGISTRY {
+            registry_access_profiles.insert(format!("profile-{index}"), access_profile.clone());
         }
         assert_refused(
-            &parse_value(registry_representations_value),
-            "representation.registry_bound_exceeded",
+            &parse_value(registry_access_profiles_value),
+            "access_profile.registry_bound_exceeded",
         );
 
         let list_yaml = valid_contract().replace(
-            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-            "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 1}",
+            "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+            "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 1}",
         );
         let list_contract = RegistryContract::parse_yaml(&list_yaml).expect("strict list contract");
         let mut filters_value = serde_json::to_value(&list_contract).expect("contract serializes");
@@ -4055,10 +4250,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_operation_with_a_public_representation_requires_a_public_default() {
+    fn an_operation_with_a_public_access_profile_requires_a_public_default() {
         let contract = RegistryContract::parse_yaml(&valid_contract().replace(
-            "defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-            "defaultRepresentation: protected\n        representations:\n          public: {access: public, disclosureProfile: public}\n          protected: {access: {scope: registry:record:protected}, disclosureProfile: public}",
+            "defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+            "defaultAccessProfile: protected\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n          protected: {access: {scope: registry:record:protected}, disclosureProfile: public}",
         ))
         .expect("strict contract");
         let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
@@ -4066,24 +4261,24 @@ pub(crate) mod tests {
         assert!(report
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "representation.public_default_required"));
+            .any(|diagnostic| diagnostic.code == "access_profile.public_default_required"));
     }
 
     #[test]
-    fn one_operation_compiles_finite_representations_with_distinct_handling() {
-        let contract = RegistryContract::parse_yaml(&governed_representations_contract())
-            .expect("strict representation contract");
+    fn one_operation_compiles_finite_access_profiles_with_distinct_handling() {
+        let contract = RegistryContract::parse_yaml(&governed_access_profiles_contract())
+            .expect("strict access profile contract");
         let compiled =
             compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
-                .expect("representations compile");
+                .expect("access_profiles compile");
         let resource = &compiled.resources[0];
         assert_eq!(resource.operations.len(), 1);
         let operation = &resource.operations[0];
         assert_eq!(operation.identifier, "record.read");
-        assert_eq!(operation.default_representation, "limited");
-        assert_eq!(operation.representations.len(), 2);
-        let limited = &operation.representations[0];
-        let full = &operation.representations[1];
+        assert_eq!(operation.default_access_profile, "limited");
+        assert_eq!(operation.access_profiles.len(), 2);
+        let limited = &operation.access_profiles[0];
+        let full = &operation.access_profiles[1];
         assert_eq!(limited.id, "limited");
         assert_eq!(limited.disclosure_handling, Handling::Confidential);
         assert_eq!(limited.processing_handling, Handling::Restricted);
@@ -4115,7 +4310,7 @@ pub(crate) mod tests {
 
     #[test]
     fn transformed_and_multiply_bound_columns_require_explicit_review() {
-        let yaml = governed_representations_contract().replace(
+        let yaml = governed_access_profiles_contract().replace(
             "    sourceColumnClassifications:\n      name: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}\n",
             "    sourceColumnClassifications: {}\n",
         );
@@ -4128,10 +4323,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn representation_default_and_transform_parameters_fail_closed() {
-        let invalid_default = governed_representations_contract().replace(
-            "defaultRepresentation: limited",
-            "defaultRepresentation: absent",
+    fn access_profile_default_and_transform_parameters_fail_closed() {
+        let invalid_default = governed_access_profiles_contract().replace(
+            "defaultAccessProfile: limited",
+            "defaultAccessProfile: absent",
         );
         let contract = RegistryContract::parse_yaml(&invalid_default).expect("strict contract");
         let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
@@ -4139,10 +4334,10 @@ pub(crate) mod tests {
         assert!(report
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "representation.default_invalid"));
+            .any(|diagnostic| diagnostic.code == "access_profile.default_invalid"));
 
         for characters in [0, MAXIMUM_PARTIAL_STRING_CHARACTERS + 1] {
-            let yaml = governed_representations_contract()
+            let yaml = governed_access_profiles_contract()
                 .replace("characters: 4", &format!("characters: {characters}"));
             let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
             let report =
@@ -4155,8 +4350,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn public_masked_representation_cannot_process_restricted_source() {
-        let yaml = governed_representations_contract()
+    fn public_masked_access_profile_cannot_process_restricted_source() {
+        let yaml = governed_access_profiles_contract()
             .replace(
                 "classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}",
                 "classification: {privacy: partially-revealed-identifying, institutional: public, handling: public, status: reviewed}",
@@ -4176,7 +4371,7 @@ pub(crate) mod tests {
 
     #[test]
     fn date_precision_is_typed_and_closed() {
-        let yaml = governed_representations_contract()
+        let yaml = governed_access_profiles_contract()
             .replace("type: string\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: partial-string, reveal: suffix, characters: 4}", "type: year-month\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: date-precision, sourceType: date-time, precision: year-month}");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict date transform");
         let compiled =
@@ -4236,7 +4431,7 @@ pub(crate) mod tests {
         let CompiledAccess::Protected {
             row_binding: Some(binding),
             ..
-        } = &operation.representations[0].access
+        } = &operation.access_profiles[0].access
         else {
             panic!("row-bound protected access expected");
         };
@@ -4268,9 +4463,9 @@ pub(crate) mod tests {
             &governed_files(),
         )
         .expect("legacy contract compiles");
-        assert_eq!(compiled.resources[0].operations[0].representations.len(), 1);
+        assert_eq!(compiled.resources[0].operations[0].access_profiles.len(), 1);
         assert_eq!(
-            compiled.resources[0].operations[0].representations[0].id,
+            compiled.resources[0].operations[0].access_profiles[0].id,
             "public"
         );
     }
@@ -4292,6 +4487,13 @@ pub(crate) mod tests {
         assert_eq!(geometry.longitude_column, "longitude");
         let operation = &resource.operations[0];
         assert_eq!(operation.pattern, ConsultationPattern::Search);
+        assert_eq!(
+            operation.kind,
+            OperationKind::Search {
+                name: "within-bbox".into()
+            }
+        );
+        assert_eq!(operation.identifier, "record.search.within-bbox");
         assert!(!operation.query.allow_unfiltered);
         assert_eq!(
             operation
@@ -4302,12 +4504,12 @@ pub(crate) mod tests {
                 .maximum_longitude_span_degrees,
             10
         );
-        let representation = &operation.representations[0];
-        assert!(representation
+        let access_profile = &operation.access_profiles[0];
+        assert!(access_profile
             .projected_columns
             .iter()
             .any(|column| column == "longitude"));
-        assert!(representation
+        assert!(access_profile
             .selectable_properties
             .iter()
             .any(|property| property == "location"));
@@ -4318,7 +4520,7 @@ pub(crate) mod tests {
                     .contains(&ColumnUse::GeometryLatitude("location".into()))
                 && account
                     .uses
-                    .contains(&ColumnUse::SpatialBbox("record.list".into()))
+                    .contains(&ColumnUse::SpatialBbox("record.search.within-bbox".into()))
         }));
     }
 
@@ -4345,14 +4547,21 @@ pub(crate) mod tests {
         collision["resources"][0]["primaryGeometry"]["name"] = serde_json::json!("name");
         assert_code(collision, "geometry.name_collision");
 
+        let mut without_geometry = spatial_contract_value(true);
+        without_geometry["resources"][0]
+            .as_object_mut()
+            .expect("resource object")
+            .remove("primaryGeometry");
+        assert_code(without_geometry, "search.point_bbox_without_geometry");
+
         let mut carrier_collision = spatial_contract_value(true);
         carrier_collision["resources"][0]["primaryGeometry"]["source"]["longitudeColumn"] =
             serde_json::json!("name");
         assert_code(carrier_collision, "geometry.column_collision");
 
         let mut row_binding_collision = spatial_contract_value(true);
-        row_binding_collision["resources"][0]["operations"]["list"]["representations"]["public"]
-            ["access"] = serde_json::json!({
+        row_binding_collision["resources"][0]["operations"]["searches"][0]["accessProfiles"]
+            ["public"]["access"] = serde_json::json!({
             "scope": "registry:records:list",
             "authorityRowBinding": {"principal": true, "sourceColumn": "longitude"}
         });
@@ -4363,15 +4572,15 @@ pub(crate) mod tests {
         assert_code(wrong_crs, "geometry.crs_unsupported");
 
         let mut oversized = spatial_contract_value(true);
-        oversized["resources"][0]["operations"]["list"]["spatialQuery"]["bbox"]
+        oversized["resources"][0]["operations"]["searches"][0]["query"]
             ["maximumLatitudeSpanDegrees"] = serde_json::json!(181);
-        assert_code(oversized, "list.bbox_bound_invalid");
+        assert_code(oversized, "search.point_bbox_bound_invalid");
 
         let mut personal = spatial_contract_value(true);
         personal["resources"][0]["primaryGeometry"]["classification"] = serde_json::json!({
             "privacy": "personal"
         });
-        assert_code(personal, "list.bbox_personal_forbidden");
+        assert_code(personal, "search.point_bbox_personal_forbidden");
 
         let mut personal_carrier = spatial_contract_value(true);
         personal_carrier["resources"][0]["sourceColumnClassifications"]["longitude"] =
@@ -4396,13 +4605,41 @@ pub(crate) mod tests {
             properties.insert(format!("name{index}"), template.clone());
         }
         assert_code(too_many_properties, "property.bound_exceeded");
+
+        let mut duplicate_search = spatial_contract_value(true);
+        let duplicate = duplicate_search["resources"][0]["operations"]["searches"][0].clone();
+        duplicate_search["resources"][0]["operations"]["searches"]
+            .as_array_mut()
+            .expect("search array")
+            .push(duplicate);
+        assert_code(duplicate_search, "operation.search_id_duplicate");
+
+        let mut too_many_searches = spatial_contract_value(true);
+        let template = too_many_searches["resources"][0]["operations"]["searches"][0].clone();
+        let searches = too_many_searches["resources"][0]["operations"]["searches"]
+            .as_array_mut()
+            .expect("search array");
+        for index in 1..=MAXIMUM_SEARCHES_PER_RESOURCE {
+            let mut search = template.clone();
+            search["id"] = serde_json::json!(format!("within-bbox-{index}"));
+            searches.push(search);
+        }
+        assert_code(too_many_searches, "operation.search_bound_exceeded");
     }
 
     #[test]
-    fn geometry_disclosure_is_representation_scoped() {
-        let mut undisclosed = spatial_contract_value(false);
+    fn geometry_disclosure_is_access_profile_scoped() {
+        let mut undisclosed = spatial_contract_value(true);
         undisclosed["resources"][0]["disclosureProfiles"]["public"]["properties"] =
             serde_json::json!(["name"]);
+        undisclosed["resources"][0]["primaryGeometry"]["classification"]["handling"] =
+            serde_json::json!("internal");
+        undisclosed["resources"][0]["sourceColumnClassifications"]["longitude"] =
+            serde_json::json!({"handling": "internal"});
+        undisclosed["resources"][0]["sourceColumnClassifications"]["latitude"] =
+            serde_json::json!({"handling": "internal"});
+        undisclosed["resources"][0]["operations"]["searches"][0]["accessProfiles"]["public"]
+            ["access"] = serde_json::json!({"scope": "registry:records:search"});
         let contract =
             serde_json::from_value::<RegistryContract>(undisclosed).expect("strict contract value");
         let governed_files = governed_files_for(&contract);
@@ -4412,16 +4649,49 @@ pub(crate) mod tests {
             CompileProfile::Production,
             &governed_files,
         )
-        .expect("geometry may remain outside one governed representation");
-        let representation = &compiled.resources[0].operations[0].representations[0];
-        assert!(!representation
+        .expect("geometry may remain outside one governed access profile");
+        let access_profile = &compiled.resources[0].operations[0].access_profiles[0];
+        assert!(!access_profile
             .selectable_properties
             .iter()
             .any(|property| property == "location"));
-        assert!(!representation
+        assert!(!access_profile
             .projected_columns
             .iter()
             .any(|column| column == "longitude" || column == "latitude"));
+        assert_eq!(access_profile.processing_handling, Handling::Internal);
+    }
+
+    #[test]
+    fn named_search_query_and_access_profiles_remain_operation_bound() {
+        let mut value = spatial_contract_value(true);
+        let mut protected = value["resources"][0]["operations"]["searches"][0].clone();
+        protected["id"] = serde_json::json!("protected-bbox");
+        protected["accessProfiles"]["public"]["access"] =
+            serde_json::json!({"scope": "registry:records:search:protected"});
+        value["resources"][0]["operations"]["searches"]
+            .as_array_mut()
+            .expect("search array")
+            .push(protected);
+        let contract = serde_json::from_value::<RegistryContract>(value).expect("strict contract");
+        let governed_files = governed_files_for(&contract);
+        let compiled = compile_contract_with_governed_files(
+            &contract,
+            &[spatial_observed_schema()],
+            CompileProfile::Production,
+            &governed_files,
+        )
+        .expect("independently governed searches compile");
+
+        assert!(matches!(
+            compiled.resources[0].operations[0].access_profiles[0].access,
+            CompiledAccess::Public
+        ));
+        assert!(matches!(
+            &compiled.resources[0].operations[1].access_profiles[0].access,
+            CompiledAccess::Protected { scope, .. }
+                if scope == "registry:records:search:protected"
+        ));
     }
 
     #[test]
@@ -4502,26 +4772,26 @@ pub(crate) mod tests {
             serde_json::json!(["name", "location"]);
         if list {
             value["resources"][0]["operations"] = serde_json::json!({
-                "list": {
-                    "defaultRepresentation": "public",
-                    "representations": {
+                "searches": [{
+                    "id": "within-bbox",
+                    "query": {
+                        "kind": "point-bbox",
+                        "maximumLongitudeSpanDegrees": 10,
+                        "maximumLatitudeSpanDegrees": 10
+                    },
+                    "defaultAccessProfile": "public",
+                    "accessProfiles": {
                         "public": {
                             "access": "public",
                             "disclosureProfile": "public"
                         }
                     },
-                    "filters": [],
-                    "spatialQuery": {"bbox": {
-                        "maximumLongitudeSpanDegrees": 10,
-                        "maximumLatitudeSpanDegrees": 10
-                    }},
-                    "allowUnfiltered": false,
                     "orderBy": ["name"],
                     "pagination": {"defaultPageSize": 2, "maximumPageSize": 10}
-                }
+                }]
             });
             value["resources"][0]["processingDescriptions"][0]["operationRefs"] =
-                serde_json::json!(["list"]);
+                serde_json::json!(["search:within-bbox"]);
         }
         value
     }
@@ -4559,7 +4829,7 @@ pub(crate) mod tests {
             ),
             (
                 "governance/review-rationale",
-                "reviewed classification and representation design\n",
+                "reviewed classification and access profile design\n",
             ),
             (
                 "governance/processing.dpv.yaml",
@@ -4580,7 +4850,7 @@ pub(crate) mod tests {
         files
     }
 
-    fn governed_representations_contract() -> String {
+    fn governed_access_profiles_contract() -> String {
         valid_contract()
             .replace(
                 "    sourceColumnClassifications: {}",
@@ -4591,8 +4861,8 @@ pub(crate) mod tests {
                 "        semanticTerm: local:name\n        classification: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}\n      maskedName:\n        label: Masked name\n        description: Partially revealed Record name\n        sourceColumn: name\n        type: string\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: partial-string, reveal: suffix, characters: 4}\n    disclosureProfiles:\n      limited: {properties: [maskedName]}\n      full: {properties: [name]}",
             )
             .replace(
-                "      read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "      read:\n        defaultRepresentation: limited\n        representations:\n          limited:\n            access: {scope: registry:records:limited}\n            disclosureProfile: limited\n          full:\n            access: {scope: registry:records:full}\n            disclosureProfile: full",
+                "      read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "      read:\n        defaultAccessProfile: limited\n        accessProfiles:\n          limited:\n            access: {scope: registry:records:limited}\n            disclosureProfile: limited\n          full:\n            access: {scope: registry:records:full}\n            disclosureProfile: full",
             )
             .replace(
                 "metadataVisibility: {service: public, resources: public, semantics: public, classifications: public, processing: public}",
@@ -4646,8 +4916,8 @@ resources:
     disclosureProfiles: {public: {properties: [name]}}
     operations:
       read:
-        defaultRepresentation: public
-        representations:
+        defaultAccessProfile: public
+        accessProfiles:
           public: {access: public, disclosureProfile: public}
     processingDescriptions:
       - id: statutory-publication

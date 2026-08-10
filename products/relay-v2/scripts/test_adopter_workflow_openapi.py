@@ -18,7 +18,7 @@ SPEC.loader.exec_module(WORKFLOW)
 
 
 class PublicOpenApiProjectionTests(unittest.TestCase):
-    def test_rejects_a_protected_representation_in_public_output(self) -> None:
+    def test_rejects_a_protected_access_profile_in_public_output(self) -> None:
         public_profile = {
             "identifier": "public-register",
             "default": True,
@@ -44,9 +44,9 @@ class PublicOpenApiProjectionTests(unittest.TestCase):
         full = {
             "operationId": "business.read",
             "security": [{}, {"bearerAuth": []}],
-            "x-registry-representations": [public_profile, protected_profile],
+            "x-registry-access-profiles": [public_profile, protected_profile],
             "x-registry-required-scopes": [
-                {"representation": "registrar", "scope": "registry:business:read-registrar"}
+                {"accessProfile": "registrar", "scope": "registry:business:read-registrar"}
             ],
         }
         public = {
@@ -54,14 +54,14 @@ class PublicOpenApiProjectionTests(unittest.TestCase):
             "security": [],
             "parameters": [
                 {
-                    "name": "representation",
+                    "name": "accessProfile",
                     "in": "query",
                     "schema": {"enum": ["public-register", "registrar"]},
                 }
             ],
-            "x-registry-representations": [public_profile, copy.deepcopy(protected_profile)],
+            "x-registry-access-profiles": [public_profile, copy.deepcopy(protected_profile)],
         }
-        with self.assertRaisesRegex(WORKFLOW.GateFailure, "protected representation"):
+        with self.assertRaisesRegex(WORKFLOW.GateFailure, "protected access profile"):
             WORKFLOW.validate_public_operation(
                 public,
                 full,

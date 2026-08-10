@@ -21,7 +21,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::auth::RowAuthority;
 use crate::contract::{DataType, SourceProfile};
 use crate::model::{
-    CompiledOperation, CompiledRegistry, CompiledRepresentation, CompiledResource, OperationKind,
+    CompiledAccessProfile, CompiledOperation, CompiledRegistry, CompiledResource, OperationKind,
 };
 
 const MAXIMUM_CELL_BYTES: usize = 1024 * 1024;
@@ -124,13 +124,13 @@ pub enum SqliteRuntimeError {
 struct OperationExecutor {
     statement: Arc<ReadOnlyStatement>,
     operation: CompiledOperation,
-    representation: CompiledRepresentation,
+    access_profile: CompiledAccessProfile,
     source_revision: SourceRevision,
 }
 
 struct OperationInventory {
     source_revision: SourceRevision,
-    representations: BTreeMap<String, OperationExecutor>,
+    access_profiles: BTreeMap<String, OperationExecutor>,
 }
 
 #[derive(Clone)]
@@ -207,23 +207,23 @@ impl SqliteRuntime {
                     .iter()
                     .find(|source| source.id == operation.query.source)
                     .ok_or(SqliteRuntimeError::MissingSource)?;
-                let mut representations = BTreeMap::new();
-                for representation in &operation.representations {
+                let mut access_profiles = BTreeMap::new();
+                for access_profile in &operation.access_profiles {
                     let contract = statement_contract(
                         resource,
                         operation,
-                        representation,
+                        access_profile,
                         &limits,
                         &source.expected_schema_fingerprint,
                     )?;
                     let statement = ReadOnlyStatement::open(profile.clone(), contract)?;
-                    if representations
+                    if access_profiles
                         .insert(
-                            representation.id.clone(),
+                            access_profile.id.clone(),
                             OperationExecutor {
                                 statement: Arc::new(statement),
                                 operation: operation.clone(),
-                                representation: representation.clone(),
+                                access_profile: access_profile.clone(),
                                 source_revision: source_revision.clone(),
                             },
                         )
@@ -232,13 +232,13 @@ impl SqliteRuntime {
                         return Err(SqliteRuntimeError::InvalidPlan);
                     }
                 }
-                if representations.is_empty()
+                if access_profiles.is_empty()
                     || operations
                         .insert(
                             operation.identifier.clone(),
                             OperationInventory {
                                 source_revision: source_revision.clone(),
-                                representations,
+                                access_profiles,
                             },
                         )
                         .is_some()
@@ -295,16 +295,16 @@ impl SqliteRuntime {
     pub async fn execute(
         &self,
         operation: &str,
-        representation: &str,
+        access_profile: &str,
         query: OperationQuery,
     ) -> Result<OperationResult, SqliteRuntimeError> {
         let executor = self
             .operations
             .get(operation)
-            .and_then(|inventory| inventory.representations.get(representation))
+            .and_then(|inventory| inventory.access_profiles.get(access_profile))
             .ok_or(SqliteRuntimeError::UnknownOperation)?;
         let permit = self.acquire().await?;
-        let values = bind_operation_values(&executor.operation, &executor.representation, query)?;
+        let values = bind_operation_values(&executor.operation, &executor.access_profile, query)?;
         let result = executor.statement.execute(&values).await;
         drop(permit);
         Ok(OperationResult {
@@ -324,11 +324,11 @@ impl SqliteRuntime {
 fn statement_contract(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     limits: &SqliteRuntimeLimits,
     expected_schema_fingerprint: &str,
 ) -> Result<StatementContract, SqliteRuntimeError> {
-    let result_columns = result_columns(operation, representation);
+    let result_columns = result_columns(operation, access_profile);
     let columns = result_columns
         .iter()
         .map(|column| ColumnContract {
@@ -338,22 +338,22 @@ fn statement_contract(
         .collect::<Vec<_>>();
     let mut parameters = Vec::new();
     let sql = match &operation.kind {
-        OperationKind::List => {
-            list_sql(operation, representation, &result_columns, &mut parameters)
+        OperationKind::List | OperationKind::Search { .. } => {
+            collection_sql(operation, access_profile, &result_columns, &mut parameters)
         }
         OperationKind::Read => read_sql(
             resource,
             operation,
-            representation,
+            access_profile,
             &result_columns,
             &mut parameters,
         ),
         OperationKind::Lookup { .. } => {
-            lookup_sql(operation, representation, &result_columns, &mut parameters)
+            lookup_sql(operation, access_profile, &result_columns, &mut parameters)
         }
     };
     let maximum_rows = match &operation.kind {
-        OperationKind::List => u64::from(
+        OperationKind::List | OperationKind::Search { .. } => u64::from(
             operation
                 .query
                 .pagination
@@ -375,8 +375,8 @@ fn statement_contract(
             maximum_statement_steps: MAXIMUM_STATEMENT_STEPS,
             timeout: limits.request_timeout,
             // Aggregate process concurrency is owned above. Each fixed
-            // representation has one connection, and compilation bounds the
-            // Registry-wide representation executor inventory.
+            // access_profile has one connection, and compilation bounds the
+            // Registry-wide access_profile executor inventory.
             concurrency: 1,
         },
         schema: Some(SchemaBinding {
@@ -389,9 +389,9 @@ fn statement_contract(
 
 fn result_columns(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> Vec<String> {
-    let mut columns = representation.projected_columns.clone();
+    let mut columns = access_profile.projected_columns.clone();
     for column in &operation.query.order_by {
         if !columns.contains(column) {
             columns.push(column.clone());
@@ -427,9 +427,9 @@ fn data_type(value: DataType) -> ColumnType {
     }
 }
 
-fn list_sql(
+fn collection_sql(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     columns: &[String],
     parameters: &mut Vec<ParameterContract>,
 ) -> String {
@@ -445,24 +445,18 @@ fn list_sql(
         ));
     }
     if let Some(spatial) = &operation.query.spatial_bbox {
-        for name in [
-            "bbox_present",
-            "bbox_west",
-            "bbox_south",
-            "bbox_east",
-            "bbox_north",
-        ] {
+        for name in ["bbox_west", "bbox_south", "bbox_east", "bbox_north"] {
             parameters.push(parameter(name));
         }
         predicates.push(format!(
-            "(:bbox_present = 0 OR ({} >= :bbox_south AND {} <= :bbox_north AND {} >= :bbox_west AND {} <= :bbox_east))",
+            "({} >= :bbox_south AND {} <= :bbox_north AND {} >= :bbox_west AND {} <= :bbox_east)",
             quote_identifier(&spatial.latitude_column),
             quote_identifier(&spatial.latitude_column),
             quote_identifier(&spatial.longitude_column),
             quote_identifier(&spatial.longitude_column),
         ));
     }
-    add_row_authority(representation, parameters, &mut predicates);
+    add_row_authority(access_profile, parameters, &mut predicates);
     parameters.push(parameter("cursor_present"));
     let keyset = keyset_predicate(&operation.query.order_by, parameters);
     predicates.push(format!("(:cursor_present = 0 OR ({keyset}))"));
@@ -485,7 +479,7 @@ fn list_sql(
 fn read_sql(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     columns: &[String],
     parameters: &mut Vec<ParameterContract>,
 ) -> String {
@@ -494,7 +488,7 @@ fn read_sql(
         "{} = :record_identifier",
         quote_identifier(&resource.record_context.record_identifier_column)
     )];
-    add_row_authority(representation, parameters, &mut predicates);
+    add_row_authority(access_profile, parameters, &mut predicates);
     format!(
         "SELECT {} FROM {} WHERE {} LIMIT 2",
         select_list(columns),
@@ -505,7 +499,7 @@ fn read_sql(
 
 fn lookup_sql(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     columns: &[String],
     parameters: &mut Vec<ParameterContract>,
 ) -> String {
@@ -518,7 +512,7 @@ fn lookup_sql(
             quote_identifier(&selector.source_column)
         ));
     }
-    add_row_authority(representation, parameters, &mut predicates);
+    add_row_authority(access_profile, parameters, &mut predicates);
     format!(
         "SELECT {} FROM {} WHERE {} LIMIT 2",
         select_list(columns),
@@ -528,14 +522,14 @@ fn lookup_sql(
 }
 
 fn add_row_authority(
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     parameters: &mut Vec<ParameterContract>,
     predicates: &mut Vec<String>,
 ) {
     if let crate::model::CompiledAccess::Protected {
         row_binding: Some(binding),
         ..
-    } = &representation.access
+    } = &access_profile.access
     {
         parameters.push(parameter("row_authority"));
         predicates.push(format!(
@@ -585,12 +579,12 @@ fn quote_identifier(value: &str) -> String {
 
 fn bind_operation_values(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     query: OperationQuery,
 ) -> Result<BTreeMap<String, Value>, SqliteRuntimeError> {
     let mut values = BTreeMap::new();
     match &operation.kind {
-        OperationKind::List => {
+        OperationKind::List | OperationKind::Search { .. } => {
             let declared = operation
                 .query
                 .filters
@@ -612,34 +606,18 @@ fn bind_operation_values(
                 );
                 values.insert(format!("filter_{index}"), value.unwrap_or(Value::Null));
             }
-            match (&operation.query.spatial_bbox, query.bbox) {
-                (Some(spatial), bbox) => {
-                    if bbox.is_some_and(|value| !value.is_within(spatial)) {
+            match (&operation.kind, &operation.query.spatial_bbox, query.bbox) {
+                (OperationKind::Search { .. }, Some(spatial), Some(bbox)) => {
+                    if !bbox.is_within(spatial) {
                         return Err(SqliteRuntimeError::InvalidPlan);
                     }
-                    values.insert(
-                        "bbox_present".into(),
-                        Value::Integer(i64::from(bbox.is_some())),
-                    );
-                    values.insert(
-                        "bbox_west".into(),
-                        bbox.map_or(Value::Null, |value| Value::Number(value.west)),
-                    );
-                    values.insert(
-                        "bbox_south".into(),
-                        bbox.map_or(Value::Null, |value| Value::Number(value.south)),
-                    );
-                    values.insert(
-                        "bbox_east".into(),
-                        bbox.map_or(Value::Null, |value| Value::Number(value.east)),
-                    );
-                    values.insert(
-                        "bbox_north".into(),
-                        bbox.map_or(Value::Null, |value| Value::Number(value.north)),
-                    );
+                    values.insert("bbox_west".into(), Value::Number(bbox.west));
+                    values.insert("bbox_south".into(), Value::Number(bbox.south));
+                    values.insert("bbox_east".into(), Value::Number(bbox.east));
+                    values.insert("bbox_north".into(), Value::Number(bbox.north));
                 }
-                (None, None) => {}
-                (None, Some(_)) => return Err(SqliteRuntimeError::InvalidPlan),
+                (OperationKind::List, None, None) => {}
+                _ => return Err(SqliteRuntimeError::InvalidPlan),
             }
             let after = query.after_order.unwrap_or_default();
             if !after.is_empty() && after.len() != operation.query.order_by.len() {
@@ -697,7 +675,7 @@ fn bind_operation_values(
     if let crate::model::CompiledAccess::Protected {
         row_binding: Some(binding),
         ..
-    } = &representation.access
+    } = &access_profile.access
     {
         let row = query.row_authority.ok_or(SqliteRuntimeError::InvalidPlan)?;
         if row.source_column != binding.source_column {
@@ -713,6 +691,63 @@ fn bind_operation_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::Handling;
+    use crate::model::{
+        CapabilityFamily, CompiledAccess, CompiledPagination, CompiledSpatialBboxQuery,
+        ConsultationPattern, QueryPlan,
+    };
+
+    fn public_access_profile() -> CompiledAccessProfile {
+        CompiledAccessProfile {
+            id: "public".into(),
+            access: CompiledAccess::Public,
+            disclosure_profile: "public".into(),
+            selectable_properties: vec!["identifier".into()],
+            projected_columns: vec!["identifier".into()],
+            processing_handling: Handling::Public,
+            disclosure_handling: Handling::Public,
+            transform_inventory: Vec::new(),
+            schema_reference: "schema".into(),
+            semantic_model_reference: "semantic-model".into(),
+            context_reference: "context".into(),
+        }
+    }
+
+    fn collection_operation(kind: OperationKind) -> CompiledOperation {
+        let spatial_bbox =
+            matches!(&kind, OperationKind::Search { .. }).then(|| CompiledSpatialBboxQuery {
+                longitude_column: "longitude".into(),
+                latitude_column: "latitude".into(),
+                maximum_longitude_span_degrees: 2,
+                maximum_latitude_span_degrees: 2,
+            });
+        CompiledOperation {
+            identifier: "resource.search.within-bbox".into(),
+            family: CapabilityFamily::Consultation,
+            pattern: if spatial_bbox.is_some() {
+                ConsultationPattern::Search
+            } else {
+                ConsultationPattern::List
+            },
+            kind,
+            default_access_profile: "public".into(),
+            access_profiles: vec![public_access_profile()],
+            query: QueryPlan {
+                source: "source".into(),
+                view: "records".into(),
+                filters: Vec::new(),
+                spatial_bbox,
+                selectors: Vec::new(),
+                order_by: vec!["identifier".into()],
+                allow_unfiltered: true,
+                pagination: Some(CompiledPagination {
+                    default_page_size: 10,
+                    maximum_page_size: 100,
+                }),
+                maximum_request_body_bytes: None,
+            },
+        }
+    }
 
     #[test]
     fn point_bbox_validation_is_numeric_and_crs84_bounded() {
@@ -774,5 +809,51 @@ mod tests {
             north: -16.0,
         }
         .is_valid());
+    }
+
+    #[test]
+    fn named_search_requires_one_bounded_bbox_and_list_refuses_it() {
+        let access_profile = public_access_profile();
+        let search = collection_operation(OperationKind::Search {
+            name: "within-bbox".into(),
+        });
+        let base = OperationQuery {
+            fetch_limit: Some(11),
+            ..OperationQuery::default()
+        };
+        assert!(matches!(
+            bind_operation_values(&search, &access_profile, base.clone()),
+            Err(SqliteRuntimeError::InvalidPlan)
+        ));
+        let bbox = PointBbox {
+            west: 100.0,
+            south: 10.0,
+            east: 101.0,
+            north: 11.0,
+        };
+        let values = bind_operation_values(
+            &search,
+            &access_profile,
+            OperationQuery {
+                bbox: Some(bbox),
+                ..base.clone()
+            },
+        )
+        .expect("named search binds its bbox");
+        assert_eq!(values.get("bbox_west"), Some(&Value::Number(100.0)));
+        assert!(!values.contains_key("bbox_present"));
+
+        let list = collection_operation(OperationKind::List);
+        assert!(matches!(
+            bind_operation_values(
+                &list,
+                &access_profile,
+                OperationQuery {
+                    bbox: Some(bbox),
+                    ..base
+                },
+            ),
+            Err(SqliteRuntimeError::InvalidPlan)
+        ));
     }
 }

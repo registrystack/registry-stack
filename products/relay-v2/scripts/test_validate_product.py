@@ -86,22 +86,22 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
             VALIDATOR.validate_catalogs(errors)
         self.assertTrue(any("invalid source-row classes must cover" in error for error in errors), errors)
 
-    def test_each_operation_requires_a_declared_default_representation(self) -> None:
+    def test_each_operation_requires_a_declared_default_access_profile(self) -> None:
         original = VALIDATOR.load_yaml
 
         def load_without_social_lookup_default(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "registry.yaml" and path.parent.name == "social-assistance":
                 value["resources"][0]["operations"]["lookups"][0].pop(
-                    "defaultRepresentation"
+                    "defaultAccessProfile"
                 )
             return value
 
         errors: list[str] = []
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_social_lookup_default):
-            VALIDATOR.validate_acceptance_representation_contracts(errors)
+            VALIDATOR.validate_acceptance_access_profile_contracts(errors)
         self.assertTrue(
-            any("every declared operation needs one declared default representation" in error for error in errors),
+            any("every declared operation needs one declared default access profile" in error for error in errors),
             errors,
         )
 
@@ -116,7 +116,7 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
 
         errors: list[str] = []
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_social_quota_drift):
-            VALIDATOR.validate_acceptance_representation_contracts(errors)
+            VALIDATOR.validate_acceptance_access_profile_contracts(errors)
         self.assertTrue(
             any("quota fixture must admit exactly" in error for error in errors), errors
         )
@@ -132,10 +132,40 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
 
         errors: list[str] = []
         with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_civil_quota_drift):
-            VALIDATOR.validate_acceptance_representation_contracts(errors)
+            VALIDATOR.validate_acceptance_access_profile_contracts(errors)
         self.assertTrue(
             any("lookup quota fixture must admit exactly" in error for error in errors), errors
         )
+
+    def test_business_bbox_is_a_named_search_with_distinct_list_access(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_bbox_on_list(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "registry.yaml" and path.parent.name == "business-registry":
+                premises = next(
+                    resource
+                    for resource in value["resources"]
+                    if resource["id"] == "registered-premises"
+                )
+                premises["operations"]["list"]["spatialQuery"] = {
+                    "bbox": {
+                        "maximumLongitudeSpanDegrees": 2,
+                        "maximumLatitudeSpanDegrees": 2,
+                    }
+                }
+                premises["operations"]["searches"][0]["accessProfiles"][
+                    "registrar-premises"
+                ]["access"]["scope"] = "registry:business:premises-list"
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_bbox_on_list
+        ):
+            VALIDATOR.validate_acceptance_access_profile_contracts(errors)
+        self.assertTrue(any("bbox must not be configured on list" in error for error in errors), errors)
+        self.assertTrue(any("list and search scopes must remain distinct" in error for error in errors), errors)
 
     def test_invalid_source_row_scenario_must_match_the_executable_failure(self) -> None:
         original = VALIDATOR.load_yaml
@@ -209,27 +239,27 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
             any("both bounded transforms require" in error for error in errors), errors
         )
 
-    def test_unknown_and_scope_hidden_representations_share_one_outcome(self) -> None:
+    def test_unknown_and_scope_hidden_access_profiles_share_one_outcome(self) -> None:
         original = VALIDATOR.load_yaml
 
-        def load_with_enumerable_unknown_representation(path: Path):
+        def load_with_enumerable_unknown_access_profile(path: Path):
             value = copy.deepcopy(original(path))
             if path.name == "expected-http.yaml" and path.parent.name == "social-assistance":
                 step = next(
                     item
                     for item in value["steps"]
-                    if item.get("id") == "unknown-representation"
+                    if item.get("id") == "unknown-access-profile"
                 )
-                step["expect"]["code"] = "representation.not_found"
+                step["expect"]["code"] = "access_profile.not_found"
             return value
 
         errors: list[str] = []
         with mock.patch.object(
-            VALIDATOR, "load_yaml", side_effect=load_with_enumerable_unknown_representation
+            VALIDATOR, "load_yaml", side_effect=load_with_enumerable_unknown_access_profile
         ):
             VALIDATOR.validate_catalogs(errors)
         self.assertTrue(
-            any("must conceal representation existence" in error for error in errors), errors
+            any("must conceal access-profile existence" in error for error in errors), errors
         )
 
     def test_security_test_resolution_rejects_a_similar_prefix(self) -> None:

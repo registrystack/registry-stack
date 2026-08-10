@@ -17,14 +17,20 @@ use crate::contract::{
     AccessRule, AuthorityRowBinding, ClassificationReviewDocument, GeneratedIdentificationBinding,
     Handling, IdentificationMethod, RegistryContract, ReviewStatus, RulePackBinding,
 };
+use crate::format_capabilities::{
+    response_format_capabilities, FormatProfileIdentifier, WireFormatCapability,
+    WireFormatIdentifier, CRS84_URI,
+};
 use crate::model::{
-    ColumnUse, CompiledAccess, CompiledOperation, CompiledRegistry, CompiledRepresentation,
-    CompiledResource, EffectiveClassification, ObservedColumn, ObservedSourceSchema, OperationKind,
+    CapabilityFamily, ColumnUse, CompiledAccess, CompiledAccessProfile, CompiledOperation,
+    CompiledRegistry, CompiledResource, CompiledTransform, ConsultationPattern,
+    EffectiveClassification, ObservedColumn, ObservedSourceSchema, OperationKind,
+    RowAuthoritySource,
 };
 
 pub const IDENTIFICATION_REPORT_PATH: &str = "reports/identification-report.json";
 pub const CLASSIFICATION_INVENTORY_REPORT_PATH: &str = "reports/classification-inventory.json";
-pub const REPRESENTATION_REPORT_PATH: &str = "reports/representation-report.json";
+pub const OPERATION_EXPLANATION_PATH: &str = "reports/operation-explanation.json";
 pub const CONTEXTUAL_REVIEW_FINDINGS_PATH: &str = "reports/contextual-review-findings.json";
 pub const CLASSIFICATION_REVIEW_STARTER_PATH: &str =
     "governance/classification-review-starter.yaml";
@@ -378,109 +384,837 @@ pub fn render_classification_inventory_report(
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RepresentationReport {
+pub struct OperationExplanation {
     pub api_version: String,
     pub kind: String,
     pub registry_identifier: String,
+    pub contract_revision: String,
     pub classification_inventory_digest: String,
-    pub resources: Vec<ResourceRepresentationReport>,
+    pub operations: Vec<OperationExplanationEntry>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ResourceRepresentationReport {
-    pub resource: String,
-    pub source: String,
-    pub view: String,
-    pub operations: Vec<OperationRepresentationReport>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct OperationRepresentationReport {
-    pub operation: String,
+pub struct OperationExplanationEntry {
+    pub resource_identifier: String,
+    pub operation_identifier: String,
+    pub family: CapabilityFamily,
+    pub pattern: ConsultationPattern,
     pub operation_kind: String,
-    pub default_representation: String,
-    pub representations: Vec<RepresentationBoundary>,
+    pub http: HttpOperationBinding,
+    pub query: QueryExplanation,
+    pub selection: SelectionExplanation,
+    pub access_profiles: Vec<AccessProfileExplanation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RepresentationBoundary {
-    pub representation: String,
-    pub default: bool,
-    pub disclosure_profile: String,
-    pub processed_source_columns: Vec<String>,
-    pub disclosed_properties: Vec<String>,
-    pub processing_handling: Handling,
-    pub disclosure_handling: Handling,
-    pub transforms: Vec<String>,
+pub struct HttpOperationBinding {
+    pub method: HttpMethod,
+    pub path: String,
 }
 
-pub fn representation_report(
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum HttpMethod {
+    Get,
+    Post,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct QueryExplanation {
+    pub capabilities: Vec<QueryCapabilityExplanation>,
+    pub fixed_order_by: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct QueryCapabilityExplanation {
+    pub id: QueryCapabilityIdentifier,
+    pub availability: CapabilityAvailability,
+    pub reason: CapabilityReason,
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_request_body_bytes: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_page_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_page_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spatial: Option<SpatialQueryExplanation>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum QueryCapabilityIdentifier {
+    ExactFilters,
+    Unfiltered,
+    Pagination,
+    ExactLookup,
+    PointBbox,
+    CallerSorting,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CapabilityAvailability {
+    Available,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CapabilityReason {
+    DeclaredExactFilters,
+    NoDeclaredExactFilters,
+    OperationAllowsUnfiltered,
+    OperationRequiresDeclaredFilter,
+    PaginationConfigured,
+    PaginationNotApplicable,
+    ExactLookupOperation,
+    NotExactLookupOperation,
+    PointBboxSearchOperation,
+    NotPointBboxSearchOperation,
+    FixedOrderOnly,
+    NotApplicableToOperation,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SpatialQueryExplanation {
+    pub parameter: String,
+    pub crs: String,
+    pub predicate: String,
+    pub maximum_longitude_span_degrees: u16,
+    pub maximum_latitude_span_degrees: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SelectionExplanation {
+    pub access_profile_parameter: String,
+    pub fields_parameter: String,
+    pub format_profile_parameter: String,
+    pub default_access_profile: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AccessProfileExplanation {
+    pub id: String,
+    pub default: bool,
+    pub access: AccessPolicyExplanation,
+    pub processing: ProcessingExplanation,
+    pub disclosure: DisclosureExplanation,
+    pub transforms: Vec<TransformExplanation>,
+    pub wire_formats: Vec<WireFormatCapability>,
+    pub cache: CacheExplanation,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum AccessPolicyExplanation {
+    Public,
+    Protected {
+        scope: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        purpose: Option<PurposeExplanation>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        row_binding: Option<RowBindingExplanation>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PurposeExplanation {
+    pub claim: String,
+    pub allowed_value_count: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RowBindingExplanation {
+    pub authority_source: RowAuthorityExplanation,
+    pub source_column: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum RowAuthorityExplanation {
+    Principal,
+    Claim { claim: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProcessingExplanation {
+    pub source_columns: Vec<String>,
+    pub handling: Handling,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct DisclosureExplanation {
+    pub profile_identifier: String,
+    pub properties: Vec<String>,
+    pub handling: Handling,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum TransformExplanation {
+    PartialString {
+        property: String,
+        identifier: String,
+        reveal: crate::contract::PartialStringReveal,
+        characters: u16,
+    },
+    DatePrecision {
+        property: String,
+        identifier: String,
+        source_type: crate::contract::DateInputType,
+        precision: crate::contract::DatePrecision,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CacheExplanation {
+    pub kind: CachePosture,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CachePosture {
+    PublicRevalidate,
+    NoStore,
+}
+
+pub fn operation_explanation(
     registry: &CompiledRegistry,
     classification_inventory_digest: &str,
-) -> Result<RepresentationReport, IdentificationError> {
+) -> Result<OperationExplanation, IdentificationError> {
     require_inventory_digest(registry, classification_inventory_digest)?;
-    let mut resources = registry
+    let mut operations = registry
         .resources
         .iter()
-        .map(|resource| {
-            let mut operations = resource
+        .flat_map(|resource| {
+            resource
                 .operations
                 .iter()
                 .map(|operation| {
-                    let mut representations = operation
-                        .representations
+                    let mut access_profiles = operation
+                        .access_profiles
                         .iter()
-                        .map(|representation| RepresentationBoundary {
-                            representation: representation.id.clone(),
-                            default: representation.id == operation.default_representation,
-                            disclosure_profile: representation.disclosure_profile.clone(),
-                            processed_source_columns: processed_columns(operation, representation),
-                            disclosed_properties: sorted_unique(
-                                representation.selectable_properties.iter().cloned(),
-                            ),
-                            processing_handling: representation.processing_handling,
-                            disclosure_handling: representation.disclosure_handling,
-                            transforms: sorted_unique(
-                                representation.transform_inventory.iter().cloned(),
-                            ),
+                        .map(|access_profile| AccessProfileExplanation {
+                            id: access_profile.id.clone(),
+                            default: access_profile.id == operation.default_access_profile,
+                            access: access_policy_explanation(&access_profile.access),
+                            processing: ProcessingExplanation {
+                                source_columns: processed_columns(operation, access_profile),
+                                handling: access_profile.processing_handling,
+                            },
+                            disclosure: DisclosureExplanation {
+                                profile_identifier: access_profile.disclosure_profile.clone(),
+                                properties: sorted_unique(
+                                    access_profile.selectable_properties.iter().cloned(),
+                                ),
+                                handling: access_profile.disclosure_handling,
+                            },
+                            transforms: transform_explanations(resource, access_profile),
+                            wire_formats: response_format_capabilities(resource, access_profile),
+                            cache: CacheExplanation {
+                                kind: if matches!(access_profile.access, CompiledAccess::Public) {
+                                    CachePosture::PublicRevalidate
+                                } else {
+                                    CachePosture::NoStore
+                                },
+                            },
                         })
                         .collect::<Vec<_>>();
-                    representations
-                        .sort_by(|left, right| left.representation.cmp(&right.representation));
-                    OperationRepresentationReport {
-                        operation: operation.identifier.clone(),
+                    access_profiles.sort_by(|left, right| left.id.cmp(&right.id));
+                    let (method, path) = operation_http_binding(resource, operation);
+                    OperationExplanationEntry {
+                        resource_identifier: resource.id.clone(),
+                        operation_identifier: operation.identifier.clone(),
+                        family: operation.family,
+                        pattern: operation.pattern,
                         operation_kind: operation_kind(&operation.kind),
-                        default_representation: operation.default_representation.clone(),
-                        representations,
+                        http: HttpOperationBinding { method, path },
+                        query: query_explanation(operation),
+                        selection: SelectionExplanation {
+                            access_profile_parameter: "accessProfile".into(),
+                            fields_parameter: "fields".into(),
+                            format_profile_parameter: "formatProfile".into(),
+                            default_access_profile: operation.default_access_profile.clone(),
+                        },
+                        access_profiles,
                     }
                 })
-                .collect::<Vec<_>>();
-            operations.sort_by(|left, right| left.operation.cmp(&right.operation));
-            ResourceRepresentationReport {
-                resource: resource.id.clone(),
-                source: resource.source.clone(),
-                view: resource.view.clone(),
-                operations,
-            }
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    resources.sort_by(|left, right| left.resource.cmp(&right.resource));
-    Ok(RepresentationReport {
-        api_version: "relay.registrystack.org/representation-report/v1".into(),
-        kind: "RepresentationReport".into(),
+    operations.sort_by(|left, right| {
+        left.resource_identifier
+            .cmp(&right.resource_identifier)
+            .then(left.operation_identifier.cmp(&right.operation_identifier))
+    });
+    Ok(OperationExplanation {
+        api_version: "relay.registrystack.org/operation-explanation/v1".into(),
+        kind: "OperationExplanation".into(),
         registry_identifier: registry.registry_identifier.clone(),
+        contract_revision: registry.contract_revision.clone(),
         classification_inventory_digest: classification_inventory_digest.into(),
-        resources,
+        operations,
     })
 }
 
-pub fn render_representation_report(
-    report: &RepresentationReport,
+pub fn render_operation_explanation(
+    report: &OperationExplanation,
 ) -> Result<Vec<u8>, IdentificationError> {
     render_canonical(report)
+}
+
+/// Render a compact, deterministic operator view without re-deriving any
+/// contract semantics in the command-line adapter.
+#[must_use]
+pub fn render_operation_explanation_text(report: &OperationExplanation) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "Registry: {}", report.registry_identifier);
+    let _ = writeln!(output, "Contract revision: {}", report.contract_revision);
+    let mut current_resource = None;
+    for operation in &report.operations {
+        if current_resource != Some(operation.resource_identifier.as_str()) {
+            current_resource = Some(operation.resource_identifier.as_str());
+            let _ = writeln!(output, "\nResource: {}", operation.resource_identifier);
+        }
+        let _ = writeln!(
+            output,
+            "\n  Operation: {}  {} {}  consultation/{}",
+            operation.operation_identifier,
+            http_method(operation.http.method),
+            operation.http.path,
+            consultation_pattern_name(operation.pattern),
+        );
+        let _ = writeln!(
+            output,
+            "    selection: access-profile={}; fields={}; format-profile={}",
+            operation.selection.access_profile_parameter,
+            operation.selection.fields_parameter,
+            operation.selection.format_profile_parameter,
+        );
+        let _ = writeln!(
+            output,
+            "    default access profile: {}",
+            operation.selection.default_access_profile
+        );
+        let _ = writeln!(
+            output,
+            "    fixed order: {}",
+            comma_list(&operation.query.fixed_order_by)
+        );
+        let _ = writeln!(output, "    query capabilities:");
+        for capability in &operation.query.capabilities {
+            let _ = writeln!(
+                output,
+                "      {}: {} ({}){}",
+                query_capability_name(capability.id),
+                availability_name(capability.availability),
+                capability_reason_name(capability.reason),
+                if capability.required {
+                    "; required"
+                } else {
+                    ""
+                },
+            );
+            if !capability.parameters.is_empty() {
+                let _ = writeln!(
+                    output,
+                    "        parameters: {}",
+                    comma_list(&capability.parameters)
+                );
+            }
+            if let Some(maximum) = capability.maximum_request_body_bytes {
+                let _ = writeln!(output, "        maximum request bytes: {maximum}");
+            }
+            if let (Some(default), Some(maximum)) =
+                (capability.default_page_size, capability.maximum_page_size)
+            {
+                let _ = writeln!(
+                    output,
+                    "        page size: default={default}; maximum={maximum}"
+                );
+            }
+            if let Some(spatial) = &capability.spatial {
+                let _ = writeln!(
+                    output,
+                    "        spatial: parameter={}; crs={}; predicate={}; max-longitude-span={}; max-latitude-span={}",
+                    spatial.parameter,
+                    spatial.crs,
+                    spatial.predicate,
+                    spatial.maximum_longitude_span_degrees,
+                    spatial.maximum_latitude_span_degrees,
+                );
+            }
+        }
+        for access_profile in &operation.access_profiles {
+            let _ = writeln!(
+                output,
+                "    access profile: {}{}",
+                access_profile.id,
+                if access_profile.default {
+                    " (default)"
+                } else {
+                    ""
+                }
+            );
+            match &access_profile.access {
+                AccessPolicyExplanation::Public => {
+                    let _ = writeln!(output, "      access: public");
+                }
+                AccessPolicyExplanation::Protected {
+                    scope,
+                    purpose,
+                    row_binding,
+                } => {
+                    let _ = writeln!(output, "      access: protected; scope={scope}");
+                    if let Some(purpose) = purpose {
+                        let _ = writeln!(
+                            output,
+                            "      purpose: claim={}; allowed-value-count={}",
+                            purpose.claim, purpose.allowed_value_count
+                        );
+                    }
+                    if let Some(row_binding) = row_binding {
+                        let authority = match &row_binding.authority_source {
+                            RowAuthorityExplanation::Principal => "principal".to_owned(),
+                            RowAuthorityExplanation::Claim { claim } => {
+                                format!("claim:{claim}")
+                            }
+                        };
+                        let _ = writeln!(
+                            output,
+                            "      row binding: authority={authority}; source-column={}",
+                            row_binding.source_column
+                        );
+                    }
+                }
+            }
+            let _ = writeln!(
+                output,
+                "      processing: {}; columns={}",
+                handling_name(access_profile.processing.handling),
+                comma_list(&access_profile.processing.source_columns),
+            );
+            let _ = writeln!(
+                output,
+                "      disclosure: {}; profile={}; properties={}",
+                handling_name(access_profile.disclosure.handling),
+                access_profile.disclosure.profile_identifier,
+                comma_list(&access_profile.disclosure.properties),
+            );
+            if access_profile.transforms.is_empty() {
+                let _ = writeln!(output, "      transforms: none");
+            } else {
+                let _ = writeln!(output, "      transforms:");
+                for transform in &access_profile.transforms {
+                    match transform {
+                        TransformExplanation::PartialString {
+                            property,
+                            identifier,
+                            reveal,
+                            characters,
+                        } => {
+                            let reveal = match reveal {
+                                crate::contract::PartialStringReveal::Prefix => "prefix",
+                                crate::contract::PartialStringReveal::Suffix => "suffix",
+                            };
+                            let _ = writeln!(
+                                output,
+                                "        {property}: partial-string; id={identifier}; reveal={reveal}; characters={characters}"
+                            );
+                        }
+                        TransformExplanation::DatePrecision {
+                            property,
+                            identifier,
+                            source_type,
+                            precision,
+                        } => {
+                            let source_type = match source_type {
+                                crate::contract::DateInputType::Date => "date",
+                                crate::contract::DateInputType::DateTime => "date-time",
+                            };
+                            let precision = match precision {
+                                crate::contract::DatePrecision::Year => "year",
+                                crate::contract::DatePrecision::YearMonth => "year-month",
+                            };
+                            let _ = writeln!(
+                                output,
+                                "        {property}: date-precision; id={identifier}; source-type={source_type}; precision={precision}"
+                            );
+                        }
+                    }
+                }
+            }
+            let _ = writeln!(output, "      wire formats:");
+            for format in &access_profile.wire_formats {
+                let profiles = format
+                    .format_profiles
+                    .iter()
+                    .map(|profile| format_profile_name(profile.id))
+                    .collect::<Vec<_>>();
+                let profile_suffix = if profiles.is_empty() {
+                    String::new()
+                } else {
+                    format!("; format-profiles={}", profiles.join(", "))
+                };
+                let _ = writeln!(
+                    output,
+                    "        {}: {}{}",
+                    wire_format_name(format.id),
+                    format.media_type,
+                    profile_suffix
+                );
+            }
+            let _ = writeln!(
+                output,
+                "      cache: {}",
+                match access_profile.cache.kind {
+                    CachePosture::PublicRevalidate => "public-revalidate",
+                    CachePosture::NoStore => "no-store",
+                }
+            );
+        }
+    }
+    output
+}
+
+fn operation_http_binding(
+    resource: &CompiledResource,
+    operation: &CompiledOperation,
+) -> (HttpMethod, String) {
+    match &operation.kind {
+        OperationKind::List => (
+            HttpMethod::Get,
+            format!("/v2/resources/{}/records", resource.id),
+        ),
+        OperationKind::Read => (
+            HttpMethod::Get,
+            format!("/v2/resources/{}/records/{{recordIdentifier}}", resource.id),
+        ),
+        OperationKind::Lookup { name } => (
+            HttpMethod::Post,
+            format!("/v2/resources/{}/lookups/{name}", resource.id),
+        ),
+        OperationKind::Search { name } => (
+            HttpMethod::Get,
+            format!("/v2/resources/{}/searches/{name}", resource.id),
+        ),
+    }
+}
+
+fn query_explanation(operation: &CompiledOperation) -> QueryExplanation {
+    let mut filters = operation
+        .query
+        .filters
+        .iter()
+        .map(|filter| filter.parameter.clone())
+        .collect::<Vec<_>>();
+    filters.sort();
+    let exact_filters_available = !filters.is_empty();
+    let unfiltered_applicable = matches!(operation.kind, OperationKind::List);
+    let pagination = operation.query.pagination.as_ref();
+    let lookup = matches!(operation.kind, OperationKind::Lookup { .. });
+    let mut selectors = operation
+        .query
+        .selectors
+        .iter()
+        .map(|selector| selector.name.clone())
+        .collect::<Vec<_>>();
+    selectors.sort();
+    let spatial = operation
+        .query
+        .spatial_bbox
+        .as_ref()
+        .map(|bbox| SpatialQueryExplanation {
+            parameter: "bbox".into(),
+            crs: CRS84_URI.into(),
+            predicate: "inclusive-point-within-bbox".into(),
+            maximum_longitude_span_degrees: bbox.maximum_longitude_span_degrees,
+            maximum_latitude_span_degrees: bbox.maximum_latitude_span_degrees,
+        });
+    let capabilities = vec![
+        QueryCapabilityExplanation {
+            id: QueryCapabilityIdentifier::ExactFilters,
+            availability: available(exact_filters_available),
+            reason: if exact_filters_available {
+                CapabilityReason::DeclaredExactFilters
+            } else {
+                CapabilityReason::NoDeclaredExactFilters
+            },
+            required: exact_filters_available && !operation.query.allow_unfiltered,
+            parameters: filters,
+            maximum_request_body_bytes: None,
+            default_page_size: None,
+            maximum_page_size: None,
+            spatial: None,
+        },
+        QueryCapabilityExplanation {
+            id: QueryCapabilityIdentifier::Unfiltered,
+            availability: available(unfiltered_applicable && operation.query.allow_unfiltered),
+            reason: if !unfiltered_applicable {
+                CapabilityReason::NotApplicableToOperation
+            } else if operation.query.allow_unfiltered {
+                CapabilityReason::OperationAllowsUnfiltered
+            } else {
+                CapabilityReason::OperationRequiresDeclaredFilter
+            },
+            required: false,
+            parameters: Vec::new(),
+            maximum_request_body_bytes: None,
+            default_page_size: None,
+            maximum_page_size: None,
+            spatial: None,
+        },
+        QueryCapabilityExplanation {
+            id: QueryCapabilityIdentifier::Pagination,
+            availability: available(pagination.is_some()),
+            reason: if pagination.is_some() {
+                CapabilityReason::PaginationConfigured
+            } else {
+                CapabilityReason::PaginationNotApplicable
+            },
+            required: false,
+            parameters: pagination
+                .map(|_| vec!["pageSize".into(), "cursor".into()])
+                .unwrap_or_default(),
+            maximum_request_body_bytes: None,
+            default_page_size: pagination.map(|value| value.default_page_size),
+            maximum_page_size: pagination.map(|value| value.maximum_page_size),
+            spatial: None,
+        },
+        QueryCapabilityExplanation {
+            id: QueryCapabilityIdentifier::ExactLookup,
+            availability: available(lookup),
+            reason: if lookup {
+                CapabilityReason::ExactLookupOperation
+            } else {
+                CapabilityReason::NotExactLookupOperation
+            },
+            required: lookup,
+            parameters: selectors,
+            maximum_request_body_bytes: operation.query.maximum_request_body_bytes,
+            default_page_size: None,
+            maximum_page_size: None,
+            spatial: None,
+        },
+        QueryCapabilityExplanation {
+            id: QueryCapabilityIdentifier::PointBbox,
+            availability: available(spatial.is_some()),
+            reason: if spatial.is_some() {
+                CapabilityReason::PointBboxSearchOperation
+            } else {
+                CapabilityReason::NotPointBboxSearchOperation
+            },
+            required: spatial.is_some(),
+            parameters: spatial
+                .as_ref()
+                .map(|_| vec!["bbox".into()])
+                .unwrap_or_default(),
+            maximum_request_body_bytes: None,
+            default_page_size: None,
+            maximum_page_size: None,
+            spatial,
+        },
+        QueryCapabilityExplanation {
+            id: QueryCapabilityIdentifier::CallerSorting,
+            availability: CapabilityAvailability::Unavailable,
+            reason: CapabilityReason::FixedOrderOnly,
+            required: false,
+            parameters: Vec::new(),
+            maximum_request_body_bytes: None,
+            default_page_size: None,
+            maximum_page_size: None,
+            spatial: None,
+        },
+    ];
+    QueryExplanation {
+        capabilities,
+        fixed_order_by: operation.query.order_by.clone(),
+    }
+}
+
+fn available(value: bool) -> CapabilityAvailability {
+    if value {
+        CapabilityAvailability::Available
+    } else {
+        CapabilityAvailability::Unavailable
+    }
+}
+
+fn access_policy_explanation(access: &CompiledAccess) -> AccessPolicyExplanation {
+    match access {
+        CompiledAccess::Public => AccessPolicyExplanation::Public,
+        CompiledAccess::Protected {
+            scope,
+            purpose,
+            row_binding,
+        } => AccessPolicyExplanation::Protected {
+            scope: scope.clone(),
+            purpose: purpose.as_ref().map(|purpose| PurposeExplanation {
+                claim: purpose.claim.clone(),
+                allowed_value_count: purpose.allowed.len(),
+            }),
+            row_binding: row_binding.as_ref().map(|binding| RowBindingExplanation {
+                authority_source: match &binding.source {
+                    RowAuthoritySource::Principal => RowAuthorityExplanation::Principal,
+                    RowAuthoritySource::Claim(claim) => RowAuthorityExplanation::Claim {
+                        claim: claim.clone(),
+                    },
+                },
+                source_column: binding.source_column.clone(),
+            }),
+        },
+    }
+}
+
+fn transform_explanations(
+    resource: &CompiledResource,
+    access_profile: &CompiledAccessProfile,
+) -> Vec<TransformExplanation> {
+    let selectable = access_profile
+        .selectable_properties
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut transforms = resource
+        .properties
+        .iter()
+        .filter(|property| selectable.contains(property.name.as_str()))
+        .filter_map(|property| {
+            property
+                .transform
+                .as_ref()
+                .map(|transform| match transform {
+                    CompiledTransform::PartialString {
+                        identifier,
+                        reveal,
+                        characters,
+                    } => TransformExplanation::PartialString {
+                        property: property.name.clone(),
+                        identifier: identifier.clone(),
+                        reveal: *reveal,
+                        characters: *characters,
+                    },
+                    CompiledTransform::DatePrecision {
+                        identifier,
+                        source_type,
+                        precision,
+                    } => TransformExplanation::DatePrecision {
+                        property: property.name.clone(),
+                        identifier: identifier.clone(),
+                        source_type: *source_type,
+                        precision: *precision,
+                    },
+                })
+        })
+        .collect::<Vec<_>>();
+    transforms.sort_by(|left, right| transform_property(left).cmp(transform_property(right)));
+    transforms
+}
+
+fn transform_property(transform: &TransformExplanation) -> &str {
+    match transform {
+        TransformExplanation::PartialString { property, .. }
+        | TransformExplanation::DatePrecision { property, .. } => property,
+    }
+}
+
+fn http_method(method: HttpMethod) -> &'static str {
+    match method {
+        HttpMethod::Get => "GET",
+        HttpMethod::Post => "POST",
+    }
+}
+
+fn consultation_pattern_name(pattern: ConsultationPattern) -> &'static str {
+    match pattern {
+        ConsultationPattern::List => "list",
+        ConsultationPattern::Retrieve => "retrieve",
+        ConsultationPattern::Search => "search",
+    }
+}
+
+fn query_capability_name(capability: QueryCapabilityIdentifier) -> &'static str {
+    match capability {
+        QueryCapabilityIdentifier::ExactFilters => "exact-filters",
+        QueryCapabilityIdentifier::Unfiltered => "unfiltered",
+        QueryCapabilityIdentifier::Pagination => "pagination",
+        QueryCapabilityIdentifier::ExactLookup => "exact-lookup",
+        QueryCapabilityIdentifier::PointBbox => "point-bbox",
+        QueryCapabilityIdentifier::CallerSorting => "caller-sorting",
+    }
+}
+
+fn availability_name(availability: CapabilityAvailability) -> &'static str {
+    match availability {
+        CapabilityAvailability::Available => "available",
+        CapabilityAvailability::Unavailable => "unavailable",
+    }
+}
+
+fn capability_reason_name(reason: CapabilityReason) -> &'static str {
+    match reason {
+        CapabilityReason::DeclaredExactFilters => "declared-exact-filters",
+        CapabilityReason::NoDeclaredExactFilters => "no-declared-exact-filters",
+        CapabilityReason::OperationAllowsUnfiltered => "operation-allows-unfiltered",
+        CapabilityReason::OperationRequiresDeclaredFilter => "operation-requires-declared-filter",
+        CapabilityReason::PaginationConfigured => "pagination-configured",
+        CapabilityReason::PaginationNotApplicable => "pagination-not-applicable",
+        CapabilityReason::ExactLookupOperation => "exact-lookup-operation",
+        CapabilityReason::NotExactLookupOperation => "not-exact-lookup-operation",
+        CapabilityReason::PointBboxSearchOperation => "point-bbox-search-operation",
+        CapabilityReason::NotPointBboxSearchOperation => "not-point-bbox-search-operation",
+        CapabilityReason::FixedOrderOnly => "fixed-order-only",
+        CapabilityReason::NotApplicableToOperation => "not-applicable-to-operation",
+    }
+}
+
+fn handling_name(handling: Handling) -> &'static str {
+    match handling {
+        Handling::Public => "public",
+        Handling::Internal => "internal",
+        Handling::Confidential => "confidential",
+        Handling::Restricted => "restricted",
+    }
+}
+
+fn comma_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".into()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn wire_format_name(format: WireFormatIdentifier) -> &'static str {
+    match format {
+        WireFormatIdentifier::Json => "json",
+        WireFormatIdentifier::JsonLd => "json-ld",
+        WireFormatIdentifier::Geojson => "geojson",
+    }
+}
+
+fn format_profile_name(profile: FormatProfileIdentifier) -> &'static str {
+    match profile {
+        FormatProfileIdentifier::Rfc7946 => "rfc7946",
+        FormatProfileIdentifier::Jsonfg => "jsonfg",
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -500,7 +1234,7 @@ pub struct ContextualReviewFinding {
     pub status: ContextualFindingStatus,
     pub resource: String,
     pub operation: Option<String>,
-    pub representation: Option<String>,
+    pub access_profile: Option<String>,
     pub properties: Vec<String>,
     pub source_columns: Vec<String>,
     pub message: String,
@@ -513,7 +1247,7 @@ pub enum ContextualFindingStatus {
 }
 
 /// Generate fixed contextual prompts. Findings never grant access, select a
-/// representation, or alter a compiled handling floor.
+/// access profile, or alter a compiled handling floor.
 pub fn contextual_review_findings(
     registry: &CompiledRegistry,
     classification_inventory_digest: &str,
@@ -653,14 +1387,14 @@ pub fn contextual_review_findings(
         }
 
         for operation in &resource.operations {
-            for representation in &operation.representations {
+            for access_profile in &operation.access_profiles {
                 let restrictive_selectors = operation
                     .query
                     .selectors
                     .iter()
                     .filter(|selector| {
                         column_handling(resource, &selector.source_column)
-                            .is_some_and(|handling| handling > representation.disclosure_handling)
+                            .is_some_and(|handling| handling > access_profile.disclosure_handling)
                     })
                     .collect::<Vec<_>>();
                 if !restrictive_selectors.is_empty() {
@@ -669,8 +1403,8 @@ pub fn contextual_review_findings(
                         "classification.context.selector_more_restrictive_than_disclosure",
                         resource,
                         Some(&operation.identifier),
-                        Some(&representation.id),
-                        representation.selectable_properties.iter().cloned(),
+                        Some(&access_profile.id),
+                        access_profile.selectable_properties.iter().cloned(),
                         restrictive_selectors
                             .iter()
                             .map(|selector| selector.source_column.clone()),
@@ -678,22 +1412,22 @@ pub fn contextual_review_findings(
                     );
                 }
                 if matches!(operation.kind, OperationKind::List)
-                    && representation.disclosure_handling >= Handling::Confidential
+                    && access_profile.disclosure_handling >= Handling::Confidential
                 {
                     push_finding(
                         &mut findings,
                         "classification.context.nonpublic_list_disclosure",
                         resource,
                         Some(&operation.identifier),
-                        Some(&representation.id),
-                        representation.selectable_properties.iter().cloned(),
+                        Some(&access_profile.id),
+                        access_profile.selectable_properties.iter().cloned(),
                         std::iter::empty(),
-                        "confidential or restricted data appears in a list representation",
+                        "confidential or restricted data appears in a list access profile",
                     );
                 }
-                if matches!(representation.access, CompiledAccess::Public) {
-                    let disclosed_columns = disclosed_source_columns(resource, representation);
-                    let hidden_nonpublic = processed_columns(operation, representation)
+                if matches!(access_profile.access, CompiledAccess::Public) {
+                    let disclosed_columns = disclosed_source_columns(resource, access_profile);
+                    let hidden_nonpublic = processed_columns(operation, access_profile)
                         .into_iter()
                         .filter(|column| !disclosed_columns.contains(column))
                         .filter(|column| {
@@ -707,10 +1441,10 @@ pub fn contextual_review_findings(
                             "classification.context.public_processes_hidden_nonpublic",
                             resource,
                             Some(&operation.identifier),
-                            Some(&representation.id),
-                            representation.selectable_properties.iter().cloned(),
+                            Some(&access_profile.id),
+                            access_profile.selectable_properties.iter().cloned(),
                             hidden_nonpublic,
-                            "a public representation processes hidden non-public source columns",
+                            "a public access profile processes hidden non-public source columns",
                         );
                     }
                 }
@@ -721,7 +1455,7 @@ pub fn contextual_review_findings(
         left.resource
             .cmp(&right.resource)
             .then(left.operation.cmp(&right.operation))
-            .then(left.representation.cmp(&right.representation))
+            .then(left.access_profile.cmp(&right.access_profile))
             .then(left.code.cmp(&right.code))
             .then(left.properties.cmp(&right.properties))
             .then(left.source_columns.cmp(&right.source_columns))
@@ -1213,13 +1947,13 @@ fn authored_hints(contract: &RegistryContract) -> BTreeMap<(String, String, Stri
                     );
                 }
             }
-            for (_, representation) in operation.representations.iter() {
-                add_access_roles(&mut hints, source, view, &representation.access);
+            for (_, access_profile) in operation.access_profiles.iter() {
+                add_access_roles(&mut hints, source, view, &access_profile.access);
             }
         }
         if let Some(operation) = &resource.operations.read {
-            for (_, representation) in operation.representations.iter() {
-                add_access_roles(&mut hints, source, view, &representation.access);
+            for (_, access_profile) in operation.access_profiles.iter() {
+                add_access_roles(&mut hints, source, view, &access_profile.access);
             }
         }
         for lookup in &resource.operations.lookups {
@@ -1235,8 +1969,24 @@ fn authored_hints(contract: &RegistryContract) -> BTreeMap<(String, String, Stri
                     add_codelist(&mut hints, source, view, &selector.source_column);
                 }
             }
-            for (_, representation) in lookup.representations.iter() {
-                add_access_roles(&mut hints, source, view, &representation.access);
+            for (_, access_profile) in lookup.access_profiles.iter() {
+                add_access_roles(&mut hints, source, view, &access_profile.access);
+            }
+        }
+        for search in &resource.operations.searches {
+            for property_name in &search.order_by {
+                if let Some(property) = resource.properties.get(property_name) {
+                    add_role(
+                        &mut hints,
+                        source,
+                        view,
+                        &property.source_column,
+                        AuthoredRole::Order,
+                    );
+                }
+            }
+            for (_, access_profile) in search.access_profiles.iter() {
+                add_access_roles(&mut hints, source, view, &access_profile.access);
             }
         }
     }
@@ -1526,14 +2276,15 @@ fn operation_kind(kind: &OperationKind) -> String {
         OperationKind::List => "list".into(),
         OperationKind::Read => "read".into(),
         OperationKind::Lookup { name } => format!("lookup:{name}"),
+        OperationKind::Search { name } => format!("search:{name}"),
     }
 }
 
 fn processed_columns(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> Vec<String> {
-    let mut columns = representation
+    let mut columns = access_profile
         .projected_columns
         .iter()
         .cloned()
@@ -1545,6 +2296,10 @@ fn processed_columns(
             .iter()
             .map(|filter| filter.source_column.clone()),
     );
+    if let Some(spatial) = &operation.query.spatial_bbox {
+        columns.insert(spatial.longitude_column.clone());
+        columns.insert(spatial.latitude_column.clone());
+    }
     columns.extend(operation.query.order_by.iter().cloned());
     columns.extend(
         operation
@@ -1556,7 +2311,7 @@ fn processed_columns(
     if let CompiledAccess::Protected {
         row_binding: Some(binding),
         ..
-    } = &representation.access
+    } = &access_profile.access
     {
         columns.insert(binding.source_column.clone());
     }
@@ -1565,7 +2320,7 @@ fn processed_columns(
 
 fn disclosed_source_columns(
     resource: &CompiledResource,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> BTreeSet<String> {
     let mut columns = [
         &resource.record_context.record_identifier_column,
@@ -1576,13 +2331,21 @@ fn disclosed_source_columns(
     .into_iter()
     .cloned()
     .collect::<BTreeSet<_>>();
-    for name in &representation.selectable_properties {
+    for name in &access_profile.selectable_properties {
         if let Some(property) = resource
             .properties
             .iter()
             .find(|property| property.name == *name && property.transform.is_none())
         {
             columns.insert(property.source_column.clone());
+        }
+        if let Some(geometry) = resource
+            .primary_geometry
+            .as_ref()
+            .filter(|geometry| geometry.name == *name)
+        {
+            columns.insert(geometry.longitude_column.clone());
+            columns.insert(geometry.latitude_column.clone());
         }
     }
     columns
@@ -1606,7 +2369,7 @@ fn push_finding<I, J>(
     code: &str,
     resource: &CompiledResource,
     operation: Option<&str>,
-    representation: Option<&str>,
+    access_profile: Option<&str>,
     properties: I,
     source_columns: J,
     message: &str,
@@ -1619,7 +2382,7 @@ fn push_finding<I, J>(
         status: ContextualFindingStatus::ReviewRequired,
         resource: resource.id.clone(),
         operation: operation.map(str::to_owned),
-        representation: representation.map(str::to_owned),
+        access_profile: access_profile.map(str::to_owned),
         properties: sorted_unique(properties.into_iter()),
         source_columns: sorted_unique(source_columns.into_iter()),
         message: message.into(),
@@ -1720,6 +2483,11 @@ fn push_review_diagnostic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler::{
+        classification_inventory_digest, compile_contract_with_governed_files,
+        tests as compiler_tests,
+    };
+    use crate::model::{CompileProfile, CompiledPurpose, CompiledRowBinding};
 
     #[test]
     fn pack_tampering_is_refused_before_parsing() {
@@ -1737,5 +2505,138 @@ mod tests {
             load_core_pack(CORE_PACK_BYTES, &format!("sha256:{}", "0".repeat(64))),
             Err(IdentificationError::PackDigestMismatch)
         );
+    }
+
+    #[test]
+    fn operation_explanation_is_canonical_value_free_and_complete_for_spatial_search() {
+        let contract = compiler_tests::spatial_contract(true);
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::spatial_observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files_for(&contract),
+        )
+        .expect("spatial contract compiles");
+        registry.resources[0].properties[0].transform = Some(CompiledTransform::PartialString {
+            identifier: "partial-string:suffix:2".into(),
+            reveal: crate::contract::PartialStringReveal::Suffix,
+            characters: 2,
+        });
+        let canary = "PURPOSE_VALUE_CANARY_58a4c9";
+        registry.resources[0].operations[0].access_profiles[0].access = CompiledAccess::Protected {
+            scope: "registry:records:search".into(),
+            purpose: Some(CompiledPurpose {
+                claim: "purpose".into(),
+                allowed: vec![canary.into()],
+            }),
+            row_binding: Some(CompiledRowBinding {
+                source: RowAuthoritySource::Claim("authority".into()),
+                source_column: "name".into(),
+            }),
+        };
+        let mut hidden_geometry = registry.resources[0].operations[0].access_profiles[0].clone();
+        hidden_geometry.id = "hidden-geometry".into();
+        hidden_geometry
+            .selectable_properties
+            .retain(|property| property != "location");
+        hidden_geometry
+            .projected_columns
+            .retain(|column| !matches!(column.as_str(), "longitude" | "latitude"));
+        registry.resources[0].operations[0]
+            .access_profiles
+            .push(hidden_geometry);
+        let digest = classification_inventory_digest(&registry).expect("inventory digest");
+        let explanation = operation_explanation(&registry, &digest).expect("explanation");
+        assert_eq!(
+            explanation.api_version,
+            "relay.registrystack.org/operation-explanation/v1"
+        );
+        assert_eq!(explanation.kind, "OperationExplanation");
+        let operation = &explanation.operations[0];
+        assert_eq!(operation.operation_kind, "search:within-bbox");
+        assert_eq!(
+            operation.http.path,
+            "/v2/resources/record/searches/within-bbox"
+        );
+        let bbox = operation
+            .query
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == QueryCapabilityIdentifier::PointBbox)
+            .expect("bbox capability");
+        assert_eq!(bbox.availability, CapabilityAvailability::Available);
+        assert_eq!(bbox.reason, CapabilityReason::PointBboxSearchOperation);
+        assert!(bbox.required);
+        let caller_sorting = operation
+            .query
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == QueryCapabilityIdentifier::CallerSorting)
+            .expect("sorting capability");
+        assert_eq!(
+            caller_sorting.availability,
+            CapabilityAvailability::Unavailable
+        );
+        assert_eq!(caller_sorting.reason, CapabilityReason::FixedOrderOnly);
+
+        let access_profile = operation
+            .access_profiles
+            .iter()
+            .find(|profile| profile.id == "public")
+            .expect("public access profile");
+        assert_eq!(access_profile.wire_formats.len(), 3);
+        assert!(matches!(
+            &access_profile.access,
+            AccessPolicyExplanation::Protected {
+                purpose: Some(PurposeExplanation {
+                    allowed_value_count: 1,
+                    ..
+                }),
+                row_binding: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            access_profile.transforms.as_slice(),
+            [TransformExplanation::PartialString {
+                property,
+                characters: 2,
+                ..
+            }] if property == "name"
+        ));
+        let hidden_geometry = operation
+            .access_profiles
+            .iter()
+            .find(|profile| profile.id == "hidden-geometry")
+            .expect("hidden-geometry access profile");
+        assert!(hidden_geometry
+            .processing
+            .source_columns
+            .contains(&"longitude".into()));
+        assert!(hidden_geometry
+            .processing
+            .source_columns
+            .contains(&"latitude".into()));
+        assert_eq!(hidden_geometry.wire_formats.len(), 2);
+        assert!(hidden_geometry
+            .wire_formats
+            .iter()
+            .all(|format| format.id != WireFormatIdentifier::Geojson));
+
+        let first = render_operation_explanation(&explanation).expect("canonical bytes");
+        let second = render_operation_explanation(&explanation).expect("canonical bytes again");
+        assert_eq!(first, second);
+        let encoded = String::from_utf8(first).expect("UTF-8 JSON");
+        assert!(!encoded.contains(canary));
+        assert!(encoded.contains("allowedValueCount"));
+        let mut unknown = serde_json::to_value(&explanation).expect("explanation serializes");
+        unknown["operations"][0]["selection"]["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<OperationExplanation>(unknown).is_err());
+        let text = render_operation_explanation_text(&explanation);
+        assert!(text.contains("Resource: record"));
+        assert!(text.contains("Operation: record.search.within-bbox"));
+        assert!(text.contains("max-longitude-span=10"));
+        assert!(text.contains("format-profiles=rfc7946, jsonfg"));
+        assert!(!text.contains(canary));
     }
 }

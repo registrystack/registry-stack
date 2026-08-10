@@ -33,10 +33,15 @@ TRANSFORM_FAILURE_SCENARIOS = {
     "social-invalid-transform",
     "civil-invalid-transform",
 }
-REPRESENTATION_CONCEALMENT_STEPS = {
-    "social-assistance": {"unauthorized-representation", "unknown-representation"},
-    "business-registry": {"registrar-representation-denied", "public-representation-unknown"},
-    "civil-event": {"supervisory-representation-denied", "invalid-representation"},
+ACCESS_PROFILE_CONCEALMENT_STEPS = {
+    "social-assistance": {"unauthorized-access-profile", "unknown-access-profile"},
+    "business-registry": {
+        "registrar-access-profile-denied",
+        "public-access-profile-unknown",
+        "premises-search-access-profile-denied",
+        "premises-search-access-profile-unknown",
+    },
+    "civil-event": {"supervisory-access-profile-denied", "invalid-access-profile"},
 }
 SECURITY_INVARIANT_IDS = {
     "sec-contract-runtime-separation",
@@ -48,10 +53,10 @@ SECURITY_INVARIANT_IDS = {
     "sec-resource-existence-concealment",
     "sec-operation-confinement",
     "sec-classification-review-binding",
-    "sec-finite-representation-authorization",
-    "sec-public-representation-processing-floor",
+    "sec-finite-access-profile-authorization",
+    "sec-public-access-profile-processing-floor",
     "sec-closed-mask-and-date-transforms",
-    "sec-representation-state-and-metadata-binding",
+    "sec-access-profile-state-and-metadata-binding",
     "sec-operation-quota",
     "sec-trusted-context",
     "sec-disclosure-monotonic",
@@ -234,51 +239,89 @@ def validate_review_sidecar(
         errors.append(f"{project.name}: imported or manual review must not carry generated binding")
 
 
-def validate_acceptance_representation_contracts(errors: list[str]) -> None:
+def validate_acceptance_access_profile_contracts(errors: list[str]) -> None:
     expected_methods = {
         "social-assistance": "generated",
         "business-registry": "imported",
         "civil-event": "manual",
     }
-    expected_representations = {
+    expected_access_profiles = {
         "social-assistance": {"limited", "caseworker"},
-        "business-registry": {"public-register", "registrar"},
+        "business-registry": {
+            "public-register",
+            "registrar",
+            "public-premises",
+            "registrar-premises",
+        },
         "civil-event": {"registrar", "supervisory"},
     }
     for project_name in PROJECTS:
         project = PRODUCT_ROOT / "acceptance" / project_name
         registry = mapping(load_yaml(project / "registry.yaml"), f"{project_name} registry", errors)
+        if registry.get("apiVersion") != "relay.registrystack.org/v2alpha1":
+            errors.append(f"{project_name}: RegistryContract apiVersion is not frozen")
         validate_review_sidecar(project, registry, expected_methods[project_name], errors)
         resources = sequence(registry.get("resources"), f"{project_name} resources", errors)
-        operations = mapping(resources[0].get("operations") if resources else None, f"{project_name} operations", errors)
-        representations: set[str] = set()
-        operation_definitions = [operations.get("list"), operations.get("read")] + list(
-            operations.get("lookups", []) if isinstance(operations.get("lookups"), list) else []
-        )
-        for index, operation in enumerate(operation_definitions):
-            if operation is None:
-                continue
-            operation = mapping(operation, f"{project_name} operation[{index}]", errors)
-            profiles = mapping(operation.get("representations"), f"{project_name} operation[{index}] representations", errors)
-            default = operation.get("defaultRepresentation")
-            if not isinstance(default, str) or default not in profiles or not profiles:
-                errors.append(f"{project_name}: every declared operation needs one declared default representation")
-            for identifier, representation in profiles.items():
-                representations.add(identifier)
-                representation = mapping(representation, f"{project_name} representation {identifier}", errors)
-                require_exact_keys(
-                    representation,
-                    {"access", "disclosureProfile"},
-                    f"{project_name} representation {identifier}",
+        access_profile_ids: set[str] = set()
+        primary_operations: dict[str, Any] = {}
+        for resource_index, raw_resource in enumerate(resources):
+            resource = mapping(raw_resource, f"{project_name} resource[{resource_index}]", errors)
+            operations = mapping(
+                resource.get("operations"),
+                f"{project_name} resource[{resource_index}] operations",
+                errors,
+            )
+            if resource_index == 0:
+                primary_operations = operations
+            operation_definitions = [operations.get("list"), operations.get("read")]
+            operation_definitions.extend(
+                operations.get("lookups", [])
+                if isinstance(operations.get("lookups"), list)
+                else []
+            )
+            operation_definitions.extend(
+                operations.get("searches", [])
+                if isinstance(operations.get("searches"), list)
+                else []
+            )
+            for operation_index, operation in enumerate(operation_definitions):
+                if operation is None:
+                    continue
+                operation = mapping(
+                    operation,
+                    f"{project_name} resource[{resource_index}] operation[{operation_index}]",
                     errors,
                 )
-        if not expected_representations[project_name].issubset(representations):
-            errors.append(f"{project_name}: required acceptance representations are missing")
+                profiles = mapping(
+                    operation.get("accessProfiles"),
+                    f"{project_name} resource[{resource_index}] operation[{operation_index}] accessProfiles",
+                    errors,
+                )
+                default = operation.get("defaultAccessProfile")
+                if not isinstance(default, str) or default not in profiles or not profiles:
+                    errors.append(
+                        f"{project_name}: every declared operation needs one declared default access profile"
+                    )
+                for identifier, access_profile in profiles.items():
+                    access_profile_ids.add(identifier)
+                    access_profile = mapping(
+                        access_profile,
+                        f"{project_name} access profile {identifier}",
+                        errors,
+                    )
+                    require_exact_keys(
+                        access_profile,
+                        {"access", "disclosureProfile"},
+                        f"{project_name} access profile {identifier}",
+                        errors,
+                    )
+        if not expected_access_profiles[project_name].issubset(access_profile_ids):
+            errors.append(f"{project_name}: required acceptance access profiles are missing")
         if project_name == "social-assistance":
             properties = resources[0].get("properties", {}) if resources else {}
             transform = mapping(properties.get("maskedEnrolmentReference", {}).get("transform"), "social partial-string transform", errors)
             if transform != {"kind": "partial-string", "reveal": "suffix", "characters": 4}:
-                errors.append("social-assistance: limited representation must use the frozen partial-string transform")
+                errors.append("social-assistance: limited access profile must use the frozen partial-string transform")
             runtime = mapping(
                 load_yaml(project / "runtime.yaml"), "social-assistance runtime", errors
             )
@@ -292,8 +335,8 @@ def validate_acceptance_representation_contracts(errors: list[str]) -> None:
             properties = resources[0].get("properties", {}) if resources else {}
             transform = mapping(properties.get("registrationYear", {}).get("transform"), "civil date-precision transform", errors)
             if transform != {"kind": "date-precision", "sourceType": "date", "precision": "year"}:
-                errors.append("civil-event: supervisory representation must use the frozen date-precision transform")
-            if operations.get("list") is not None:
+                errors.append("civil-event: supervisory access profile must use the frozen date-precision transform")
+            if primary_operations.get("list") is not None:
                 errors.append("civil-event: collection list remains out of scope")
             runtime = mapping(
                 load_yaml(project / "runtime.yaml"), "civil-event runtime", errors
@@ -304,10 +347,92 @@ def validate_acceptance_representation_contracts(errors: list[str]) -> None:
                     "civil-event: lookup quota fixture must admit exactly the eight "
                     "pre-quota lookup executions before the named rate-limit proof"
                 )
+        if project_name == "business-registry":
+            premises = next(
+                (
+                    resource
+                    for resource in resources
+                    if isinstance(resource, dict)
+                    and resource.get("id") == "registered-premises"
+                ),
+                None,
+            )
+            premises = mapping(premises, "business-registry registered-premises", errors)
+            operations = mapping(
+                premises.get("operations"),
+                "business-registry registered-premises operations",
+                errors,
+            )
+            list_operation = mapping(
+                operations.get("list"),
+                "business-registry registered-premises list",
+                errors,
+            )
+            if "spatialQuery" in list_operation:
+                errors.append("business-registry: bbox must not be configured on list")
+            searches = sequence(
+                operations.get("searches"),
+                "business-registry registered-premises searches",
+                errors,
+            )
+            search = next(
+                (
+                    item
+                    for item in searches
+                    if isinstance(item, dict) and item.get("id") == "within-bbox"
+                ),
+                None,
+            )
+            search = mapping(search, "business-registry within-bbox search", errors)
+            expected_query = {
+                "kind": "point-bbox",
+                "maximumLongitudeSpanDegrees": 2,
+                "maximumLatitudeSpanDegrees": 2,
+            }
+            if search.get("query") != expected_query:
+                errors.append(
+                    "business-registry: within-bbox must retain the frozen bounded Point query"
+                )
+            search_profiles = mapping(
+                search.get("accessProfiles"),
+                "business-registry within-bbox access profiles",
+                errors,
+            )
+            protected_search = mapping(
+                search_profiles.get("registrar-premises"),
+                "business-registry protected search access profile",
+                errors,
+            )
+            list_profiles = mapping(
+                list_operation.get("accessProfiles"),
+                "business-registry premises list access profiles",
+                errors,
+            )
+            protected_list = mapping(
+                list_profiles.get("registrar-premises"),
+                "business-registry protected list access profile",
+                errors,
+            )
+            search_access = mapping(
+                protected_search.get("access"),
+                "business-registry protected search access",
+                errors,
+            )
+            list_access = mapping(
+                protected_list.get("access"),
+                "business-registry protected list access",
+                errors,
+            )
+            search_scope = search_access.get("scope")
+            list_scope = list_access.get("scope")
+            if not all(isinstance(scope, str) and scope for scope in (search_scope, list_scope)):
+                errors.append("business-registry: list and search require exact scopes")
+            elif search_scope == list_scope:
+                errors.append("business-registry: list and search scopes must remain distinct")
 
 
 def validate_catalogs(errors: list[str]) -> None:
-    validate_acceptance_representation_contracts(errors)
+    validate_acceptance_access_profile_contracts(errors)
     layout = mapping(
         load_yaml(PRODUCT_ROOT / "contracts/package-layout.yaml"), "package layout", errors
     )
@@ -377,8 +502,8 @@ def validate_catalogs(errors: list[str]) -> None:
     for required in {
         "openapi-full",
         "openapi-public",
-        "representation-schema",
-        "representation-shacl",
+        "access-profile-schema",
+        "access-profile-shacl",
         "full-record-schema",
         "full-record-shacl",
         "semantic-model",
@@ -389,7 +514,7 @@ def validate_catalogs(errors: list[str]) -> None:
         "audit-event-schema",
         "identification-report",
         "classification-inventory",
-        "representation-report",
+        "operation-explanation",
         "contextual-review-findings",
         "classification-review",
     }:
@@ -397,11 +522,11 @@ def validate_catalogs(errors: list[str]) -> None:
             errors.append(f"artifact inventory: missing {required}")
 
     steps = journey_steps(errors)
-    for project, concealed_steps in REPRESENTATION_CONCEALMENT_STEPS.items():
+    for project, concealed_steps in ACCESS_PROFILE_CONCEALMENT_STEPS.items():
         for step in concealed_steps:
             if steps.get(project, {}).get(step) != (404, "resource.not_found"):
                 errors.append(
-                    f"{project}: {step} must conceal representation existence as 404 resource.not_found"
+                    f"{project}: {step} must conceal access-profile existence as 404 resource.not_found"
                 )
     scenarios = mapping(
         load_yaml(PRODUCT_ROOT / "contracts/acceptance-scenario-matrix.yaml"),

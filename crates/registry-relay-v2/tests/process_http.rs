@@ -166,7 +166,10 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
         output_dir: package,
     })
     .expect("sealed package operation succeeds");
-    assert!(report.is_success(), "acceptance project packages");
+    assert!(
+        report.is_success(),
+        "acceptance project packages: {report:?}"
+    );
 
     let client = Client::builder()
         .no_proxy()
@@ -188,17 +191,42 @@ fn make_business_project_public_only(project: &Path, source: &Path) {
         &fs::read_to_string(&contract_path).expect("business contract reads"),
     )
     .expect("business contract becomes a value");
-    for pointer in [
-        "/resources/0/operations/list/representations",
-        "/resources/0/operations/read/representations",
+    for (pointer, profile) in [
+        ("/resources/0/operations/list/accessProfiles", "registrar"),
+        ("/resources/0/operations/read/accessProfiles", "registrar"),
+        (
+            "/resources/1/operations/read/accessProfiles",
+            "registrar-premises",
+        ),
+        (
+            "/resources/1/operations/searches/0/accessProfiles",
+            "registrar-premises",
+        ),
     ] {
         value
             .pointer_mut(pointer)
             .and_then(Value::as_object_mut)
-            .expect("business representation map")
-            .remove("registrar")
-            .expect("registrar representation exists");
+            .expect("business access-profile map")
+            .remove(profile)
+            .expect("protected access profile exists");
     }
+    let premises_list = value
+        .pointer_mut("/resources/1/operations/list")
+        .and_then(Value::as_object_mut)
+        .expect("premises list operation");
+    premises_list.insert(
+        "defaultAccessProfile".into(),
+        Value::String("public-premises".into()),
+    );
+    premises_list.insert(
+        "accessProfiles".into(),
+        serde_json::json!({
+            "public-premises": {
+                "access": "public",
+                "disclosureProfile": "public-premises"
+            }
+        }),
+    );
     fs::write(
         &contract_path,
         serde_norway::to_string(&value).expect("public-only contract serializes"),

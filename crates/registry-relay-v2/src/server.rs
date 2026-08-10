@@ -132,6 +132,10 @@ pub fn router(service: Arc<RelayService>) -> Router {
             post(crate::api::record_lookup),
         )
         .route(
+            "/v2/resources/{resource}/searches/{search}",
+            get(crate::api::record_search),
+        )
+        .route(
             "/v2/artifacts/{artifact_identifier}",
             get(crate::api::artifact),
         )
@@ -230,6 +234,17 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             None,
         ) if !resource.is_empty() && !lookup.is_empty() => {
             "/v2/resources/{resource}/lookups/{lookup}"
+        }
+        (
+            Some("v2"),
+            Some("resources"),
+            Some(resource),
+            Some("searches"),
+            Some(search),
+            None,
+            None,
+        ) if !resource.is_empty() && !search.is_empty() => {
+            "/v2/resources/{resource}/searches/{search}"
         }
         (Some("v2"), Some("artifacts"), Some(artifact_identifier), None, None, None, None)
             if !artifact_identifier.is_empty() =>
@@ -341,6 +356,16 @@ mod tests {
         );
         assert!(!operational_route(&uri).contains("private-registry"));
         assert!(!operational_route(&uri).contains("protected-record"));
+        let search_uri = "/v2/resources/private-registry/searches/within-bbox?bbox=100,10,101,11"
+            .parse()
+            .expect("search URI");
+        assert_eq!(
+            operational_route(&search_uri),
+            "/v2/resources/{resource}/searches/{search}"
+        );
+        assert!(!operational_route(&search_uri).contains("private-registry"));
+        assert!(!operational_route(&search_uri).contains("within-bbox"));
+        assert!(!operational_route(&search_uri).contains("100"));
         assert_eq!(
             operational_method(&http::Method::from_bytes(b"ATTACKER-CONTROLLED").expect("method")),
             "OTHER"

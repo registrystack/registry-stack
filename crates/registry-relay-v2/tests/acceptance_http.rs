@@ -39,9 +39,9 @@ use registry_relay_v2::compiler::{
 use registry_relay_v2::contract::{RegistryContract, RelayRuntime};
 use registry_relay_v2::fixture_contract::{
     parse_journey, FixtureAuthorization as AuthorizationFixture,
-    FixtureExpectation as JourneyExpectation, FixtureGeoJsonRoot as JourneyGeoJsonRoot,
-    FixtureGeometryType as JourneyGeometryType, FixtureJourney as Journey, FixtureMethod,
-    FixtureRepresentationProfile as JourneyRepresentationProfile, FixtureStep as JourneyStep,
+    FixtureExpectation as JourneyExpectation, FixtureFormatProfile as JourneyFormatProfile,
+    FixtureGeoJsonRoot as JourneyGeoJsonRoot, FixtureGeometryType as JourneyGeometryType,
+    FixtureJourney as Journey, FixtureMethod, FixtureStep as JourneyStep,
 };
 use registry_relay_v2::identification::{
     parse_classification_review_yaml, render_classification_review_yaml,
@@ -614,7 +614,7 @@ async fn audit_terminal_failure_discards_held_record_bytes() {
 }
 
 #[tokio::test]
-async fn spatial_representations_validate_and_keep_distinct_cache_identities() {
+async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
     let harness = ProjectHarness::open("business-registry").await;
     let path = "/v2/resources/registered-premises/records/PREM-SYNTH-0001";
     let (json_headers, json) = successful_get(&harness, path, None, None).await;
@@ -622,14 +622,14 @@ async fn spatial_representations_validate_and_keep_distinct_cache_identities() {
         successful_get(&harness, path, Some("application/ld+json"), None).await;
     let (rfc_headers, rfc) = successful_get(
         &harness,
-        &format!("{path}?profile=rfc7946"),
+        &format!("{path}?formatProfile=rfc7946"),
         Some("application/geo+json"),
         None,
     )
     .await;
     let (json_fg_headers, json_fg) = successful_get(
         &harness,
-        &format!("{path}?profile=jsonfg"),
+        &format!("{path}?formatProfile=jsonfg"),
         Some("application/geo+json"),
         None,
     )
@@ -640,7 +640,7 @@ async fn spatial_representations_validate_and_keep_distinct_cache_identities() {
         &harness
             .artifacts
             .get(
-                "artifacts/registered-premises--read--representation-public-premises.context.jsonld",
+                "artifacts/registered-premises--read--access-profile-public-premises.context.jsonld",
             )
             .expect("generated spatial JSON-LD context")
             .content,
@@ -649,7 +649,7 @@ async fn spatial_representations_validate_and_keep_distinct_cache_identities() {
     assert_eq!(
         json_ld.get("@context").and_then(Value::as_str),
         Some(
-            "https://business.example.invalid/v2/artifacts/registered-premises--read--representation-public-premises-context",
+            "https://business.example.invalid/v2/artifacts/registered-premises--read--access-profile-public-premises-context",
         )
     );
     assert_eq!(
@@ -665,7 +665,7 @@ async fn spatial_representations_validate_and_keep_distinct_cache_identities() {
         &harness
             .artifacts
             .get(
-                "artifacts/registered-premises--read--representation-public-premises.geojson.schema.json",
+                "artifacts/registered-premises--read--access-profile-public-premises.geojson.schema.json",
             )
             .expect("generated spatial response schema")
             .content,
@@ -709,10 +709,10 @@ async fn spatial_representations_validate_and_keep_distinct_cache_identities() {
         headers
             .get(ETAG)
             .and_then(|value| value.to_str().ok())
-            .expect("snapshot representation has an ETag")
+            .expect("snapshot format has an ETag")
     })
     .collect::<BTreeSet<_>>();
-    assert_eq!(etags.len(), 4, "each exact representation has its own ETag");
+    assert_eq!(etags.len(), 4, "each exact format has its own ETag");
 
     let json_fg_etag = json_fg_headers
         .get(ETAG)
@@ -722,7 +722,7 @@ async fn spatial_representations_validate_and_keep_distinct_cache_identities() {
         .app
         .clone()
         .oneshot(get_request(
-            &format!("{path}?profile=jsonfg"),
+            &format!("{path}?formatProfile=jsonfg"),
             Some("application/geo+json"),
             Some(json_fg_etag),
         ))
@@ -760,7 +760,7 @@ async fn spatial_terminal_audit_failure_discards_held_feature_bytes() {
     let response = harness
         .app
         .oneshot(get_request(
-            "/v2/resources/registered-premises/records/PREM-SYNTH-0001?profile=jsonfg",
+            "/v2/resources/registered-premises/records/PREM-SYNTH-0001?formatProfile=jsonfg",
             Some("application/geo+json"),
             None,
         ))
@@ -1010,7 +1010,7 @@ async fn operation_bound_metadata_is_no_store_and_links_only_visible_artifacts()
             capability["processingReference"]
                 .as_str()
                 .is_some_and(|reference| reference.ends_with(
-                    "/v2/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-limited-processing"
+                    "/v2/artifacts/assistance-enrolment--lookup-by-case-and-person--access-profile-limited-processing"
                 )),
             "processing metadata link resolves to the mounted artifact identifier"
         );
@@ -1103,6 +1103,126 @@ async fn invalid_bearer_on_unknown_data_routes_is_audited_fail_closed() {
     )
     .await;
     assert_eq!(failing_sink.writes(), 1);
+}
+
+#[tokio::test]
+async fn invalid_bearer_precedes_named_search_resolution() {
+    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
+    let harness = ProjectHarness::open_with_audit(
+        "business-registry",
+        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+    )
+    .await;
+    for uri in [
+        "/v2/resources/registered-premises/searches/within-bbox?bbox=100,13,101,14",
+        "/v2/resources/registered-premises/searches/unknown?bbox=100,13,101,14",
+    ] {
+        assert_problem_code(
+            harness
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header(AUTHORIZATION, "Bearer malformed")
+                        .body(Body::empty())
+                        .expect("search request builds"),
+                )
+                .await
+                .expect("router responds"),
+            StatusCode::UNAUTHORIZED,
+            "auth.invalid_credential",
+        )
+        .await;
+    }
+    let records = sink.values();
+    assert_eq!(records.len(), 2);
+    for record in &records {
+        assert_eq!(record["phase"], "refusal");
+        assert_eq!(record["outcome"], "invalid-credential");
+        assert!(record.get("resourceIdentifier").is_none());
+        assert!(record.get("operationIdentifier").is_none());
+        assert!(record.get("accessProfile").is_none());
+    }
+    let wire = serde_json::to_string(&records).expect("audit serializes");
+    for hidden in [
+        "within-bbox",
+        "searches/unknown",
+        "100,13,101,14",
+        "malformed",
+    ] {
+        assert!(!wire.contains(hidden));
+    }
+}
+
+#[tokio::test]
+async fn bbox_shape_refusals_are_audited_before_any_search_attempt() {
+    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
+    let harness = ProjectHarness::open_with_audit(
+        "business-registry",
+        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+    )
+    .await;
+    for (uri, code) in [
+        (
+            "/v2/resources/registered-premises/searches/within-bbox",
+            "filter.invalid_value",
+        ),
+        (
+            "/v2/resources/registered-premises/searches/within-bbox?bbox=hidden,bbox,canary",
+            "filter.invalid_value",
+        ),
+    ] {
+        assert_problem_code(
+            harness
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds"),
+            StatusCode::BAD_REQUEST,
+            code,
+        )
+        .await;
+    }
+    let journey = project_journey("business-registry");
+    let list_fixture = journey
+        .authorizations
+        .get("premises-list")
+        .expect("premises-list fixture");
+    let list_token = harness.token("premises-list", list_fixture);
+    assert_problem_code(
+        harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/resources/registered-premises/records?bbox=100,13,101,14")
+                    .header(AUTHORIZATION, format!("Bearer {list_token}"))
+                    .body(Body::empty())
+                    .expect("list request builds"),
+            )
+            .await
+            .expect("router responds"),
+        StatusCode::BAD_REQUEST,
+        "filter.unknown_field",
+    )
+    .await;
+    let records = sink.values();
+    assert_eq!(records.len(), 3);
+    assert!(records.iter().all(|record| record["phase"] == "refusal"));
+    assert!(records
+        .iter()
+        .all(|record| record["selectedProperties"] == json!([])));
+    let wire = serde_json::to_string(&records).expect("audit serializes");
+    for hidden in ["hidden,bbox,canary", "100,13,101,14"] {
+        assert!(!wire.contains(hidden));
+    }
 }
 
 #[tokio::test]
@@ -1640,7 +1760,7 @@ fn assert_geojson_expectations(
             }
         }
     }
-    let Some(profile) = expectation.representation_profile else {
+    let Some(profile) = expectation.format_profile else {
         return;
     };
     assert_eq!(
@@ -1651,10 +1771,8 @@ fn assert_geojson_expectations(
         "{label} GeoJSON content type"
     );
     let (uri, conforms_to) = match profile {
-        JourneyRepresentationProfile::Rfc7946 => {
-            ("http://www.opengis.net/def/profile/OGC/0/rfc7946", None)
-        }
-        JourneyRepresentationProfile::JsonFg => (
+        JourneyFormatProfile::Rfc7946 => ("http://www.opengis.net/def/profile/OGC/0/rfc7946", None),
+        JourneyFormatProfile::JsonFg => (
             "http://www.opengis.net/def/profile/OGC/0/jsonfg",
             Some(BTreeSet::from([
                 "http://www.opengis.net/spec/json-fg-1/1.0/conf/core",
@@ -1778,10 +1896,10 @@ fn validate_response_contracts(
         .pointer("/meta/operationIdentifier")
         .and_then(Value::as_str)
         .expect("Record response names its compiled operation");
-    let representation_identifier = document
-        .pointer("/meta/representation")
+    let access_profile_identifier = document
+        .pointer("/meta/accessProfile")
         .and_then(Value::as_str)
-        .expect("Record response names its selected representation");
+        .expect("Record response names its selected access profile");
     let matching_bindings = harness
         .service
         .artifacts
@@ -1789,13 +1907,13 @@ fn validate_response_contracts(
         .iter()
         .filter(|binding| {
             binding.operation_identifier == operation_identifier
-                && binding.representation_identifier == representation_identifier
+                && binding.access_profile_identifier == access_profile_identifier
         })
         .collect::<Vec<_>>();
     assert_eq!(
         matching_bindings.len(),
         1,
-        "{project}/{} must resolve one exact operation and representation binding",
+        "{project}/{} must resolve one exact operation and access-profile binding",
         step.id
     );
     let binding = matching_bindings[0];
@@ -1804,7 +1922,7 @@ fn validate_response_contracts(
         let schema_reference = record
             .get("schemaReference")
             .and_then(Value::as_str)
-            .expect("Record carries its exact permitted-representation schema reference");
+            .expect("Record carries its exact permitted-access-profile schema reference");
         assert_eq!(
             document
                 .pointer("/meta/links/schema")
@@ -1829,7 +1947,7 @@ fn validate_response_contracts(
         assert_eq!(
             matching_schemas.len(),
             1,
-            "{project}/{} must resolve exactly one generated permitted-representation schema",
+            "{project}/{} must resolve exactly one generated permitted-access-profile schema",
             step.id
         );
         let (schema_artifact, schema) = &matching_schemas[0];
@@ -1839,22 +1957,22 @@ fn validate_response_contracts(
             .compile(schema)
             .unwrap_or_else(|_| {
                 panic!(
-                    "{project}/{} generated permitted-representation schema must compile",
+                    "{project}/{} generated permitted-access-profile schema must compile",
                     step.id
                 )
             });
         assert!(
             validator.is_valid(record),
-            "{project}/{} Record must validate against its exact generated permitted-representation schema",
+            "{project}/{} Record must validate against its exact generated permitted-access-profile schema",
             step.id
         );
 
         assert_eq!(
-            binding.representation_schema_path, schema_artifact.path,
-            "{project}/{} schema must belong to the exact operation and representation",
+            binding.access_profile_schema_path, schema_artifact.path,
+            "{project}/{} schema must belong to the exact operation and access profile",
             step.id
         );
-        let shacl_path = &binding.representation_shacl_path;
+        let shacl_path = &binding.access_profile_shacl_path;
         let shacl_artifact = harness
             .service
             .artifacts
@@ -1898,29 +2016,29 @@ fn validate_json_ld_graph(
                 .any(|operation| operation.identifier == binding.operation_identifier)
         })
         .expect("compiled operation belongs to one resource");
-    let representation = resource
+    let access_profile = resource
         .operations
         .iter()
         .find(|operation| operation.identifier == binding.operation_identifier)
         .and_then(|operation| {
             operation
-                .representations
+                .access_profiles
                 .iter()
-                .find(|representation| representation.id == binding.representation_identifier)
+                .find(|access_profile| access_profile.id == binding.access_profile_identifier)
         })
-        .expect("compiled operation carries the selected representation");
+        .expect("compiled operation carries the selected access profile");
     assert_eq!(
         document.get("@context").and_then(Value::as_str),
-        Some(representation.context_reference.as_str()),
-        "{project}/{} JSON-LD response must name the selected representation context",
+        Some(access_profile.context_reference.as_str()),
+        "{project}/{} JSON-LD response must name the selected access profile context",
         step.id
     );
     assert_eq!(
         document
             .pointer("/meta/links/context")
             .and_then(Value::as_str),
-        Some(representation.context_reference.as_str()),
-        "{project}/{} response metadata must name the selected representation context",
+        Some(access_profile.context_reference.as_str()),
+        "{project}/{} response metadata must name the selected access profile context",
         step.id
     );
     let context_artifact = harness
@@ -1958,7 +2076,7 @@ fn validate_json_ld_graph(
         &harness
             .service
             .artifacts
-            .get(&binding.representation_shacl_path)
+            .get(&binding.access_profile_shacl_path)
             .expect("bound SHACL artifact exists")
             .content,
     )
@@ -2024,7 +2142,7 @@ fn validate_json_ld_graph(
                 .as_ref()
                 .filter(|geometry| geometry.name == *property_name)
             {
-                assert!(representation.selectable_properties.contains(property_name));
+                assert!(access_profile.selectable_properties.contains(property_name));
                 let datatype = "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON";
                 assert_typed_quad(
                     &quads,
@@ -2045,7 +2163,7 @@ fn validate_json_ld_graph(
                 .iter()
                 .find(|property| property.name == *property_name)
                 .expect("disclosed property is compiled");
-            assert!(representation.selectable_properties.contains(property_name));
+            assert!(access_profile.selectable_properties.contains(property_name));
             let datatype = registry_relay_v2::semantics::datatype_iri(property.data_type);
             assert_typed_quad(
                 &quads,

@@ -15,9 +15,9 @@ use tower::ServiceExt as _;
 
 use crate::auth::{FixturePrincipal, RelayAuthenticator};
 pub use crate::fixture_contract::{
-    parse_journey, FixtureAuthorization, FixtureError, FixtureExpectation, FixtureGeoJsonRoot,
-    FixtureGeometryType, FixtureJourney, FixtureMethod, FixtureRepresentationProfile,
-    FixtureRequest, FixtureStep,
+    parse_journey, FixtureAuthorization, FixtureError, FixtureExpectation, FixtureFormatProfile,
+    FixtureGeoJsonRoot, FixtureGeometryType, FixtureJourney, FixtureMethod, FixtureRequest,
+    FixtureStep,
 };
 use crate::model::{CompiledAccess, CompiledRegistry, OperationKind};
 
@@ -144,18 +144,18 @@ pub fn compile_fixture_plan(
             );
         }
         if let Some(operation) = operation {
-            let representation_identifier = step
+            let access_profile_identifier = step
                 .request
                 .query
-                .get("representation")
+                .get("accessProfile")
                 .and_then(Value::as_str)
-                .unwrap_or(&operation.default_representation);
+                .unwrap_or(&operation.default_access_profile);
             let protected = operation
-                .representations
+                .access_profiles
                 .iter()
-                .find(|representation| representation.id == representation_identifier)
-                .is_some_and(|representation| {
-                    matches!(representation.access, CompiledAccess::Protected { .. })
+                .find(|access_profile| access_profile.id == access_profile_identifier)
+                .is_some_and(|access_profile| {
+                    matches!(access_profile.access, CompiledAccess::Protected { .. })
                 });
             if protected && step.expect.status == 200 && step.authorization_fixture.is_none() {
                 diagnostic(
@@ -591,7 +591,7 @@ fn assert_expectations(
         if previous.is_none() || current != previous {
             mismatch(
                 diagnostics,
-                "fixture.representation_mismatch",
+                "fixture.format_mismatch",
                 &location,
                 "JSON and JSON-LD Record equivalence",
             );
@@ -634,7 +634,7 @@ fn assert_geojson_expectations(
     let Some(document) = response.document else {
         if step.expect.geo_json_root.is_some()
             || step.expect.geometry_type.is_some()
-            || step.expect.representation_profile.is_some()
+            || step.expect.format_profile.is_some()
         {
             mismatch(
                 diagnostics,
@@ -681,7 +681,7 @@ fn assert_geojson_expectations(
             );
         }
     }
-    let Some(profile) = step.expect.representation_profile else {
+    let Some(profile) = step.expect.format_profile else {
         return;
     };
     if response
@@ -692,16 +692,14 @@ fn assert_geojson_expectations(
     {
         mismatch(
             diagnostics,
-            "fixture.representation_profile_mismatch",
+            "fixture.format_profile_mismatch",
             location,
             "GeoJSON content type",
         );
     }
     let (profile_uri, conformance) = match profile {
-        FixtureRepresentationProfile::Rfc7946 => {
-            ("http://www.opengis.net/def/profile/OGC/0/rfc7946", None)
-        }
-        FixtureRepresentationProfile::JsonFg => (
+        FixtureFormatProfile::Rfc7946 => ("http://www.opengis.net/def/profile/OGC/0/rfc7946", None),
+        FixtureFormatProfile::JsonFg => (
             "http://www.opengis.net/def/profile/OGC/0/jsonfg",
             Some([
                 "http://www.opengis.net/spec/json-fg-1/1.0/conf/core",
@@ -718,7 +716,7 @@ fn assert_geojson_expectations(
     {
         mismatch(
             diagnostics,
-            "fixture.representation_profile_mismatch",
+            "fixture.format_profile_mismatch",
             location,
             "GeoJSON profile link",
         );
@@ -736,7 +734,7 @@ fn assert_geojson_expectations(
         if actual != Some(expected.into_iter().collect()) {
             mismatch(
                 diagnostics,
-                "fixture.representation_profile_mismatch",
+                "fixture.format_profile_mismatch",
                 location,
                 "JSON-FG conformance",
             );
@@ -744,7 +742,7 @@ fn assert_geojson_expectations(
     } else if document.get("conformsTo").is_some() || document.get("featureType").is_some() {
         mismatch(
             diagnostics,
-            "fixture.representation_profile_mismatch",
+            "fixture.format_profile_mismatch",
             location,
             "RFC 7946 profile members",
         );
@@ -840,6 +838,10 @@ fn resolve_operation<'a>(
                 OperationKind::Lookup { name } => {
                     request.method == FixtureMethod::Post
                         && request.path == format!("/v2/resources/{}/lookups/{name}", resource.id)
+                }
+                OperationKind::Search { name } => {
+                    request.method == FixtureMethod::Get
+                        && request.path == format!("/v2/resources/{}/searches/{name}", resource.id)
                 }
             })
     })
@@ -1225,7 +1227,7 @@ steps:
       status: 200
       geoJsonRoot: feature
       geometryType: Point
-      representationProfile: jsonfg
+      formatProfile: jsonfg
 "#;
         let journey = parse_journey(yaml).expect("closed GeoJSON expectations parse");
         assert_eq!(
@@ -1237,8 +1239,8 @@ steps:
             Some(FixtureGeometryType::Point)
         );
         assert_eq!(
-            journey.steps[0].expect.representation_profile,
-            Some(FixtureRepresentationProfile::JsonFg)
+            journey.steps[0].expect.format_profile,
+            Some(FixtureFormatProfile::JsonFg)
         );
 
         assert!(parse_journey(&yaml.replace("jsonfg", "draft-profile")).is_err());
@@ -1258,7 +1260,7 @@ steps:
       status: 200
       geoJsonRoot: feature
       geometryType: "null"
-      representationProfile: rfc7946
+      formatProfile: rfc7946
 "#,
         )
         .expect("fixture parses");

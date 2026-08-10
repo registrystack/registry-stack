@@ -97,7 +97,7 @@ pub struct FixtureExpectation {
     #[serde(default)]
     pub geometry_type: Option<FixtureGeometryType>,
     #[serde(default)]
-    pub representation_profile: Option<FixtureRepresentationProfile>,
+    pub format_profile: Option<FixtureFormatProfile>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -117,7 +117,7 @@ pub enum FixtureGeometryType {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum FixtureRepresentationProfile {
+pub enum FixtureFormatProfile {
     Rfc7946,
     JsonFg,
 }

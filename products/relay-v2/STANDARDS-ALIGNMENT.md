@@ -16,10 +16,11 @@ claim. The obsolete Digital Registries OpenAPI is not an input.
 | One Registry with named authority and authoritative scope | Authored once in `RegistryContract`, compiled into service metadata and package provenance. |
 | Consultation Retrieve | Identifier read is compiled only when the resource declares `read`. |
 | Consultation List | Deterministic list is compiled only when the resource declares `list`; pagination and filters are closed. |
-| Consultation Search | A named exact lookup is the only accepted search-shaped operation. It returns one governed Record or the unresolved outcome. |
-| Bounded spatial consultation | An opted point list with required bounded `bbox` is derived as `consultation.search`; it remains the same fixed consultation route and does not create an OGC API Features service. |
+| Consultation Search | Named exact lookup and named Point-bbox search are the only accepted search-shaped operations. Exact lookup returns one governed Record or the unresolved outcome; Point-bbox returns a bounded collection. |
+| Bounded spatial consultation | A named Point-bbox operation with required bounded `bbox` is derived as `consultation.search`; its access profiles are independent from list and it does not create an OGC API Features service. |
 | Registry semantics | Every resource and property has a stable local semantic identity; JSON-LD, JSON Schema, and SHACL artifacts are compiler outputs. |
-| Governed representations | A compiled operation may expose only its finite reviewed representations, each with its own access, disclosure, semantic, schema, SHACL, JSON-LD, classification, and processing artifact. This is controlled publication, not content negotiation or dynamic ABAC. |
+| Governed access profiles | A compiled operation may expose only its finite reviewed access profiles, each with its own access, disclosure, semantic, schema, SHACL, JSON-LD, classification, and processing artifact. `fields` can only narrow the selected profile. Wire format and optional format profile are independent serialization choices, not entitlement or dynamic ABAC. |
+| Explainable contract | `relayctl check --explain` and generated `operation-explanation.json` expose one value-free compiler view of operation paths, query capabilities and reasons, access, disclosure, transforms, wire formats, and cache posture. |
 | Data governance review | Schema-only identification supplies deterministic review evidence. Classification remains Registry Authority review metadata and constrains compilation; it never grants an entitlement or becomes a remote runtime policy. |
 | Capability discovery | The public and protected inventories are derived from compiled operations and their visibility. |
 | API description | One full OpenAPI 3.1 document is package-only and one deterministic public subset is exposed at `/openapi.json`. |

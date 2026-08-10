@@ -20,6 +20,7 @@ pub(crate) fn execute(command: Command) -> Result<ToolingReport, ToolingError> {
         Command::Check(args) => tooling::check_project(&CheckOptions {
             project_root: args.project,
             production: args.production,
+            explain: args.explain,
         }),
         Command::Generate(args) => tooling::generate_project(&GenerateOptions {
             project_root: args.project,

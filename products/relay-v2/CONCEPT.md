@@ -67,7 +67,7 @@ The existing `registryctl` is not renamed, migrated, deprecated, or otherwise ch
 The intended authoring lifecycle is:
 
 ```text
-init -> inspect -> check -> generate -> test -> diff -> package
+init -> inspect -> check --explain -> generate -> test -> diff -> package
 ```
 
 Inspection is schema-only by default. Any future value sampling must be explicit, local, bounded, and value-free in its output. Generated semantics and classifications are suggestions until reviewed.
@@ -223,7 +223,7 @@ for serving a valid Registry or a runtime policy input.
 
 DPV remains a semantic projection, not Relay's policy language. Relay executes its small typed access contract, never arbitrary RDF, DPV rules, ODRL, or remote vocabulary content. DPV 2.3 is a W3C Community Group report rather than a W3C Recommendation, so the profile and vocabulary digest must be pinned and upgraded deliberately.
 
-### Schema-only identification and reviewed representation governance
+### Schema-only identification and reviewed access-profile governance
 
 Relay keeps one classification model. `semanticTerm` describes meaning;
 `privacy`, `institutional`, and `handling` describe the Registry Authority's
@@ -246,7 +246,7 @@ directory at these fixed paths:
 
 - `generated/reports/identification-report.json`
 - `generated/reports/classification-inventory.json`
-- `generated/reports/representation-report.json`
+- `generated/reports/operation-explanation.json`
 - `generated/reports/contextual-review-findings.json`
 - `generated/governance/classification-review-starter.yaml`
 
@@ -269,11 +269,14 @@ Every property has its own output classification. Every processed source
 column has its own reviewed source-column classification. The compiler derives
 processing handling from every Registry Core, output, transform input,
 selector, filter, order, and row-binding column, and disclosure handling from
-properties serializable by the representation. Source processing controls,
+properties serializable by the access profile. Source processing controls,
 authentication, audit, and cache use the processing floor even when a reviewed
 output has lower disclosure handling. Anonymous publication cannot transform a
-non-public source: a public representation must read a reviewed pre-derived
-public SQLite view column.
+non-public source: a public access profile must read a reviewed pre-derived
+public SQLite view column. `relayctl check --explain` shows this compiled
+operation, processing, disclosure, transform, query, access-profile, cache,
+and wire-format plan without source values or allowed authorization-claim
+values. `relayctl generate` writes the same canonical explanation.
 
 Only two finite deterministic transforms are in this profile. `partial-string`
 accepts a reviewed string and emits Relay's fixed `***` marker plus a bounded
@@ -289,13 +292,18 @@ engine are not part of this release.
 
 ### Registry operations and safe requester minimization
 
-A resource compiles only the operations its publisher declares: collection listing, identifier read, and named exact lookup. A resource may expose any appropriate subset. An exact-lookup-only resource compiles no enumeration or identifier-read operation.
+A resource compiles only the operations its publisher declares: collection
+listing, identifier read, named exact lookup, and named Point-bbox search. A
+resource may expose any appropriate subset. A lookup-only resource compiles no
+enumeration or identifier-read operation. A list and a named search are
+separate operations with separate access profiles, so either right may exist
+without the other.
 
 Collection queries use publisher-defined, typed, camelCase filter parameters
 directly in the query string, for example `status=ACTIVE`. Version one supports
 exact equality. Any non-empty subset of declared filters is valid; the contract
 separately declares whether an unfiltered request is allowed. `pageSize`,
-`cursor`, `fields`, and `representation` are reserved names. Filters in query strings are
+`cursor`, `fields`, `accessProfile`, and `formatProfile` are reserved names. Filters in query strings are
 limited to non-personal selectors. Relay binds their values as SQL parameters.
 Transforms are response-only: a transformed property cannot be a filter or
 fixed-order key because doing so would compare or order its undisclosed raw
@@ -306,7 +314,7 @@ arbitrary sorting, or SQL.
 
 Named exact lookups define their complete required inputs, row boundary, result shape, and maximum of one result. Sensitive selectors belong in a bounded request body rather than a URL. Lookup outcomes are deliberately non-enumerating and are subject to tighter limits and audit.
 
-The selected representation's disclosure profile supplies the maximum property
+The selected access profile's disclosure profile supplies the maximum property
 set. A caller may request a non-empty subset of those published properties, or
 receive the complete selected profile when no subset is requested.
 This is a one-way minimization control:
@@ -321,9 +329,9 @@ This is a one-way minimization control:
   a Version one correctness contract.
 
 This is not dynamic attribute authorization. An operation has a finite ordered
-map of reviewed representations, exactly one `defaultRepresentation`, and one
-access rule plus one disclosure profile per representation. An absent
-`representation` selects that sole declared default. A supplied representation
+map of reviewed access profiles, exactly one `defaultAccessProfile`, and one
+access rule plus one disclosure profile per access profile. An absent
+`accessProfile` selects that sole declared default. A supplied access profile
 is authorized exactly as requested: denial, an invalid bearer, or an unknown
 identifier never falls back to another profile. A syntactically valid unknown
 name and a scope-hidden name receive the same `resource.not_found` response, so
@@ -344,9 +352,10 @@ GET  /openapi.json
 GET  /v2
 GET  /v2/resources?pageSize=...&cursor=...
 GET  /v2/resources/{resource}
-GET  /v2/resources/{resource}/records?pageSize=...&cursor=...&status=...&representation=...&fields=...
-GET  /v2/resources/{resource}/records/{recordIdentifier}?representation=...&fields=...
-POST /v2/resources/{resource}/lookups/{lookup}?representation=...&fields=...
+GET  /v2/resources/{resource}/records?pageSize=...&cursor=...&status=...&accessProfile=...&fields=...&formatProfile=...
+GET  /v2/resources/{resource}/records/{recordIdentifier}?accessProfile=...&fields=...&formatProfile=...
+POST /v2/resources/{resource}/lookups/{lookup}?accessProfile=...&fields=...&formatProfile=...
+GET  /v2/resources/{resource}/searches/{search}?bbox=...&pageSize=...&cursor=...&accessProfile=...&fields=...&formatProfile=...
 GET  /v2/artifacts/{artifactIdentifier}
 ```
 
@@ -368,11 +377,12 @@ Lists use `pageSize`, `cursor`, and the envelope
 `{items, pageInfo: {nextCursor}, meta}`. `nextCursor` is nullable. Ordering is
 contract-defined with the Record identifier as a unique tie-breaker. The
 client-opaque authenticated-encrypted cursor binds the contract and source
-revisions, operation, selected representation and disclosure profile, filters,
+revisions, operation, selected access profile and disclosure profile, filters,
 order, selected fields, authorization context, and expiry. Every page is
 reauthorized. Encryption prevents its filter and keyset-order state from
 bypassing field minimization. Callers treat it as an uninterpreted continuation
-token and cannot choose an order or replay a cursor across representations.
+token and cannot choose an order or replay a cursor across access profiles,
+named searches, bbox predicates, wire formats, or format profiles.
 
 Single-record reads and resolved lookups use `{data, meta}`. `data` contains
 the Registry Core context and `domainData`. `fields` is a documented Relay
@@ -380,17 +390,17 @@ extension: a non-empty, duplicate-free comma-separated list of published propert
 keys. A property key is the contract's URL-safe camelCase name, not a source
 column or semantic IRI. Exactly one `fields` parameter is accepted; empty
 members, whitespace, repeats, and duplicate keys are invalid. It only narrows
-the selected representation's `domainData`; Registry Core context cannot be
+the selected access profile's `domainData`; Registry Core context cannot be
 removed, and response ordering remains contract-defined rather than
-request-defined. A field outside the selected representation is rejected
+request-defined. A field outside the selected access profile is rejected
 before source access.
 
 Ordinary JSON is the default. `application/ld+json` adds the generated context
 and a derived global `@id` while preserving all Registry Core identifiers and
-the same selected domain values. Responses vary on `Accept`; unsupported
-representations receive `406`. Where caching is allowed, the strong ETag hashes
-the exact representation bytes, including the selected representation and field
-subset, and supports `If-None-Match` with `304`. Only a public representation
+the same selected domain values. Responses vary on `Accept`; unsupported wire
+formats receive `406 format.unsupported`. Where caching is allowed, the strong ETag hashes
+the exact response bytes, including the selected access profile, wire format,
+format profile, and field subset, and supports `If-None-Match` with `304`. Only a public access profile
 with a public processing floor over a snapshot may be cacheable. Every cacheable public
 response includes `Vary: Accept, Authorization` so an anonymous `200` cannot
 satisfy a request carrying an invalid bearer. Non-public and unversioned-live responses are
@@ -406,27 +416,31 @@ source-required validation, requester minimization, access, audit, and cache
 posture as every other published field. Requesting GeoJSON never grants a
 different right or a wider property set.
 
-An opted list may declare bounded exact point `bbox` search. All four CRS84
+An opted resource may declare a named bounded exact Point-bbox search. The
+operation owns its query shape, path, pagination, order, and finite access
+profiles. It requires exactly one `bbox`; a list never accepts `bbox`, and a
+list scope never grants the search. All four CRS84
 coordinates must be finite and in range, use increasing bounds, avoid
 antimeridian crossing, and remain within publisher-declared longitude and
 latitude spans. Relay executes inclusive point containment against the reviewed
 coordinate columns. Because `bbox` is a collection-query selector, its primary
 geometry must be classified `privacy: non-personal`; personal locations require
-a different bounded consultation design. A cursor binds bbox, the selected
-governed representation, response format, and GeoJSON profile as well as the
-ordinary list context.
+a different bounded consultation design. A cursor binds the named search,
+bbox, selected access profile, wire format, and format profile as well as the
+ordinary collection context.
 
 `application/geo+json` is available only when the resource declares a primary
-geometry and the exact selected governed representation discloses it. It
+geometry and the exact selected access profile discloses it. It
 returns an RFC 7946 `Feature` or `FeatureCollection`. Feature `properties`
 carry Registry Core and the selected non-spatial domain fields, while
 `geometry` carries the selected primary geometry; together they preserve the
-same governed disclosure as ordinary JSON. `profile=rfc7946` is the default;
-`profile=jsonfg` adds JSON-FG profile metadata while retaining valid GeoJSON
+same governed disclosure as ordinary JSON. `formatProfile=rfc7946` is the default;
+`formatProfile=jsonfg` adds JSON-FG profile metadata while retaining valid GeoJSON
 core. A caller may select fewer fields, including the geometry, in which case
-the GeoJSON feature geometry is `null`. `representation=` still selects the
-finite access and disclosure contract; `Accept` and `profile` select only its
-wire format. This profile intentionally excludes
+the GeoJSON feature geometry is `null`. `accessProfile=` still selects the
+finite access and disclosure contract; `Accept` selects the wire format and
+`formatProfile=` optionally selects the serialization profile. This spatial
+profile intentionally excludes
 generic geometry ingestion, OGC API Features routes, CQL2, EDR, tiles,
 reprojection, and spatial joins.
 
@@ -437,7 +451,7 @@ metadata. Protected resource metadata and referenced artifacts use the same
 compiled operation gate as the Record that links them. Relay never generates
 caller-specific OpenAPI at request time.
 
-Every `schemaReference` is a permitted-representation schema: Registry Core is
+Every `schemaReference` is a permitted access-profile schema: Registry Core is
 required, while a selectable `domainData` property is validated when present.
 A separate operator validation schema and SHACL shape describe the complete
 source Record and preserve source requiredness. `semanticModelReference` points
@@ -496,16 +510,31 @@ disclosure profile as described above.
 The initial access model combines:
 
 - a strictly verified OAuth 2.0 JWT access token when the operation is protected;
-- one explicit access rule for each finite representation, with an exact scope when protected;
+- one explicit access rule for each finite access profile, with an exact scope when protected;
 - optional trusted purpose;
 - optional authority-to-row binding from the resolved principal or a verified claim;
 - the selected disclosure profile.
 
 Purpose comes from, or is constrained by, verified authority. A caller header never creates authority. Principal binding is a compiler-declared equality boundary injected by Relay and cannot be replaced by caller filters.
 
-The resource posture and contract define the maximum compiled operation set. Token scopes can only narrow it. Separate scopes for list, read, named lookup, and their finite representations allow an issuer to give a client exact-lookup access without collection or identifier-read access. A valid principal without the selected scope receives the same concealed `resource.not_found` outcome as an unknown operation. Conversely, no token can enable an operation or representation the resource did not compile. Relay does not maintain a client registry; the trusted issuer registers clients and assigns scopes.
+The resource posture and contract define the maximum compiled operation set.
+Token scopes can only narrow it. Separate scopes for list, read, named lookup,
+named search, and their finite access profiles allow an issuer to give a client
+search or exact-lookup access without collection or identifier-read access. A
+valid principal without the selected scope receives the same concealed
+`resource.not_found` outcome as an unknown operation. Conversely, no token can
+enable an operation or access profile the resource did not compile. Relay does
+not maintain a client registry; the trusted issuer registers clients and
+assigns scopes.
 
-Each request produces a typed access decision followed by a typed disclosure plan. The plan contains the authorized operation and representation, row constraints, selected disclosure profile, and any requester-selected property subset. This architectural seam keeps authentication, authorization, row constraints, query construction, and serialization separate. Version one uses static reviewed disclosure plans and does not require a general PDP, CEL, dynamic masking, per-client field permissions, or tag-based ABAC.
+Each request produces a typed access decision followed by a typed disclosure
+plan. The plan contains the authorized operation and access profile, row
+constraints, selected disclosure profile, and any requester-selected property
+subset. Wire-format negotiation happens after that governed decision and
+cannot widen it. This architectural seam keeps authentication, authorization,
+row constraints, query construction, and serialization separate. Version one
+uses static reviewed disclosure plans and does not require a general PDP, CEL,
+dynamic masking, per-client field permissions, or tag-based ABAC.
 
 ### Token issuers and optional Registry Mint
 
@@ -580,7 +609,7 @@ Every data request, including anonymous public access, durably records either a
 refusal before returning or a pre-source attempt followed by a terminal
 release, unresolved, or source-failed outcome. Audit is a source-access and response-release
 gate. An event identifies the Registry, resource, operation, access-rule
-revision, purpose when present, applied row-boundary kind, representation,
+revision, purpose when present, applied row-boundary kind, access profile,
 disclosure profile, selected property identifiers or their digest, transform
 identifiers, effective handling levels,
 contract revision, and snapshot or live-source revision. Anonymous public
@@ -746,8 +775,8 @@ The first coherent Relay V2 release should contain:
 4. generated Consultation capability discovery and a concise Digital Registries alignment note;
 5. generated local semantics, JSON-LD, JSON Schema, SHACL, full packaged OpenAPI, and safe public OpenAPI;
 6. property classification with provenance and the `public`, `internal`, `confidential`, and `restricted` handling levels;
-7. derived public, protected, or absent enumeration with independently compiled list, read, and named-lookup operations;
-8. `pageSize` and client-opaque authenticated-encrypted cursor lists, direct predefined equality filters, and safe caller selection of fewer properties than the selected representation;
+7. derived public, protected, or absent enumeration with independently compiled list, read, named-lookup, and named Point-bbox search operations;
+8. `pageSize` and client-opaque authenticated-encrypted collection cursors, direct predefined equality filters, and safe caller selection of fewer properties than the selected access profile;
 9. strict OAuth JWT access-token verification, operation scopes, trusted purpose, optional authority row binding, and an optional conforming Mint issuer;
 10. snapshot and live read-only SQLite profiles, including useful unversioned live read and lookup deployments;
 11. deterministic disclosure plans, bounded queries, stable `404` lookup outcomes, atomic activation, and Registry Stack problems;
@@ -790,10 +819,11 @@ shape. The generated schema makes their constraints precise.
 - Relay owns a strict registry contract. A Registry Manifest projection is a later portability artifact, not the Relay execution contract.
 - One contract and process serves one Registry, which may contain several resources.
 - Registry Core context is mandatory and requester field selection can narrow only `domainData`.
-- Lists use `pageSize`, `cursor`, `items`, and `pageInfo.nextCursor`; predefined filters are direct camelCase equality parameters, and an opted point resource may accept bounded exact `bbox`.
+- Lists use `pageSize`, `cursor`, `items`, and `pageInfo.nextCursor`; predefined filters are direct camelCase equality parameters. A separately named Point-bbox search requires bounded exact `bbox` and has its own access profiles.
 - Named exact lookup remains a bounded POST action and maps to constrained Consultation Search, not Record Match.
-- Each operation has finite reviewed representations, an explicit sole default,
-  and representation-owned access plus disclosure. Dynamic, caller-derived
+- Each operation has finite reviewed access profiles, an explicit sole default,
+  and access-profile-owned access plus disclosure. Wire format and optional
+  format profile are independent serialization choices. Dynamic, caller-derived
   entitlement variants are deferred.
 - Handling levels are `public`, `internal`, `confidential`, and `restricted`; purpose and row binding are separate explicit constraints.
 - Snapshot SQLite is valuable but optional. Unversioned live sources are `no-store` and do not compile paginated lists.

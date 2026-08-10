@@ -21,13 +21,13 @@ pub enum ProblemCode {
     UnknownFilter,
     InvalidFilter,
     CursorInvalid,
-    RepresentationInvalid,
+    AccessProfileInvalid,
     MissingCredential,
     InvalidCredential,
     ConsultationDenied,
     ResourceNotFound,
     ConsultationUnresolved,
-    UnsupportedRepresentation,
+    UnsupportedFormat,
     BodyTooLarge,
     UriTooLong,
     UnsupportedMediaType,
@@ -48,13 +48,13 @@ impl ProblemCode {
             Self::UnknownFilter => "filter.unknown_field",
             Self::InvalidFilter => "filter.invalid_value",
             Self::CursorInvalid => "query.cursor_invalid",
-            Self::RepresentationInvalid => "request.representation_invalid",
+            Self::AccessProfileInvalid => "request.access_profile_invalid",
             Self::MissingCredential => "auth.missing_credential",
             Self::InvalidCredential => "auth.invalid_credential",
             Self::ConsultationDenied => "consultation.denied",
             Self::ResourceNotFound => "resource.not_found",
             Self::ConsultationUnresolved => "consultation.unresolved",
-            Self::UnsupportedRepresentation => "representation.unsupported",
+            Self::UnsupportedFormat => "format.unsupported",
             Self::BodyTooLarge => "internal.payload_too_large",
             Self::UriTooLong => "internal.uri_too_long",
             Self::UnsupportedMediaType => "request.media_type_unsupported",
@@ -75,13 +75,13 @@ impl ProblemCode {
             Self::UnknownFilter => "Filter is not declared",
             Self::InvalidFilter => "Filter value is invalid",
             Self::CursorInvalid => "Cursor is invalid",
-            Self::RepresentationInvalid => "Representation selection is invalid",
+            Self::AccessProfileInvalid => "Access profile selection is invalid",
             Self::MissingCredential => "Bearer access token is required",
             Self::InvalidCredential => "Bearer access token is invalid",
             Self::ConsultationDenied => "Consultation is not permitted",
             Self::ResourceNotFound => "Requested resource was not found",
             Self::ConsultationUnresolved => "Requested record was not resolved",
-            Self::UnsupportedRepresentation => "Requested representation is not supported",
+            Self::UnsupportedFormat => "Requested format is not supported",
             Self::BodyTooLarge => "Request body is too large",
             Self::UriTooLong => "Request URI is too long",
             Self::UnsupportedMediaType => "Request media type is not supported",
@@ -102,11 +102,11 @@ impl ProblemCode {
             | Self::UnknownFilter
             | Self::InvalidFilter
             | Self::CursorInvalid
-            | Self::RepresentationInvalid => 400,
+            | Self::AccessProfileInvalid => 400,
             Self::MissingCredential | Self::InvalidCredential => 401,
             Self::ConsultationDenied => 403,
             Self::ResourceNotFound | Self::ConsultationUnresolved => 404,
-            Self::UnsupportedRepresentation => 406,
+            Self::UnsupportedFormat => 406,
             Self::BodyTooLarge => 413,
             Self::UriTooLong => 414,
             Self::UnsupportedMediaType => 415,
@@ -170,13 +170,13 @@ impl ProblemCode {
             Self::UnknownFilter => "filter is not declared for this operation",
             Self::InvalidFilter => "filter value is invalid",
             Self::CursorInvalid => "cursor is invalid for this query",
-            Self::RepresentationInvalid => "representation selection is invalid",
+            Self::AccessProfileInvalid => "access profile selection is invalid",
             Self::MissingCredential => "a bearer access token is required",
             Self::InvalidCredential => "bearer access token validation failed",
             Self::ConsultationDenied => "the consultation is not permitted",
             Self::ResourceNotFound => "the requested resource was not found",
             Self::ConsultationUnresolved => "the requested record was not resolved",
-            Self::UnsupportedRepresentation => "the requested representation is not supported",
+            Self::UnsupportedFormat => "the requested format is not supported",
             Self::BodyTooLarge => "request body exceeds the configured limit",
             Self::UriTooLong => "request URI exceeds the configured limit",
             Self::UnsupportedMediaType => "request body must use application/json",
@@ -325,6 +325,17 @@ mod tests {
             body.type_uri,
             "https://id.registrystack.org/problems/registry-relay/consultation/unresolved"
         );
+    }
+
+    #[test]
+    fn access_profile_and_wire_format_failures_are_distinct() {
+        assert_eq!(
+            ProblemCode::AccessProfileInvalid.code(),
+            "request.access_profile_invalid"
+        );
+        assert_eq!(ProblemCode::AccessProfileInvalid.status(), 400);
+        assert_eq!(ProblemCode::UnsupportedFormat.code(), "format.unsupported");
+        assert_eq!(ProblemCode::UnsupportedFormat.status(), 406);
     }
 
     #[test]

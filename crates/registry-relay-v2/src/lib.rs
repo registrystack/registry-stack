@@ -12,6 +12,7 @@ pub mod diff;
 pub mod fixture_contract;
 #[cfg(feature = "tooling")]
 pub mod fixtures;
+pub mod format_capabilities;
 pub mod identification;
 pub mod model;
 pub mod package;
