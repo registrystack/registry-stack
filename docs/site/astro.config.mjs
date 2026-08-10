@@ -362,9 +362,9 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'explanation/governed-registry-publication' },
             { label: 'Publish a SQLite registry', slug: 'tutorials/publish-governed-sqlite-registry' },
+            { label: 'Semantics and disclosure', slug: 'explanation/relay-semantics-and-disclosure' },
             { label: 'Author a Relay project', slug: 'configure/relay' },
             { label: 'Operate Relay', slug: 'operate/relay' },
-            { label: 'Semantics and disclosure', slug: 'explanation/relay-semantics-and-disclosure' },
           ],
         },
         {

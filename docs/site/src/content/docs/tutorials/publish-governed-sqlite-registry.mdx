@@ -1,6 +1,6 @@
 ---
 title: Publish a governed SQLite registry
-description: Build Relay and relayctl, prove one synthetic business Registry, and read a minimized Record through the real HTTP service.
+description: Run the supplied business Registry, verify its contract, and request a minimized Record through Registry Relay.
 status: draft
 owner: registry-docs
 source_repos:
@@ -20,27 +20,33 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Registry Relay turns a reviewed SQLite view and one Registry contract into a
-read-only API, semantic artifacts, and auditable runtime behavior. In this
-tutorial, you will build the Relay V2 candidate, prove the maintained synthetic
-business Registry, start the real service, and request two selected properties
-without exposing the SQLite table or column names.
+Run a synthetic business Registry through Registry Relay, from a reviewed
+SQLite view to a working read-only API. You will verify the supplied contract,
+generate its documentation and semantic model, seal a deployment package, and
+request only two permitted properties from the running service.
 
 <QuickstartMeta
   outcome="One governed business Registry served from a sealed package, with a filtered and minimized Record response."
   time="About 20 minutes after the Rust toolchain is installed"
-  level="Local source build with synthetic data"
+  level="Source-built preview with synthetic data"
   prerequisites={['Rust and Cargo', 'Python 3', 'curl', 'A Unix environment', 'A Registry Stack source checkout']}
 />
 
-The project contains synthetic organisations and reserved `.invalid` service
-names. Do not substitute production data, identifiers, or keys during this
-first run.
+## Before you start
 
-## Build the candidate tools
+This preview builds Relay from the source checkout. Run every command from the
+repository root unless the tutorial tells you to change directory.
 
-From the Registry Stack repository root, build `relayctl` and `relay` from the
-same source revision:
+The supplied project uses synthetic organisations and reserved `.invalid`
+service names. Do not substitute production data, identifiers, or keys during
+this first run. A data publisher reviews the Registry meaning and disclosure
+rules. An operator binds the reviewed package to local files and starts the
+service. You will perform both roles locally.
+
+## Build the tools
+
+Build `relayctl`, the project-authoring command, and `relay`, the service
+command:
 
 ```sh
 repo_root="$(pwd -P)"
@@ -50,13 +56,20 @@ relayctl --version
 relay --version
 ```
 
-`relayctl` owns the adopter workflow. `relay` owns startup verification and the
-HTTP service. Both use the same compiler and runtime library.
+The final two lines have this form. The version follows your checkout:
 
-## Copy the maintained Registry
+```text
+relayctl <version>
+relay <version>
+```
 
-Copy the business acceptance project into a disposable reader directory, then
-materialize its SQLite snapshot from tracked SQL:
+Both commands now use the same contract compiler. `relayctl` prepares and
+checks a project; `relay` opens the checked package and serves its HTTP API.
+
+## Prepare the sample Registry
+
+Copy the supplied business Registry into a disposable directory, then create
+its SQLite snapshot from the tracked synthetic SQL:
 
 ```sh
 reader_root="$(mktemp -d "${TMPDIR:-/tmp}/relay-tutorial.XXXXXX")"
@@ -77,65 +90,140 @@ database.chmod(0o444)
 PY
 ```
 
-The authored project has four kinds of input:
+These commands print nothing when they succeed. `pwd -P` records the physical
+path because Relay rejects symlinks in trusted runtime paths.
+
+The project contains one YAML contract, one deployment binding, and the files
+needed to prove them:
 
 ```text
-registry.yaml       governed Registry, resources, operations, and disclosure
-runtime.yaml        local package, source, audit, secret, and listener bindings
-fixture.sql         synthetic source construction
-expected-http.yaml  executable HTTP journey
+registry.yaml       Registry identity, resources, operations, and disclosure
+runtime.yaml        local package, SQLite, audit, secret, and listener paths
+fixture.sql         synthetic SQLite source construction
+expected-http.yaml  expected requests and responses
 codelists/          reviewed controlled values
-governance/         legal-basis and identifier-lifecycle material
-semantics/          optional external vocabulary mappings
+governance/         legal-basis and identifier-lifecycle records
+semantics/          optional mappings to external vocabularies
 ```
 
-The SQLite database is an input to the deployment. The database is not copied
-into the sealed package.
+The Registry contract is the reviewed agreement about what the API means and
+may release. The SQLite database remains a separate deployment input and is
+not copied into the package.
 
-## Prove the project
+## Verify the project
 
-Compile the production profile before generating or serving anything:
+Compile the production checks before generating or serving anything:
 
 ```sh
 relayctl check "$project" --production
 ```
 
-The report has `"status": "success"`, an empty `diagnostics` array, and a
-contract revision. Production mode refuses unreviewed semantic or
-classification suggestions, missing source bindings, schema drift, and
-inconsistent disclosure or access rules.
+After the command label, the report begins with a successful status and no
+diagnostics:
 
-Generate the public and operator artifacts, then run the complete synthetic
-journey through the real Relay router:
+```json
+{
+  "status": "success",
+  "diagnostics": [],
+  "details": {
+    "kind": "check",
+    "production": true,
+    "contract_revision": "sha256:<digest>"
+  }
+}
+```
+
+This is the first governed result. Production checks refuse unreviewed
+semantic or classification suggestions, missing source bindings, schema
+changes, and inconsistent access or disclosure rules.
+
+Generate the public and operator artifacts:
 
 ```sh
 relayctl generate "$project"
+```
+
+The abridged result identifies the generated artifact inventory:
+
+```text
+relayctl generate
+{
+  "status": "success",
+  "diagnostics": [],
+  "details": {
+    "kind": "generate",
+    "contract_revision": "sha256:<digest>",
+    "artifacts": [ ... ]
+  }
+}
+```
+
+Now replay every supplied HTTP request through the same router used by the
+service:
+
+```sh
 relayctl test "$project"
 ```
 
-The generated directory includes OpenAPI 3.1, JSON Schema, SHACL, JSON-LD
-contexts and vocabularies, codelist schemas, classification and processing
-descriptions, and capability discovery. The fixture report covers successful
-reads, pagination, filters, field minimization, JSON-LD equivalence, cache
-revalidation, and safe refusals.
+The test report lists each request and its observed result. Every supplied step
+must record `"passed": true`:
+
+```text
+relayctl test
+{
+  "status": "success",
+  "diagnostics": [],
+  "details": {
+    "kind": "test",
+    "contract_revision": "sha256:<digest>",
+    "report": {
+      "steps": [
+        {"id": "registry-discovery", "actualStatus": 200, "passed": true},
+        ...
+      ]
+    }
+  }
+}
+```
+
+Generated files include OpenAPI 3.1, JSON Schema, Shapes Constraint Language
+(SHACL), JSON for Linked Data (JSON-LD), codelist schemas, processing
+descriptions, and capability discovery.
 
 ## Seal the deployment package
 
-Package the governed contract and generated artifacts:
+Package the reviewed contract and generated artifacts:
 
 ```sh
 relayctl package "$project" --output "$project/package"
 ```
 
-The package report records the contract revision, package revision, source
-schema fingerprint, governed-file digests, generated artifacts, media types,
-and visibility. `relay` verifies that inventory before opening a source,
-issuer, audit sink, or listener.
+The abridged report records both revisions and the source schema fingerprint:
+
+```text
+relayctl package
+{
+  "status": "success",
+  "diagnostics": [],
+  "details": {
+    "kind": "package",
+    "manifest": {
+      "packageRevision": "sha256:<package-digest>",
+      "contractRevision": "sha256:<contract-digest>",
+      "sourceSchemaFingerprints": {"companies": "sha256:<schema-digest>"}
+    }
+  }
+}
+```
+
+The package also inventories governed-file digests, media types, and artifact
+visibility. Relay verifies that inventory before opening the database, audit
+file, token issuer, or listener.
 
 ## Start Relay
 
-Create disposable local integrity keys without printing their values, then
-start the service:
+Create disposable integrity keys without printing their values, then start the
+service:
 
 ```sh
 export RELAY_TEST_AUDIT_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
@@ -143,21 +231,37 @@ export RELAY_TEST_CURSOR_KEY="$(python3 -c 'import secrets; print(secrets.token_
 relay serve --runtime "$project/runtime.yaml"
 ```
 
-Leave this terminal running. Startup logs end with a loopback listener at
-`127.0.0.1:18082`. The business Registry is intentionally public, so this
-synthetic first run has no token issuer. Protected registries use the same
-runtime with one configured issuer.
+Leave this terminal running after the listener message. The timestamp is
+omitted from this abridged log entry:
+
+```json
+{"level":"INFO","fields":{"message":"relay service listening","bind":"127.0.0.1:18082"},"target":"registry_relay_v2::startup"}
+```
+
+This Registry is intentionally public, so the local run needs no access
+token. A protected deployment configures one OpenID Connect token issuer in
+the runtime file.
 
 ## Read the Registry metadata
 
-In a second terminal, read the service document:
+In a second terminal, confirm that the service is ready:
+
+```sh
+curl -fsS http://127.0.0.1:18082/ready
+```
+
+```json
+{"status":"ready"}
+```
+
+Now read the service document:
 
 ```sh
 curl -fsS http://127.0.0.1:18082/v2 | python3 -m json.tool
 ```
 
-The document identifies one Registry, its Authority and operator, and two
-compiled Consultation capabilities:
+The document identifies one Registry, its accountable Authority and technical
+operator, and two available read capabilities. This is an abridged response:
 
 ```json
 {
@@ -170,8 +274,8 @@ compiled Consultation capabilities:
 }
 ```
 
-The displayed document is abridged. Relay derives the capability inventory
-from compiled operations rather than accepting a second authored list.
+Relay derives this inventory from the operations that passed compilation. The
+project does not maintain a second capability list that can drift from the API.
 
 ## Request fewer properties
 
@@ -184,7 +288,7 @@ curl -fsS \
   | python3 -m json.tool
 ```
 
-Each item retains its Registry Core context while `domainData` contains only
+Each item keeps the mandatory record context while `domainData` contains only
 the requested subset:
 
 ```json
@@ -207,35 +311,52 @@ the requested subset:
 }
 ```
 
-The displayed response is abridged. The real item also carries resolvable
-schema and semantic-model references, and the response metadata records the
+The response is abridged. The complete item links to the schema and semantic
+model that describe this representation. Response metadata records the
 operation, disclosure profile, selected fields, contract revision, and source
-revision. A request for `legal_name`, an unknown field, arbitrary sorting, or
-an undeclared filter receives a bounded problem instead of widening the query.
+revision. An unknown field, SQLite column name, sort, or undeclared filter
+receives a bounded problem response instead of changing the query.
 
 ## Stop the service
 
-Return to the Relay terminal and press `Ctrl+C`. Relay completes a graceful
-shutdown. Remove the disposable reader directory when you no longer need the
-generated package or audit file, then clear the two local environment values.
+Return to the Relay terminal and press `Ctrl+C`. Relay logs `relay shutdown
+complete` after the graceful shutdown. Then remove the disposable project and
+clear the local keys:
 
-## What you proved
+```sh
+cd "$repo_root"
+rm -rf -- "$reader_root"
+unset RELAY_TEST_AUDIT_KEY RELAY_TEST_CURSOR_KEY
+```
 
-- SQLite tables and columns did not become routes by convention.
+The cleanup commands print nothing when they succeed.
+
+## What you built
+
 - One reviewed contract produced the API, semantic artifacts, disclosure
   rules, and capability inventory.
+- SQLite tables and columns did not become routes by convention.
 - The caller selected fewer properties but could not select more.
-- Registry Core context remained present for every Record.
-- The deployment package was verified before Relay opened its source or
-  listener.
+- Mandatory Registry and Record context remained present in every result.
+- Relay verified the sealed package before opening its source or listener.
 
 ## Next
 
+- [Understand Relay's product boundary](../../explanation/governed-registry-publication/)
+  to decide whether Relay fits an institutional Registry.
+- [Review semantics, classification, and disclosure](../../explanation/relay-semantics-and-disclosure/)
+  before assigning public names and handling levels to real fields.
 - [Author a Registry Relay project](../../configure/relay/) to bind an
   institution-owned SQLite view.
-- [Operate Registry Relay](../../operate/relay/) to choose a source profile,
-  issuer, audit path, limits, and deployment permissions.
-- [Understand Relay's product boundary](../../explanation/governed-registry-publication/)
-  before introducing additional resources.
-- [Review semantics, classification, and disclosure](../../explanation/relay-semantics-and-disclosure/)
-  before publishing real fields.
+- [Operate Registry Relay](../../operate/relay/) to prepare source files,
+  authentication, audit, limits, and deployment permissions.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `cargo build` cannot find a package | The command is outside the Registry Stack root or the checkout predates Relay | Return to the source root and confirm that `crates/registry-relay-v2` exists. |
+| Relay refuses a path containing `/tmp` | On macOS, `/tmp` is a symlink | Keep the `pwd -P` assignment so the runtime receives the physical path. |
+| `relayctl check` returns diagnostics | A governed input or SQLite schema does not match the reviewed contract | Read the diagnostic identifiers, fix the authored input, and run `check --production` again. |
+| `relay serve` reports that the address is in use | Another process is listening on port `18082` | Stop that process or change the sample listener consistently before packaging. |
+| `/ready` is unavailable | Startup refused the package, source, audit path, keys, or listener | Read the value-free startup error in the Relay terminal and correct that deployment input. |

@@ -87,9 +87,9 @@ test('keeps the compact Relay V2 reader journey under existing registries', () =
     [
       "slug: 'explanation/governed-registry-publication'",
       "slug: 'tutorials/publish-governed-sqlite-registry'",
+      "slug: 'explanation/relay-semantics-and-disclosure'",
       "slug: 'configure/relay'",
       "slug: 'operate/relay'",
-      "slug: 'explanation/relay-semantics-and-disclosure'",
     ],
     'Relay V2 reader journey',
   );
