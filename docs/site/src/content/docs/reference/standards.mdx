@@ -6,6 +6,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-relay
+  - registry-stack
   - registry-platform
   - registry-manifest
 last_reviewed: "2026-08-03"
@@ -18,6 +19,8 @@ standards_referenced:
   - ogc-api-records
   - ogc-api-features
   - ogc-api-edr
+  - geojson
+  - json-fg
   - openapi
   - shacl
   - skos
@@ -58,6 +61,40 @@ CSV, XLSX, and Parquet are source decoders.
 Aggregate output supports JSON, CSV, and SDMX-JSON, with only JSON stable for 1.0.
 
 <RelaySupportRoster />
+
+## Relay V2 spatial wire-format profile
+
+Relay V2 uses GeoJSON and JSON-FG as optional wire formats for the same governed Registry Record.
+The initial profile is one classified Point in CRS84, with an exact bounded bbox query on a
+separately named `consultation.search` operation. The operation's access profile remains the
+authorization and maximum-disclosure boundary. This does not claim Open Geospatial Consortium API
+Features support and does not inherit the separate Relay 1.0 adapter described in the roster.
+
+## Relay V2 SDMX read profile
+
+Relay V2 aligns with the [SDMX REST 2.2.2](https://github.com/sdmx-twg/sdmx-rest/tree/v2.2.2),
+[SDMX-JSON 2.1.0](https://github.com/sdmx-twg/sdmx-json/tree/v2.1.0), and
+[SDMX-CSV 2.1.0](https://github.com/sdmx-twg/sdmx-csv/tree/v2.1.0) primary specifications through a
+governed read subset over pre-aggregated snapshots. This is an `aligns_with` claim, not a
+conformance, compatibility, or certification claim.
+
+The subset contains these `GET` routes:
+
+- `/sdmx/v2/data/dataflow/{agencyID}/{resourceID}/{version}/{key}`
+- `/sdmx/v2/data/dataflow/{agencyID}/{resourceID}/{version}`, with the omitted key equivalent to `*`
+- `/sdmx/v2/structure/dataflow/{agencyID}/{resourceID}/{version}`
+- `/sdmx/v2/structure/datastructure/{agencyID}/{resourceID}/{version}`
+
+Data responses use `application/vnd.sdmx.data+json;version=2.1.0` or
+`application/vnd.sdmx.data+csv;version=2.1.0`. Structure responses use
+`application/vnd.sdmx.structure+json;version=2.1.0` and the
+[official 2.1.0 schemas](https://json.sdmx.org/2.1.0/). The profile exposes no schema or
+availability placeholders, other structure types, maintenance routes, or dynamic aggregation.
+
+Each statistical dataset has one fixed access rule and does not accept the Record-oriented
+`accessProfile` request parameter. Start from
+`products/relay-v2/acceptance/labour-statistics` for the complete synthetic project and its expected
+HTTP exchanges.
 
 ## Register
 

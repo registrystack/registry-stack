@@ -1,6 +1,6 @@
 ---
 title: Publish a governed SQLite registry
-description: Run the supplied business Registry project, verify its contract, and test a minimized Record response through Registry Relay.
+description: Run the supplied business Registry, then test minimized Record and bounded Point responses through Registry Relay.
 status: draft
 owner: registry-docs
 source_repos:
@@ -16,6 +16,9 @@ standards_referenced:
   - json-schema
   - json-ld
   - shacl
+  - geojson
+  - json-fg
+  - sdmx
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -23,10 +26,10 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 Run a synthetic business Registry through Registry Relay, from a reviewed
 SQLite view to a verified read-only API package. You will verify the supplied contract,
 generate its documentation and semantic model, seal a deployment package, and
-replay a request for only two permitted properties through the Relay router.
+replay minimized Record and bounded Point requests through the Relay router.
 
 <QuickstartMeta
-  outcome="One governed business Registry sealed into a package, with filtered and minimized Record behavior verified through the Relay router."
+  outcome="One governed business Registry sealed into a package, with minimized Record and bounded Point behavior verified through the Relay router."
   time="About 20 minutes after the Rust toolchain is installed"
   level="Source-built preview with synthetic data"
   prerequisites={['Rust and Cargo', 'Python 3', 'curl', 'A Unix environment', 'A Registry Stack source checkout']}
@@ -94,7 +97,7 @@ The project contains one YAML contract, one deployment binding, and the files
 needed to prove them:
 
 ```text
-registry.yaml       Registry identity, resources, operations, and disclosure
+registry.yaml       Registry identity, resources, operations, access profiles, and disclosure
 runtime.yaml        local package, SQLite, audit, secret, and listener paths
 fixture.sql         synthetic SQLite source construction
 expected-http.yaml  expected requests and responses
@@ -238,14 +241,47 @@ The fixture expectation also requires complete Registry Core context and exactly
 domain properties. An unknown field, SQLite column, sort, or undeclared filter is a separate
 refusal case in the full journey and cannot change the compiled query.
 
-The contract also defines a protected `registrar` representation for the same read and list
-operations. The full fixture journey proves its distinct scope, no-store cache posture, a denied
-request, and an unknown representation. The unknown and scope-hidden cases use the same generic
-`404 resource.not_found` response. Relay authorizes the requested representation exactly and never
+The contract also defines protected `registrar` access profiles for read and list operations. The
+full fixture journey proves their distinct scopes, no-store cache posture, denied requests, and an
+unknown access profile. The unknown and scope-hidden cases use the same generic
+`404 resource.not_found` response. Relay authorizes the requested access profile exactly and never
 falls back to the public default.
 
+## Verify the spatial response boundary
+
+The supplied project also contains a `registered-premises` resource with one reviewed Point and a
+bounded bbox query. Replay its JSON-FG fixture:
+
+```sh
+relayctl test "$project" --fixture premises-feature-collection-jsonfg
+```
+
+The report first runs `premises-first-page`, the declared record-equivalence prerequisite, then the
+selected JSON-FG step. Both pass. The selected step is:
+
+```json
+{
+  "id": "premises-feature-collection-jsonfg",
+  "expectedStatus": 200,
+  "actualStatus": 200,
+  "passed": true
+}
+```
+
+The request uses `Accept: application/geo+json`, `formatProfile=jsonfg`, and a bounded CRS84
+`bbox` on the named `within-bbox` search. `Accept` and `formatProfile` select serialization. The
+named search fixes the query shape, while the `public-premises` access profile supplies the access
+rule and maximum disclosure.
+
+The full journey also checks the RFC 7946 profile, JSON and JSON-LD record equivalence, field
+minimization to `geometry: null`, invalid bbox refusal, cursor binding, nonspatial negotiation
+refusal, and value-free coordinate failure. The list and search operations have independent access
+profiles. A client with only the protected list scope cannot call the named search, and a client
+with only the protected search scope cannot list. The bbox capability does not create another
+authorization plane.
+
 Starting the packaged service requires the configured token issuer to be reachable because the
-package contains protected representations, even when the request you plan to send is public.
+package contains protected access profiles, even when the request you plan to send is public.
 Continue with [Operate Registry Relay](../../operate/relay/) to bind a real institutional issuer,
 trusted paths, audit retention, and a private listener.
 
@@ -262,12 +298,14 @@ The cleanup commands print nothing when they succeed.
 
 ## What you built
 
-- One reviewed contract produced the API package, semantic artifacts, disclosure rules, and
-  capability inventory.
+- One reviewed contract produced the API package, semantic artifacts, access profiles, disclosure
+  rules, and capability inventory.
 - SQLite tables and columns did not become routes by convention.
 - Generated identification and classification material remained suggestions
   until the governed review accepted it.
 - The caller selected fewer properties but could not select more.
+- The Point used the same access-profile and disclosure boundary in JSON, JSON-LD, RFC 7946
+  GeoJSON, and JSON-FG.
 - Mandatory Registry and Record context remained present in every result.
 - The shared Relay router verified the public, protected, and refusal behavior against synthetic
   source data.
@@ -280,6 +318,8 @@ The cleanup commands print nothing when they succeed.
   before assigning published names and handling levels to real fields.
 - [Author a Registry Relay project](../../configure/relay/) to bind an
   institution-owned SQLite view.
+- Start from `products/relay-v2/acceptance/labour-statistics` to adapt the separate governed
+  statistical-dataset profile, fixed access rule, and SDMX binding.
 - [Operate Registry Relay](../../operate/relay/) to prepare source files,
   authentication, audit, limits, and deployment permissions.
 

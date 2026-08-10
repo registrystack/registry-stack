@@ -1,6 +1,6 @@
 ---
 title: How Relay publishes a governed Registry
-description: Understand how one reviewed Registry contract governs SQLite reads, representations, audit, and startup behavior.
+description: Understand how one reviewed Registry contract governs SQLite reads, access profiles, wire formats, audit, and startup behavior.
 status: draft
 owner: registry-docs
 source_repos:
@@ -10,6 +10,9 @@ doc_type: explanation
 locale: en
 standards_referenced:
   - openapi
+  - geojson
+  - json-fg
+  - sdmx
   - govstack-digital-registries
   - universal-dpi-safeguards
 ---
@@ -17,7 +20,7 @@ standards_referenced:
 Registry Relay exposes selected, read-only Registry Records without making the source database a
 general API.
 One reviewed contract connects Registry identity, SQLite views, mandatory Registry Core context,
-operations, representations, processing, disclosure, generated artifacts, and audit.
+operations, access profiles, wire formats, processing, disclosure, generated artifacts, and audit.
 
 ## Start with one Registry
 
@@ -28,7 +31,7 @@ Unbound database objects remain invisible.
 
 Each successful Record preserves Registry Core: Registry and Record identifiers, revision,
 lifecycle state, Authority, recorded time, response-schema reference, and semantic-model reference.
-Only `domainData` varies by representation and requester field subset.
+Only `domainData` varies by access profile and requester field subset.
 The pair `(registryIdentifier, recordIdentifier)` remains authoritative when JSON for Linked Data
 (JSON-LD) adds a derived `@id` and the resource semantic class as `@type`.
 
@@ -41,25 +44,25 @@ plans, and generates OpenAPI and semantic artifacts.
 
 Runtime configuration supplies deployment-local paths, listener, issuer, audit sink, limits, and
 secrets.
-It cannot add or weaken a resource, operation, representation, access rule, classification,
+It cannot add or weaken a resource, operation, access profile, access rule, classification,
 semantic mapping, or disclosure decision.
 The service loads one complete checked package at startup.
 It has no hot reload, overlay, partial activation, fallback interpretation, or mutable authoring
 project input.
 
-## Publish representations, not database columns
+## Publish access profiles, not database columns
 
-Each compiled list, identifier-read, or named exact-lookup operation has a finite map of named
-representations and one default.
-The representation binds one access rule to one disclosure profile.
+Each compiled list, identifier-read, named exact-lookup, or named search operation has a finite map
+of named access profiles and one default.
+The access profile binds one access rule to one disclosure profile.
 The profile is the maximum published-property set for that response.
 
-Callers choose the default by omitting `representation`, or request a supplied representation by
+Callers choose the default by omitting `accessProfile`, or request a supplied access profile by
 name.
 Relay authorizes the exact choice and never falls back when it is unknown or denied.
 A syntactically valid unknown name and a scope-hidden name share the generic
-`404 resource.not_found` response, so callers cannot enumerate the finite representation map.
-`fields` runs after representation selection and can only narrow `domainData` within that profile.
+`404 resource.not_found` response, so callers cannot enumerate the finite access-profile map.
+`fields` runs after access-profile selection and can only narrow `domainData` within that profile.
 It cannot introduce SQL, source columns, joins, filters, ordering, expressions, transformations, or
 new authorization.
 Registry Core cannot be removed.
@@ -67,9 +70,45 @@ Registry Core cannot be removed.
 The compiler keeps source processing and disclosure distinct.
 Processing handling covers all columns Relay uses, including hidden identifiers, filters, and row
 boundaries.
-Disclosure handling covers the serializable properties of the representation.
+Disclosure handling covers the serializable properties of the access profile.
 The processing floor drives compiler validity, source projection, cache eligibility, and audit
-context. Authorization remains the representation's explicit access rule.
+context. Authorization remains the access profile's explicit access rule.
+
+## Keep spatial output inside the same boundary
+
+A resource can declare one classified Point property assembled from reviewed CRS84 longitude and
+latitude columns, then name that property as `primaryGeometry`. The Point enters an ordinary
+disclosure profile by its published property name. An access profile that omits the Point cannot
+negotiate GeoJSON. A profile that includes the Point can serialize the same governed Record as
+JSON, JSON-LD, RFC 7946 GeoJSON, or the bounded JSON-FG profile. `Accept` and `formatProfile` change
+serialization, not authorization.
+
+A separately named search can declare one publisher-bounded `point-bbox` query over that Point.
+Relay classifies the search as constrained `consultation.search`, binds the predicate to the
+reviewed columns, and binds the bbox, selected access profile, selected fields, wire format, and
+format profile into the cursor context. List and search can require different scopes.
+
+The initial profile has no alternate coordinate reference system, antimeridian traversal, generic
+geometry, spatial join, or Open Geospatial Consortium API Features route. The synthetic tutorial
+exercises the same authorization, disclosure, audit, and cache boundary through the Relay router.
+
+## Keep statistical publication separate from Records
+
+A statistical dataset describes a reviewed pre-aggregated snapshot in format-neutral terms:
+dimensions, one time dimension and granularity, one measure, optional attributes, publication
+facts, classification, one fixed access rule, and bounded queries. An explicit `sdmx: {}` binding
+adds stable SDMX identities and wire contracts without turning the dataset definition into a data
+structure definition (DSD).
+
+Record access profiles do not apply to this surface. A statistical request cannot select an
+`accessProfile`, switch disclosure profiles, or widen the dataset's one access rule. SDMX-JSON and
+SDMX-CSV are two serializations of the same governed observations, not two authorization choices.
+
+The initial binding is a profiled SDMX REST 2.2.2 read subset. It exposes keyed data and the
+equivalent omitted-key request, plus dataflow and DSD structure reads. Data and structure messages
+use version 2.1.0 of their JSON or CSV formats. Schema, availability, other structure types,
+maintenance, history, and caller-directed aggregation are outside the profile. Relay does not
+claim full SDMX conformance or certification.
 
 ## Offer only declared read capabilities
 
@@ -80,6 +119,8 @@ Relay compiles only the operations the publisher declares:
 | Identifier read | `consultation.retrieve` | One Record by stable identifier. |
 | Deterministic list | `consultation.list` | A bounded collection with declared equality filters and order. |
 | Named exact lookup | `consultation.search` | One resolved Record or an indistinguishable unresolved outcome. |
+| Bounded Point search | `consultation.search` | A deterministic collection search constrained by one declared CRS84 bbox. |
+| Statistical dataflow | `aggregate-data.statistical-dataflow` | Bounded observations from one pre-aggregated snapshot. |
 
 Exact lookup is not record matching: Relay returns no candidates, scores, rankings, or matching
 explanations.
@@ -112,10 +153,11 @@ relation and do not claim certification or conformance.
 Relay records a durable attempt before source access and a terminal event before the exact response
 bytes leave the service.
 Failure of either audit gate refuses source access or withholds the response.
-The events are value-free: they bind the Registry, resource, operation, representation, disclosure
-profile, selected properties, processing and disclosure handling, transform identifiers, contract
-revision, and source revision, but exclude tokens, selectors, raw principals, source values, and
-response values.
+Record events bind the Registry, resource, operation, access profile, disclosure profile, selected
+properties, processing and disclosure handling, transform identifiers, contract revision, and
+source revision. Statistical events bind the fixed statistical access rule, route surface, and wire
+format instead of an access profile. Both event shapes exclude tokens, selectors, raw principals,
+source values, and response values.
 
 Deployment TLS protects transport and OAuth 2.0 access tokens control protected operations.
 Relay responses are not signed.
@@ -125,7 +167,7 @@ Registry Mint is an optional token issuer rather than a Relay runtime dependency
 ## Next
 
 - [Review semantics, classification, and disclosure](../relay-semantics-and-disclosure/) for the
-  representation and governance model.
+  access-profile and governance model.
 - [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/) for a
   synthetic end-to-end run.
 - [Operate Registry Relay](../../operate/relay/) for deployment controls.

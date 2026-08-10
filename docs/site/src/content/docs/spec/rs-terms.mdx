@@ -5,6 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-relay
+  - registry-stack
   - registry-evidence
   - registry-mint
   - registry-platform
@@ -64,6 +65,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.8.0 | 2026-07-19 | draft | Defined the registry-backed, issuer-initiated OID4VCI profile and its algorithm, transaction-code, and non-conformance boundaries. |
 | 0.9.0 | 2026-08-03 | draft | Reseated the vocabulary on Registry Relay, Evidence Gateway, and Registry Mint, added the Evidence Gateway assertion terms, and marked the retired Registry Notary terms as retired. |
 | 0.10.0 | 2026-08-07 | draft | Replaced the Evidence Gateway requirement's single-source field with its closed single or search-then-fetch acquisition. |
+| 0.11.0 | 2026-08-10 | draft | Scoped the data-only SDMX definition to Relay 1.0 and added the separate Relay V2 read profile. |
 
 ## 1. Products
 
@@ -223,7 +225,7 @@ coordinator, and this is not atomic project activation. Registry Stack product t
 
 **SP DCI**: Social Protection Digital Convergence Initiative. Registry Relay exposes an SP DCI adapter behind the `spdci-api-standards` feature flag and can execute a reviewed DCI source integration.
 
-**SDMX**: Statistical Data and Metadata eXchange. Registry Relay serves configured aggregates as SDMX-JSON 2.1 data messages (media type `application/vnd.sdmx.data+json;version=2.1`) through content negotiation or `?f=sdmx-json`. Scope is limited to data messages: structure messages and the SDMX REST API are not implemented.
+**SDMX**: Statistical Data and Metadata eXchange. Registry Relay 1.0 serves configured aggregates as experimental SDMX-JSON 2.1 data messages through content negotiation or `?f=sdmx-json`; that surface does not implement structure messages or SDMX REST routes. Relay V2 defines a separate profiled SDMX REST 2.2.2 read subset over governed pre-aggregated snapshots. The V2 subset defines data JSON and CSV 2.1.0 plus dataflow and data structure definition JSON 2.1.0, uses one fixed statistical-dataset access rule, and does not expose schema or availability placeholders. Neither surface claims full SDMX conformance or certification.
 
 **PROV-O**: W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.
 
