@@ -78,6 +78,12 @@ pub struct StatementLimits {
     pub concurrency: usize,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ResponseBudgetAccounting {
+    SerializedResult,
+    TextValuesOnly,
+}
+
 impl StatementLimits {
     fn validate(&self) -> Result<(), SqliteError> {
         if self.maximum_rows == 0
@@ -221,6 +227,12 @@ struct CompiledPlan {
     limits: StatementLimits,
     schema: Option<SchemaBinding>,
     statement_digest: String,
+    response_budget_accounting: ResponseBudgetAccounting,
+}
+
+struct ConnectionExecution<T> {
+    outcome: Result<T, SqliteError>,
+    reusable: bool,
 }
 
 /// One compiled statement and one read-only connection pool.
@@ -235,6 +247,36 @@ impl ReadOnlyStatement {
     pub fn open(
         profile: DatabaseProfile,
         contract: StatementContract,
+    ) -> Result<Self, SqliteError> {
+        Self::open_with_response_budget_accounting(
+            profile,
+            contract,
+            ResponseBudgetAccounting::SerializedResult,
+        )
+    }
+
+    /// Open a statement while charging only the original UTF-8 bytes of text
+    /// values to the intermediate response budget.
+    ///
+    /// This preserves callers whose established contract applies the
+    /// authoritative serialized-response bound after projection. New consumers
+    /// should use [`Self::open`], which charges the compact JSON result
+    /// structure as it is collected.
+    pub fn open_with_text_value_response_budget(
+        profile: DatabaseProfile,
+        contract: StatementContract,
+    ) -> Result<Self, SqliteError> {
+        Self::open_with_response_budget_accounting(
+            profile,
+            contract,
+            ResponseBudgetAccounting::TextValuesOnly,
+        )
+    }
+
+    fn open_with_response_budget_accounting(
+        profile: DatabaseProfile,
+        contract: StatementContract,
+        response_budget_accounting: ResponseBudgetAccounting,
     ) -> Result<Self, SqliteError> {
         contract.limits.validate()?;
         if let Some(schema) = &contract.schema {
@@ -266,6 +308,7 @@ impl ReadOnlyStatement {
                 limits: contract.limits,
                 schema: contract.schema,
                 statement_digest,
+                response_budget_accounting,
             }),
             connections: Arc::new(Mutex::new(connections)),
             concurrency: Arc::new(Semaphore::new(permits)),
@@ -296,15 +339,17 @@ impl ReadOnlyStatement {
             .ok_or_else(|| SqliteError::new(ErrorKind::WorkerUnavailable))?;
         let plan = Arc::clone(&self.plan);
         let pool = Arc::clone(&self.connections);
+        let profile = self.profile.clone();
         let execution = tokio::task::spawn_blocking(move || {
-            let result = confirm_connection_still_bound(&connection)
-                .and_then(|()| run_statement(&connection, &plan, &bindings, deadline))
-                .and_then(|result| confirm_connection_still_bound(&connection).map(|()| result));
-            pool.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(connection);
-            drop(permit);
-            result
+            let execution = execute_on_connection(&connection, &plan, &bindings, deadline);
+            if return_or_replace_connection(&pool, &profile, connection, execution.reusable) {
+                drop(permit);
+            } else {
+                // No connection backs this slot, so permanently remove the
+                // permit rather than admit a request to an empty pool.
+                permit.forget();
+            }
+            execution.outcome
         });
         let (rows, schema_fingerprint) = tokio::time::timeout_at(async_deadline, execution)
             .await
@@ -331,15 +376,18 @@ impl ReadOnlyStatement {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop()
             .ok_or_else(|| SqliteError::new(ErrorKind::WorkerUnavailable))?;
-        let outcome = confirm_connection_still_bound(&connection)
-            .and_then(|()| run_statement(&connection, &self.plan, &bindings, deadline))
-            .and_then(|result| confirm_connection_still_bound(&connection).map(|()| result));
-        self.connections
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(connection);
+        let execution = execute_on_connection(&connection, &self.plan, &bindings, deadline);
+        let restored = return_or_replace_connection(
+            &self.connections,
+            &self.profile,
+            connection,
+            execution.reusable,
+        );
+        if !restored {
+            self.concurrency.forget_permits(1);
+        }
         self.profile.confirm()?;
-        let (rows, schema_fingerprint) = outcome?;
+        let (rows, schema_fingerprint) = execution.outcome?;
         Ok(ResultSet {
             rows,
             provenance: self.provenance(schema_fingerprint),
@@ -435,6 +483,61 @@ fn confirm_connection_pool_still_bound(connections: &[Connection]) -> Result<(),
         confirm_connection_still_bound(connection)?;
     }
     Ok(())
+}
+
+fn execute_on_connection(
+    connection: &Connection,
+    plan: &CompiledPlan,
+    bindings: &[(usize, Value)],
+    deadline: Instant,
+) -> ConnectionExecution<(Vec<ResultRow>, Option<String>)> {
+    if let Err(error) = confirm_connection_still_bound(connection) {
+        return ConnectionExecution {
+            outcome: Err(error),
+            reusable: false,
+        };
+    }
+    let mut execution = run_statement(connection, plan, bindings, deadline);
+    if execution.reusable {
+        if let Err(error) = confirm_connection_still_bound(connection) {
+            if execution.outcome.is_ok() {
+                execution.outcome = Err(error);
+            }
+            execution.reusable = false;
+        }
+    }
+    execution
+}
+
+fn return_or_replace_connection(
+    connections: &Mutex<Vec<Connection>>,
+    profile: &DatabaseProfile,
+    connection: Connection,
+    reusable: bool,
+) -> bool {
+    let connection = if reusable {
+        Some(connection)
+    } else {
+        drop(connection);
+        open_replacement_connection(profile).ok()
+    };
+    if let Some(connection) = connection {
+        connections
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(connection);
+        true
+    } else {
+        false
+    }
+}
+
+fn open_replacement_connection(profile: &DatabaseProfile) -> Result<Connection, SqliteError> {
+    profile.confirm()?;
+    let connection = open_connection(profile)?;
+    profile.confirm()?;
+    confirm_connection_still_bound(&connection)?;
+    Ok(connection)
 }
 
 /// Ask the active SQLite VFS whether the actual `main` handle has moved away
@@ -707,14 +810,18 @@ fn run_statement(
     plan: &CompiledPlan,
     bindings: &[(usize, Value)],
     deadline: Instant,
-) -> Result<(Vec<ResultRow>, Option<String>), SqliteError> {
-    begin_read_transaction(connection)?;
-    let outcome = run_statement_in_transaction(connection, plan, bindings, deadline);
-    let closed = end_read_transaction(connection);
-    match (outcome, closed) {
+) -> ConnectionExecution<(Vec<ResultRow>, Option<String>)> {
+    let outcome = begin_read_transaction(connection)
+        .and_then(|()| run_statement_in_transaction(connection, plan, bindings, deadline));
+    let cleaned = reset_connection_after_read(connection);
+    let outcome = match (outcome, &cleaned) {
         (Ok(value), Ok(())) => Ok(value),
         (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
+        (Ok(_), Err(error)) => Err(error.clone()),
+    };
+    ConnectionExecution {
+        outcome,
+        reusable: cleaned.is_ok(),
     }
 }
 
@@ -745,10 +852,12 @@ fn run_statement_in_transaction(
     }
     let mut rows = statement.raw_query();
     let mut collected = Vec::new();
-    // Include the outer collection even when it is empty. This is a
-    // conservative serialization/allocation budget, not just cell payload.
     let mut response_bytes = 0_usize;
-    charge_response(&mut response_bytes, 2, plan.limits.maximum_response_bytes)?;
+    if plan.response_budget_accounting == ResponseBudgetAccounting::SerializedResult {
+        // Include the outer collection even when it is empty. This is a
+        // conservative serialization/allocation budget, not just cell payload.
+        charge_response(&mut response_bytes, 2, plan.limits.maximum_response_bytes)?;
+    }
     loop {
         let row = match rows.next() {
             Ok(Some(row)) => row,
@@ -758,11 +867,13 @@ fn run_statement_in_transaction(
         if collected.len() as u64 >= plan.limits.maximum_rows {
             return Err(SqliteError::new(ErrorKind::TooManyRows));
         }
-        charge_response(
-            &mut response_bytes,
-            if collected.is_empty() { 2 } else { 3 },
-            plan.limits.maximum_response_bytes,
-        )?;
+        if plan.response_budget_accounting == ResponseBudgetAccounting::SerializedResult {
+            charge_response(
+                &mut response_bytes,
+                if collected.is_empty() { 2 } else { 3 },
+                plan.limits.maximum_response_bytes,
+            )?;
+        }
         collected.push(read_row(row, plan, &mut response_bytes)?);
     }
     Ok((collected, schema_fingerprint))
@@ -780,16 +891,25 @@ fn begin_read_transaction(connection: &Connection) -> Result<(), SqliteError> {
     Ok(())
 }
 
-fn end_read_transaction(connection: &Connection) -> Result<(), SqliteError> {
-    connection
+fn reset_connection_after_read(connection: &Connection) -> Result<(), SqliteError> {
+    // Every reset is attempted even when an earlier one fails. In particular,
+    // an authorizer-installation failure must not skip rollback, and a rollback
+    // failure must not leave the connection without the reviewed authorizer.
+    let mut reusable = connection.progress_handler(0, None::<fn() -> bool>).is_ok();
+    reusable &= connection
         .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
-        .map_err(|_| SqliteError::new(ErrorKind::ExecutionFailed))?;
-    let rolled_back = connection.execute_batch("ROLLBACK");
-    let authorized = install_authorizer(connection);
-    if rolled_back.is_err() || authorized.is_err() {
-        return Err(SqliteError::new(ErrorKind::ExecutionFailed));
+        .is_ok();
+    if !connection.is_autocommit() {
+        reusable &= connection.execute_batch("ROLLBACK").is_ok();
     }
-    Ok(())
+    reusable &= install_authorizer(connection).is_ok();
+    reusable &= connection.is_autocommit();
+    reusable &= !connection.is_busy();
+    if reusable {
+        Ok(())
+    } else {
+        Err(SqliteError::new(ErrorKind::ExecutionFailed))
+    }
 }
 
 fn verify_schema_at_open(
@@ -800,12 +920,14 @@ fn verify_schema_at_open(
     let Some(binding) = binding else {
         return Ok(());
     };
-    begin_read_transaction(connection)?;
     let deadline = deadline(limits.timeout)?;
-    let budget = install_progress_handler(connection, limits.maximum_statement_steps, deadline)?;
-    let outcome = schema_fingerprint_with_budget(connection, binding, limits, &budget);
-    let closed = end_read_transaction(connection);
-    match (outcome, closed) {
+    let outcome = begin_read_transaction(connection).and_then(|()| {
+        let budget =
+            install_progress_handler(connection, limits.maximum_statement_steps, deadline)?;
+        schema_fingerprint_with_budget(connection, binding, limits, &budget)
+    });
+    let cleaned = reset_connection_after_read(connection);
+    match (outcome, cleaned) {
         (Ok(_), Ok(())) => Ok(()),
         (Err(error), _) => Err(error),
         (Ok(_), Err(error)) => Err(error),
@@ -860,22 +982,27 @@ fn read_row(
 ) -> Result<ResultRow, SqliteError> {
     let mut object = BTreeMap::new();
     for (index, column) in plan.columns.iter().enumerate() {
-        charge_response(
-            response_bytes,
-            usize::from(index > 0)
-                .saturating_add(json_string_bytes(column.name.as_bytes()))
-                .saturating_add(1),
-            plan.limits.maximum_response_bytes,
-        )?;
+        if plan.response_budget_accounting == ResponseBudgetAccounting::SerializedResult {
+            charge_response(
+                response_bytes,
+                usize::from(index > 0)
+                    .saturating_add(json_string_bytes(column.name.as_bytes()))
+                    .saturating_add(1),
+                plan.limits.maximum_response_bytes,
+            )?;
+        }
         let raw = row
             .get_ref(index)
             .map_err(|_| SqliteError::new(ErrorKind::ExecutionFailed))?;
         let (value, bytes) = read_value(raw, column.value_type, plan.limits.maximum_cell_bytes)?;
-        charge_response(
-            response_bytes,
-            serialized_value_bytes(&value).max(bytes),
-            plan.limits.maximum_response_bytes,
-        )?;
+        let charge = match plan.response_budget_accounting {
+            ResponseBudgetAccounting::SerializedResult => serialized_value_bytes(&value).max(bytes),
+            ResponseBudgetAccounting::TextValuesOnly => match &value {
+                Value::String(_) => bytes,
+                Value::Null | Value::Integer(_) | Value::Number(_) | Value::Boolean(_) => 0,
+            },
+        };
+        charge_response(response_bytes, charge, plan.limits.maximum_response_bytes)?;
         object.insert(column.name.clone(), value);
     }
     Ok(object)
@@ -1057,6 +1184,74 @@ pub fn materialize_fixture(target: &Path, seed_sql: &str) -> Result<(), SqliteEr
 mod tests {
     use super::*;
 
+    fn test_plan(sql: &str, maximum_statement_steps: u64) -> CompiledPlan {
+        CompiledPlan {
+            sql: sql.to_owned(),
+            columns: vec![ColumnContract {
+                name: "id".to_owned(),
+                value_type: ColumnType::String,
+            }],
+            parameters: Vec::new(),
+            limits: StatementLimits {
+                maximum_rows: 2,
+                maximum_cell_bytes: 32,
+                maximum_response_bytes: 128,
+                maximum_statement_steps,
+                timeout: Duration::from_secs(1),
+                concurrency: 1,
+            },
+            schema: None,
+            statement_digest: statement_digest(sql),
+            response_budget_accounting: ResponseBudgetAccounting::SerializedResult,
+        }
+    }
+
+    fn reusable_test_connection() -> Connection {
+        let connection = Connection::open_in_memory().expect("test connection opens");
+        connection
+            .set_limit(Limit::SQLITE_LIMIT_LENGTH, MAXIMUM_ENGINE_VALUE_BYTES)
+            .expect("engine limit installs");
+        install_authorizer(&connection).expect("reviewed authorizer installs");
+        connection
+    }
+
+    fn assert_failure_leaves_connection_reusable(
+        connection: &Connection,
+        plan: &CompiledPlan,
+        deadline: Instant,
+        expected: ErrorKind,
+    ) {
+        let failed = run_statement(connection, plan, &[], deadline);
+        assert_eq!(
+            failed.outcome.expect_err("statement fails").kind(),
+            expected
+        );
+        assert!(
+            failed.reusable,
+            "failed execution must clean the connection"
+        );
+        assert!(connection.is_autocommit(), "transaction must be closed");
+
+        let answered = run_statement(
+            connection,
+            &test_plan("SELECT 'ok' AS id", 100_000),
+            &[],
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(answered.reusable);
+        let (rows, _) = answered
+            .outcome
+            .expect("the cleaned connection is reusable");
+        assert_eq!(rows[0]["id"], Value::String("ok".to_owned()));
+        let refused = connection
+            .prepare("SELECT random()")
+            .expect_err("the reviewed authorizer remains installed");
+        assert_eq!(
+            classify_prepare(&refused, "SELECT random()").kind(),
+            ErrorKind::AuthorizerRefused
+        );
+    }
+
     #[cfg(unix)]
     fn database(path: &Path, marker: &str) {
         use std::os::unix::fs::PermissionsExt as _;
@@ -1125,6 +1320,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn step_deadline_engine_and_authorizer_failures_leave_connection_reusable() {
+        let connection = reusable_test_connection();
+        assert_failure_leaves_connection_reusable(
+            &connection,
+            &test_plan(
+                "WITH RECURSIVE counter(n) AS (\
+                     SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 50000000\
+                 ) SELECT printf('%d', COUNT(*)) AS id FROM counter",
+                1_000,
+            ),
+            Instant::now() + Duration::from_secs(1),
+            ErrorKind::StepBudgetExceeded,
+        );
+        assert_failure_leaves_connection_reusable(
+            &connection,
+            &test_plan("SELECT 'too-late' AS id", 100_000),
+            Instant::now(),
+            ErrorKind::TimeBudgetExceeded,
+        );
+        assert_failure_leaves_connection_reusable(
+            &connection,
+            &test_plan("SELECT json_extract('not-json', '$') AS id", 100_000),
+            Instant::now() + Duration::from_secs(1),
+            ErrorKind::ExecutionFailed,
+        );
+        assert_failure_leaves_connection_reusable(
+            &connection,
+            &test_plan("SELECT random() AS id", 100_000),
+            Instant::now() + Duration::from_secs(1),
+            ErrorKind::AuthorizerRefused,
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_nonreusable_connection_is_discarded_and_replaced() {
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let path = temporary.path().join("source.sqlite");
+        database(&path, "governed");
+        let profile =
+            DatabaseProfile::Snapshot(CapturedSnapshot::capture(&path).expect("snapshot captures"));
+        let connection = open_replacement_connection(&profile).expect("connection opens");
+        connection
+            .set_limit(Limit::SQLITE_LIMIT_COLUMN, 1)
+            .expect("old connection is marked");
+        let connections = Mutex::new(Vec::new());
+
+        assert!(return_or_replace_connection(
+            &connections,
+            &profile,
+            connection,
+            false,
+        ));
+
+        let replacement = connections
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+            .expect("a replacement is returned to the pool");
+        assert!(
+            replacement
+                .limit(Limit::SQLITE_LIMIT_COLUMN)
+                .expect("replacement limit can be read")
+                > 1
+        );
+        let answered = run_statement(
+            &replacement,
+            &test_plan("SELECT 'replacement' AS id", 100_000),
+            &[],
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert!(answered.reusable);
+        assert!(answered.outcome.is_ok());
     }
 
     #[test]

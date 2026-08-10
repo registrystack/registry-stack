@@ -264,13 +264,14 @@ fn snapshot_readiness_rehashes_the_exact_captured_bytes() {
 }
 
 #[tokio::test]
-async fn the_step_budget_interrupts_an_expensive_statement() {
+async fn the_step_budget_interrupts_an_expensive_statement_and_the_pool_recovers() {
     let directory = TempDir::new().unwrap();
     let path = database(&directory);
     let snapshot = CapturedSnapshot::capture(&path).unwrap();
     let mut bounded = contract(
         "WITH RECURSIVE counter(n) AS (\
-             SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 50000000\
+             SELECT 1 UNION ALL SELECT n + 1 FROM counter \
+             WHERE n < CASE WHEN :active = 1 THEN 50000000 ELSE 1 END\
          ) SELECT printf('%d', COUNT(*)) AS id FROM counter WHERE :active = :active",
     );
     bounded.limits.maximum_statement_steps = 1_000;
@@ -280,20 +281,26 @@ async fn the_step_budget_interrupts_an_expensive_statement() {
         .await
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::StepBudgetExceeded);
+    let recovered = statement
+        .execute(&BTreeMap::from([("active".to_owned(), Value::Integer(0))]))
+        .await
+        .expect("the interrupted connection returns cleanly to the pool");
+    assert_eq!(recovered.rows[0]["id"], Value::String("1".to_owned()));
 }
 
 #[tokio::test]
-async fn the_time_budget_interrupts_an_expensive_statement() {
+async fn the_time_budget_interrupts_an_expensive_statement_and_the_pool_recovers() {
     let directory = TempDir::new().unwrap();
     let path = database(&directory);
     let snapshot = CapturedSnapshot::capture(&path).unwrap();
     let mut bounded = contract(
         "WITH RECURSIVE counter(n) AS (\
-             SELECT 1 UNION ALL SELECT n + 1 FROM counter WHERE n < 50000000\
+             SELECT 1 UNION ALL SELECT n + 1 FROM counter \
+             WHERE n < CASE WHEN :active = 1 THEN 50000000 ELSE 1 END\
          ) SELECT printf('%d', COUNT(*)) AS id FROM counter WHERE :active = :active",
     );
     bounded.limits.maximum_statement_steps = 100_000_000;
-    bounded.limits.timeout = Duration::from_millis(1);
+    bounded.limits.timeout = Duration::from_millis(25);
     let statement = ReadOnlyStatement::open(DatabaseProfile::Snapshot(snapshot), bounded).unwrap();
     let error = statement
         .execute(&BTreeMap::from([("active".to_owned(), Value::Integer(1))]))
@@ -303,6 +310,11 @@ async fn the_time_budget_interrupts_an_expensive_statement() {
         error.kind(),
         ErrorKind::TimeBudgetExceeded | ErrorKind::Timeout
     ));
+    let recovered = statement
+        .execute(&BTreeMap::from([("active".to_owned(), Value::Integer(0))]))
+        .await
+        .expect("the timed-out connection returns cleanly to the pool");
+    assert_eq!(recovered.rows[0]["id"], Value::String("1".to_owned()));
 }
 
 #[cfg(feature = "fixture")]

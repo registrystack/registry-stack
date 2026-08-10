@@ -323,9 +323,11 @@ impl SqliteExtractSource {
             request.maximum_statement_steps,
             timeout,
         )?;
-        let statement =
-            ReadOnlyStatement::open(profile, platform_contract(request, statement_sql)?)
-                .map_err(|error| map_platform_error(error, artifact, extract_profile))?;
+        let statement = ReadOnlyStatement::open_with_text_value_response_budget(
+            profile,
+            platform_contract(request, statement_sql)?,
+        )
+        .map_err(|error| map_platform_error(error, artifact, extract_profile))?;
         let parameters = request
             .parameter_bindings
             .keys()
@@ -376,9 +378,10 @@ impl SqliteExtractSource {
     /// The result is `{"rows": [...], "extract": {...}}`. Applying the
     /// acquisition projection belongs to the caller, which does it for every
     /// transport, and so does the authoritative response size check. Collection
-    /// here conservatively charges the serialized collection, row, column-name,
-    /// and scalar-value structure against the same bound so the intermediate
-    /// result is bounded before the caller projects it.
+    /// here charges the original UTF-8 text payload against that same bound so
+    /// the intermediate result is bounded before the caller projects it. This
+    /// is the frozen Evidence accounting contract: the caller's later check is
+    /// authoritative for the complete serialized result.
     ///
     /// A caller may stop awaiting this at any point: the acquisition deadline
     /// above it expires, or a client disconnects and the handler future is
@@ -1297,13 +1300,13 @@ factSchema: schemas/facts.schema.yaml
     async fn a_result_beyond_the_response_bound_is_refused_as_it_is_collected() {
         let directory = TempDir::new().expect("a temporary directory");
         let path = extract(&directory);
-        let plan = Plan::default().response_bytes(39);
+        let plan = Plan::default().response_bytes(8);
         let source = open(&plan, "SELECT id FROM person ORDER BY id", &path);
         assert_eq!(run_error(&source).await, cause::RESPONSE_TOO_LARGE);
 
-        // The exact compact JSON collection is 40 bytes: three one-property
-        // objects containing the three identifiers, plus delimiters and keys.
-        let exact = Plan::default().response_bytes(40);
+        // The three identifiers are nine bytes of text between them, and the
+        // count is of text alone, so a bound of nine admits exactly them.
+        let exact = Plan::default().response_bytes(9);
         let source = open(&exact, "SELECT id FROM person ORDER BY id", &path);
         let result = run(&source, "the response bound admits its own size").await;
         assert_eq!(
