@@ -29,13 +29,16 @@ use std::{
     future::{Future, IntoFuture},
     io,
     net::SocketAddr,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
 use axum::{
     body::{Body, Bytes},
-    extract::{DefaultBodyLimit, Form, State},
+    extract::{DefaultBodyLimit, Extension, Form, State},
     http::{
         header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA, WWW_AUTHENTICATE},
         HeaderMap, HeaderValue, Request, StatusCode,
@@ -276,6 +279,24 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
         ))
         .layer(from_fn_with_state(metrics, observability::observe))
         .layer(from_fn(add_no_store))
+}
+
+/// Data-free request-local state shared by the credential handler and timeout.
+///
+/// It carries no token, request identifier, or other caller material. The one
+/// bit distinguishes a retryable timeout from one that occurred after the
+/// request's single-use authorization had already been consumed.
+#[derive(Clone, Default)]
+struct CredentialRequestStage(Arc<AtomicBool>);
+
+impl CredentialRequestStage {
+    fn mark_claimed(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    fn is_claimed(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
 }
 
 /// Bind the configured listener and serve until `shutdown` resolves.
@@ -672,6 +693,7 @@ struct CredentialProofs {
 /// being a place to try proofs against a live token until one is accepted.
 async fn credential(
     State(service): State<Arc<DeliveryService>>,
+    Extension(stage): Extension<CredentialRequestStage>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -687,6 +709,7 @@ async fn credential(
         }
         Err(error) => return store_response(&service, &error, Outcome::TokenClaimRefused),
     };
+    stage.mark_claimed();
     service.metrics.record_outcome(Outcome::TokenClaimed);
     let expired = service.store.sweep(now());
     service.metrics.record_cleanup(expired);
@@ -1039,6 +1062,10 @@ fn issuance_response(service: &DeliveryService, error: &IssuanceError) -> Respon
 fn credential_issuance_response(service: &DeliveryService, error: &IssuanceError) -> Response {
     record_issuance_outcome(service, error);
     warn_on_unusable_issuance(error);
+    terminal_credential_response()
+}
+
+fn terminal_credential_response() -> Response {
     problem(
         StatusCode::BAD_REQUEST,
         "credential_request_denied",
@@ -1091,9 +1118,11 @@ fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
 /// than for as long as it likes.
 async fn refuse_a_stalled_request(
     State(bound): State<Duration>,
-    request: Request<Body>,
+    mut request: Request<Body>,
     next: Next,
 ) -> Response {
+    let credential_stage = CredentialRequestStage::default();
+    request.extensions_mut().insert(credential_stage.clone());
     match tokio::time::timeout(bound, next.run(request)).await {
         Ok(response) => response,
         Err(_) => {
@@ -1101,11 +1130,15 @@ async fn refuse_a_stalled_request(
                 target: "registry_evidence_oid4vci::service",
                 "a request outlived the configured timeout and was refused"
             );
-            problem(
-                StatusCode::REQUEST_TIMEOUT,
-                "invalid_request",
-                "the request took longer than this service waits",
-            )
+            if credential_stage.is_claimed() {
+                terminal_credential_response()
+            } else {
+                problem(
+                    StatusCode::REQUEST_TIMEOUT,
+                    "invalid_request",
+                    "the request took longer than this service waits",
+                )
+            }
         }
     }
 }

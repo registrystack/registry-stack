@@ -183,6 +183,44 @@ struct FailingIssuer {
     attempts: Mutex<usize>,
 }
 
+#[derive(Clone, Copy)]
+enum SlowBoundary {
+    Catalog,
+    Issuance,
+}
+
+struct SlowIssuer {
+    catalog: Arc<CredentialCatalog>,
+    slow_boundary: SlowBoundary,
+    catalog_calls: Mutex<usize>,
+    issuance_calls: Mutex<usize>,
+}
+
+impl SlowIssuer {
+    fn new(slow_boundary: SlowBoundary) -> Self {
+        Self {
+            catalog: credential_catalog(),
+            slow_boundary,
+            catalog_calls: Mutex::new(0),
+            issuance_calls: Mutex::new(0),
+        }
+    }
+
+    fn catalog_call_count(&self) -> usize {
+        *self
+            .catalog_calls
+            .lock()
+            .expect("the slow catalog recorder is usable")
+    }
+
+    fn issuance_call_count(&self) -> usize {
+        *self
+            .issuance_calls
+            .lock()
+            .expect("the slow issuance recorder is usable")
+    }
+}
+
 impl FailingIssuer {
     fn new(failure: PostClaimFailure) -> Self {
         Self {
@@ -212,6 +250,33 @@ impl CredentialIssuer for FailingIssuer {
             .lock()
             .expect("the failing Evidence recorder is usable") += 1;
         Err(self.failure.error())
+    }
+}
+
+#[async_trait]
+impl CredentialIssuer for SlowIssuer {
+    async fn catalog(&self) -> Result<Arc<CredentialCatalog>, IssuanceError> {
+        *self
+            .catalog_calls
+            .lock()
+            .expect("the slow catalog recorder is usable") += 1;
+        if matches!(self.slow_boundary, SlowBoundary::Catalog) {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        Ok(Arc::clone(&self.catalog))
+    }
+
+    async fn issue(&self, spec: HolderBoundRequestSpec) -> Result<Vec<String>, IssuanceError> {
+        *self
+            .issuance_calls
+            .lock()
+            .expect("the slow issuance recorder is usable") += 1;
+        if matches!(self.slow_boundary, SlowBoundary::Issuance) {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        Ok((0..spec.holder_keys.len())
+            .map(|index| format!("signed.credential.{index}"))
+            .collect())
     }
 }
 
@@ -709,6 +774,84 @@ async fn post_claim_evidence_failures_are_terminal_and_never_restore_the_token()
             "{failure:?} must not rebind the spent token"
         );
     }
+}
+
+#[tokio::test]
+async fn a_post_claim_timeout_is_terminal_and_never_restores_the_token() {
+    let mut config = loaded_config();
+    config.listener.request_timeout_milliseconds = 100;
+    let issuer = Arc::new(SlowIssuer::new(SlowBoundary::Issuance));
+    let server = server_with_issuer(config, Arc::clone(&issuer) as Arc<dyn CredentialIssuer>);
+    let token = access_token(&server).await;
+    let nonce = minted_nonce(&server).await;
+    let request = credential_body(vec![proof_jwt(&private_jwk(), &nonce)]);
+
+    let terminal = server
+        .post(CREDENTIAL_PATH)
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&request)
+        .await;
+    assert_exact_problem(
+        &terminal,
+        StatusCode::BAD_REQUEST,
+        "credential_request_denied",
+        "this credential request cannot be completed",
+        &[&token, &nonce, CONFIGURATION_ID, SELECTOR_VALUE],
+    );
+    assert_eq!(
+        issuer.issuance_call_count(),
+        1,
+        "the claimed request enters Evidence exactly once before timing out"
+    );
+
+    let retry = server
+        .post(CREDENTIAL_PATH)
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&request)
+        .await;
+    assert_exact_problem(
+        &retry,
+        StatusCode::UNAUTHORIZED,
+        "invalid_token",
+        "the access token cannot be used",
+        &[&token, &nonce, CONFIGURATION_ID, SELECTOR_VALUE],
+    );
+    assert_eq!(
+        issuer.issuance_call_count(),
+        1,
+        "the spent token cannot re-enter Evidence"
+    );
+}
+
+#[tokio::test]
+async fn a_pre_claim_timeout_remains_retryable_without_entering_issuance() {
+    let mut config = loaded_config();
+    config.listener.request_timeout_milliseconds = 100;
+    let issuer = Arc::new(SlowIssuer::new(SlowBoundary::Catalog));
+    let server = server_with_issuer(config, Arc::clone(&issuer) as Arc<dyn CredentialIssuer>);
+
+    let response = server
+        .post(OFFERS_PATH)
+        .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+        .json(&offer_body(false))
+        .await;
+    assert_exact_problem(
+        &response,
+        StatusCode::REQUEST_TIMEOUT,
+        "invalid_request",
+        "the request took longer than this service waits",
+        &[OFFER_TOKEN, CONFIGURATION_ID, SELECTOR_VALUE],
+    );
+    assert_eq!(
+        issuer.catalog_call_count(),
+        1,
+        "the pre-claim catalog lookup began exactly once"
+    );
+    assert_eq!(
+        issuer.issuance_call_count(),
+        0,
+        "a pre-claim timeout never enters credential issuance"
+    );
 }
 
 #[tokio::test]

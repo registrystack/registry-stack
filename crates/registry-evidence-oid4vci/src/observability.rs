@@ -386,7 +386,9 @@ fn normalized_problem(problem: &str) -> &'static str {
 
 pub(crate) fn metrics_app(metrics: Arc<Metrics>) -> Router {
     Router::new()
-        .route("/metrics", get(render_metrics))
+        // Axum otherwise dispatches HEAD through the GET handler before
+        // removing the response body, which would still render the metrics.
+        .route("/metrics", get(render_metrics).head(metrics_route_absent))
         .fallback(metrics_route_absent)
         .with_state(metrics)
 }
@@ -523,9 +525,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_metrics_listener_serves_only_metrics() {
+    async fn the_metrics_listener_serves_metrics_for_get_only() {
         let server = axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256))));
-        server.get("/metrics").await.assert_status_ok();
+        let response = server.get("/metrics").await;
+        response.assert_status_ok();
+        response.assert_header(CONTENT_TYPE, METRICS_MEDIA_TYPE);
+        response.assert_text_contains("evidence_oid4vci_store_capacity 256");
+    }
+
+    #[tokio::test]
+    async fn the_metrics_listener_refuses_head_without_rendering_metrics() {
+        let server = axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256))));
+        server
+            .method(Method::HEAD, "/metrics")
+            .await
+            .assert_status_not_found();
+    }
+
+    #[tokio::test]
+    async fn the_metrics_listener_refuses_other_methods() {
+        let server = axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256))));
+        server
+            .post("/metrics")
+            .await
+            .assert_status(StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn the_metrics_listener_refuses_other_paths() {
+        let server = axum_test::TestServer::new(metrics_app(Arc::new(Metrics::new(256))));
         server
             .get(ISSUER_METADATA_PATH)
             .await

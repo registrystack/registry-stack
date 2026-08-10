@@ -605,6 +605,9 @@ impl NonceMinter {
             return Err(NonceError::Invalid);
         }
         let expires_at: i64 = expiry.parse().map_err(|_| NonceError::Invalid)?;
+        if expiry != expires_at.to_string() {
+            return Err(NonceError::Invalid);
+        }
         let expected = self.tag(expires_at);
         // The MAC is checked before the expiry, so a caller cannot learn
         // anything about a nonce it did not receive by reading the refusal.
@@ -1018,6 +1021,36 @@ mod tests {
                 "the minter accepted {tampered}"
             );
         }
+    }
+
+    #[test]
+    fn a_noncanonical_nonce_expiry_is_refused_even_with_the_valid_tag() {
+        let minter = NonceMinter::new(120);
+        let nonce = minter.mint(NOW);
+        let (expiry, tag) = nonce.split_once('.').expect("the nonce carries its expiry");
+
+        for (case, rewritten) in [
+            ("leading plus", format!("+{expiry}.{tag}")),
+            ("leading zero", format!("0{expiry}.{tag}")),
+            ("leading whitespace", format!(" {expiry}.{tag}")),
+            ("trailing whitespace", format!("{expiry} .{tag}")),
+        ] {
+            assert_eq!(
+                minter.verify(&rewritten, NOW),
+                Err(NonceError::Invalid),
+                "the {case} rewrite must be refused"
+            );
+        }
+
+        let zero_expiry_nonce = minter.mint(-120);
+        let (_, zero_expiry_tag) = zero_expiry_nonce
+            .split_once('.')
+            .expect("the nonce carries its expiry");
+        assert_eq!(
+            minter.verify(&format!("-0.{zero_expiry_tag}"), -1),
+            Err(NonceError::Invalid),
+            "the negative-zero rewrite must be refused"
+        );
     }
 
     #[test]
