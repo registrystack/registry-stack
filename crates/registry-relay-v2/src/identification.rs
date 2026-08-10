@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::contract::{
     AccessRule, AuthorityRowBinding, ClassificationReviewDocument, GeneratedIdentificationBinding,
-    Handling, IdentificationMethod, RegistryContract, ReviewStatus, RulePackBinding,
+    Handling, IdentificationMethod, RegistryContract, ReviewStatus, RulePackBinding, SourceProfile,
 };
 use crate::format_capabilities::{
     response_format_capabilities, FormatProfileIdentifier, WireFormatCapability,
@@ -25,7 +25,7 @@ use crate::model::{
     CapabilityFamily, ColumnUse, CompiledAccess, CompiledAccessProfile, CompiledOperation,
     CompiledRegistry, CompiledResource, CompiledTransform, ConsultationPattern,
     EffectiveClassification, ObservedColumn, ObservedSourceSchema, OperationKind,
-    RowAuthoritySource,
+    RowAuthoritySource, POINT_BBOX_PREDICATE,
 };
 
 pub const IDENTIFICATION_REPORT_PATH: &str = "reports/identification-report.json";
@@ -627,11 +627,7 @@ pub fn operation_explanation(
                             transforms: transform_explanations(resource, access_profile),
                             wire_formats: response_format_capabilities(resource, access_profile),
                             cache: CacheExplanation {
-                                kind: if matches!(access_profile.access, CompiledAccess::Public) {
-                                    CachePosture::PublicRevalidate
-                                } else {
-                                    CachePosture::NoStore
-                                },
+                                kind: cache_posture(registry, resource, access_profile),
                             },
                         })
                         .collect::<Vec<_>>();
@@ -670,6 +666,25 @@ pub fn operation_explanation(
         classification_inventory_digest: classification_inventory_digest.into(),
         operations,
     })
+}
+
+fn cache_posture(
+    registry: &CompiledRegistry,
+    resource: &CompiledResource,
+    access_profile: &CompiledAccessProfile,
+) -> CachePosture {
+    let snapshot_source = registry
+        .sources
+        .iter()
+        .any(|source| source.id == resource.source && source.profile == SourceProfile::Snapshot);
+    if matches!(access_profile.access, CompiledAccess::Public)
+        && access_profile.processing_handling == Handling::Public
+        && snapshot_source
+    {
+        CachePosture::PublicRevalidate
+    } else {
+        CachePosture::NoStore
+    }
 }
 
 pub fn render_operation_explanation(
@@ -944,7 +959,7 @@ fn query_explanation(operation: &CompiledOperation) -> QueryExplanation {
         .map(|bbox| SpatialQueryExplanation {
             parameter: "bbox".into(),
             crs: CRS84_URI.into(),
-            predicate: "inclusive-point-within-bbox".into(),
+            predicate: POINT_BBOX_PREDICATE.into(),
             maximum_longitude_span_degrees: bbox.maximum_longitude_span_degrees,
             maximum_latitude_span_degrees: bbox.maximum_latitude_span_degrees,
         });
@@ -2508,6 +2523,36 @@ mod tests {
     }
 
     #[test]
+    fn public_snapshot_source_is_explained_as_public_revalidation() {
+        let mut registry = public_registry(SourceProfile::Snapshot);
+        let source_metadata_canary = "SOURCE_METADATA_CANARY_4ee4ba";
+        registry.sources[0].expected_schema_fingerprint = source_metadata_canary.into();
+        let digest = classification_inventory_digest(&registry).expect("inventory digest");
+
+        let explanation = operation_explanation(&registry, &digest).expect("explanation");
+        let access_profile = &explanation.operations[0].access_profiles[0];
+        assert_eq!(access_profile.cache.kind, CachePosture::PublicRevalidate);
+        let rendered = render_operation_explanation(&explanation).expect("canonical explanation");
+        assert!(!String::from_utf8(rendered)
+            .expect("UTF-8 JSON")
+            .contains(source_metadata_canary));
+    }
+
+    #[test]
+    fn public_live_source_is_explained_as_no_store() {
+        let registry = public_registry(SourceProfile::LiveReadOnly);
+        let digest = classification_inventory_digest(&registry).expect("inventory digest");
+
+        let explanation = operation_explanation(&registry, &digest).expect("explanation");
+        let access_profile = &explanation.operations[0].access_profiles[0];
+        assert_eq!(access_profile.cache.kind, CachePosture::NoStore);
+        assert!(matches!(
+            access_profile.access,
+            AccessPolicyExplanation::Public
+        ));
+    }
+
+    #[test]
     fn operation_explanation_is_canonical_value_free_and_complete_for_spatial_search() {
         let contract = compiler_tests::spatial_contract(true);
         let mut registry = compile_contract_with_governed_files(
@@ -2638,5 +2683,18 @@ mod tests {
         assert!(text.contains("max-longitude-span=10"));
         assert!(text.contains("format-profiles=rfc7946, jsonfg"));
         assert!(!text.contains(canary));
+    }
+
+    fn public_registry(profile: SourceProfile) -> CompiledRegistry {
+        let contract = compiler_tests::spatial_contract(false);
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::spatial_observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files_for(&contract),
+        )
+        .expect("public contract compiles");
+        registry.sources[0].profile = profile;
+        registry
     }
 }

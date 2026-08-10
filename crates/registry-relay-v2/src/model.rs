@@ -370,6 +370,9 @@ pub struct CompiledSpatialBboxQuery {
     pub maximum_latitude_span_degrees: u16,
 }
 
+/// Stable capability identifier shared by discovery, generated artifacts, and explanations.
+pub const POINT_BBOX_PREDICATE: &str = "inclusive-point-within-bbox";
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledFilter {

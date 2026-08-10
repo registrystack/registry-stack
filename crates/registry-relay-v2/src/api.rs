@@ -30,7 +30,7 @@ use crate::format_capabilities::{
 };
 use crate::model::{
     CompiledAccess, CompiledAccessProfile, CompiledOperation, CompiledResource,
-    ConsultationPattern, OperationKind, RowAuthoritySource,
+    ConsultationPattern, OperationKind, RowAuthoritySource, POINT_BBOX_PREDICATE,
 };
 use crate::problem::{ProblemCode, TraceContext};
 use crate::server::{uri_within_bound, RelayService};
@@ -3167,7 +3167,7 @@ fn capability(
             json!({
                 "bbox": {
                     "crs": CRS84_URI,
-                    "predicate": "exact-point-intersection",
+                    "predicate": POINT_BBOX_PREDICATE,
                     "maximumLongitudeSpanDegrees": spatial.maximum_longitude_span_degrees,
                     "maximumLatitudeSpanDegrees": spatial.maximum_latitude_span_degrees,
                 }

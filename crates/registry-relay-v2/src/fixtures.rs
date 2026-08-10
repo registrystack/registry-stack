@@ -87,7 +87,6 @@ pub fn compile_fixture_plan(
     validate_authorizations(journey, &mut diagnostics);
 
     let mut ids = BTreeSet::new();
-    let mut steps = Vec::new();
     for (index, step) in journey.steps.iter().enumerate() {
         if !ids.insert(step.id.as_str()) {
             diagnostic(
@@ -97,6 +96,12 @@ pub fn compile_fixture_plan(
                 "fixture step identifiers must be unique",
             );
         }
+    }
+    let dependencies = fixture_dependencies(journey, &mut diagnostics);
+    let selected_steps = selected_step_closure(journey, &dependencies, selected_fixture);
+
+    let mut steps = Vec::new();
+    for (index, step) in journey.steps.iter().enumerate() {
         if let Some(reference) = step.authorization_fixture.as_deref() {
             if !journey.authorizations.contains_key(reference) {
                 diagnostic(
@@ -107,7 +112,7 @@ pub fn compile_fixture_plan(
                 );
             }
         }
-        if selected_fixture.is_some_and(|selected| selected != step.id) {
+        if !selected_steps.contains(&index) {
             continue;
         }
         if !step.request.path.starts_with('/') || step.request.path.contains(['?', '#']) {
@@ -191,6 +196,164 @@ pub fn compile_fixture_plan(
         steps,
         diagnostics,
     }
+}
+
+#[derive(Clone, Debug)]
+struct FixtureDependency {
+    target: String,
+    location: String,
+}
+
+fn fixture_dependencies(
+    journey: &FixtureJourney,
+    diagnostics: &mut Vec<FixtureDiagnostic>,
+) -> Vec<Vec<usize>> {
+    let identifiers =
+        journey
+            .steps
+            .iter()
+            .enumerate()
+            .fold(BTreeMap::new(), |mut identifiers, (index, step)| {
+                identifiers.entry(step.id.as_str()).or_insert(index);
+                identifiers
+            });
+    let mut equivalence_classes = BTreeMap::<&str, &str>::new();
+    let references = journey
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let mut references = step_dependencies(step, index);
+            if let Some(class) = step.expect.equivalence_class.as_deref() {
+                if let Some(target) = equivalence_classes.get(class) {
+                    references.push(FixtureDependency {
+                        target: (*target).into(),
+                        location: format!("steps[{index}].expect.equivalenceClass"),
+                    });
+                } else {
+                    equivalence_classes.insert(class, step.id.as_str());
+                }
+            }
+            references
+        })
+        .collect::<Vec<_>>();
+    let mut dependencies = vec![Vec::new(); journey.steps.len()];
+
+    for (index, step_references) in references.iter().enumerate() {
+        for reference in step_references {
+            let Some(target) = identifiers.get(reference.target.as_str()).copied() else {
+                diagnostic(
+                    diagnostics,
+                    "fixture.dependency_unknown",
+                    &reference.location,
+                    "the fixture step dependency is unknown",
+                );
+                continue;
+            };
+            if !dependencies[index].contains(&target) {
+                dependencies[index].push(target);
+            }
+        }
+    }
+
+    for (index, step_references) in references.iter().enumerate() {
+        for reference in step_references {
+            let Some(target) = identifiers.get(reference.target.as_str()).copied() else {
+                continue;
+            };
+            if dependency_reaches(&dependencies, target, index) {
+                diagnostic(
+                    diagnostics,
+                    "fixture.dependency_cycle",
+                    &reference.location,
+                    "fixture step dependencies must be acyclic",
+                );
+            } else if target > index {
+                diagnostic(
+                    diagnostics,
+                    "fixture.dependency_forward",
+                    &reference.location,
+                    "fixture steps may depend only on preceding steps",
+                );
+            }
+        }
+    }
+    dependencies
+}
+
+fn step_dependencies(step: &FixtureStep, index: usize) -> Vec<FixtureDependency> {
+    let mut dependencies = Vec::new();
+    for (name, value) in &step.request.query {
+        if let Some(target) = value
+            .as_str()
+            .and_then(|value| value.strip_prefix("$nextCursor:"))
+        {
+            dependencies.push(FixtureDependency {
+                target: target.into(),
+                location: format!("steps[{index}].request.query.{name}"),
+            });
+        }
+    }
+    for (name, value) in &step.request.headers {
+        if let Some(target) = value.strip_prefix("$etag:") {
+            dependencies.push(FixtureDependency {
+                target: target.into(),
+                location: format!("steps[{index}].request.headers.{name}"),
+            });
+        }
+    }
+    if let Some(target) = step.expect.records_equivalent_to.as_ref() {
+        dependencies.push(FixtureDependency {
+            target: target.clone(),
+            location: format!("steps[{index}].expect.recordsEquivalentTo"),
+        });
+    }
+    if let Some(target) = step.expect.etag_same_as.as_ref() {
+        dependencies.push(FixtureDependency {
+            target: target.clone(),
+            location: format!("steps[{index}].expect.etagSameAs"),
+        });
+    }
+    dependencies
+}
+
+fn dependency_reaches(dependencies: &[Vec<usize>], start: usize, target: usize) -> bool {
+    let mut pending = vec![start];
+    let mut visited = BTreeSet::new();
+    while let Some(index) = pending.pop() {
+        if index == target {
+            return true;
+        }
+        if visited.insert(index) {
+            pending.extend(dependencies[index].iter().copied());
+        }
+    }
+    false
+}
+
+fn selected_step_closure(
+    journey: &FixtureJourney,
+    dependencies: &[Vec<usize>],
+    selected_fixture: Option<&str>,
+) -> BTreeSet<usize> {
+    let Some(selected_fixture) = selected_fixture else {
+        return (0..journey.steps.len()).collect();
+    };
+    let Some(selected) = journey
+        .steps
+        .iter()
+        .position(|step| step.id == selected_fixture)
+    else {
+        return BTreeSet::new();
+    };
+    let mut selected_steps = BTreeSet::new();
+    let mut pending = vec![selected];
+    while let Some(index) = pending.pop() {
+        if selected_steps.insert(index) {
+            pending.extend(dependencies[index].iter().copied());
+        }
+    }
+    selected_steps
 }
 
 /// Execute each preflighted step against the real in-process Relay router.
@@ -1212,6 +1375,103 @@ steps:
         let token = fixture_token("fixture-a");
         assert_eq!(token.split('.').count(), 3);
         assert!(!token.contains("principal"));
+    }
+
+    #[test]
+    fn selected_step_closure_includes_every_transitive_reference_and_nothing_else() {
+        let journey = parse_journey(
+            r#"
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry
+authorizations: {}
+steps:
+  - id: cursor-source
+    request: {method: GET, path: /health}
+    expect: {status: 200}
+  - id: cursor-consumer
+    request:
+      method: GET
+      path: /health
+      query: {cursor: "$nextCursor:cursor-source"}
+    expect: {status: 200}
+  - id: etag-consumer
+    request:
+      method: GET
+      path: /health
+      headers: {if-none-match: "$etag:cursor-consumer"}
+    expect: {status: 200}
+  - id: format-consumer
+    request: {method: GET, path: /health}
+    expect:
+      status: 200
+      recordsEquivalentTo: etag-consumer
+      etagSameAs: etag-consumer
+      equivalenceClass: selected-equivalence
+  - id: selected
+    request: {method: GET, path: /health}
+    expect: {status: 200, equivalenceClass: selected-equivalence}
+  - id: unrelated
+    request: {method: GET, path: /health}
+    expect: {status: 200}
+"#,
+        )
+        .expect("fixture parses");
+        let mut diagnostics = Vec::new();
+        let dependencies = fixture_dependencies(&journey, &mut diagnostics);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(
+            selected_step_closure(&journey, &dependencies, Some("selected")),
+            BTreeSet::from([0, 1, 2, 3, 4])
+        );
+    }
+
+    #[test]
+    fn unknown_forward_and_cyclic_step_dependencies_are_distinct_refusals() {
+        for (steps, expected) in [
+            (
+                r#"
+  - id: one
+    request: {method: GET, path: /health}
+    expect: {status: 200, recordsEquivalentTo: missing}
+"#,
+                "fixture.dependency_unknown",
+            ),
+            (
+                r#"
+  - id: one
+    request: {method: GET, path: /health}
+    expect: {status: 200, recordsEquivalentTo: two}
+  - id: two
+    request: {method: GET, path: /health}
+    expect: {status: 200}
+"#,
+                "fixture.dependency_forward",
+            ),
+            (
+                r#"
+  - id: one
+    request: {method: GET, path: /health}
+    expect: {status: 200, recordsEquivalentTo: two}
+  - id: two
+    request: {method: GET, path: /health}
+    expect: {status: 200, recordsEquivalentTo: one}
+"#,
+                "fixture.dependency_cycle",
+            ),
+        ] {
+            let journey = parse_journey(&format!(
+                "schemaVersion: {JOURNEY_VERSION}\nregistry: urn:example:registry\nauthorizations: {{}}\nsteps:{steps}"
+            ))
+            .expect("fixture parses");
+            let mut diagnostics = Vec::new();
+            fixture_dependencies(&journey, &mut diagnostics);
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == expected),
+                "{diagnostics:?}"
+            );
+        }
     }
 
     #[test]

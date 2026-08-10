@@ -252,7 +252,7 @@ projects:
       size: 6470
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:8b2b7ef4d57b9fa78450ddddcfd2054769fc8c01f5d36435a4312c1f268f740c
+    packageRevision: sha256:29d37d6bf8ca1d278b5cbbda0cf9bd47c1c79da0195ba5a0c767cf127b913163
     contractRevision: sha256:f72669730175ad097512fa9eda378bbbd3bbb64a859615e42d4752b277630968
     sourceSchemaFingerprints:
       companies: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
@@ -269,14 +269,14 @@ projects:
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
-      sha256: sha256:af5457dd3c685d914da14b911a4d8d34138bbba695e4b90f871b934ca4bc2f0e
+      sha256: sha256:84581ff4973a06efc9c383930a873cdc422595381aa278f9c01cb7eea4904abf
       visibility: operator-only
     - accessProfileIdentifier: null
       id: capability-inventory
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.json
-      sha256: sha256:eb7db7231f6e902cef236eea3ed32cf074d202ce3a44f56fa2a9c1169f624a08
+      sha256: sha256:3b1bb8c5dfc320a6565ae01e2d53eee1dc44b41719c5dc1d1872b3b0f46e1a3c
       visibility: public
     - accessProfileIdentifier: null
       id: registered-business--list--access-profile-public-register-classifications
@@ -738,7 +738,7 @@ projects:
       mediaType: application/json
       operationIdentifier: registered-premises.search.within-bbox
       path: generated/artifacts/registered-premises--search-within-bbox--access-profile-registrar-premises.capability.json
-      sha256: sha256:35eede13bf9ee7c706a853d1f266cd45d9becb888ab295b8ea46e8e2381ee755
+      sha256: sha256:75549a4599894196e026203ceb9aca253299bf4dff50db17b7f3078cd464ff6f
       visibility: operation-bound
     - accessProfileIdentifier: registrar-premises
       id: registered-premises--search-within-bbox--access-profile-registrar-premises-classifications
@@ -836,14 +836,14 @@ projects:
       mediaType: application/yaml
       operationIdentifier: null
       path: generated/openapi.full.yaml
-      sha256: sha256:0f632e9d0751702b6ab682faca7870909a1e375852db214320de8841c5b62979
+      sha256: sha256:e142704c094faeb697e26eb9195cc1593f9623147daaa94d356cdc83c810b824
       visibility: operator-only
     - accessProfileIdentifier: null
       id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
-      sha256: sha256:d8cda77c932d8514ab32236d425957bef50d03cc0c16b6bd712939d3e0abd4de
+      sha256: sha256:e0dd38413b3ba98a80a9b42014f564733b38f8af51cf12674591af88870280e8
       visibility: public
     governedFiles:
     - generated: false

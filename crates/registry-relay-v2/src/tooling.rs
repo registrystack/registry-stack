@@ -393,6 +393,10 @@ fn collect_configuration_key_paths(document: &serde_json::Value) -> Vec<String> 
                         | "resources[].sourceColumnClassifications"
                         | "resources[].properties"
                         | "resources[].disclosureProfiles"
+                        | "resources[].operations.list.accessProfiles"
+                        | "resources[].operations.read.accessProfiles"
+                        | "resources[].operations.lookups[].accessProfiles"
+                        | "resources[].operations.searches[].accessProfiles"
                         | "resources[].operations.lookups[].requestBody.selectors"
                 );
                 if dynamic_map {
@@ -1280,6 +1284,31 @@ mod tests {
     }
 
     #[test]
+    fn access_profile_identifiers_are_wildcarded_in_configuration_key_paths() {
+        let document = serde_json::json!({
+            "resources": [{
+                "operations": {
+                    "list": {"accessProfiles": {"acceptance-list": {"access": "public"}}},
+                    "read": {"accessProfiles": {"acceptance-read": {"access": "public"}}},
+                    "lookups": [{"accessProfiles": {"acceptance-lookup": {"access": "public"}}}],
+                    "searches": [{"accessProfiles": {"acceptance-search": {"access": "public"}}}]
+                }
+            }]
+        });
+        let paths = collect_configuration_key_paths(&document);
+        for prefix in [
+            "resources[].operations.list.accessProfiles",
+            "resources[].operations.read.accessProfiles",
+            "resources[].operations.lookups[].accessProfiles",
+            "resources[].operations.searches[].accessProfiles",
+        ] {
+            assert!(paths.contains(&format!("{prefix}.*")), "{paths:?}");
+            assert!(paths.contains(&format!("{prefix}.*.access")), "{paths:?}");
+        }
+        assert!(paths.iter().all(|path| !path.contains("acceptance-")));
+    }
+
+    #[test]
     fn refused_check_returns_no_partial_explanation() {
         let temporary = tempfile::tempdir().expect("temporary project creates");
         fs::write(temporary.path().join("registry.yaml"), "not: [valid")
@@ -1375,5 +1404,40 @@ mod tests {
         ] {
             assert!(!rendered.contains(protected), "report leaked fixture data");
         }
+    }
+
+    #[test]
+    fn selected_fixture_executes_and_asserts_its_minimal_prerequisite_closure() {
+        let project_name = ["business", "registry"].join("-");
+        let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/relay-v2/acceptance")
+            .join(project_name);
+        let selected = "premises-feature-collection-jsonfg";
+        let report = test_project(&TestOptions {
+            project_root: project,
+            fixture_id: Some(selected.into()),
+        })
+        .expect("selected fixture operation completes");
+        assert!(report.is_success(), "{report:?}");
+        let ToolingDetails::Test {
+            report: Some(fixture_report),
+            ..
+        } = report.details
+        else {
+            panic!("fixture execution returns its plan report");
+        };
+        assert_eq!(fixture_report.selected_fixture.as_deref(), Some(selected));
+        assert_eq!(
+            fixture_report
+                .steps
+                .iter()
+                .map(|step| step.id.as_str())
+                .collect::<Vec<_>>(),
+            ["premises-first-page", selected]
+        );
+        assert!(fixture_report
+            .steps
+            .iter()
+            .all(|step| step.passed == Some(true)));
     }
 }

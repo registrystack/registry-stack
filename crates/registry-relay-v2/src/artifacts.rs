@@ -16,7 +16,7 @@ use crate::format_capabilities::{
 };
 use crate::model::{
     CompiledAccess, CompiledOperation, CompiledRegistry, CompiledResource, ConsultationPattern,
-    OperationKind,
+    OperationKind, POINT_BBOX_PREDICATE,
 };
 use crate::semantics::{
     access_profile_schema, access_profile_shacl, full_record_schema, full_record_shacl,
@@ -717,7 +717,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                         parameters.push(json!({
                             "name": "bbox",
                             "in": "query",
-                            "required": true,
+                            "required": false,
                             "style": "form",
                             "explode": false,
                             "schema": {
@@ -726,8 +726,8 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                                 "minItems": 4,
                                 "maxItems": 4
                             },
-                            "description": "Inclusive CRS84 point bounds: west,south,east,north",
-                            "x-registry-spatial-predicate": "exact-point-intersection",
+                            "description": "Required for a fresh search and omitted for cursor continuation. Inclusive CRS84 point bounds: west,south,east,north.",
+                            "x-registry-spatial-predicate": POINT_BBOX_PREDICATE,
                             "x-registry-crs": CRS84_URI,
                             "x-registry-maximum-longitude-span-degrees": bbox.maximum_longitude_span_degrees,
                             "x-registry-maximum-latitude-span-degrees": bbox.maximum_latitude_span_degrees,
@@ -786,6 +786,15 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "default": {"$ref": "#/components/responses/Problem"}
                 }
             });
+            if matches!(&operation.kind, OperationKind::Search { .. }) {
+                operation_value
+                    .as_object_mut()
+                    .expect("operation object")
+                    .insert(
+                        "description".into(),
+                        json!("Start this named search with bbox, no cursor, and any other documented optional query parameters. Continue it with cursor and optional accessProfile only; all other query parameters, including bbox, are invalid with cursor."),
+                    );
+            }
             let required_scopes = visible_access_profiles
                 .iter()
                 .filter_map(|access_profile| match &access_profile.access {
@@ -1228,7 +1237,7 @@ fn capability_inventory(
                         "spatialQuery": operation.query.spatial_bbox.as_ref().map(|spatial| json!({
                             "bbox": {
                                 "crs": CRS84_URI,
-                                "predicate": "exact-point-intersection",
+                                "predicate": POINT_BBOX_PREDICATE,
                                 "maximumLongitudeSpanDegrees": spatial.maximum_longitude_span_degrees,
                                 "maximumLatitudeSpanDegrees": spatial.maximum_latitude_span_degrees,
                             }
@@ -1594,23 +1603,40 @@ mod tests {
         assert!(operation["responses"]["200"]["content"]
             .get("application/geo+json")
             .is_some());
-        let bbox = operation["parameters"]
-            .as_array()
-            .expect("parameters")
+        let parameters = operation["parameters"].as_array().expect("parameters");
+        let bbox = parameters
             .iter()
             .find(|parameter| parameter["name"] == "bbox")
             .expect("bbox parameter");
         assert_eq!(bbox["schema"]["minItems"], 4);
         assert_eq!(bbox["explode"], false);
-        assert_eq!(bbox["required"], true);
-        assert!(operation["parameters"]
-            .as_array()
-            .expect("parameters")
+        assert_eq!(bbox["required"], false);
+        assert_eq!(
+            bbox["description"],
+            "Required for a fresh search and omitted for cursor continuation. Inclusive CRS84 point bounds: west,south,east,north."
+        );
+        assert_eq!(
+            operation["description"],
+            "Start this named search with bbox, no cursor, and any other documented optional query parameters. Continue it with cursor and optional accessProfile only; all other query parameters, including bbox, are invalid with cursor."
+        );
+        let required_query_parameters = parameters
+            .iter()
+            .filter(|parameter| parameter["in"] == "query" && parameter["required"] == true)
+            .filter_map(|parameter| parameter["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            required_query_parameters.is_empty(),
+            "cursor-only continuation must not be blocked by required query parameters: {required_query_parameters:?}"
+        );
+        let cursor = parameters
+            .iter()
+            .find(|parameter| parameter["name"] == "cursor")
+            .expect("cursor parameter");
+        assert_eq!(cursor["required"], false);
+        assert!(parameters
             .iter()
             .any(|parameter| parameter["name"] == "accessProfile"));
-        assert!(operation["parameters"]
-            .as_array()
-            .expect("parameters")
+        assert!(parameters
             .iter()
             .any(|parameter| parameter["name"] == "formatProfile"));
         let expected_formats =
@@ -1631,7 +1657,7 @@ mod tests {
             capability_document["capabilities"][0]["wireFormats"],
             expected_formats
         );
-        assert!(encoded.contains("exact-point-intersection"));
+        assert!(encoded.contains(POINT_BBOX_PREDICATE));
         assert!(encoded.contains(JSON_FG_PROFILE_URI));
         assert!(!encoded.contains("longitude_col"));
         assert!(!encoded.contains("latitude_col"));
@@ -1665,9 +1691,9 @@ mod tests {
         )
         .expect("UTF-8 capabilities");
         assert!(!public_openapi.contains("application/geo+json"));
-        assert!(!public_openapi.contains("exact-point-intersection"));
+        assert!(!public_openapi.contains(POINT_BBOX_PREDICATE));
         assert!(!public_capabilities.contains("application/geo+json"));
-        assert!(!public_capabilities.contains("exact-point-intersection"));
+        assert!(!public_capabilities.contains(POINT_BBOX_PREDICATE));
         assert!(!public_openapi.contains("/searches/within-bbox"));
         assert!(!public_capabilities.contains("record.search.within-bbox"));
 
