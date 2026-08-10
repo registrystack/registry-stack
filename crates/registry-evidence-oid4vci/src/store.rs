@@ -467,6 +467,23 @@ impl OfferStore {
             .unwrap_or(0)
     }
 
+    /// The fullest bounded key-space, for operational saturation pressure.
+    ///
+    /// Each of the offer, ledger, and token maps refuses independently at the
+    /// configured capacity. Reporting their aggregate would hide a full map
+    /// behind spare room in the other two. A poisoned store returns no sample
+    /// so telemetry retains its last trustworthy value instead of reporting
+    /// an apparent recovery to zero.
+    pub(crate) fn maximum_keyspace_len(&self) -> Option<usize> {
+        self.state.lock().ok().map(|state| {
+            state
+                .offers
+                .len()
+                .max(state.ledgers.len())
+                .max(state.tokens.len())
+        })
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -885,6 +902,37 @@ mod tests {
         // The ledger stays, so the lockout stands. The prepared request is gone,
         // because nothing can ever redeem it now.
         assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn saturation_pressure_is_the_fullest_independently_bounded_keyspace() {
+        let store = store();
+        assert_eq!(store.maximum_keyspace_len(), Some(0));
+
+        store
+            .remember_offer("code-1", None, prepared(), NOW)
+            .expect("the offer is remembered");
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.maximum_keyspace_len(), Some(1));
+
+        for token in ["token-1", "token-2"] {
+            store
+                .bind_access_token(token, prepared(), NOW)
+                .expect("the token is bound");
+        }
+        assert_eq!(store.len(), 4);
+        assert_eq!(store.maximum_keyspace_len(), Some(2));
+    }
+
+    #[test]
+    fn a_poisoned_store_reports_no_trustworthy_pressure_sample() {
+        let store = store();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = store.state.lock().expect("the store lock");
+            panic!("poison the store for the pressure test");
+        }));
+
+        assert_eq!(store.maximum_keyspace_len(), None);
     }
 
     #[test]

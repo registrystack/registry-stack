@@ -68,19 +68,26 @@ endpoints:
     authorization: none
     rule: >-
       Publishes credential_issuer, credential_endpoint, nonce_endpoint,
-      authorization_servers, batch_credential_issuance and
-      credential_configurations_supported. The token endpoint is not published
-      here; it is published by the authorization server metadata below, which is
-      what authorization_servers points a wallet at. Every
-      credential_configurations_supported entry is derived from the Evidence
-      bundle rather than hand-written, so published metadata cannot drift from
-      what Evidence will actually issue. The batch_credential_issuance
-      batch_size is the backing deployment's effective holder-bound batch
+      authorization_servers and credential_configurations_supported. It also
+      publishes batch_credential_issuance when the effective holder-bound
+      ceiling is at least two; batch_size is then that ceiling in the range 2
+      through 16. Omitting the member means only a single proof is accepted,
+      still inside the plural proofs and credentials envelopes. The token
+      endpoint is not published here; it is published by the authorization
+      server metadata below, which is what authorization_servers points a
+      wallet at. Every credential_configurations_supported entry is derived
+      from the Evidence bundle's authenticated discovery rather than
+      hand-written, so it describes that discovered generation rather than an
+      adapter-authored capability. The batch_credential_issuance batch_size is
+      the backing deployment's effective holder-bound batch
       ceiling from authenticated Evidence discovery, bounded again by the
-      Evidence client's compile-time request ceiling. That effective value is
-      captured with each offer and enforced before proof processing, so neither
-      metadata nor a later discovery change can advertise a batch the complete
-      deployment will refuse.
+      Evidence client's compile-time request ceiling. Discovery is cached and
+      that effective value is captured with each offer so the adapter enforces
+      one catalog generation consistently before proof processing. Capturing it
+      does not make a later Evidence generation honor the old ceiling. Stop the
+      adapter and discard its outstanding exchanges before changing or
+      restarting the backing Evidence bundle, then restart the adapter after
+      Evidence is ready so it begins from fresh authenticated discovery.
   - path: GET /.well-known/oauth-authorization-server
     authorization: none
     rule: >-
@@ -129,9 +136,17 @@ endpoints:
     authorization: bearer access token
     rule: >-
       Accepts credential_configuration_id and a proofs object keyed by proof
-      type whose value is a non-empty array. Returns credentials as an array of
-      objects even for a single credential, which is Final's shape and maps one
-      to one onto the holder-bound batch.
+      type whose value is a non-empty array. One proof is valid whether or not
+      batch_credential_issuance is advertised. Returns credentials as an array
+      of objects even for a single credential, which is Final's shape and maps
+      one to one onto the holder-bound batch. The access token is claimed before
+      proof inspection. Any later Evidence refusal or failure is therefore
+      terminal for that exchange and returns 400 credential_request_denied with
+      the fixed value-free description "this credential request cannot be
+      completed"; the wallet must begin a newly authorized exchange. A transient
+      dependency or bounded-state failure detected before a code or token is
+      claimed may still return 503 temporarily_unavailable and invite retry of
+      that unclaimed authorization.
   - path: GET /health and GET /ready
     authorization: none
     rule: >-
@@ -168,6 +183,7 @@ state_model:
     nonce is worth nothing without the token that must accompany it.
   honest_limits:
     - A restart invalidates every offer outstanding in a minutes-wide window. The resulting failure is a clean, value-free error rather than a panic.
+    - A backing Evidence bundle or batch-ceiling change requires a coordinated cutover: stop this adapter and discard outstanding exchanges, change or restart Evidence, then restart this adapter so its first catalog comes from the new generation. Do not change Evidence while this adapter continues to serve a cached catalog.
     - Single use is enforced per process. A second replica breaks it, which is why there is exactly one. Adding a replica means a shared store, and that decision is not taken here.
     - Single use is mostly a detection property. It turns silent duplicate issuance from a stolen offer into one party receiving an error and complaining. The short lifetime and the transaction code are the primary defenses, not the marker.
     - Selector values are held in the deployment's memory rather than encrypted into a client-held code, so they are never placed in a QR code that can be forwarded or photographed.

@@ -305,7 +305,10 @@ fn default_maximum_transaction_code_attempts() -> u32 {
 /// the store fails closed on saturation rather than evicting a live entry, so
 /// the capacity is what an operator sizes against the offers a deployment
 /// really creates, and the lifetimes are what keeps that capacity from filling
-/// with state nobody is going to claim.
+/// with state nobody is going to claim. A redeemed offer's failure ledger stays
+/// for the full offer lifetime, so sustained offer creation is bounded to about
+/// `maximum_offers / offer_lifetime_seconds` per second, not merely the number
+/// of offers waiting to be redeemed at one instant.
 #[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreConfig {

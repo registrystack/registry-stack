@@ -33,9 +33,13 @@ use crate::{config::DeliveryConfig, metadata::CredentialCatalog};
 
 /// How long a derived catalog is reused before discovery is read again.
 ///
-/// A deployment changes its bundle rarely, and every published entry is a
-/// promise a wallet may act on minutes later, so this is a cache rather than a
-/// window anyone should tune around.
+/// This protects the authenticated discovery endpoint from public metadata and
+/// offer load within one deployment generation. Evidence bundles are
+/// startup-only, and discovery carries no generation identifier that could
+/// safely invalidate this cache in place. A backing bundle change therefore
+/// requires the coordinated process boundary documented for operators: stop
+/// this adapter, restart Evidence, then start a fresh adapter whose cache is
+/// necessarily empty.
 const CATALOG_LIFETIME: Duration = Duration::from_secs(300);
 
 /// Why a credential could not be obtained.

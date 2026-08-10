@@ -15,6 +15,8 @@ command -v cargo >/dev/null 2>&1 || {
   exit 1
 }
 
+"$script_directory/inji-oid4vci-upstream.sh" --self-test
+
 if [[ -n ${EVIDENCE_OID4VCI_BIN:-} ]]; then
   [[ $EVIDENCE_OID4VCI_BIN == /* && -x $EVIDENCE_OID4VCI_BIN ]] || {
     printf 'EVIDENCE_OID4VCI_BIN must name an absolute executable.\n' >&2

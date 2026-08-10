@@ -39,6 +39,7 @@ pub(crate) enum Outcome {
     OfferCreated,
     OfferAuthorizationRefused,
     StoreSaturated,
+    StoreFault,
     CodeRedeemed,
     CodeClaimRefused,
     TokenClaimed,
@@ -56,10 +57,11 @@ pub(crate) enum Outcome {
 }
 
 impl Outcome {
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::OfferCreated,
         Self::OfferAuthorizationRefused,
         Self::StoreSaturated,
+        Self::StoreFault,
         Self::CodeRedeemed,
         Self::CodeClaimRefused,
         Self::TokenClaimed,
@@ -81,6 +83,7 @@ impl Outcome {
             Self::OfferCreated => "offer_created",
             Self::OfferAuthorizationRefused => "offer_authorization_refused",
             Self::StoreSaturated => "store_saturated",
+            Self::StoreFault => "store_fault",
             Self::CodeRedeemed => "code_redeemed",
             Self::CodeClaimRefused => "code_claim_refused",
             Self::TokenClaimed => "token_claimed",
@@ -136,7 +139,7 @@ impl Metrics {
             requests: Mutex::new(BTreeMap::new()),
             outcomes: Mutex::new(BTreeMap::new()),
             store_entries: AtomicUsize::new(0),
-            store_capacity: store_capacity.saturating_mul(3),
+            store_capacity,
             cleanup_expired: AtomicU64::new(0),
         }
     }
@@ -149,8 +152,10 @@ impl Metrics {
         *outcomes.entry(outcome).or_default() += 1;
     }
 
-    pub(crate) fn record_store_entries(&self, entries: usize) {
-        self.store_entries.store(entries, Ordering::Relaxed);
+    pub(crate) fn record_store_entries(&self, entries: Option<usize>) {
+        if let Some(entries) = entries {
+            self.store_entries.store(entries, Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn record_cleanup(&self, expired: usize) {
@@ -250,13 +255,13 @@ impl Metrics {
                 outcomes.get(&outcome).copied().unwrap_or(0)
             ));
         }
-        body.push_str("# HELP evidence_oid4vci_store_entries In-memory offer, ledger, and token entries currently held.\n");
+        body.push_str("# HELP evidence_oid4vci_store_entries Entries in the fullest independently bounded offer, ledger, or token keyspace.\n");
         body.push_str("# TYPE evidence_oid4vci_store_entries gauge\n");
         body.push_str(&format!(
             "evidence_oid4vci_store_entries {}\n",
             self.store_entries.load(Ordering::Relaxed)
         ));
-        body.push_str("# HELP evidence_oid4vci_store_capacity Maximum aggregate entries across the three bounded keyspaces.\n");
+        body.push_str("# HELP evidence_oid4vci_store_capacity Refusal threshold for each independently bounded offer, ledger, or token keyspace.\n");
         body.push_str("# TYPE evidence_oid4vci_store_capacity gauge\n");
         body.push_str(&format!(
             "evidence_oid4vci_store_capacity {}\n",
@@ -304,14 +309,25 @@ fn log_request(
     status: &'static str,
     error: &'static str,
 ) {
-    tracing::info!(
-        target: "registry_evidence_oid4vci::request",
-        route,
-        method,
-        status,
-        error,
-        "delivery request served"
-    );
+    if (route == HEALTH_PATH || route == READY_PATH) && status == "success" {
+        tracing::debug!(
+            target: "registry_evidence_oid4vci::request",
+            route,
+            method,
+            status,
+            error,
+            "delivery probe served"
+        );
+    } else {
+        tracing::info!(
+            target: "registry_evidence_oid4vci::request",
+            route,
+            method,
+            status,
+            error,
+            "delivery request served"
+        );
+    }
 }
 
 fn normalized_route(request: &Request<Body>) -> &'static str {
@@ -359,6 +375,7 @@ fn normalized_problem(problem: &str) -> &'static str {
         "unsupported_grant_type" => "unsupported_grant_type",
         "invalid_grant" => "invalid_grant",
         "invalid_credential_request" => "invalid_credential_request",
+        "credential_request_denied" => "credential_request_denied",
         "invalid_proof" => "invalid_proof",
         "invalid_nonce" => "invalid_nonce",
         "temporarily_unavailable" => "temporarily_unavailable",
@@ -427,7 +444,8 @@ mod tests {
             Duration::from_millis(20),
         );
         metrics.record_outcome(Outcome::NonceTampered);
-        metrics.record_store_entries(7);
+        metrics.record_store_entries(Some(7));
+        metrics.record_store_entries(None);
         let rendered = metrics.render();
         for canary in [
             "https://issuer.private.example",
@@ -440,7 +458,9 @@ mod tests {
             assert!(!rendered.contains(canary), "metrics rendered {canary}");
         }
         assert!(rendered.contains("outcome=\"nonce_tampered\"} 1"));
+        assert!(rendered.contains("outcome=\"store_fault\"} 0"));
         assert!(rendered.contains("evidence_oid4vci_store_entries 7"));
+        assert!(rendered.contains("evidence_oid4vci_store_capacity 256"));
     }
 
     #[test]
@@ -469,6 +489,37 @@ mod tests {
         ] {
             assert!(!rendered.contains(canary), "logs rendered {canary}");
         }
+    }
+
+    #[test]
+    fn successful_probes_log_at_debug_while_probe_failures_stay_visible() {
+        let buffer = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(buffer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            log_request(HEALTH_PATH, "GET", "success", NO_ERROR);
+            log_request(READY_PATH, "GET", "server_error", "server_error");
+        });
+        let rendered = String::from_utf8(buffer.0.lock().expect("log buffer lock").clone())
+            .expect("logs are UTF-8");
+        assert!(rendered.contains("DEBUG"), "logs: {rendered}");
+        assert!(
+            rendered.contains("delivery probe served"),
+            "logs: {rendered}"
+        );
+        assert!(rendered.contains(" INFO "), "logs: {rendered}");
+        assert!(
+            rendered.contains("delivery request served"),
+            "logs: {rendered}"
+        );
+        assert_eq!(
+            normalized_problem("credential_request_denied"),
+            "credential_request_denied"
+        );
     }
 
     #[tokio::test]

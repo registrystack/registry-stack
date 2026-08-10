@@ -162,10 +162,12 @@ is the base URL of the Evidence Gateway deployment this service requests credent
 credentials may be requested is the Evidence Gateway bundle's decision, never restated here.
 There is deliberately no configuration member for the credential configurations this service
 publishes: every entry is derived from the Evidence Gateway bundle, so published metadata cannot
-describe a credential Evidence Gateway would refuse to issue. The advertised
+describe a credential that the same coordinated Evidence Gateway generation would refuse to issue.
+The advertised
 `batch_credential_issuance.batch_size` also comes from authenticated Evidence discovery. The
-adapter bounds the value by its own request ceiling and records the effective value with each
-offer, so a later metadata change cannot widen an outstanding exchange.
+adapter omits that optional metadata member when the effective ceiling is one, and publishes it
+only for a ceiling from two through sixteen. It records the effective value with each offer, so a
+later metadata change cannot widen an outstanding exchange.
 
 `metricsListener` is optional and absent by default. When present, it binds a separate
 operator-private loopback or private address. It cannot share the delivery listener's binding.
@@ -293,8 +295,8 @@ process opens no metrics socket and the delivery listener still has no `/metrics
 | --- | --- | --- |
 | `evidence_oid4vci_http_requests_total` | Counter | Delivery requests by closed route, method, status, and problem class |
 | `evidence_oid4vci_http_request_duration_seconds` | Histogram | Delivery request latency with the same closed labels |
-| `evidence_oid4vci_outcomes_total` | Counter | Offer, code, token, nonce, proof, issuance, upstream Evidence, saturation, and cleanup outcomes |
-| `evidence_oid4vci_store_entries` and `evidence_oid4vci_store_capacity` | Gauges | Current process-local state pressure and its aggregate ceiling |
+| `evidence_oid4vci_outcomes_total` | Counter | Offer, code, token, nonce, proof, issuance, upstream Evidence, saturation, store-fault, and cleanup outcomes |
+| `evidence_oid4vci_store_entries` and `evidence_oid4vci_store_capacity` | Gauges | The fullest independently bounded offer, ledger, or token keyspace and its refusal threshold |
 | `evidence_oid4vci_cleanup_expired_total` | Counter | Expired process-local entries released by cleanup |
 
 The request labels are closed to the registered routes plus `unmatched`, the methods `GET`,
@@ -303,13 +305,14 @@ classes. The complete outcome vocabulary is `offer_created`, `offer_authorizatio
 `store_saturated`, `code_redeemed`, `code_claim_refused`, `token_claimed`,
 `token_claim_refused`, `nonce_minted`, `nonce_invalid`, `nonce_tampered`, `nonce_expired`,
 `proof_refused`, `credential_issued`, `evidence_refused`, `evidence_not_available`,
-`evidence_unavailable`, and `cleanup_expired`. These labels contain no request-derived or
+`evidence_unavailable`, `store_fault`, and `cleanup_expired`. These labels contain no request-derived or
 deployment-specific identifier.
 
 Structured request logs use the same closed route, method, status, and problem classes. Logs and
 metrics omit codes, transaction codes, tokens, nonces, proofs, holder keys, credentials,
 selectors, subject identifiers, client identifiers, credential configuration identifiers, raw
-issuers, and raw audiences.
+issuers, and raw audiences. Successful `/health` and `/ready` requests log at `DEBUG`; probe
+failures and non-probe requests remain visible at `INFO`.
 
 ## Protocol surface
 
@@ -317,7 +320,7 @@ issuers, and raw audiences.
 
 | Endpoint | Auth | Notes |
 | --- | --- | --- |
-| `GET /.well-known/openid-credential-issuer` | none | Publishes the issuer and credential endpoints, authorization server, batch ceiling, and supported credential configurations. The token endpoint is not published here. |
+| `GET /.well-known/openid-credential-issuer` | none | Publishes the issuer and credential endpoints, authorization server, supported credential configurations, and a batch ceiling only when the deployment accepts at least two proofs. The token endpoint is not published here. |
 | `GET /.well-known/oauth-authorization-server` | none | Publishes the token endpoint, the pre-authorized-code grant, `none` for token endpoint authentication, and anonymous pre-authorized access. |
 | `POST /offers` | Registry Mint bearer token | Adopter-facing, not wallet-facing. Takes `credentialConfigurationId`, `subjects`, and a boolean `transactionCode`. Returns the offer object, its `openid-credential-offer://` URI, and, when one was asked for, the generated transaction code, once. |
 | `POST /token` | pre-authorized code, plus the transaction code when the offer set one | `grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code`. Returns `access_token`, `token_type`, `expires_in`. No `c_nonce`. |
@@ -358,7 +361,8 @@ claim, so a load-balanced or rolling multi-replica deployment is outside the pro
 A recognized live access token is claimed before the credential request body and holder proofs
 are accepted. Invalid JSON, configuration, nonce, proof, or duplicate holder key leaves that token
 spent and makes no Evidence request. Obtain a new authorized exchange before correcting and
-retrying the request.
+retrying the request. A failure after Evidence access begins also leaves the token spent and returns
+the terminal `credential_request_denied` error, because retrying that token cannot succeed.
 
 Stop the old replica before starting a replacement. Restarting invalidates outstanding offers,
 pre-authorized codes, and access tokens. The client receives the same value-free refusal used for
@@ -366,7 +370,15 @@ an unknown, expired, consumed, or locked exchange and must obtain a new offer. A
 stateless, service-minted freshness challenge. The service validates the nonce's integrity and
 expiry but does not store or consume it, so nonce reuse alone is not replay detection.
 
-Size `store.maximumOffers` for the maximum live offer window. Saturation refuses a new offer
+Treat an Evidence Gateway bundle change as a coordinated restart. Stop the adapter first, which
+invalidates its outstanding exchanges, restart Evidence Gateway with the new bundle, then start the
+adapter so its catalog cache begins from the new deployment generation. Do not restart or replace
+Evidence Gateway behind a running adapter whose cached metadata and outstanding offers came from
+the previous bundle generation.
+
+Size `store.maximumOffers` for every offer created during the configured offer lifetime, including
+offers already redeemed whose failure ledgers remain live. The approximate sustained creation
+ceiling is `maximumOffers / offerLifetimeSeconds` per second. Saturation refuses a new offer
 without evicting a live authorized exchange. Short offer and access-token lifetimes and a
 transaction code reduce the usefulness of copied offer material.
 
@@ -387,6 +399,7 @@ transaction code reduce the usefulness of copied offer material.
 | A code or token stops working after a restart | Restart discarded the process-local exchange. | Create a new authorized offer and complete a new exchange. Do not retry an outstanding exchange against the replacement process. |
 | The credential endpoint reports `invalid_nonce` | The nonce is malformed, tampered, expired, or not minted by this service. | Obtain a fresh nonce from the discovered nonce endpoint, obtain a new offer and access token, and sign a new proof with a synchronized clock. |
 | The credential endpoint reports `invalid_proof` | The proof shape, algorithm, key source, audience, freshness, or distinct-key rule is outside the frozen profile. | Compare the request with published metadata, then obtain a new offer, access token, and nonce before retrying. |
+| The credential endpoint reports `credential_request_denied` | Evidence Gateway refused, lacked, or could not complete this already claimed exchange. | Diagnose Evidence Gateway through private monitoring, then create a new authorized offer after the upstream is usable. Do not retry the spent token. |
 | A new offer is refused under load | The bounded in-memory store is at capacity. | Stop creating offers, allow expired entries to be cleaned up, and size `maximumOffers` for the reviewed live window before the next restart. |
 | Credential delivery reports an upstream failure | Registry Mint or Evidence Gateway did not complete the adapter's bounded outbound call. | Diagnose the upstream through its private monitoring. Start a new authorized exchange after the upstream recovers. |
 | The private metrics address refuses a connection | `metricsListener` is absent, invalid, occupied, or the process has not restarted on the edited configuration. | Run `check`, keep the binding private and distinct from the delivery listener, then restart the single replica. |

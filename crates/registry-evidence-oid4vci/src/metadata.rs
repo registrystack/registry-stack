@@ -3,8 +3,9 @@
 //! Every credential this service offers is one Evidence already agreed to issue
 //! holder-bound. The catalog is built from the Evidence definitions document
 //! and from nothing else: there is no configuration member to write an entry
-//! into, and no member of this module accepts a hand-written one. A deployment
-//! therefore cannot publish a credential description Evidence would refuse.
+//! into, and no member of this module accepts a hand-written one. One deployment
+//! generation therefore cannot publish a credential description the matching
+//! Evidence generation would refuse.
 //!
 //! Two rules narrow the document to what a wallet can actually be handed:
 //!
@@ -163,10 +164,13 @@ impl CredentialCatalog {
             "authorization_servers": [issuer],
             "credential_configurations_supported": Value::Object(supported),
         });
-        if self.maximum_holder_keys() > 0 {
+        if self.maximum_holder_keys() > 1 {
             // The ceiling comes from authenticated Evidence discovery and is
             // pinned into each offer. It can never exceed either the backing
             // deployment's effective bundle limit or the client request limit.
+            // One proof is the ordinary credential endpoint shape, so the
+            // optional batch capability is published only when at least two
+            // proofs can be honored together.
             metadata["batch_credential_issuance"] =
                 json!({"batch_size": self.maximum_holder_keys()});
         }
@@ -380,7 +384,7 @@ pub(crate) mod tests {
     /// bounded by the client ceiling the credential endpoint also enforces.
     ///
     #[test]
-    fn the_published_batch_size_is_the_ceiling_the_service_enforces() {
+    fn batch_metadata_is_published_only_for_an_effective_ceiling_of_two_through_sixteen() {
         let config = crate::config::tests::valid_config();
         let metadata = catalog().issuer_metadata(&config);
 
@@ -395,6 +399,20 @@ pub(crate) mod tests {
             CredentialCatalog::derive(&narrow).issuer_metadata(&config)
                 ["batch_credential_issuance"]["batch_size"],
             json!(2)
+        );
+
+        let mut singular = document();
+        singular.holder_bound_batch_max_size = 1;
+        let singular = CredentialCatalog::derive(&singular).issuer_metadata(&config);
+        assert!(singular.get("batch_credential_issuance").is_none());
+
+        let mut invalid_zero = document();
+        invalid_zero.holder_bound_batch_max_size = 0;
+        let invalid_zero = CredentialCatalog::derive(&invalid_zero).issuer_metadata(&config);
+        assert!(invalid_zero.get("batch_credential_issuance").is_none());
+        assert_eq!(
+            invalid_zero["credential_configurations_supported"],
+            json!({})
         );
 
         let mut wider = document();

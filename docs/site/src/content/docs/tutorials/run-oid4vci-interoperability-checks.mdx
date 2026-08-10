@@ -26,7 +26,7 @@ result.
   outcome="A checked and exercised local OID4VCI adapter configuration, plus reproducible evidence for the frozen profile and optional pinned Inji revisions."
   time="About 10 minutes for the ordinary check; longer for the opt-in upstream builds"
   level="Source checkout and synthetic interoperability evidence"
-  prerequisites={['A registry-stack source checkout', 'The repository Rust toolchain', 'Bash', 'Python 3', 'Loopback ports 18440 through 18442 available', 'For the optional upstream check: Git, network access, npm, Java 17, Android SDK platform 34 with Build Tools 33.0.1, full Xcode, and an iPhone 15 simulator']}
+  prerequisites={['A registry-stack source checkout', 'The repository Rust toolchain', 'Bash', 'Python 3', 'Loopback ports 18440 through 18442 available', 'For the optional upstream check: macOS, Git, network access, npm, Java 17, Android SDK platform 34 with Build Tools 33.0.1, full Xcode, and an iPhone 15 simulator']}
 />
 
 The runners create their disposable working material and remove it when they exit. They use a
@@ -149,14 +149,24 @@ The sanitized profile records the upstream target reviewed on 2026-08-09:
 | Inji Android VCI client | `f1d7ee2b14e996e18bfc7c40fbf89ec31b768951` |
 | Inji iOS VCI client | `dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c` |
 
-The ordinary receipt proves the checked-in fixture and Registry-side behavior. The separate
-upstream receipt recorded on 2026-08-09 proves that the focused public tests from all three pinned
-repositories also built and passed in the stated clean environment.
+The ordinary run records the checked-in fixture and Registry-side behavior. Ordinary continuous
+integration validates the stored receipt's shape and consistency with the profile, then runs the
+Registry-side tests. It does not fetch or rerun the pinned upstream clients.
+
+The separate upstream receipt records bounded exact-pin evidence from 2026-08-09: the focused
+public tests from all three pinned repositories built and passed beside the sanitized Registry
+flow in the stated clean environment. It does not record a pinned Inji client crossing HTTP to
+Registry.
 
 ## Run the pinned upstream clients
 
 Run the opt-in check when the acceptance process requires a clean build against the exact public
 Inji revisions:
+
+The combined upstream runner is macOS-only because its final suite uses Xcode and the iOS
+Simulator. Before running it, install Java 17, Android SDK platform 34 with Build Tools 33.0.1,
+full Xcode, and an iPhone 15 simulator. The runner requires `git`, `npm`, `java`, `xcodebuild`, and
+`xcrun` on `PATH`, plus network access.
 
 ```sh
 EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh
@@ -218,6 +228,7 @@ deferred or encrypted issuance, notification, credential status, or other creden
 | The adopter journey cannot bind a listener | One of loopback ports 18440 through 18442 is already in use. | Stop the conflicting local service and rerun. Do not change only one copy of the configuration because the executable fixture intentionally checks exact drift. |
 | Cargo cannot build the Registry tests | The checkout lacks the repository Rust toolchain or locked dependencies. | Install the pinned toolchain and rerun from the repository root. |
 | The upstream runner exits before cloning | The opt-in environment variable is absent, or the runner has no network access. | Set `EVIDENCE_INJI_OID4VCI=1` only in a network-enabled clean runner. |
-| The Android client preflight fails | Java 17, Android SDK platform 34, or Build Tools 33.0.1 is unavailable. | Install a Java 17 JDK, set `JAVA_HOME`, install the named Android packages, and set `ANDROID_HOME` or `ANDROID_SDK_ROOT`. |
-| The Swift client preflight fails | The host lacks full Xcode or the iPhone 15 simulator runtime. | Install full Xcode, select it with `xcode-select`, accept its licence, and install an iPhone 15 simulator before rerunning on macOS. |
+| The runner prints `Pinned Inji OID4VCI checking requires macOS because the combined receipt includes iOS client tests.` | The combined runner was started on another operating system. | Rerun the optional combined check on macOS. |
+| The runner prints `Pinned Inji OID4VCI checking needs Java 17; the installed runtime is not Java 17.`, `Pinned Inji OID4VCI checking needs ANDROID_HOME or ANDROID_SDK_ROOT to name an installed Android SDK.`, or `Pinned Inji OID4VCI checking needs Android SDK platform 34 and Build Tools 33.0.1.` | The Android client prerequisites are missing or not selected. | Install a Java 17 JDK, set `JAVA_HOME`, install the named Android packages, and set `ANDROID_HOME` or `ANDROID_SDK_ROOT`. |
+| The runner prints `Pinned Inji OID4VCI checking needs full Xcode, not Command Line Tools alone.`, `Pinned Inji OID4VCI checking could not inspect installed iOS simulators.`, or `Pinned Inji OID4VCI checking needs an available iPhone 15 simulator.` | Full Xcode or the iPhone 15 simulator is missing or unavailable. | Install full Xcode, select it with `xcode-select`, accept its licence, and install an iPhone 15 simulator. |
 | A pinned upstream build fails | The checked revision, toolchain, or resolved dependencies did not reproduce in this environment. | Retain the failed result and environment details. Do not replace the pin with a mutable branch or describe the failed run as compatibility evidence. |

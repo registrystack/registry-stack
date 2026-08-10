@@ -74,7 +74,9 @@ EVIDENCE_INJI_OID4VCI=1 \
 products/evidence/scripts/compat/inji-oid4vci-upstream.sh
 ```
 
-It requires Git, npm, Java, Xcode, an iPhone 15 simulator, and network access.
+The combined runner requires macOS, Git, npm, Java 17, Android SDK platform 34
+with Build Tools 33.0.1, full Xcode, an available iPhone 15 simulator, and
+network access. It checks those prerequisites before cloning any repository.
 Any absent toolchain, clone failure, revision mismatch, dependency failure, or
 upstream test failure stops the check. The test recorded on 2026-08-09 pins:
 

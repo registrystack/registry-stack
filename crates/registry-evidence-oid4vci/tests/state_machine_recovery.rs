@@ -25,7 +25,10 @@ use registry_evidence_oid4vci::{
     config::DeliveryConfig,
     issuer::{CredentialIssuer, IssuanceError},
     metadata::CredentialCatalog,
-    service::{build_app, DeliveryService, CREDENTIAL_PATH, NONCE_PATH, OFFERS_PATH, TOKEN_PATH},
+    service::{
+        build_app, DeliveryService, CREDENTIAL_PATH, ISSUER_METADATA_PATH, NONCE_PATH, OFFERS_PATH,
+        TOKEN_PATH,
+    },
     PRE_AUTHORIZED_CODE_GRANT_TYPE,
 };
 use registry_platform_crypto::{sign, PrivateJwk};
@@ -116,16 +119,29 @@ struct RecordingIssuer {
     requests: Mutex<Vec<HolderBoundRequestSpec>>,
 }
 
+fn credential_catalog() -> Arc<CredentialCatalog> {
+    credential_catalog_with_batch_maximum(4)
+}
+
+fn credential_catalog_with_batch_maximum(maximum: u16) -> Arc<CredentialCatalog> {
+    let mut document: EvidenceDefinitionsDocument =
+        serde_json::from_str(DEFINITIONS).expect("the test definitions parse");
+    document.holder_bound_batch_max_size = maximum;
+    assert_eq!(
+        document.definitions[0].subject_binding_mode,
+        Some(SubjectBindingMode::HolderBound)
+    );
+    Arc::new(CredentialCatalog::derive(&document))
+}
+
 impl RecordingIssuer {
     fn new() -> Self {
-        let document: EvidenceDefinitionsDocument =
-            serde_json::from_str(DEFINITIONS).expect("the test definitions parse");
-        assert_eq!(
-            document.definitions[0].subject_binding_mode,
-            Some(SubjectBindingMode::HolderBound)
-        );
+        Self::with_batch_maximum(4)
+    }
+
+    fn with_batch_maximum(maximum: u16) -> Self {
         Self {
-            catalog: Arc::new(CredentialCatalog::derive(&document)),
+            catalog: credential_catalog_with_batch_maximum(maximum),
             requests: Mutex::new(Vec::new()),
         }
     }
@@ -135,6 +151,67 @@ impl RecordingIssuer {
             .lock()
             .expect("the Evidence recorder is usable")
             .len()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PostClaimFailure {
+    Refused,
+    NotAvailable,
+    Unavailable,
+    Malformed,
+    Configuration,
+}
+
+impl PostClaimFailure {
+    fn error(self) -> IssuanceError {
+        match self {
+            Self::Refused => IssuanceError::Refused,
+            Self::NotAvailable => IssuanceError::NotAvailable,
+            Self::Unavailable => IssuanceError::Unavailable,
+            Self::Malformed => IssuanceError::Malformed,
+            Self::Configuration => {
+                IssuanceError::Configuration("a private test-only configuration cause")
+            }
+        }
+    }
+}
+
+struct FailingIssuer {
+    catalog: Arc<CredentialCatalog>,
+    failure: PostClaimFailure,
+    attempts: Mutex<usize>,
+}
+
+impl FailingIssuer {
+    fn new(failure: PostClaimFailure) -> Self {
+        Self {
+            catalog: credential_catalog(),
+            failure,
+            attempts: Mutex::new(0),
+        }
+    }
+
+    fn call_count(&self) -> usize {
+        *self
+            .attempts
+            .lock()
+            .expect("the failing Evidence recorder is usable")
+    }
+}
+
+#[async_trait]
+impl CredentialIssuer for FailingIssuer {
+    async fn catalog(&self) -> Result<Arc<CredentialCatalog>, IssuanceError> {
+        Ok(Arc::clone(&self.catalog))
+    }
+
+    async fn issue(&self, _spec: HolderBoundRequestSpec) -> Result<Vec<String>, IssuanceError> {
+        *self
+            .attempts
+            .lock()
+            .expect("the failing Evidence recorder is usable") += 1;
+        Err(self.failure.error())
     }
 }
 
@@ -171,24 +248,30 @@ fn loaded_config() -> DeliveryConfig {
     DeliveryConfig::load(&path).expect("the reference deployment loads before test mutation")
 }
 
-fn harness(mut config: DeliveryConfig) -> Harness {
+fn server_with_issuer(
+    mut config: DeliveryConfig,
+    issuer: Arc<dyn CredentialIssuer>,
+) -> Arc<TestServer> {
     // The listener belongs to a real deployment. axum-test binds its own
     // random loopback port, while every published identifier remains the
     // deployment's exact configured value.
     config.listener.port = 8090;
-    let issuer = Arc::new(RecordingIssuer::new());
     let service = Arc::new(DeliveryService::with_halves(
         config,
         Arc::new(StubAuthorizer),
-        Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
-    ));
-    let server = TestServer::builder()
-        .http_transport()
-        .build(build_app(service));
-    Harness {
-        server: Arc::new(server),
         issuer,
-    }
+    ));
+    Arc::new(
+        TestServer::builder()
+            .http_transport()
+            .build(build_app(service)),
+    )
+}
+
+fn harness(config: DeliveryConfig) -> Harness {
+    let issuer = Arc::new(RecordingIssuer::new());
+    let server = server_with_issuer(config, Arc::clone(&issuer) as Arc<dyn CredentialIssuer>);
+    Harness { server, issuer }
 }
 
 fn offer_body(transaction_code: bool) -> Value {
@@ -415,6 +498,114 @@ async fn a_recognized_token_is_claimed_before_every_later_validation_failure() {
         harness.issuer.call_count(),
         0,
         "no Evidence request or release audit follows a validation refusal"
+    );
+}
+
+#[tokio::test]
+async fn post_claim_evidence_failures_are_terminal_and_never_restore_the_token() {
+    for failure in [
+        PostClaimFailure::Refused,
+        PostClaimFailure::NotAvailable,
+        PostClaimFailure::Unavailable,
+        PostClaimFailure::Malformed,
+        PostClaimFailure::Configuration,
+    ] {
+        let issuer = Arc::new(FailingIssuer::new(failure));
+        let server = server_with_issuer(
+            loaded_config(),
+            Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+        );
+        let token = access_token(&server).await;
+        let nonce = minted_nonce(&server).await;
+        let request = credential_body(vec![proof_jwt(&private_jwk(), &nonce)]);
+
+        let terminal = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(
+            terminal.status_code(),
+            StatusCode::BAD_REQUEST,
+            "{failure:?}"
+        );
+        assert_closed_error(
+            &terminal,
+            "credential_request_denied",
+            &[&token, &nonce, SELECTOR_VALUE, "private test-only"],
+        );
+        assert_eq!(
+            issuer.call_count(),
+            1,
+            "{failure:?} reaches the Evidence boundary once"
+        );
+
+        // A deployment failure may be transient, but this authorization is not:
+        // the token was permanently claimed before Evidence was called. A retry
+        // needs a newly authorized exchange and must never re-enter Evidence.
+        let retry = server
+            .post(CREDENTIAL_PATH)
+            .add_header("authorization", format!("Bearer {token}"))
+            .json(&request)
+            .await;
+        assert_eq!(retry.status_code(), StatusCode::UNAUTHORIZED, "{failure:?}");
+        assert_closed_error(&retry, "invalid_token", &[&token, &nonce, SELECTOR_VALUE]);
+        assert_eq!(
+            issuer.call_count(),
+            1,
+            "{failure:?} must not rebind the spent token"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_singular_ceiling_omits_batch_metadata_and_still_enforces_one_proof() {
+    let issuer = Arc::new(RecordingIssuer::with_batch_maximum(1));
+    let server = server_with_issuer(
+        loaded_config(),
+        Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+    );
+
+    let metadata = server.get(ISSUER_METADATA_PATH).await;
+    assert_eq!(metadata.status_code(), StatusCode::OK);
+    assert!(
+        metadata
+            .json::<Value>()
+            .get("batch_credential_issuance")
+            .is_none(),
+        "a singular credential endpoint does not advertise batch issuance"
+    );
+
+    let token = access_token(&server).await;
+    let nonce = minted_nonce(&server).await;
+    let singular = server
+        .post(CREDENTIAL_PATH)
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&credential_body(vec![proof_jwt(&private_jwk(), &nonce)]))
+        .await;
+    assert_eq!(singular.status_code(), StatusCode::OK);
+    assert_eq!(issuer.call_count(), 1);
+
+    let token = access_token(&server).await;
+    let nonce = minted_nonce(&server).await;
+    let excessive = server
+        .post(CREDENTIAL_PATH)
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&credential_body(vec![
+            proof_jwt(&private_jwk(), &nonce),
+            proof_jwt(&private_jwk(), &nonce),
+        ]))
+        .await;
+    assert_eq!(excessive.status_code(), StatusCode::BAD_REQUEST);
+    assert_closed_error(
+        &excessive,
+        "invalid_proof",
+        &[&token, &nonce, SELECTOR_VALUE],
+    );
+    assert_eq!(
+        issuer.call_count(),
+        1,
+        "a proof count above the pinned singular ceiling never reaches Evidence"
     );
 }
 

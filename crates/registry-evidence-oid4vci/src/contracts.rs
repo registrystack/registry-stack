@@ -127,12 +127,11 @@ pub fn openapi_document() -> Value {
                 "requestBody": required_json_body("CredentialRequest"),
                 "responses": {
                     "200": json_response("Evidence credentials, byte-for-byte", "CredentialResponse"),
-                    "400": problem_response("The configuration, nonce, or proof was refused after token claim"),
+                    "400": credential_bad_request_response(),
                     "401": bearer_problem_response("The access token is missing, unknown, expired, or already claimed"),
-                    "403": problem_response("Evidence refused the request"),
                     "408": problem_response("The configured request deadline elapsed"),
                     "413": framework_response("The request body exceeds the configured byte limit"),
-                    "503": problem_response("Evidence or bounded state is unavailable")
+                    "503": problem_response("Bounded state is unavailable before the access token can be claimed")
                 }
             }
         }),
@@ -202,6 +201,36 @@ fn problem_response(description: &str) -> Value {
     })
 }
 
+fn credential_bad_request_response() -> Value {
+    let mut response = problem_response(
+        "The configuration, nonce, proof, or post-claim credential request was terminally refused",
+    );
+    response["content"]["application/json"]["schema"] = json!({
+        "allOf": [
+            {"$ref": "#/components/schemas/Problem"},
+            {
+                "type": "object",
+                "properties": {
+                    "error": {"enum": [
+                        "invalid_credential_request", "invalid_proof", "invalid_nonce",
+                        "credential_request_denied"
+                    ]}
+                }
+            }
+        ]
+    });
+    response["content"]["application/json"]["examples"] = json!({
+        "postClaimCredentialRequestDenied": {
+            "summary": "A claimed authorization cannot be retried",
+            "value": {
+                "error": "credential_request_denied",
+                "error_description": "this credential request cannot be completed"
+            }
+        }
+    });
+    response
+}
+
 fn bearer_problem_response(description: &str) -> Value {
     let mut response = problem_response(description);
     response["headers"]["WWW-Authenticate"] =
@@ -233,7 +262,7 @@ fn schemas() -> Value {
                 "error": {"enum": [
                     "invalid_request", "invalid_token", "unsupported_grant_type", "invalid_grant",
                     "invalid_credential_request", "invalid_proof", "invalid_nonce",
-                    "temporarily_unavailable", "server_error"
+                    "credential_request_denied", "temporarily_unavailable", "server_error"
                 ]},
                 "error_description": {"type": "string"}
             }
@@ -242,8 +271,7 @@ fn schemas() -> Value {
             "type": "object", "additionalProperties": false,
             "required": [
                 "credential_issuer", "credential_endpoint", "nonce_endpoint",
-                "authorization_servers", "batch_credential_issuance",
-                "credential_configurations_supported"
+                "authorization_servers", "credential_configurations_supported"
             ],
             "properties": {
                 "credential_issuer": {"type": "string", "format": "uri"},
@@ -255,7 +283,7 @@ fn schemas() -> Value {
                 },
                 "batch_credential_issuance": {
                     "type": "object", "additionalProperties": false, "required": ["batch_size"],
-                    "properties": {"batch_size": {"type": "integer", "minimum": 1, "maximum": 16}}
+                    "properties": {"batch_size": {"type": "integer", "minimum": 2, "maximum": 16}}
                 },
                 "credential_configurations_supported": {
                     "type": "object", "additionalProperties": {"$ref": "#/components/schemas/CredentialConfiguration"}
@@ -506,5 +534,76 @@ mod tests {
                 .iter()
                 .any(|entry| entry == unsupported));
         }
+    }
+
+    #[test]
+    fn batch_metadata_is_optional_and_only_advertises_plural_batches() {
+        let document = openapi_document();
+        let metadata = &document["components"]["schemas"]["CredentialIssuerMetadata"];
+        assert!(!metadata["required"]
+            .as_array()
+            .expect("metadata required members are an array")
+            .iter()
+            .any(|member| member == "batch_credential_issuance"));
+        let batch_size =
+            &metadata["properties"]["batch_credential_issuance"]["properties"]["batch_size"];
+        assert_eq!(batch_size["minimum"], json!(2));
+        assert_eq!(batch_size["maximum"], json!(16));
+    }
+
+    #[test]
+    fn final_credential_shapes_are_plural_and_accept_one_proof() {
+        let document = openapi_document();
+        let schemas = &document["components"]["schemas"];
+        assert!(schemas["CredentialRequest"]["required"]
+            .as_array()
+            .expect("credential request required members are an array")
+            .iter()
+            .any(|member| member == "proofs"));
+        let proofs = &schemas["CredentialRequest"]["properties"]["proofs"]["properties"]["jwt"];
+        assert_eq!(proofs["type"], "array");
+        assert_eq!(proofs["minItems"], json!(1));
+        assert_eq!(proofs["maxItems"], json!(16));
+
+        assert!(schemas["CredentialResponse"]["required"]
+            .as_array()
+            .expect("credential response required members are an array")
+            .iter()
+            .any(|member| member == "credentials"));
+        let credentials = &schemas["CredentialResponse"]["properties"]["credentials"];
+        assert_eq!(credentials["type"], "array");
+        assert_eq!(credentials["minItems"], json!(1));
+        assert_eq!(credentials["maxItems"], json!(16));
+        assert!(schemas["Problem"]["properties"]["error"]["enum"]
+            .as_array()
+            .expect("problem errors are an array")
+            .iter()
+            .any(|error| error == "credential_request_denied"));
+        assert!(
+            document["paths"][CREDENTIAL_PATH]["post"]["responses"]["400"]["content"]
+                ["application/json"]["schema"]["allOf"][1]["properties"]["error"]["enum"]
+                .as_array()
+                .expect("credential bad-request errors are an array")
+                .iter()
+                .any(|error| error == "credential_request_denied")
+        );
+        assert_eq!(
+            document["paths"][CREDENTIAL_PATH]["post"]["responses"]["400"]["content"]
+                ["application/json"]["examples"]["postClaimCredentialRequestDenied"]["value"],
+            json!({
+                "error": "credential_request_denied",
+                "error_description": "this credential request cannot be completed"
+            })
+        );
+        assert!(document["paths"][CREDENTIAL_PATH]["post"]["responses"]
+            .get("403")
+            .is_none());
+        assert!(document["paths"][CREDENTIAL_PATH]["post"]["responses"]
+            .get("503")
+            .is_some());
+        assert_eq!(
+            document["paths"][CREDENTIAL_PATH]["post"]["responses"]["503"]["description"],
+            "Bounded state is unavailable before the access token can be claimed"
+        );
     }
 }

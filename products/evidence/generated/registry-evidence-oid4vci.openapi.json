@@ -138,7 +138,7 @@
             "properties": {
               "batch_size": {
                 "maximum": 16,
-                "minimum": 1,
+                "minimum": 2,
                 "type": "integer"
               }
             },
@@ -171,7 +171,6 @@
           "credential_endpoint",
           "nonce_endpoint",
           "authorization_servers",
-          "batch_credential_issuance",
           "credential_configurations_supported"
         ],
         "type": "object"
@@ -374,6 +373,7 @@
               "invalid_credential_request",
               "invalid_proof",
               "invalid_nonce",
+              "credential_request_denied",
               "temporarily_unavailable",
               "server_error"
             ]
@@ -667,12 +667,38 @@
           "400": {
             "content": {
               "application/json": {
+                "examples": {
+                  "postClaimCredentialRequestDenied": {
+                    "summary": "A claimed authorization cannot be retried",
+                    "value": {
+                      "error": "credential_request_denied",
+                      "error_description": "this credential request cannot be completed"
+                    }
+                  }
+                },
                 "schema": {
-                  "$ref": "#/components/schemas/Problem"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "enum": [
+                            "invalid_credential_request",
+                            "invalid_proof",
+                            "invalid_nonce",
+                            "credential_request_denied"
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
                 }
               }
             },
-            "description": "The configuration, nonce, or proof was refused after token claim",
+            "description": "The configuration, nonce, proof, or post-claim credential request was terminally refused",
             "headers": {
               "Cache-Control": {
                 "schema": {
@@ -713,30 +739,6 @@
               "WWW-Authenticate": {
                 "schema": {
                   "const": "Bearer",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            },
-            "description": "Evidence refused the request",
-            "headers": {
-              "Cache-Control": {
-                "schema": {
-                  "const": "no-store",
-                  "type": "string"
-                }
-              },
-              "Pragma": {
-                "schema": {
-                  "const": "no-cache",
                   "type": "string"
                 }
               }
@@ -798,7 +800,7 @@
                 }
               }
             },
-            "description": "Evidence or bounded state is unavailable",
+            "description": "Bounded state is unavailable before the access token can be claimed",
             "headers": {
               "Cache-Control": {
                 "schema": {

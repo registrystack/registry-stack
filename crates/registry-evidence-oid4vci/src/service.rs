@@ -378,7 +378,9 @@ async fn cleanup_expired(service: Arc<DeliveryService>, mut stopped: watch::Rece
             _ = interval.tick() => {
                 let expired = service.store.sweep(now());
                 service.metrics.record_cleanup(expired);
-                service.metrics.record_store_entries(service.store.len());
+                service
+                    .metrics
+                    .record_store_entries(service.store.maximum_keyspace_len());
             }
             changed = stopped.changed() => {
                 if changed.is_err() || *stopped.borrow() {
@@ -523,7 +525,9 @@ async fn create_offer(
         return store_response(&service, &error, Outcome::StoreSaturated);
     }
     service.metrics.record_outcome(Outcome::OfferCreated);
-    service.metrics.record_store_entries(service.store.len());
+    service
+        .metrics
+        .record_store_entries(service.store.maximum_keyspace_len());
 
     tracing::info!(
         target: "registry_evidence_oid4vci::service",
@@ -591,7 +595,9 @@ async fn token(
         return store_response(&service, &error, Outcome::CodeClaimRefused);
     }
     service.metrics.record_outcome(Outcome::CodeRedeemed);
-    service.metrics.record_store_entries(service.store.len());
+    service
+        .metrics
+        .record_store_entries(service.store.maximum_keyspace_len());
     value_response(
         StatusCode::OK,
         &json!({
@@ -670,7 +676,9 @@ async fn credential(
     service.metrics.record_outcome(Outcome::TokenClaimed);
     let expired = service.store.sweep(now());
     service.metrics.record_cleanup(expired);
-    service.metrics.record_store_entries(service.store.len());
+    service
+        .metrics
+        .record_store_entries(service.store.maximum_keyspace_len());
 
     let Ok(request) = serde_json::from_str::<CredentialRequest>(&body) else {
         service.metrics.record_outcome(Outcome::ProofRefused);
@@ -745,7 +753,7 @@ async fn credential(
     // credentials the wallet asked for.
     let credentials = match service.issuer.issue(offered.into_spec(holder_keys)).await {
         Ok(credentials) => credentials,
-        Err(error) => return issuance_response(&service, &error),
+        Err(error) => return credential_issuance_response(&service, &error),
     };
     service.metrics.record_outcome(Outcome::CredentialIssued);
 
@@ -924,9 +932,12 @@ fn now() -> i64 {
 fn store_response(service: &DeliveryService, error: &StoreError, refused: Outcome) -> Response {
     service.metrics.record_outcome(match error {
         StoreError::Saturated => Outcome::StoreSaturated,
+        StoreError::Poisoned => Outcome::StoreFault,
         _ => refused,
     });
-    service.metrics.record_store_entries(service.store.len());
+    service
+        .metrics
+        .record_store_entries(service.store.maximum_keyspace_len());
     match error {
         StoreError::Unknown
         | StoreError::AlreadyRedeemed
@@ -950,33 +961,44 @@ fn store_response(service: &DeliveryService, error: &StoreError, refused: Outcom
     }
 }
 
-/// Every Evidence failure, as much as a caller is told.
-fn issuance_response(service: &DeliveryService, error: &IssuanceError) -> Response {
-    match error {
-        IssuanceError::Refused => {
-            service.metrics.record_outcome(Outcome::EvidenceRefused);
-            problem(
-                StatusCode::FORBIDDEN,
-                "invalid_credential_request",
-                "the credential source refused this request",
-            )
-        }
-        IssuanceError::NotAvailable => {
-            service
-                .metrics
-                .record_outcome(Outcome::EvidenceNotAvailable);
-            problem(
-                StatusCode::BAD_REQUEST,
-                "invalid_credential_request",
-                "the credential source has no evidence for this request",
-            )
-        }
+fn record_issuance_outcome(service: &DeliveryService, error: &IssuanceError) {
+    service.metrics.record_outcome(match error {
+        IssuanceError::Refused => Outcome::EvidenceRefused,
+        IssuanceError::NotAvailable => Outcome::EvidenceNotAvailable,
         IssuanceError::Unavailable | IssuanceError::Malformed | IssuanceError::Configuration(_) => {
-            service.metrics.record_outcome(Outcome::EvidenceUnavailable);
-            tracing::warn!(
-                target: "registry_evidence_oid4vci::service",
-                "the credential source did not answer usably"
-            );
+            Outcome::EvidenceUnavailable
+        }
+    });
+}
+
+fn warn_on_unusable_issuance(error: &IssuanceError) {
+    if matches!(
+        error,
+        IssuanceError::Unavailable | IssuanceError::Malformed | IssuanceError::Configuration(_)
+    ) {
+        tracing::warn!(
+            target: "registry_evidence_oid4vci::service",
+            "the credential source did not answer usably"
+        );
+    }
+}
+
+/// An Evidence failure before a wallet access token has been claimed.
+fn issuance_response(service: &DeliveryService, error: &IssuanceError) -> Response {
+    record_issuance_outcome(service, error);
+    match error {
+        IssuanceError::Refused => problem(
+            StatusCode::FORBIDDEN,
+            "invalid_credential_request",
+            "the credential source refused this request",
+        ),
+        IssuanceError::NotAvailable => problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_credential_request",
+            "the credential source has no evidence for this request",
+        ),
+        IssuanceError::Unavailable | IssuanceError::Malformed | IssuanceError::Configuration(_) => {
+            warn_on_unusable_issuance(error);
             problem(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "temporarily_unavailable",
@@ -984,6 +1006,22 @@ fn issuance_response(service: &DeliveryService, error: &IssuanceError) -> Respon
             )
         }
     }
+}
+
+/// An Evidence failure after the wallet access token has been claimed.
+///
+/// The claim is deliberately permanent. Even a transient upstream condition is
+/// terminal for this credential request, so the wire must not invite a retry
+/// with the token that has already been spent. The private outcome retains the
+/// operator distinction while every wallet sees one Final terminal class.
+fn credential_issuance_response(service: &DeliveryService, error: &IssuanceError) -> Response {
+    record_issuance_outcome(service, error);
+    warn_on_unusable_issuance(error);
+    problem(
+        StatusCode::BAD_REQUEST,
+        "credential_request_denied",
+        "this credential request cannot be completed",
+    )
 }
 
 async fn unknown_route() -> Response {

@@ -247,6 +247,13 @@ load_spec() {
 			"PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests"
 			"EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh"
 			"PASS: pinned Inji OID4VCI source and client tests"
+			"combined upstream runner is macOS-only"
+			"Pinned Inji OID4VCI checking needs Java 17; the installed runtime is not Java 17."
+			"Pinned Inji OID4VCI checking needs ANDROID_HOME or ANDROID_SDK_ROOT to name an installed Android SDK."
+			"Pinned Inji OID4VCI checking needs Android SDK platform 34 and Build Tools 33.0.1."
+			"Pinned Inji OID4VCI checking needs full Xcode, not Command Line Tools alone."
+			"Pinned Inji OID4VCI checking could not inspect installed iOS simulators."
+			"Pinned Inji OID4VCI checking needs an available iPhone 15 simulator."
 			"2fa12c3285b6523db340c3dd2333454b750b40a4"
 			"f1d7ee2b14e996e18bfc7c40fbf89ec31b768951"
 			"dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c"
@@ -808,6 +815,22 @@ executed_fence_count() {
 	printf '%d' "$total"
 }
 
+# The sanitized OID4VCI runner may fall back to Cargo when CI has not supplied
+# its prebuilt interoperability test. Keep that build in this gate's target
+# directory without changing the documented Cargo behavior of other tutorials.
+run_journey_script() {
+	local slug="$1" reader_dir="$2" run_script="$3"
+	if [[ "$slug" == "run-oid4vci-interoperability-checks" ]]; then
+		(cd "$reader_dir" && PATH="$SHIM_DIR:$PATH" CARGO_TARGET_DIR="$TARGET_DIR" bash "$run_script")
+	else
+		(
+			unset CARGO_TARGET_DIR
+			cd "$reader_dir"
+			PATH="$SHIM_DIR:$PATH" bash "$run_script"
+		)
+	fi
+}
+
 # ---------------------------------------------------------------------------
 # Replay
 # ---------------------------------------------------------------------------
@@ -915,7 +938,7 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 	emit_journey "$slug" "$fence_dir" "$tutorial_file" >"$run_script"
 
 	run_log="$WORK_ROOT/run-$slug.log"
-	if ! (cd "$reader_dir" && PATH="$SHIM_DIR:$PATH" CARGO_TARGET_DIR="$TARGET_DIR" bash "$run_script") 2>&1 |
+	if ! run_journey_script "$slug" "$reader_dir" "$run_script" 2>&1 |
 		tee "$run_log"; then
 		printf 'tutorial %s failed; the transcript ends just before this line\n' \
 			"$slug" >&2

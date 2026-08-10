@@ -102,8 +102,9 @@ fn run(cli: Cli) -> Result<(), String> {
             .map_err(|_| "the OpenAPI contract could not be rendered".to_owned())?;
             rendered.push('\n');
             if let Some(output) = output {
-                std::fs::write(output, rendered)
-                    .map_err(|_| "the OpenAPI contract could not be written".to_owned())?;
+                std::fs::write(output, rendered).map_err(|error| {
+                    format!("the OpenAPI contract could not be written: {error}")
+                })?;
             } else {
                 print!("{rendered}");
             }
@@ -152,5 +153,28 @@ async fn shutdown_signal() {
     tokio::select! {
         () = interrupt => {}
         () = terminate => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_openapi_write_failure_keeps_the_operating_system_cause() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing_parent = directory.path().join("missing").join("contract.json");
+        let error = run(Cli {
+            command: Command::Openapi {
+                output: Some(missing_parent),
+            },
+        })
+        .expect_err("writing below a missing directory fails");
+
+        assert!(
+            error.starts_with("the OpenAPI contract could not be written: "),
+            "error: {error}"
+        );
+        assert_ne!(error, "the OpenAPI contract could not be written");
     }
 }

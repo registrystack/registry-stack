@@ -196,6 +196,53 @@ test('the gate depends on no interpreter beyond the replay userland', async () =
   assert.deepEqual(offenders, [], 'the gate must not reach for an interpreter');
 });
 
+async function replayCargoTarget(slug) {
+  const source = await readFile(gate, 'utf8');
+  const runner = source.match(/\nrun_journey_script\(\) \{\n[\s\S]*?\n\}\n/u)?.[0];
+  assert.ok(runner, 'the journey runner must exist');
+  const root = await mkdtemp(join(tmpdir(), 'evidence-cargo-target-test-'));
+  const journey = join(root, 'journey.sh');
+  const harness = join(root, 'run.sh');
+  await writeFile(journey, 'printf "%s\\n" "${CARGO_TARGET_DIR-unset}"\n');
+  await writeFile(
+    harness,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      runner,
+      'SHIM_DIR="$1"',
+      'TARGET_DIR="$2"',
+      'run_journey_script "$3" "$1" "$4"',
+      '',
+    ].join('\n'),
+  );
+  try {
+    const expectedTarget = join(root, 'oid4vci-target');
+    const { stdout } = await execFileAsync(
+      'bash',
+      [harness, root, expectedTarget, slug, journey],
+      {
+        env: { ...process.env, CARGO_TARGET_DIR: join(root, 'inherited-target') },
+      },
+    );
+    return { output: stdout.trim(), expectedTarget };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('the OID4VCI replay receives the gate Cargo target directory', async () => {
+  const { output, expectedTarget } = await replayCargoTarget(
+    'run-oid4vci-interoperability-checks',
+  );
+  assert.equal(output, expectedTarget);
+});
+
+test('other tutorial replays do not receive a Cargo target directory', async () => {
+  const { output } = await replayCargoTarget('first-evidence-assertion');
+  assert.equal(output, 'unset');
+});
+
 async function runFence(args) {
   try {
     const { stdout, stderr } = await execFileAsync('bash', [fenceHelper, ...args]);
