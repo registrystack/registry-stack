@@ -11,99 +11,19 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use thiserror::Error;
 use tower::ServiceExt as _;
 
 use crate::auth::{FixturePrincipal, RelayAuthenticator};
+pub use crate::fixture_contract::{
+    parse_journey, FixtureAuthorization, FixtureError, FixtureExpectation, FixtureJourney,
+    FixtureMethod, FixtureRequest, FixtureStep,
+};
 use crate::model::{CompiledAccess, CompiledRegistry, OperationKind};
 
 const JOURNEY_VERSION: &str = "relay.registrystack.org/http-journey/v1alpha1";
 const MAXIMUM_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct FixtureJourney {
-    pub schema_version: String,
-    pub registry: String,
-    #[serde(default)]
-    pub authorizations: BTreeMap<String, FixtureAuthorization>,
-    pub steps: Vec<FixtureStep>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct FixtureAuthorization {
-    pub principal: String,
-    pub scopes: BTreeSet<String>,
-    #[serde(default)]
-    pub claims: BTreeMap<String, String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct FixtureStep {
-    pub id: String,
-    #[serde(default)]
-    pub authorization_fixture: Option<String>,
-    pub request: FixtureRequest,
-    pub expect: FixtureExpectation,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct FixtureRequest {
-    pub method: FixtureMethod,
-    pub path: String,
-    #[serde(default)]
-    pub headers: BTreeMap<String, String>,
-    #[serde(default)]
-    pub query: BTreeMap<String, Value>,
-    #[serde(default)]
-    pub body: BTreeMap<String, Value>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum FixtureMethod {
-    Get,
-    Post,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct FixtureExpectation {
-    pub status: u16,
-    #[serde(default)]
-    pub code: Option<String>,
-    #[serde(default)]
-    pub capability_patterns: Vec<String>,
-    #[serde(default)]
-    pub absent_capability_patterns: Vec<String>,
-    #[serde(default)]
-    pub item_count: Option<u32>,
-    #[serde(default)]
-    pub next_cursor: Option<Value>,
-    #[serde(default)]
-    pub registry_core_required: Option<bool>,
-    #[serde(default)]
-    pub domain_data_keys: Vec<String>,
-    #[serde(default)]
-    pub record_identifier: Option<String>,
-    #[serde(default)]
-    pub cache: Option<String>,
-    #[serde(default)]
-    pub route_absent: Option<bool>,
-    #[serde(default)]
-    pub equivalence_class: Option<String>,
-    #[serde(default)]
-    pub absent_everywhere: Vec<String>,
-    #[serde(default)]
-    pub records_equivalent_to: Option<String>,
-    #[serde(default)]
-    pub body_empty: Option<bool>,
-    #[serde(default)]
-    pub etag_same_as: Option<String>,
-}
+const MAXIMUM_DOMAIN_VALUE_EXPECTATIONS: usize = 64;
+const MAXIMUM_DOMAIN_PROPERTY_NAME_BYTES: usize = 128;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -137,16 +57,6 @@ pub struct FixtureDiagnostic {
     pub code: String,
     pub location: String,
     pub message: String,
-}
-
-#[derive(Debug, Error)]
-pub enum FixtureError {
-    #[error("fixture YAML is not valid")]
-    InvalidYaml,
-}
-
-pub fn parse_journey(yaml: &str) -> Result<FixtureJourney, FixtureError> {
-    serde_norway::from_str(yaml).map_err(|_| FixtureError::InvalidYaml)
 }
 
 /// Compile a journey against the exact runtime operation inventory without
@@ -218,6 +128,11 @@ pub fn compile_fixture_plan(
                 "the expected status is outside the Relay problem contract",
             );
         }
+        validate_domain_data_expectations(
+            &step.expect,
+            &format!("steps[{index}].expect.domainDataValues"),
+            &mut diagnostics,
+        );
         let operation = resolve_operation(registry, &step.request);
         if step.expect.status == 200 && is_data_path(&step.request.path) && operation.is_none() {
             diagnostic(
@@ -580,6 +495,28 @@ fn assert_expectations(
             );
         }
     }
+    if !step.expect.domain_data_values.is_empty()
+        && (records.is_empty()
+            || records.iter().any(|record| {
+                step.expect
+                    .domain_data_values
+                    .iter()
+                    .any(|(property, expected)| {
+                        record
+                            .get("domainData")
+                            .and_then(Value::as_object)
+                            .and_then(|domain| domain.get(property))
+                            != Some(expected)
+                    })
+            }))
+    {
+        mismatch(
+            diagnostics,
+            "fixture.domain_value_mismatch",
+            &location,
+            "governed domain value",
+        );
+    }
     if let Some(expected) = step.expect.record_identifier.as_deref() {
         let actual = response
             .document
@@ -816,6 +753,7 @@ fn normalized_records(document: &Value) -> Value {
         if let Some(object) = record.as_object_mut() {
             object.remove("@context");
             object.remove("@id");
+            object.remove("@type");
         }
     }
     Value::Array(records)
@@ -856,6 +794,50 @@ fn has_registry_core(record: &Value) -> bool {
     ]
     .iter()
     .all(|key| record.get(key).is_some())
+}
+
+fn validate_domain_data_expectations(
+    expectation: &FixtureExpectation,
+    location: &str,
+    diagnostics: &mut Vec<FixtureDiagnostic>,
+) {
+    if expectation.domain_data_values.len() > MAXIMUM_DOMAIN_VALUE_EXPECTATIONS {
+        diagnostic(
+            diagnostics,
+            "fixture.domain_values_invalid",
+            location,
+            "exact domain-value expectations exceed the fixture bound",
+        );
+    }
+    for (property, expected) in &expectation.domain_data_values {
+        if property.len() > MAXIMUM_DOMAIN_PROPERTY_NAME_BYTES {
+            diagnostic(
+                diagnostics,
+                "fixture.domain_values_invalid",
+                location,
+                "an exact domain-value expectation name exceeds the fixture bound",
+            );
+        }
+        if !matches!(
+            expected,
+            Value::Bool(_) | Value::Number(_) | Value::String(_)
+        ) {
+            diagnostic(
+                diagnostics,
+                "fixture.domain_values_invalid",
+                location,
+                "exact domain-value expectations must be non-null JSON scalars",
+            );
+        }
+        if !expectation.domain_data_keys.contains(property) {
+            diagnostic(
+                diagnostics,
+                "fixture.domain_values_invalid",
+                location,
+                "every exact domain-value expectation must be closed by domainDataKeys",
+            );
+        }
+    }
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
@@ -902,6 +884,117 @@ steps:
     expect: {status: 200}
 "#;
         assert!(parse_journey(yaml).is_err());
+    }
+
+    #[test]
+    fn fixture_yaml_accepts_closed_scalar_domain_value_expectations() {
+        let yaml = r#"
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry
+authorizations: {}
+steps:
+  - id: one
+    request: {method: GET, path: /health}
+    expect:
+      status: 200
+      domainDataKeys: [maskedReference, registrationYear]
+      domainDataValues: {maskedReference: "***0001", registrationYear: "2026"}
+"#;
+        let journey = parse_journey(yaml).expect("fixture parses");
+        assert_eq!(
+            journey.steps[0].expect.domain_data_values,
+            BTreeMap::from([
+                ("maskedReference".into(), Value::String("***0001".into())),
+                ("registrationYear".into(), Value::String("2026".into())),
+            ])
+        );
+    }
+
+    #[test]
+    fn domain_value_expectations_are_bounded_scalar_and_closed() {
+        let mut expectation = FixtureExpectation {
+            status: 200,
+            domain_data_keys: vec!["allowed".into()],
+            domain_data_values: BTreeMap::from([
+                ("notClosed".into(), Value::String("safe".into())),
+                ("overlong".repeat(17), Value::String("safe".into())),
+                ("structured".into(), json!(["not", "scalar"])),
+            ]),
+            ..FixtureExpectation::default()
+        };
+        for index in 0..=MAXIMUM_DOMAIN_VALUE_EXPECTATIONS {
+            expectation
+                .domain_data_values
+                .insert(format!("extra{index}"), Value::Bool(true));
+        }
+        let mut diagnostics = Vec::new();
+        validate_domain_data_expectations(&expectation, "expect", &mut diagnostics);
+        assert!(diagnostics.len() >= 4);
+        assert!(diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code == "fixture.domain_values_invalid"));
+        let rendered = serde_json::to_string(&diagnostics).expect("diagnostics serialize");
+        assert!(!rendered.contains("safe"));
+        assert!(!rendered.contains("not scalar"));
+    }
+
+    #[test]
+    fn exact_domain_value_assertion_is_value_free_on_mismatch() {
+        let yaml = r#"
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry
+authorizations: {}
+steps:
+  - id: one
+    request: {method: GET, path: /health}
+    expect:
+      status: 200
+      domainDataKeys: [maskedReference]
+      domainDataValues: {maskedReference: "***0001"}
+"#;
+        let journey = parse_journey(yaml).expect("fixture parses");
+        let step = &journey.steps[0];
+        let headers = http::HeaderMap::new();
+        let mut equivalence_classes = BTreeMap::new();
+        let observations = BTreeMap::new();
+        let matching = json!({"data": {"domainData": {"maskedReference": "***0001"}}});
+        let mut diagnostics = Vec::new();
+        assert!(assert_expectations(
+            step,
+            &ObservedResponse {
+                status: StatusCode::OK,
+                headers: &headers,
+                body: b"",
+                document: Some(&matching),
+                code: None,
+            },
+            &mut equivalence_classes,
+            &observations,
+            0,
+            &mut diagnostics,
+        ));
+
+        let mismatching = json!({"data": {"domainData": {"maskedReference": "SOURCE-SECRET"}}});
+        assert!(!assert_expectations(
+            step,
+            &ObservedResponse {
+                status: StatusCode::OK,
+                headers: &headers,
+                body: b"",
+                document: Some(&mismatching),
+                code: None,
+            },
+            &mut equivalence_classes,
+            &observations,
+            0,
+            &mut diagnostics,
+        ));
+        let rendered = serde_json::to_string(&diagnostics).expect("diagnostics serialize");
+        assert!(!rendered.contains("SOURCE-SECRET"));
+        assert!(!rendered.contains("***0001"));
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "fixture.domain_value_mismatch"));
     }
 
     #[test]

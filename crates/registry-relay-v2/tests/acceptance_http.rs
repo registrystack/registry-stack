@@ -13,6 +13,8 @@ use bytes::Bytes;
 use futures::stream;
 use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, VARY};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
+use jsonschema::{Draft, JSONSchema};
+use oxjsonld::JsonLdParser;
 use registry_platform_audit::{
     AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState, JsonlFileSink,
 };
@@ -28,9 +30,18 @@ use registry_platform_testing::{
 use registry_relay_v2::artifacts::generate_artifacts;
 use registry_relay_v2::audit::RelayAudit;
 use registry_relay_v2::auth::RelayAuthenticator;
-use registry_relay_v2::compiler::{compile_contract_with_governed_files, GovernedFileSet};
+use registry_relay_v2::compiler::{
+    classification_inventory_digest, compile_contract, compile_contract_with_governed_files,
+    GovernedFileSet,
+};
 use registry_relay_v2::contract::{RegistryContract, RelayRuntime};
-use registry_relay_v2::identification::parse_classification_review_yaml;
+use registry_relay_v2::fixture_contract::{
+    parse_journey, FixtureAuthorization as AuthorizationFixture, FixtureJourney as Journey,
+    FixtureMethod, FixtureStep as JourneyStep,
+};
+use registry_relay_v2::identification::{
+    parse_classification_review_yaml, render_classification_review_yaml,
+};
 use registry_relay_v2::model::{
     CompileProfile, ObservedColumn, ObservedSourceSchema, ObservedView,
 };
@@ -38,7 +49,6 @@ use registry_relay_v2::server::{
     router, AlignmentMetadata, InstitutionMetadata, QuotaConfig, RelayService, ServiceMetadata,
 };
 use registry_relay_v2::sqlite_runtime::{RuntimeSourceBinding, SqliteRuntime, SqliteRuntimeLimits};
-use serde::Deserialize;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
@@ -49,83 +59,10 @@ const ACCEPTANCE_ROOT: &str = concat!(
 );
 const PROJECTS: [&str; 3] = ["social-assistance", "business-registry", "civil-event"];
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Journey {
-    schema_version: String,
-    registry: String,
-    #[serde(default)]
-    authorizations: BTreeMap<String, AuthorizationFixture>,
-    steps: Vec<JourneyStep>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct AuthorizationFixture {
-    principal: String,
-    scopes: BTreeSet<String>,
-    #[serde(default)]
-    claims: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct JourneyStep {
-    id: String,
-    #[serde(default)]
-    authorization_fixture: Option<String>,
-    request: JourneyRequest,
-    expect: JourneyExpectation,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct JourneyRequest {
-    method: String,
-    path: String,
-    #[serde(default)]
-    headers: BTreeMap<String, String>,
-    #[serde(default)]
-    query: BTreeMap<String, Value>,
-    #[serde(default)]
-    body: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[serde(rename_all = "camelCase")]
-struct JourneyExpectation {
-    status: u16,
-    #[serde(default)]
-    capability_patterns: Vec<String>,
-    #[serde(default)]
-    absent_capability_patterns: Vec<String>,
-    #[serde(default)]
-    item_count: Option<usize>,
-    #[serde(default)]
-    next_cursor: Option<String>,
-    #[serde(default)]
-    registry_core_required: bool,
-    #[serde(default)]
-    domain_data_keys: Vec<String>,
-    #[serde(default)]
-    record_identifier: Option<String>,
-    #[serde(default)]
-    cache: Option<String>,
-    #[serde(default)]
-    code: Option<String>,
-    #[serde(default)]
-    route_absent: bool,
-    #[serde(default)]
-    equivalence_class: Option<String>,
-    #[serde(default)]
-    absent_everywhere: Vec<String>,
-    #[serde(default)]
-    records_equivalent_to: Option<String>,
-    #[serde(default)]
-    body_empty: bool,
-    #[serde(default)]
-    etag_same_as: Option<String>,
+#[derive(Default)]
+struct ResponseContractCoverage {
+    json_records: usize,
+    json_ld_records: usize,
 }
 
 struct ProjectHarness {
@@ -206,10 +143,7 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
             .is_none_or(|selected| selected == *project)
     }) {
         let mut harness = ProjectHarness::open(project).await;
-        let journey: Journey = serde_norway::from_slice(
-            &fs::read(project_root(project).join("expected-http.yaml")).expect("journey reads"),
-        )
-        .expect("journey parses");
+        let journey = project_journey(project);
         assert_eq!(
             journey.schema_version,
             "relay.registrystack.org/http-journey/v1alpha1"
@@ -239,6 +173,7 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
         let mut equivalence_classes = BTreeMap::new();
         let mut response_documents = BTreeMap::new();
         let mut etags = BTreeMap::new();
+        let mut contract_coverage = ResponseContractCoverage::default();
         for step in journey.steps {
             let request = harness.request_with_observations(
                 &step,
@@ -272,6 +207,14 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
             assert_expectations(project, &step, &headers, &body, &mut equivalence_classes);
             if !body.is_empty() {
                 let document: Value = serde_json::from_slice(&body).expect("response is JSON");
+                validate_response_contracts(
+                    &harness,
+                    project,
+                    &step,
+                    &headers,
+                    &document,
+                    &mut contract_coverage,
+                );
                 if let Some(reference) = &step.expect.records_equivalent_to {
                     let expected = response_documents
                         .get(reference)
@@ -286,6 +229,14 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
                 response_documents.insert(step.id.clone(), document);
             }
         }
+        assert!(
+            contract_coverage.json_records > 0,
+            "{project} must validate an ordinary JSON Record against its generated schema"
+        );
+        assert!(
+            contract_coverage.json_ld_records > 0,
+            "{project} must validate a JSON-LD Record against its generated schema"
+        );
         shutdown_tx.send(()).expect("loopback server is running");
         tokio::time::timeout(Duration::from_secs(5), server)
             .await
@@ -371,13 +322,21 @@ async fn malformed_disclosed_property_type_and_requiredness_fail_closed() {
     assert_ne!(valid_recorded_at, original);
 
     let wrong_type = valid_recorded_at.replacen(") STRICT;", ");", 1).replacen(
-        "'Invalid Fixture Enterprise'",
-        "X'FF'",
+        "'Invalid Fixture Enterprise', 'Invalid Fixture Enterprise'",
+        "X'FF', X'FF'",
         1,
     );
     let missing_required = valid_recorded_at
-        .replacen("legal_name TEXT NOT NULL", "legal_name TEXT", 1)
-        .replacen("'Invalid Fixture Enterprise'", "NULL", 1);
+        .replacen(
+            "public_legal_name TEXT NOT NULL",
+            "public_legal_name TEXT",
+            1,
+        )
+        .replacen(
+            "'Invalid Fixture Enterprise', 'Invalid Fixture Enterprise'",
+            "'Invalid Fixture Enterprise', NULL",
+            1,
+        );
 
     for (case, fixture_sql) in [
         ("wrong property type", wrong_type),
@@ -487,11 +446,7 @@ async fn readiness_fails_value_free_for_missing_replaced_and_drifted_sources() {
 #[tokio::test]
 async fn social_live_update_is_consistent_and_truthfully_unversioned() {
     let harness = ProjectHarness::open("social-assistance").await;
-    let journey: Journey = serde_norway::from_slice(
-        &fs::read(project_root("social-assistance").join("expected-http.yaml"))
-            .expect("journey reads"),
-    )
-    .expect("journey parses");
+    let journey = project_journey("social-assistance");
     let step = journey
         .steps
         .iter()
@@ -563,11 +518,7 @@ async fn social_live_update_is_consistent_and_truthfully_unversioned() {
 #[tokio::test]
 async fn trusted_purpose_and_row_binding_refusals_use_only_verified_claims() {
     let harness = ProjectHarness::open("social-assistance").await;
-    let journey: Journey = serde_norway::from_slice(
-        &fs::read(project_root("social-assistance").join("expected-http.yaml"))
-            .expect("journey reads"),
-    )
-    .expect("journey parses");
+    let journey = project_journey("social-assistance");
     for (step_id, status) in [
         ("missing-purpose", StatusCode::FORBIDDEN),
         ("wrong-purpose", StatusCode::FORBIDDEN),
@@ -660,11 +611,7 @@ async fn audit_terminal_failure_discards_held_record_bytes() {
 #[tokio::test]
 async fn real_jwt_path_rejects_malformed_audience_time_and_expired_tokens() {
     let harness = ProjectHarness::open("social-assistance").await;
-    let journey: Journey = serde_norway::from_slice(
-        &fs::read(project_root("social-assistance").join("expected-http.yaml"))
-            .expect("journey reads"),
-    )
-    .expect("journey parses");
+    let journey = project_journey("social-assistance");
     let step = journey
         .steps
         .iter()
@@ -815,11 +762,7 @@ async fn real_jwt_path_rejects_malformed_audience_time_and_expired_tokens() {
 #[tokio::test]
 async fn operation_bound_metadata_is_no_store_and_links_only_visible_artifacts() {
     let harness = ProjectHarness::open("social-assistance").await;
-    let journey: Journey = serde_norway::from_slice(
-        &fs::read(project_root("social-assistance").join("expected-http.yaml"))
-            .expect("journey reads"),
-    )
-    .expect("journey parses");
+    let journey = project_journey("social-assistance");
     let step = journey
         .steps
         .iter()
@@ -994,10 +937,7 @@ async fn insufficient_scope_and_unknown_data_surfaces_are_indistinguishable() {
         Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
     )
     .await;
-    let journey: Journey = serde_norway::from_slice(
-        &fs::read(project_root("civil-event").join("expected-http.yaml")).expect("journey reads"),
-    )
-    .expect("journey parses");
+    let journey = project_journey("civil-event");
     let read_fixture = journey
         .authorizations
         .get("civil-registrar-ex-a")
@@ -1142,11 +1082,7 @@ async fn list_uri_refusal_uses_the_resolved_access_context() {
 #[tokio::test]
 async fn lookup_body_collection_obeys_the_request_deadline() {
     let harness = ProjectHarness::open("social-assistance").await;
-    let journey: Journey = serde_norway::from_slice(
-        &fs::read(project_root("social-assistance").join("expected-http.yaml"))
-            .expect("journey reads"),
-    )
-    .expect("journey parses");
+    let journey = project_journey("social-assistance");
     let step = journey
         .steps
         .iter()
@@ -1221,7 +1157,7 @@ fn assert_expectations(
     equivalence_classes: &mut BTreeMap<String, Value>,
 ) {
     let label = format!("{project}/{}", step.id);
-    if step.expect.body_empty {
+    if step.expect.body_empty.unwrap_or(false) {
         assert!(body.is_empty(), "{label} body must be empty");
         return;
     }
@@ -1234,7 +1170,7 @@ fn assert_expectations(
             "{label} code"
         );
     }
-    if step.expect.route_absent {
+    if step.expect.route_absent.unwrap_or(false) {
         assert_eq!(
             document.get("code").and_then(Value::as_str),
             Some("resource.not_found"),
@@ -1276,23 +1212,24 @@ fn assert_expectations(
                 .get("items")
                 .and_then(Value::as_array)
                 .map(Vec::len),
-            Some(count),
+            Some(count as usize),
             "{label} item count"
         );
     }
     if let Some(expectation) = &step.expect.next_cursor {
         let cursor = document.pointer("/pageInfo/nextCursor");
         match expectation.as_str() {
-            "non-null" => assert!(
+            Some("non-null") => assert!(
                 cursor.is_some_and(|value| !value.is_null()),
                 "{label} cursor"
             ),
-            "null" => assert!(cursor.is_some_and(Value::is_null), "{label} cursor"),
-            value => panic!("{label} has unsupported nextCursor expectation {value}"),
+            Some("null") => assert!(cursor.is_some_and(Value::is_null), "{label} cursor"),
+            Some(value) => panic!("{label} has unsupported nextCursor expectation {value}"),
+            None => panic!("{label} nextCursor expectation must be a string"),
         }
     }
     let records = response_records(&document);
-    if step.expect.registry_core_required {
+    if step.expect.registry_core_required.unwrap_or(false) {
         assert!(!records.is_empty(), "{label} must contain a Record");
         for record in &records {
             for key in [
@@ -1327,6 +1264,40 @@ fn assert_expectations(
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>();
             assert_eq!(actual, expected, "{label} disclosed domain properties");
+        }
+    }
+    if !step.expect.domain_data_values.is_empty() {
+        assert!(
+            step.expect.domain_data_values.len() <= 64,
+            "{label} has too many exact domain-value expectations"
+        );
+        assert!(!records.is_empty(), "{label} must contain domain data");
+        for (property, expected) in &step.expect.domain_data_values {
+            assert!(
+                property.len() <= 128,
+                "{label} has an overlong domain-value expectation name"
+            );
+            assert!(
+                matches!(
+                    expected,
+                    Value::Bool(_) | Value::Number(_) | Value::String(_)
+                ),
+                "{label} domain-value expectations must be non-null JSON scalars"
+            );
+            assert!(
+                step.expect.domain_data_keys.contains(property),
+                "{label} exact domain-value expectation must be closed by domainDataKeys"
+            );
+            for record in &records {
+                let actual = record
+                    .get("domainData")
+                    .and_then(Value::as_object)
+                    .and_then(|domain| domain.get(property));
+                assert!(
+                    actual == Some(expected),
+                    "{label} returned the wrong governed value for {property}"
+                );
+            }
         }
     }
     if let Some(identifier) = &step.expect.record_identifier {
@@ -1399,6 +1370,7 @@ fn normalized_records(document: &Value) -> Vec<Value> {
             let mut record = record.clone();
             if let Some(object) = record.as_object_mut() {
                 object.remove("@id");
+                object.remove("@type");
             }
             record
         })
@@ -1414,6 +1386,327 @@ fn response_records(document: &Value) -> Vec<&Value> {
             .and_then(Value::as_array)
             .map_or_else(Vec::new, |items| items.iter().collect())
     }
+}
+
+fn validate_response_contracts(
+    harness: &ProjectHarness,
+    project: &str,
+    step: &JourneyStep,
+    headers: &HeaderMap,
+    document: &Value,
+    coverage: &mut ResponseContractCoverage,
+) {
+    let records = response_records(document);
+    if records.is_empty() {
+        return;
+    }
+    let media_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .expect("Record response has a content type");
+    let json_ld = match media_type {
+        "application/json" => false,
+        "application/ld+json" => true,
+        _ => panic!(
+            "{project}/{} returned an unsupported Record media type",
+            step.id
+        ),
+    };
+
+    let operation_identifier = document
+        .pointer("/meta/operationIdentifier")
+        .and_then(Value::as_str)
+        .expect("Record response names its compiled operation");
+    let representation_identifier = document
+        .pointer("/meta/representation")
+        .and_then(Value::as_str)
+        .expect("Record response names its selected representation");
+    let matching_bindings = harness
+        .service
+        .artifacts
+        .operation_bindings
+        .iter()
+        .filter(|binding| {
+            binding.operation_identifier == operation_identifier
+                && binding.representation_identifier == representation_identifier
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matching_bindings.len(),
+        1,
+        "{project}/{} must resolve one exact operation and representation binding",
+        step.id
+    );
+    let binding = matching_bindings[0];
+
+    for record in records {
+        let schema_reference = record
+            .get("schemaReference")
+            .and_then(Value::as_str)
+            .expect("Record carries its exact permitted-representation schema reference");
+        assert_eq!(
+            document
+                .pointer("/meta/links/schema")
+                .and_then(Value::as_str),
+            Some(schema_reference),
+            "{project}/{} metadata and Record must name the same schema",
+            step.id
+        );
+
+        let matching_schemas = harness
+            .service
+            .artifacts
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.media_type == "application/schema+json")
+            .filter_map(|artifact| {
+                let schema: Value = serde_json::from_slice(&artifact.content).ok()?;
+                (schema.get("$id").and_then(Value::as_str) == Some(schema_reference))
+                    .then_some((artifact, schema))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            matching_schemas.len(),
+            1,
+            "{project}/{} must resolve exactly one generated permitted-representation schema",
+            step.id
+        );
+        let (schema_artifact, schema) = &matching_schemas[0];
+        let validator = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(schema)
+            .unwrap_or_else(|_| {
+                panic!(
+                    "{project}/{} generated permitted-representation schema must compile",
+                    step.id
+                )
+            });
+        assert!(
+            validator.is_valid(record),
+            "{project}/{} Record must validate against its exact generated permitted-representation schema",
+            step.id
+        );
+
+        assert_eq!(
+            binding.representation_schema_path, schema_artifact.path,
+            "{project}/{} schema must belong to the exact operation and representation",
+            step.id
+        );
+        let shacl_path = &binding.representation_shacl_path;
+        let shacl_artifact = harness
+            .service
+            .artifacts
+            .get(shacl_path)
+            .expect("the exact response binding carries its generated SHACL artifact");
+        assert_eq!(shacl_artifact.media_type, "text/turtle");
+        assert!(
+            !shacl_artifact.content.is_empty(),
+            "{project}/{} exact generated SHACL artifact must not be empty",
+            step.id
+        );
+
+        if json_ld {
+            coverage.json_ld_records += 1;
+        } else {
+            coverage.json_records += 1;
+        }
+    }
+
+    if json_ld {
+        validate_json_ld_graph(harness, project, step, document, binding);
+    }
+}
+
+fn validate_json_ld_graph(
+    harness: &ProjectHarness,
+    project: &str,
+    step: &JourneyStep,
+    document: &Value,
+    binding: &registry_relay_v2::artifacts::OperationArtifactBindings,
+) {
+    let context_artifact = harness
+        .service
+        .artifacts
+        .get(&binding.context_path)
+        .expect("the exact response binding carries its generated JSON-LD context");
+    let context_document: Value = serde_json::from_slice(&context_artifact.content)
+        .expect("generated JSON-LD context parses");
+    let mut expanded_document = document.clone();
+    expanded_document["@context"] = context_document["@context"].clone();
+    let raw = serde_json::to_string(&expanded_document).expect("JSON-LD response serializes");
+    let parser = JsonLdParser::new()
+        .with_base_iri(&harness.service.registry.base_uri)
+        .expect("Registry base IRI is valid");
+    let quads = parser
+        .for_slice(&raw)
+        .map(|quad| {
+            quad.unwrap_or_else(|error| {
+                panic!(
+                    "{project}/{} generated context must expand the actual response: {error}",
+                    step.id
+                )
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !quads.is_empty(),
+        "{project}/{} JSON-LD response must produce an RDF graph",
+        step.id
+    );
+
+    let resource = harness
+        .service
+        .registry
+        .resources
+        .iter()
+        .find(|resource| {
+            resource
+                .operations
+                .iter()
+                .any(|operation| operation.identifier == binding.operation_identifier)
+        })
+        .expect("compiled operation belongs to one resource");
+    let representation = resource
+        .operations
+        .iter()
+        .find(|operation| operation.identifier == binding.operation_identifier)
+        .and_then(|operation| {
+            operation
+                .representations
+                .iter()
+                .find(|representation| representation.id == binding.representation_identifier)
+        })
+        .expect("compiled operation carries the selected representation");
+    let shacl = std::str::from_utf8(
+        &harness
+            .service
+            .artifacts
+            .get(&binding.representation_shacl_path)
+            .expect("bound SHACL artifact exists")
+            .content,
+    )
+    .expect("generated SHACL is UTF-8");
+    assert!(shacl.contains(&format!("sh:targetClass <{}>", resource.semantic_class)));
+    assert!(shacl.contains("sh:ignoredProperties ( rdf:type )"));
+
+    for record in response_records(document) {
+        let subject = record
+            .get("@id")
+            .and_then(Value::as_str)
+            .expect("JSON-LD Record carries @id");
+        assert_quad(
+            &quads,
+            subject,
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            &format!("<{}>", resource.semantic_class),
+            project,
+            &step.id,
+        );
+        for field in [
+            "registryIdentifier",
+            "schemaReference",
+            "semanticModelReference",
+            "authorityIdentifier",
+        ] {
+            let object = record[field]
+                .as_str()
+                .expect("Registry Core IRI is a string");
+            let predicate = format!("https://id.registrystack.org/vocab/core/{field}");
+            assert_quad(
+                &quads,
+                subject,
+                &predicate,
+                &format!("<{object}>"),
+                project,
+                &step.id,
+            );
+            assert!(shacl.contains(&format!("sh:path <{predicate}> ; sh:nodeKind sh:IRI")));
+        }
+        for (field, datatype) in [
+            (
+                "recordIdentifier",
+                "http://www.w3.org/2001/XMLSchema#string",
+            ),
+            (
+                "revisionIdentifier",
+                "http://www.w3.org/2001/XMLSchema#string",
+            ),
+            ("lifecycleState", "http://www.w3.org/2001/XMLSchema#string"),
+            ("recordedAt", "http://www.w3.org/2001/XMLSchema#dateTime"),
+        ] {
+            let predicate = format!("https://id.registrystack.org/vocab/core/{field}");
+            assert_typed_quad(&quads, subject, &predicate, datatype, project, &step.id);
+            assert!(shacl.contains(&format!("sh:path <{predicate}> ; sh:datatype <{datatype}>")));
+        }
+        let domain_data = record["domainData"]
+            .as_object()
+            .expect("Record domainData is an object");
+        for property_name in domain_data.keys() {
+            let property = resource
+                .properties
+                .iter()
+                .find(|property| property.name == *property_name)
+                .expect("disclosed property is compiled");
+            assert!(representation.selectable_properties.contains(property_name));
+            let datatype = registry_relay_v2::semantics::datatype_iri(property.data_type);
+            assert_typed_quad(
+                &quads,
+                subject,
+                &property.semantic_iri,
+                datatype,
+                project,
+                &step.id,
+            );
+            assert!(shacl.contains(&format!(
+                "sh:path <{}> ; sh:datatype <{datatype}>",
+                property.semantic_iri
+            )));
+        }
+    }
+}
+
+fn assert_quad(
+    quads: &[String],
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    project: &str,
+    step: &str,
+) {
+    let expected = format!("<{subject}> <{predicate}> {object}");
+    assert!(
+        quads.iter().any(|quad| quad.contains(&expected)),
+        "{project}/{step} expanded graph is missing a required IRI statement"
+    );
+}
+
+fn assert_typed_quad(
+    quads: &[String],
+    subject: &str,
+    predicate: &str,
+    datatype: &str,
+    project: &str,
+    step: &str,
+) {
+    let subject_predicate = format!("<{subject}> <{predicate}>");
+    let datatype_marker = format!("^^<{datatype}>");
+    let plain_string = datatype == "http://www.w3.org/2001/XMLSchema#string";
+    assert!(
+        quads.iter().any(|quad| {
+            let Some((_, object)) = quad.split_once(&subject_predicate) else {
+                return false;
+            };
+            if plain_string {
+                object.trim_start().starts_with('"')
+            } else {
+                object.contains(&datatype_marker)
+            }
+        }),
+        "{project}/{step} expanded graph is missing predicate {predicate} with datatype {datatype}"
+    );
 }
 
 impl ProjectHarness {
@@ -1497,7 +1790,26 @@ impl ProjectHarness {
                 })
                 .collect(),
         }];
-        let governed = governed_files(&root, &contract);
+        let mut governed = governed_files(&root, &contract);
+        if accept_fixture_fingerprint {
+            let inventory = compile_contract(&contract, &observed, CompileProfile::Production)
+                .expect("synthetic fixture inventory compiles");
+            let inventory_digest = classification_inventory_digest(&inventory)
+                .expect("synthetic fixture inventory digests");
+            let review_path = contract.classifications.provenance_ref.clone();
+            let mut review = parse_classification_review_yaml(
+                governed
+                    .get(&review_path)
+                    .expect("classification review is governed"),
+            )
+            .expect("classification review parses");
+            review.classification_inventory_digest = inventory_digest;
+            governed.insert(
+                review_path,
+                render_classification_review_yaml(&review)
+                    .expect("synthetic fixture review renders"),
+            );
+        }
         let compiled = Arc::new(
             compile_contract_with_governed_files(
                 &contract,
@@ -1654,25 +1966,21 @@ impl ProjectHarness {
             url.push('?');
             url.push_str(&serializer.finish());
         }
-        let method = step
-            .request
-            .method
-            .parse::<Method>()
-            .expect("journey method is valid");
-        let body = step
-            .request
-            .body
-            .as_ref()
-            .map(|selectors| {
-                serde_json::to_vec(&json!({"selectors": selectors})).expect("body serializes")
-            })
-            .unwrap_or_default();
+        let method = match step.request.method {
+            FixtureMethod::Get => Method::GET,
+            FixtureMethod::Post => Method::POST,
+        };
+        let body = if step.request.body.is_empty() {
+            Vec::new()
+        } else {
+            serde_json::to_vec(&json!({"selectors": &step.request.body})).expect("body serializes")
+        };
         let mut request = Request::builder()
             .method(method)
             .uri(url)
             .body(Body::from(body))
             .expect("request builds");
-        if step.request.body.is_some() {
+        if !step.request.body.is_empty() {
             request.headers_mut().insert(
                 CONTENT_TYPE,
                 "application/json".parse().expect("content type"),
@@ -1895,6 +2203,12 @@ fn governed_files(root: &Path, contract: &RegistryContract) -> GovernedFileSet {
 
 fn project_root(project: &str) -> PathBuf {
     Path::new(ACCEPTANCE_ROOT).join(project)
+}
+
+fn project_journey(project: &str) -> Journey {
+    let bytes = fs::read(project_root(project).join("expected-http.yaml")).expect("journey reads");
+    let yaml = std::str::from_utf8(&bytes).expect("journey is UTF-8 YAML");
+    parse_journey(yaml).expect("journey parses through the production fixture contract")
 }
 
 fn yaml_scalar(value: &Value) -> Option<String> {

@@ -50,6 +50,7 @@ pub fn json_ld_context(
     let mut context = Map::new();
     context.insert("@version".into(), json!(1.1));
     context.insert("@vocab".into(), json!(registry.local_vocabulary));
+    context.insert("xsd".into(), json!("http://www.w3.org/2001/XMLSchema#"));
     for field in [
         "registryIdentifier",
         "schemaReference",
@@ -61,23 +62,34 @@ pub fn json_ld_context(
             json!({"@id": format!("{core}{field}"), "@type": "@id"}),
         );
     }
-    for field in [
-        "recordIdentifier",
-        "revisionIdentifier",
-        "lifecycleState",
-        "recordedAt",
-        "domainData",
-    ] {
-        context.insert(field.into(), json!(format!("{core}{field}")));
+    for field in ["recordIdentifier", "revisionIdentifier", "lifecycleState"] {
+        context.insert(
+            field.into(),
+            json!({"@id": format!("{core}{field}"), "@type": "xsd:string"}),
+        );
     }
+    context.insert(
+        "recordedAt".into(),
+        json!({"@id": format!("{core}recordedAt"), "@type": "xsd:dateTime"}),
+    );
+    context.insert("domainData".into(), json!("@nest"));
     for property in selected_properties(resource, selected) {
         context.insert(
             property.name.clone(),
-            json!({"@id": property.semantic_iri, "@nest": "domainData"}),
+            json!({
+                "@id": property.semantic_iri,
+                "@nest": "domainData",
+                "@type": datatype_iri(property.data_type),
+            }),
         );
     }
-    // Transport-only envelope members never acquire semantic meaning.
-    for field in ["data", "items", "pageInfo", "nextCursor", "meta"] {
+    // Record containers contribute their contents to the graph without
+    // becoming predicates of their own. Other transport-only members never
+    // acquire semantic meaning.
+    for field in ["data", "items"] {
+        context.insert(field.into(), json!("@graph"));
+    }
+    for field in ["pageInfo", "nextCursor", "meta"] {
         context.insert(field.into(), Value::Null);
     }
     json!({"@context": context})
@@ -163,6 +175,8 @@ fn record_schema(
             "authorityIdentifier", "recordedAt", "domainData"
         ],
         "properties": {
+            "@id": {"type": "string", "format": "uri"},
+            "@type": {"const": resource.semantic_class},
             "registryIdentifier": {"const": registry.registry_identifier},
             "recordIdentifier": {"type": "string", "minLength": 1},
             "revisionIdentifier": {"type": "string", "minLength": 1},
@@ -203,14 +217,20 @@ fn shacl(
         &require_codelist(registry, &resource.record_context.lifecycle_state_codelist).values;
     let lifecycle_constraint = shacl_in(lifecycle_values);
     let mut output = format!(
-        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n<{}shapes/{}> a sh:NodeShape ;\n  sh:targetClass <{}> ;\n  sh:closed true",
+        "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n<{}shapes/{}> a sh:NodeShape ;\n  sh:targetClass <{}> ;\n  sh:closed true ;\n  sh:ignoredProperties ( rdf:type )",
         registry.local_vocabulary, resource.id, resource.semantic_class
     );
+    for path in [
+        "registryIdentifier",
+        "schemaReference",
+        "semanticModelReference",
+        "authorityIdentifier",
+    ] {
+        output.push_str(&format!(
+            " ;\n  sh:property [ sh:path <https://id.registrystack.org/vocab/core/{path}> ; sh:nodeKind sh:IRI ; sh:minCount 1 ; sh:maxCount 1 ]"
+        ));
+    }
     for (path, datatype) in [
-        (
-            "registryIdentifier",
-            "http://www.w3.org/2001/XMLSchema#anyURI",
-        ),
         (
             "recordIdentifier",
             "http://www.w3.org/2001/XMLSchema#string",
@@ -220,15 +240,6 @@ fn shacl(
             "http://www.w3.org/2001/XMLSchema#string",
         ),
         ("lifecycleState", "http://www.w3.org/2001/XMLSchema#string"),
-        ("schemaReference", "http://www.w3.org/2001/XMLSchema#anyURI"),
-        (
-            "semanticModelReference",
-            "http://www.w3.org/2001/XMLSchema#anyURI",
-        ),
-        (
-            "authorityIdentifier",
-            "http://www.w3.org/2001/XMLSchema#anyURI",
-        ),
         ("recordedAt", "http://www.w3.org/2001/XMLSchema#dateTime"),
     ] {
         let controlled_values = if path == "lifecycleState" {
@@ -358,7 +369,14 @@ mod tests {
     fn transport_envelope_is_null_in_context() {
         let context = json_ld_context(&registry(), &resource(), &["name".into()]);
         assert!(context["@context"]["meta"].is_null());
+        assert_eq!(context["@context"]["data"], "@graph");
+        assert_eq!(context["@context"]["items"], "@graph");
+        assert_eq!(context["@context"]["domainData"], "@nest");
         assert_eq!(context["@context"]["name"]["@nest"], "domainData");
+        assert_eq!(
+            context["@context"]["name"]["@type"],
+            "http://www.w3.org/2001/XMLSchema#string"
+        );
     }
 
     #[test]
@@ -400,7 +418,18 @@ mod tests {
             schema["properties"]["domainData"]["properties"]["name"]["enum"],
             json!(["ONE", "TWO"])
         );
+        assert_eq!(
+            schema["properties"]["@id"],
+            json!({"type": "string", "format": "uri"})
+        );
+        assert_eq!(
+            schema["properties"]["@type"],
+            json!({"const": resource.semantic_class})
+        );
         let shacl = full_record_shacl(&registry, &resource);
+        assert!(shacl.contains("sh:targetClass <https://example.invalid/vocab/Record>"));
+        assert!(shacl.contains("sh:ignoredProperties ( rdf:type )"));
+        assert!(shacl.contains("sh:nodeKind sh:IRI"));
         assert!(shacl.contains("sh:in ( \"ACTIVE\" \"RETIRED\" )"));
         assert!(shacl.contains("sh:in ( \"ONE\" \"TWO\" )"));
     }

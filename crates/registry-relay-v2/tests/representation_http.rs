@@ -333,26 +333,21 @@ async fn representation_selection_authenticates_then_authorizes_the_exact_profil
         (
             None,
             "caseworker",
-            StatusCode::UNAUTHORIZED,
-            "auth.missing_credential",
-        ),
-        (
-            None,
-            "missing",
             StatusCode::NOT_FOUND,
-            "representation.not_found",
+            "resource.not_found",
         ),
+        (None, "missing", StatusCode::NOT_FOUND, "resource.not_found"),
         (
             Some(limited.as_str()),
             "caseworker",
-            StatusCode::FORBIDDEN,
-            "consultation.denied",
+            StatusCode::NOT_FOUND,
+            "resource.not_found",
         ),
         (
             Some(limited.as_str()),
             "missing",
             StatusCode::NOT_FOUND,
-            "representation.not_found",
+            "resource.not_found",
         ),
     ] {
         let uri = format!("/v2/resources/record/records/record-1?representation={representation}");
@@ -362,22 +357,35 @@ async fn representation_selection_authenticates_then_authorizes_the_exact_profil
 
     let records = sink.values();
     assert!(records.iter().all(|event| event["phase"] == "refusal"));
-    assert_eq!(
-        records
-            .iter()
-            .filter(|event| event["representation"] == "caseworker")
-            .count(),
-        2
-    );
+    assert!(records
+        .iter()
+        .all(|event| event.get("representation").is_none()));
     assert_eq!(
         records
             .iter()
             .filter(|event| event.get("representation").is_none())
             .count(),
-        3
+        5
     );
     let audit_wire = serde_json::to_string(&records).expect("audit serializes");
     assert!(!audit_wire.contains("not-a-jwt"));
+}
+
+#[tokio::test]
+async fn oversized_uri_still_conceals_exact_representation_authorization() {
+    let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
+    let limited = harness.token(&["registry:limited"], "review", "area-a");
+    let padding = "x".repeat(20_000);
+
+    for representation in ["caseworker", "missing"] {
+        let uri = format!(
+            "/v2/resources/record/records/record-1?representation={representation}&padding={padding}"
+        );
+        let (status, _, body) = harness
+            .send(Method::GET, &uri, Some(&limited), None, &[])
+            .await;
+        assert_problem(status, &body, StatusCode::NOT_FOUND, "resource.not_found");
+    }
 }
 
 #[tokio::test]
@@ -402,7 +410,7 @@ async fn preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_sourc
         (
             "/v2/resources/record/records?representation=missing",
             StatusCode::NOT_FOUND,
-            "representation.not_found",
+            "resource.not_found",
         ),
         (
             "/v2/resources/record/records?representation=limited&fields=secretValue",
@@ -628,8 +636,8 @@ async fn malformed_registry_core_fails_closed_and_list_release_is_atomic() {
     assert_problem(
         status,
         &body,
-        StatusCode::NOT_FOUND,
-        "consultation.unresolved",
+        StatusCode::SERVICE_UNAVAILABLE,
+        "source.unavailable",
     );
 
     let records = sink.values();
@@ -640,7 +648,7 @@ async fn malformed_registry_core_fails_closed_and_list_release_is_atomic() {
     assert_eq!(terminal.len(), 3);
     assert_eq!(terminal[0]["outcome"], "source-failed");
     assert_eq!(terminal[1]["outcome"], "source-failed");
-    assert_eq!(terminal[2]["outcome"], "unresolved");
+    assert_eq!(terminal[2]["outcome"], "source-failed");
     let audit_wire = serde_json::to_string(&records).expect("audit serializes");
     for source_value in [
         "record-1a",
@@ -737,8 +745,8 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
     assert_problem(
         status,
         &body,
-        StatusCode::NOT_FOUND,
-        "consultation.unresolved",
+        StatusCode::SERVICE_UNAVAILABLE,
+        "source.unavailable",
     );
     assert!(!String::from_utf8(body)
         .expect("problem UTF-8")

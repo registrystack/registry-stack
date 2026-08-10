@@ -60,6 +60,8 @@ zeroize.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 futures.workspace = true
+jsonschema.workspace = true
+oxjsonld = "0.2.5"
 registry-platform-httputil.workspace = true
 registry-platform-sqlite = { workspace = true, features = ["fixture"] }
 registry-platform-testing.workspace = true

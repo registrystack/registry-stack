@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::artifacts::{ArtifactSet, GeneratedArtifact, OperationArtifactBindings};
+use crate::artifacts::{
+    generate_artifacts, ArtifactSet, GeneratedArtifact, OperationArtifactBindings,
+};
 use crate::compiler::{
     compile_contract_with_governed_files, referenced_governed_files, GovernedFileSet,
 };
@@ -18,9 +20,6 @@ use crate::contract::{RegistryContract, Visibility};
 use crate::model::{
     CompileProfile, CompiledClassificationReview, CompiledRegistry, ObservedSourceSchema,
 };
-
-#[cfg(test)]
-use crate::artifacts::generate_artifacts;
 
 const PACKAGE_VERSION: &str = "relay.registrystack.org/package/v1alpha2";
 const COMPILED_REGISTRY_PATH: &str = "compiled/registry.json";
@@ -265,12 +264,8 @@ fn validate_build_inputs(
         })
         .collect::<Result<Vec<_>, _>>()?;
     verify_compiled_derivation(contract, compiled, governed, &observed)?;
-    let operation_identifiers = compiled
-        .resources
-        .iter()
-        .flat_map(|resource| resource.operations.iter())
-        .map(|operation| operation.identifier.as_str())
-        .collect::<BTreeSet<_>>();
+    verify_artifact_derivation(compiled, artifacts)?;
+    let expected_operation_representations = operation_representation_pairs(compiled);
     let mut artifact_ids = BTreeSet::new();
     let mut artifact_paths = BTreeSet::new();
     for artifact in &artifacts.artifacts {
@@ -281,14 +276,17 @@ fn validate_build_inputs(
             || artifact
                 .operation_identifier
                 .as_deref()
-                .is_some_and(|identifier| !operation_identifiers.contains(identifier))
+                .zip(artifact.representation_identifier.as_deref())
+                .is_some_and(|pair| !expected_operation_representations.contains(&pair))
+            || artifact.operation_identifier.is_some()
+                != artifact.representation_identifier.is_some()
         {
             return Err(PackageError::Verification);
         }
     }
     if !valid_operation_artifact_bindings(
         &artifacts.operation_bindings,
-        &operation_identifiers,
+        &expected_operation_representations,
         &artifact_paths,
     ) {
         return Err(PackageError::Verification);
@@ -310,6 +308,20 @@ fn verify_compiled_derivation(
     )
     .map_err(|_| PackageError::Verification)?;
     if reproduced != *compiled {
+        return Err(PackageError::Verification);
+    }
+    Ok(())
+}
+
+fn verify_artifact_derivation(
+    compiled: &CompiledRegistry,
+    artifacts: &ArtifactSet,
+) -> Result<(), PackageError> {
+    // `packageRevision` is an integrity digest, not an authenticity proof. A
+    // caller can recalculate it, so acceptance must reproduce every artifact
+    // byte and its release metadata from the already rederived Registry.
+    let reproduced = generate_artifacts(compiled).map_err(|_| PackageError::Verification)?;
+    if reproduced != *artifacts {
         return Err(PackageError::Verification);
     }
     Ok(())
@@ -517,12 +529,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
         return Err(PackageError::Verification);
     }
 
-    let operation_identifiers = registry
-        .resources
-        .iter()
-        .flat_map(|resource| resource.operations.iter())
-        .map(|operation| operation.identifier.as_str())
-        .collect::<BTreeSet<_>>();
+    let expected_operation_representations = operation_representation_pairs(&registry);
     let mut artifact_ids = BTreeSet::new();
     let mut artifact_paths = BTreeSet::new();
     let mut generated_artifacts = Vec::with_capacity(manifest.artifacts.len());
@@ -537,7 +544,10 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
             || artifact
                 .operation_identifier
                 .as_deref()
-                .is_some_and(|identifier| !operation_identifiers.contains(identifier))
+                .zip(artifact.representation_identifier.as_deref())
+                .is_some_and(|pair| !expected_operation_representations.contains(&pair))
+            || artifact.operation_identifier.is_some()
+                != artifact.representation_identifier.is_some()
         {
             return Err(PackageError::Verification);
         }
@@ -576,7 +586,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
     if artifact_paths != loaded_generated_paths
         || !valid_operation_artifact_bindings(
             &manifest.operation_artifact_bindings,
-            &operation_identifiers,
+            &expected_operation_representations,
             &artifact_paths,
         )
     {
@@ -587,6 +597,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
         artifacts: generated_artifacts,
         operation_bindings: manifest.operation_artifact_bindings.clone(),
     };
+    verify_artifact_derivation(&registry, &artifacts)?;
     Ok(VerifiedPackage {
         manifest,
         contract,
@@ -609,13 +620,17 @@ struct UnsignedManifest<'a> {
 
 fn valid_operation_artifact_bindings(
     bindings: &[OperationArtifactBindings],
-    operation_identifiers: &BTreeSet<&str>,
+    expected_operation_representations: &BTreeSet<(&str, &str)>,
     artifact_paths: &BTreeSet<&str>,
 ) -> bool {
-    let mut bound_operations = BTreeSet::new();
+    let mut bound_operation_representations = BTreeSet::new();
     for binding in bindings {
-        if !operation_identifiers.contains(binding.operation_identifier.as_str())
-            || !bound_operations.insert(binding.operation_identifier.as_str())
+        let pair = (
+            binding.operation_identifier.as_str(),
+            binding.representation_identifier.as_str(),
+        );
+        if !expected_operation_representations.contains(&pair)
+            || !bound_operation_representations.insert(pair)
             || [
                 binding.vocabulary_path.as_str(),
                 binding.context_path.as_str(),
@@ -630,7 +645,21 @@ fn valid_operation_artifact_bindings(
             return false;
         }
     }
-    bound_operations == *operation_identifiers
+    bound_operation_representations == *expected_operation_representations
+}
+
+fn operation_representation_pairs(registry: &CompiledRegistry) -> BTreeSet<(&str, &str)> {
+    registry
+        .resources
+        .iter()
+        .flat_map(|resource| resource.operations.iter())
+        .flat_map(|operation| {
+            operation
+                .representations
+                .iter()
+                .map(|representation| (operation.identifier.as_str(), representation.id.as_str()))
+        })
+        .collect()
 }
 
 fn capture_governed_closure(
@@ -925,11 +954,146 @@ fn media_type(path: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    fn reseal_manifest(package_path: &Path, manifest: &mut PackageManifest) {
+        let unsigned = UnsignedManifest {
+            package_version: PACKAGE_VERSION,
+            contract_revision: &manifest.contract_revision,
+            source_schema_fingerprints: &manifest.source_schema_fingerprints,
+            source_schemas: &manifest.source_schemas,
+            artifacts: &manifest.artifacts,
+            operation_artifact_bindings: &manifest.operation_artifact_bindings,
+            files: &manifest.files,
+        };
+        let unsigned_bytes = canonicalize_json(
+            &serde_json::to_value(unsigned).expect("unsigned manifest serializes"),
+        )
+        .expect("unsigned manifest canonicalizes");
+        manifest.package_revision = digest(&unsigned_bytes);
+        let manifest_bytes =
+            canonicalize_json(&serde_json::to_value(manifest).expect("sealed manifest serializes"))
+                .expect("sealed manifest canonicalizes");
+        fs::write(package_path.join("relay-package.json"), manifest_bytes)
+            .expect("forged manifest writes");
+    }
+
+    fn assert_resealed_package_rejected(
+        root: &Path,
+        project: &Path,
+        name: &str,
+        contract: &RegistryContract,
+        registry: &CompiledRegistry,
+        artifacts: &ArtifactSet,
+        mutate: impl FnOnce(&Path, &mut PackageManifest),
+    ) {
+        let package_path = root.join(name);
+        let mut manifest = build_package(project, &package_path, contract, registry, artifacts)
+            .expect("forgery fixture");
+        mutate(&package_path, &mut manifest);
+        reseal_manifest(&package_path, &mut manifest);
+        assert!(matches!(
+            load_package(
+                &package_path
+                    .canonicalize()
+                    .expect("forged package resolves")
+            ),
+            Err(PackageError::Verification)
+        ));
+    }
+
     #[test]
     fn package_references_cannot_escape() {
         assert!(validate_relative("governance/review.yaml").is_ok());
         assert!(validate_relative("../outside.yaml").is_err());
         assert!(validate_relative("/absolute.yaml").is_err());
+    }
+
+    #[test]
+    fn multi_representation_package_bindings_are_exactly_closed() {
+        let yaml = crate::compiler::tests::valid_contract()
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n          alternate: {access: public, disclosureProfile: public}\n      list:\n        defaultRepresentation: listing\n        representations:\n          listing: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [read, list]");
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict multi-profile contract");
+        let governed = crate::compiler::tests::governed_files_for(&contract);
+        let registry = compile_contract_with_governed_files(
+            &contract,
+            &[crate::compiler::tests::observed_schema()],
+            CompileProfile::Production,
+            &governed,
+        )
+        .expect("multi-profile Registry compiles");
+        let artifacts = generate_artifacts(&registry).expect("multi-profile artifacts generate");
+        let expected = operation_representation_pairs(&registry);
+        let artifact_paths = artifacts
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.path.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(expected.len(), 3);
+        assert!(valid_operation_artifact_bindings(
+            &artifacts.operation_bindings,
+            &expected,
+            &artifact_paths,
+        ));
+
+        let mut missing = artifacts.operation_bindings.clone();
+        missing.pop();
+        assert!(!valid_operation_artifact_bindings(
+            &missing,
+            &expected,
+            &artifact_paths,
+        ));
+
+        let mut duplicate = artifacts.operation_bindings.clone();
+        duplicate.push(duplicate[0].clone());
+        assert!(!valid_operation_artifact_bindings(
+            &duplicate,
+            &expected,
+            &artifact_paths,
+        ));
+
+        let mut cross_operation = artifacts.operation_bindings.clone();
+        let listing_representation = cross_operation
+            .iter()
+            .find(|binding| binding.operation_identifier.ends_with(".list"))
+            .expect("list binding")
+            .representation_identifier
+            .clone();
+        let read_binding = cross_operation
+            .iter_mut()
+            .find(|binding| binding.operation_identifier.ends_with(".read"))
+            .expect("read binding");
+        read_binding.representation_identifier = listing_representation;
+        assert!(!valid_operation_artifact_bindings(
+            &cross_operation,
+            &expected,
+            &artifact_paths,
+        ));
+
+        let temporary = tempfile::tempdir().expect("temporary project");
+        let project = temporary.path().join("project");
+        fs::create_dir(&project).expect("project directory");
+        fs::write(project.join("registry.yaml"), &yaml).expect("registry contract");
+        for (relative, content) in &governed {
+            let path = project.join(relative);
+            fs::create_dir_all(path.parent().expect("governed parent"))
+                .expect("governed directory");
+            fs::write(path, content).expect("governed file");
+        }
+        let package_path = temporary.path().join("package");
+        let manifest = build_package(&project, &package_path, &contract, &registry, &artifacts)
+            .expect("multi-profile package builds");
+        let verified = load_package(
+            &package_path
+                .canonicalize()
+                .expect("multi-profile package resolves"),
+        )
+        .expect("multi-profile package loads");
+        assert_eq!(verified.manifest, manifest);
+        assert_eq!(verified.artifacts.operation_bindings.len(), 3);
     }
 
     #[cfg(unix)]
@@ -1065,6 +1229,58 @@ mod tests {
             ),
             Err(PackageError::Verification)
         ));
+        let mut tampered_artifact_bytes = artifacts.clone();
+        let tampered_artifact = tampered_artifact_bytes
+            .artifacts
+            .first_mut()
+            .expect("generated artifact");
+        tampered_artifact.content.extend_from_slice(b"tampered");
+        tampered_artifact.sha256 = digest(&tampered_artifact.content);
+        assert!(matches!(
+            build_package(
+                &project,
+                &temporary.path().join("rejected-artifact-bytes"),
+                &contract,
+                &registry,
+                &tampered_artifact_bytes,
+            ),
+            Err(PackageError::Verification)
+        ));
+        let mut tampered_artifact_visibility = artifacts.clone();
+        let tampered_artifact = tampered_artifact_visibility
+            .artifacts
+            .first_mut()
+            .expect("generated artifact");
+        tampered_artifact.visibility = match tampered_artifact.visibility {
+            Visibility::OperatorOnly => Visibility::Public,
+            Visibility::Public | Visibility::OperationBound => Visibility::OperatorOnly,
+        };
+        assert!(matches!(
+            build_package(
+                &project,
+                &temporary.path().join("rejected-artifact-visibility"),
+                &contract,
+                &registry,
+                &tampered_artifact_visibility,
+            ),
+            Err(PackageError::Verification)
+        ));
+        let mut tampered_artifact_binding = artifacts.clone();
+        let binding = tampered_artifact_binding
+            .operation_bindings
+            .first_mut()
+            .expect("operation artifact binding");
+        binding.context_path = binding.vocabulary_path.clone();
+        assert!(matches!(
+            build_package(
+                &project,
+                &temporary.path().join("rejected-artifact-binding"),
+                &contract,
+                &registry,
+                &tampered_artifact_binding,
+            ),
+            Err(PackageError::Verification)
+        ));
         let mut mismatched_registry = registry.clone();
         mismatched_registry.registry_name = "Different Registry semantics".into();
         assert!(matches!(
@@ -1095,6 +1311,114 @@ mod tests {
         assert_eq!(
             manifest.operation_artifact_bindings,
             artifacts.operation_bindings
+        );
+
+        assert_resealed_package_rejected(
+            temporary.path(),
+            &project,
+            "forged-compiled-registry",
+            &contract,
+            &registry,
+            &artifacts,
+            |package_path, manifest| {
+                let compiled_path = package_path.join(COMPILED_REGISTRY_PATH);
+                let mut forged: CompiledRegistry = serde_json::from_slice(
+                    &fs::read(&compiled_path).expect("compiled Registry bytes"),
+                )
+                .expect("compiled Registry parses");
+                forged.registry_name = "Forged Registry semantics".into();
+                let forged_bytes = canonicalize_json(
+                    &serde_json::to_value(forged).expect("forged Registry serializes"),
+                )
+                .expect("forged Registry canonicalizes");
+                fs::write(&compiled_path, &forged_bytes).expect("forged Registry writes");
+                let file = manifest
+                    .files
+                    .iter_mut()
+                    .find(|file| file.path == COMPILED_REGISTRY_PATH)
+                    .expect("compiled Registry package file");
+                file.size = forged_bytes.len() as u64;
+                file.sha256 = digest(&forged_bytes);
+            },
+        );
+        assert_resealed_package_rejected(
+            temporary.path(),
+            &project,
+            "forged-artifact-content",
+            &contract,
+            &registry,
+            &artifacts,
+            |package_path, manifest| {
+                let artifact = manifest.artifacts.first_mut().expect("generated artifact");
+                let file_path = artifact.path.clone();
+                let mut content = fs::read(package_path.join(&file_path)).expect("artifact bytes");
+                content.extend_from_slice(b"tampered");
+                fs::write(package_path.join(&file_path), &content).expect("forged artifact bytes");
+                let content_digest = digest(&content);
+                artifact.sha256 = content_digest.clone();
+                let file = manifest
+                    .files
+                    .iter_mut()
+                    .find(|file| file.path == file_path)
+                    .expect("generated package file");
+                file.size = content.len() as u64;
+                file.sha256 = content_digest;
+            },
+        );
+        assert_resealed_package_rejected(
+            temporary.path(),
+            &project,
+            "forged-artifact-visibility",
+            &contract,
+            &registry,
+            &artifacts,
+            |_package_path, manifest| {
+                let artifact = manifest.artifacts.first_mut().expect("generated artifact");
+                let file_path = artifact.path.clone();
+                let visibility = match artifact.visibility {
+                    Visibility::OperatorOnly => Visibility::Public,
+                    Visibility::Public | Visibility::OperationBound => Visibility::OperatorOnly,
+                };
+                artifact.visibility = visibility;
+                manifest
+                    .files
+                    .iter_mut()
+                    .find(|file| file.path == file_path)
+                    .expect("generated package file")
+                    .visibility = visibility;
+            },
+        );
+        assert_resealed_package_rejected(
+            temporary.path(),
+            &project,
+            "forged-swapped-binding",
+            &contract,
+            &registry,
+            &artifacts,
+            |_package_path, manifest| {
+                let binding = manifest
+                    .operation_artifact_bindings
+                    .first_mut()
+                    .expect("operation artifact binding");
+                let vocabulary_path = binding.vocabulary_path.clone();
+                binding.vocabulary_path = binding.context_path.clone();
+                binding.context_path = vocabulary_path;
+            },
+        );
+        assert_resealed_package_rejected(
+            temporary.path(),
+            &project,
+            "forged-repeated-binding",
+            &contract,
+            &registry,
+            &artifacts,
+            |_package_path, manifest| {
+                let binding = manifest
+                    .operation_artifact_bindings
+                    .first_mut()
+                    .expect("operation artifact binding");
+                binding.context_path = binding.vocabulary_path.clone();
+            },
         );
 
         let compiled_path = output.join(COMPILED_REGISTRY_PATH);

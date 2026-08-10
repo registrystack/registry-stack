@@ -9,6 +9,7 @@ pub mod compiler;
 pub mod contract;
 pub mod cursor;
 pub mod diff;
+pub mod fixture_contract;
 #[cfg(feature = "tooling")]
 pub mod fixtures;
 pub mod identification;

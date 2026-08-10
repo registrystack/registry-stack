@@ -1456,6 +1456,14 @@ impl<'a> Compiler<'a> {
                 .find(|property| property.name == filter.property)
             {
                 Some(property) => {
+                    if property.transform.is_some() {
+                        self.error(
+                            "list.filter_property_transformed",
+                            &filter_location,
+                            "transformed properties cannot be used as list filters",
+                        );
+                        continue;
+                    }
                     if property.data_type != filter.data_type {
                         self.error(
                             "list.filter_type_mismatch",
@@ -1486,7 +1494,7 @@ impl<'a> Compiler<'a> {
         }
         let mut order = HashSet::new();
         let mut order_columns = HashSet::new();
-        for property_name in &list.order_by {
+        for (index, property_name) in list.order_by.iter().enumerate() {
             if !order.insert(property_name.as_str()) {
                 self.error(
                     "list.order_duplicate",
@@ -1499,6 +1507,14 @@ impl<'a> Compiler<'a> {
                 .find(|property| property.name == *property_name)
             {
                 Some(property) => {
+                    if property.transform.is_some() {
+                        self.error(
+                            "list.order_property_transformed",
+                            &format!("{location}.orderBy[{index}]"),
+                            "transformed properties cannot be used as fixed order keys",
+                        );
+                        continue;
+                    }
                     if !property.source_required {
                         self.error(
                             "list.order_property_optional",
@@ -1594,6 +1610,70 @@ impl<'a> Compiler<'a> {
                 location,
                 "keyset order columns must have a reviewed SQLite declaration supported by the cursor scalar profile",
             );
+        }
+    }
+
+    fn compile_transform(
+        &mut self,
+        definition: Option<&TransformDefinition>,
+        output_type: DataType,
+        location: &str,
+    ) -> Option<CompiledTransform> {
+        match definition? {
+            TransformDefinition::PartialString { reveal, characters } => {
+                if output_type != DataType::String {
+                    self.error(
+                        "transform.output_type_invalid",
+                        &format!("{location}.type"),
+                        "partial-string transforms must publish a string property",
+                    );
+                }
+                if !(1..=MAXIMUM_PARTIAL_STRING_CHARACTERS).contains(characters) {
+                    self.error(
+                        "transform.partial_string_characters_invalid",
+                        &format!("{location}.transform.characters"),
+                        "partial-string reveal length must be within the fixed product bound",
+                    );
+                }
+                let reveal_label = match reveal {
+                    crate::contract::PartialStringReveal::Prefix => "prefix",
+                    crate::contract::PartialStringReveal::Suffix => "suffix",
+                };
+                Some(CompiledTransform::PartialString {
+                    identifier: format!("partial-string:{reveal_label}:{characters}"),
+                    reveal: *reveal,
+                    characters: *characters,
+                })
+            }
+            TransformDefinition::DatePrecision {
+                source_type,
+                precision,
+            } => {
+                let expected_output = match precision {
+                    DatePrecision::Year => DataType::Year,
+                    DatePrecision::YearMonth => DataType::YearMonth,
+                };
+                if output_type != expected_output {
+                    self.error(
+                        "transform.output_type_invalid",
+                        &format!("{location}.type"),
+                        "date-precision output datatype must match the selected precision",
+                    );
+                }
+                let source_label = match source_type {
+                    DateInputType::Date => "date",
+                    DateInputType::DateTime => "date-time",
+                };
+                let precision_label = match precision {
+                    DatePrecision::Year => "year",
+                    DatePrecision::YearMonth => "year-month",
+                };
+                Some(CompiledTransform::DatePrecision {
+                    identifier: format!("date-precision:{source_label}:{precision_label}"),
+                    source_type: *source_type,
+                    precision: *precision,
+                })
+            }
         }
     }
 
@@ -2837,6 +2917,21 @@ fn compatible_declared_type(data_type: DataType, declared_type: &str) -> bool {
     }
 }
 
+fn transform_source_type(transform: Option<&CompiledTransform>, output_type: DataType) -> DataType {
+    match transform {
+        Some(CompiledTransform::PartialString { .. }) => DataType::String,
+        Some(CompiledTransform::DatePrecision {
+            source_type: DateInputType::Date,
+            ..
+        }) => DataType::Date,
+        Some(CompiledTransform::DatePrecision {
+            source_type: DateInputType::DateTime,
+            ..
+        }) => DataType::DateTime,
+        None => output_type,
+    }
+}
+
 fn cursor_order_type_supported(data_type: DataType) -> bool {
     matches!(
         data_type,
@@ -3087,6 +3182,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn every_referenced_selector_codelist_must_be_in_the_governed_closure() {
+        let yaml = valid_contract()
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: 1024\n            selectors:\n              name: {sourceColumn: name, type: controlled-code, codelist: codelists/selector-names.yaml}\n          defaultRepresentation: public\n          representations:\n            public: {access: public, disclosureProfile: public}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [lookup:by-name]");
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict lookup contract");
+        let report = compile_contract_with_governed_files(
+            &contract,
+            &[observed_schema()],
+            CompileProfile::Production,
+            &governed_files_for(&contract),
+        )
+        .expect_err("a selector codelist cannot be absent");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "contract.governed_file_missing"
+                && diagnostic.location == "codelists/selector-names.yaml"
+        }));
+    }
+
+    #[test]
     fn list_order_ends_in_one_non_null_string_record_identifier() {
         let yaml = valid_contract()
             .replace(
@@ -3142,6 +3259,65 @@ pub(crate) mod tests {
             .diagnostics
             .iter()
             .any(|diagnostic| { diagnostic.code == "list.order_column_type_unsupported" }));
+    }
+
+    #[test]
+    fn transformed_properties_cannot_be_list_filters_or_order_keys() {
+        let transformed = valid_contract()
+            .replace(
+                "    sourceColumnClassifications: {}",
+                "    sourceColumnClassifications:\n      name: {privacy: non-personal, institutional: public, handling: public, status: reviewed}",
+            )
+            .replace(
+                "        semanticTerm: local:name\n    disclosureProfiles",
+                "        semanticTerm: local:name\n        transform: {kind: partial-string, reveal: suffix, characters: 4}\n    disclosureProfiles",
+            );
+
+        let filtered = transformed
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let contract = RegistryContract::parse_yaml(&filtered).expect("strict filter contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("a transformed filter cannot compare its raw source input");
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "list.filter_property_transformed")
+            .expect("stable transformed-filter diagnostic");
+        assert_eq!(
+            diagnostic.location,
+            "resources[0].operations.list.filters[0]"
+        );
+        assert_eq!(
+            diagnostic.message,
+            "transformed properties cannot be used as list filters"
+        );
+
+        let ordered = transformed
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let contract = RegistryContract::parse_yaml(&ordered).expect("strict order contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("a transformed order key cannot compare its raw source input");
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "list.order_property_transformed")
+            .expect("stable transformed-order diagnostic");
+        assert_eq!(
+            diagnostic.location,
+            "resources[0].operations.list.orderBy[0]"
+        );
+        assert_eq!(
+            diagnostic.message,
+            "transformed properties cannot be used as fixed order keys"
+        );
     }
 
     #[test]
@@ -3828,7 +4004,7 @@ pub(crate) mod tests {
         governed_files_for(&contract)
     }
 
-    fn governed_files_for(contract: &RegistryContract) -> GovernedFileSet {
+    pub(crate) fn governed_files_for(contract: &RegistryContract) -> GovernedFileSet {
         let compiled = compile_contract(contract, &[observed_schema()], CompileProfile::Production)
             .expect("inventory compiles");
         let inventory_digest =

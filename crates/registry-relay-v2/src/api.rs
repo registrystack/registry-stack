@@ -399,7 +399,16 @@ pub async fn record_list(
         return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::List)
             .await;
     };
-    let access = match access_operation(&service, resource, operation, principal, &trace).await {
+    let access = match access_operation(
+        &service,
+        resource,
+        operation,
+        uri.query(),
+        principal,
+        &trace,
+    )
+    .await
+    {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -415,19 +424,6 @@ pub async fn record_list(
         )
         .await;
     }
-    let access = match access_operation(
-        &service,
-        resource,
-        operation,
-        uri.query(),
-        principal,
-        &trace,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
     if rejects_caller_purpose(&headers) {
         return refuse_known(
             &service,
@@ -629,26 +625,13 @@ pub async fn record_read(
             &service,
             resource,
             operation,
-            None,
+            Some(&access),
             AuditOutcome::InvalidRequest,
             ProblemCode::UriTooLong,
             &trace,
         )
         .await;
     }
-    let access = match access_operation(
-        &service,
-        resource,
-        operation,
-        uri.query(),
-        &headers,
-        &trace,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
     if !valid_record_identifier(&record_identifier) {
         return refuse_known(
             &service,
@@ -717,26 +700,13 @@ pub async fn record_lookup(
             &service,
             resource,
             operation,
-            None,
+            Some(&access),
             AuditOutcome::InvalidRequest,
             ProblemCode::UriTooLong,
             &trace,
         )
         .await;
     }
-    let access = match access_operation(
-        &service,
-        resource,
-        operation,
-        request.uri().query(),
-        request.headers(),
-        &trace,
-    )
-    .await
-    {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
     if rejects_caller_purpose(request.headers()) {
         return refuse_known(
             &service,
@@ -1047,18 +1017,23 @@ async fn access_operation(
 ) -> Result<Access, Response<Body>> {
     let selected = match select_representation(operation, query) {
         Ok(value) => value,
+        Err(ProblemCode::ResourceNotFound) => {
+            return Err(refuse_unknown(
+                service,
+                principal_kind(principal.as_ref()),
+                AuditOutcome::NotFound,
+                ProblemCode::ResourceNotFound,
+                trace,
+            )
+            .await);
+        }
         Err(code) => {
-            let outcome = if code == ProblemCode::RepresentationNotFound {
-                AuditOutcome::NotFound
-            } else {
-                AuditOutcome::InvalidRequest
-            };
             return Err(refuse_before_representation(
                 service,
                 resource,
                 operation,
                 principal_kind(principal.as_ref()),
-                outcome,
+                AuditOutcome::InvalidRequest,
                 code,
                 trace,
             )
@@ -1066,6 +1041,7 @@ async fn access_operation(
         }
     };
     let representation = selected.representation;
+    let explicit = selected.explicit;
     let authorization = match &service.authenticator {
         Some(authenticator) => authenticator.authorize(&representation.access, principal.as_ref()),
         None => match representation.access {
@@ -1083,6 +1059,16 @@ async fn access_operation(
             representation: representation.clone(),
         }),
         Err(error) => {
+            if error == AuthorizationError::AuthenticationRequired && explicit {
+                return Err(refuse_unknown(
+                    service,
+                    PrincipalKind::Anonymous,
+                    AuditOutcome::NotFound,
+                    ProblemCode::ResourceNotFound,
+                    trace,
+                )
+                .await);
+            }
             if error == AuthorizationError::ScopeDenied {
                 return Err(refuse_unknown(
                     service,
@@ -1463,25 +1449,85 @@ struct PreparedList {
 
 struct SelectedRepresentation<'a> {
     representation: &'a CompiledRepresentation,
+    explicit: bool,
 }
 
 fn select_representation<'a>(
     operation: &'a CompiledOperation,
     query: Option<&str>,
 ) -> Result<SelectedRepresentation<'a>, ProblemCode> {
-    let parameters = parse_query(query)?;
-    let requested = one_parameter(&parameters, "representation")
-        .map_err(|_| ProblemCode::RepresentationInvalid)?;
-    let identifier = requested.unwrap_or(&operation.default_representation);
+    let requested = representation_parameter(query)?;
+    let identifier = requested
+        .as_deref()
+        .unwrap_or(&operation.default_representation);
     if !valid_representation_identifier(identifier) {
         return Err(ProblemCode::RepresentationInvalid);
     }
+    let explicit = requested.is_some();
     operation
         .representations
         .iter()
         .find(|representation| representation.id == identifier)
-        .map(|representation| SelectedRepresentation { representation })
-        .ok_or(ProblemCode::RepresentationNotFound)
+        .map(|representation| SelectedRepresentation {
+            representation,
+            explicit,
+        })
+        .ok_or(ProblemCode::ResourceNotFound)
+}
+
+/// Extract only the representation selector before URI-shape refusal.
+///
+/// This scans the already-buffered query in place and decodes only bounded
+/// candidate names and the one bounded representation value. It therefore
+/// preserves exact-profile authorization for an oversized URI without
+/// allocating or decoding unrelated attacker-controlled query values.
+fn representation_parameter(query: Option<&str>) -> Result<Option<String>, ProblemCode> {
+    const MAXIMUM_ENCODED_NAME_BYTES: usize = "representation".len() * 3;
+    const MAXIMUM_ENCODED_VALUE_BYTES: usize = 128 * 3;
+
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    let mut requested = None;
+    for parameter in query.split('&') {
+        let (raw_name, raw_value) = parameter.split_once('=').unwrap_or((parameter, ""));
+        if raw_name.len() > MAXIMUM_ENCODED_NAME_BYTES {
+            continue;
+        }
+        if !valid_percent_encoding(raw_name.as_bytes()) {
+            // A malformed unrelated parameter remains an ordinary query-shape
+            // error after authorization. It cannot decode to the selector.
+            continue;
+        }
+        let name = decode_bounded_query_component(raw_name, MAXIMUM_ENCODED_NAME_BYTES)?;
+        if name != "representation" {
+            continue;
+        }
+        if requested.is_some()
+            || raw_value.len() > MAXIMUM_ENCODED_VALUE_BYTES
+            || raw_value.contains('=')
+        {
+            return Err(ProblemCode::RepresentationInvalid);
+        }
+        requested = Some(decode_bounded_query_component(
+            raw_value,
+            MAXIMUM_ENCODED_VALUE_BYTES,
+        )?);
+    }
+    Ok(requested)
+}
+
+fn decode_bounded_query_component(
+    raw: &str,
+    maximum_encoded_bytes: usize,
+) -> Result<String, ProblemCode> {
+    if raw.len() > maximum_encoded_bytes || !valid_percent_encoding(raw.as_bytes()) {
+        return Err(ProblemCode::RepresentationInvalid);
+    }
+    url::form_urlencoded::parse(raw.as_bytes())
+        .next()
+        .map(|(value, _)| value.into_owned())
+        .ok_or(ProblemCode::RepresentationInvalid)
 }
 
 fn valid_representation_identifier(value: &str) -> bool {
@@ -2142,6 +2188,10 @@ fn add_record_id(service: &RelayService, resource: &CompiledResource, record: &m
                 &service.registry.base_uri,
                 &format!("/v2/resources/{}/records/{identifier}", resource.id),
             )),
+        );
+        object.insert(
+            "@type".into(),
+            Value::String(resource.semantic_class.clone()),
         );
     }
 }
@@ -2907,5 +2957,33 @@ mod tests {
             expected
         );
         assert!(bounded_json_bytes(&document, expected.len().saturating_sub(1)).is_err());
+    }
+
+    #[test]
+    fn representation_selection_scans_only_bounded_components() {
+        let padding = "x".repeat(20_000);
+        let query = format!("padding={padding}&representation=caseworker");
+        assert_eq!(
+            representation_parameter(Some(&query)).expect("selector extracts"),
+            Some("caseworker".into())
+        );
+        assert_eq!(
+            representation_parameter(Some("%72epresentation=limited"))
+                .expect("encoded selector extracts"),
+            Some("limited".into())
+        );
+        assert_eq!(
+            representation_parameter(Some("%=ignored&representation=limited"))
+                .expect("malformed unrelated name is deferred"),
+            Some("limited".into())
+        );
+        assert_eq!(
+            representation_parameter(Some("representation=limited&representation=caseworker")),
+            Err(ProblemCode::RepresentationInvalid)
+        );
+        assert_eq!(
+            representation_parameter(Some("representation=limited=caseworker")),
+            Err(ProblemCode::RepresentationInvalid)
+        );
     }
 }
