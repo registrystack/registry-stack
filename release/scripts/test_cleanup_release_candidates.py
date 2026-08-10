@@ -67,11 +67,12 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         self.assertTrue(result["dry_run"])
         self.assertEqual(8, result["retention_days"])
 
-    def test_apply_deletes_expired_versions_from_both_candidates(self) -> None:
+    def test_apply_deletes_expired_versions_from_all_candidates(self) -> None:
         client = FakeClient(
             {
                 "registry-notary-candidate": [version(1, "2026-07-01T00:00:00Z")],
                 "registry-relay-candidate": [version(2, "2026-07-02T00:00:00Z")],
+                "relay-candidate": [version(3, "2026-07-03T00:00:00Z")],
             }
         )
         result = self.module.cleanup(
@@ -84,13 +85,19 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
             [
                 ("registry-notary-candidate", 1),
                 ("registry-relay-candidate", 2),
+                ("relay-candidate", 3),
             ],
             client.deleted,
         )
         self.assertFalse(result["dry_run"])
 
     def test_public_and_unknown_packages_are_rejected_before_listing(self) -> None:
-        for package in ("registry-notary", "registry-relay", "other-candidate"):
+        for package in (
+            "registry-notary",
+            "registry-relay",
+            "relay",
+            "other-candidate",
+        ):
             with self.subTest(package=package):
                 client = FakeClient({})
                 with self.assertRaises(self.module.CleanupError):
@@ -174,6 +181,75 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         values = client.package_versions("registry-notary-candidate")
         self.assertEqual([1, 2], [item["id"] for item in values])
         self.assertEqual(2, len(client.calls))
+
+    def test_missing_allowlisted_candidate_package_fails_closed(self) -> None:
+        class MissingClient(self.module.GitHubClient):
+            def __init__(self):
+                self.api_url = "https://api.github.com"
+                self.calls = []
+
+            def request(self, path_or_url, *, method="GET"):
+                self.calls.append(path_or_url)
+                raise self_module.GitHubApiError(
+                    method,
+                    f"{self.api_url}{path_or_url}",
+                    404,
+                    "package not found",
+                )
+
+        self_module = self.module
+        client = MissingClient()
+        with self.assertRaisesRegex(self.module.CleanupError, "failed with 404"):
+            client.package_versions("relay-candidate")
+        self.assertEqual(1, len(client.calls))
+
+    def test_package_version_listing_fails_closed_for_other_errors(self) -> None:
+        class FailingClient(self.module.GitHubClient):
+            def __init__(self, status):
+                self.api_url = "https://api.github.com"
+                self.status = status
+                self.calls = []
+
+            def request(self, path_or_url, *, method="GET"):
+                self.calls.append(path_or_url)
+                raise self_module.GitHubApiError(
+                    method,
+                    f"{self.api_url}{path_or_url}",
+                    self.status,
+                    "listing failed",
+                )
+
+        self_module = self.module
+        with self.assertRaisesRegex(self.module.CleanupError, "failed with 500"):
+            FailingClient(500).package_versions("relay-candidate")
+
+        client = FailingClient(404)
+        with self.assertRaisesRegex(self.module.CleanupError, "exact candidate allowlist"):
+            client.package_versions("other-candidate")
+        self.assertEqual([], client.calls)
+
+    def test_missing_pagination_page_is_not_treated_as_absent_package(self) -> None:
+        class MissingSecondPageClient(self.module.GitHubClient):
+            def __init__(self):
+                self.api_url = "https://api.github.com"
+                self.calls = []
+
+            def request(self, path_or_url, *, method="GET"):
+                self.calls.append(path_or_url)
+                if len(self.calls) == 1:
+                    return [version(1, "2026-07-01T00:00:00Z")], {
+                        "link": '<https://api.github.com/page/2>; rel="next"'
+                    }
+                raise self_module.GitHubApiError(
+                    method,
+                    path_or_url,
+                    404,
+                    "page not found",
+                )
+
+        self_module = self.module
+        with self.assertRaisesRegex(self.module.CleanupError, "failed with 404"):
+            MissingSecondPageClient().package_versions("relay-candidate")
 
     def test_pagination_cannot_change_api_origin(self) -> None:
         class RedirectingClient(self.module.GitHubClient):

@@ -47,14 +47,14 @@ def json_bytes(value: object) -> bytes:
 
 def security_evidence_members(
     image_names: tuple[str, ...] = ("registry-relay",),
+    *,
+    include_postgresql: bool = True,
 ) -> dict[str, bytes]:
     refs = {
         name: f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
         for name in image_names
     }
-    refs["postgresql"] = POSTGRESQL_REF
     members = {
-        "images/postgresql.digest": f"{POSTGRESQL_REF}\n".encode(),
         "grype/grype-db-status.json": json_bytes({"status": "valid"}),
         "advisory-verdict.json": json_bytes(
             {
@@ -62,11 +62,14 @@ def security_evidence_members(
                 "verdict": "passed",
                 "subjects": sorted(
                     [f"{name}-image" for name in image_names]
-                    + ["postgresql-runtime"]
+                    + (["postgresql-runtime"] if include_postgresql else [])
                 ),
             }
         ),
     }
+    if include_postgresql:
+        refs["postgresql"] = POSTGRESQL_REF
+        members["images/postgresql.digest"] = f"{POSTGRESQL_REF}\n".encode()
     for name, image_ref in refs.items():
         spdx = {"spdxVersion": "SPDX-2.3", "packages": []}
         if name == "postgresql":
@@ -121,7 +124,10 @@ def security_evidence_tar(
 ) -> bytes:
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz") as archive:
-        for directory in ("images", "image-sbom", "syft", "grype"):
+        directories = ["image-sbom", "syft", "grype"]
+        if any(name.startswith("images/") for name, _payload in entries):
+            directories.insert(0, "images")
+        for directory in directories:
             info = tarfile.TarInfo(directory)
             info.type = tarfile.DIRTYPE
             info.mode = 0o755
@@ -968,15 +974,18 @@ class ReleaseCandidateTest(TestCase):
 
     def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
         bundle_root = self.root / "v2-bundle"
-        evidence_members = security_evidence_members()
+        evidence_members = security_evidence_members(
+            ("relay",), include_postgresql=False
+        )
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
+        payload_inventory = self.module._relay_v2_payload_inventory("1.2.3")
         files = {
-            "registryctl-v1.2.3-linux-amd64": b"registryctl",
-            "evidence-client-node-v1.2.3-linux-amd64.tgz": b"node-client",
-            "registry-docs-v1.2.3.tar.gz": b"docs",
-            "registry-stack-v1.2.3.sbom.spdx.json": b"sbom",
-            "security/registry-relay.grype.json": evidence_members[
-                "grype/registry-relay.grype.json"
+            name: f"candidate payload: {name}\n".encode()
+            for name in payload_inventory
+        }
+        files.update({
+            "security/relay.grype.json": evidence_members[
+                "grype/relay.grype.json"
             ],
             "security/advisory-verdict.json": evidence_members[
                 "advisory-verdict.json"
@@ -984,7 +993,7 @@ class ReleaseCandidateTest(TestCase):
             evidence_name: security_evidence_tar(
                 sorted(evidence_members.items())
             ),
-        }
+        })
         for name, payload in files.items():
             path = bundle_root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1023,16 +1032,7 @@ class ReleaseCandidateTest(TestCase):
                     "size": len(files[name]),
                     "sha256": sha256(files[name]),
                 }
-                for name, kind in (
-                    ("registryctl-v1.2.3-linux-amd64", "binary"),
-                    (
-                        "evidence-client-node-v1.2.3-linux-amd64.tgz",
-                        "client-package",
-                    ),
-                    ("registry-docs-v1.2.3.tar.gz", "docs"),
-                    ("registry-stack-v1.2.3.sbom.spdx.json", "sbom"),
-                    (evidence_name, "security-evidence"),
-                )
+                for name, kind in sorted(payload_inventory.items())
             ],
             "images": [
                 {
@@ -1043,12 +1043,8 @@ class ReleaseCandidateTest(TestCase):
                     "digest": IMAGE_DIGEST,
                     "final_ref": f"ghcr.io/registrystack/{name}:v1.2.3",
                 }
-                for name in ("registry-relay",)
+                for name in ("relay",)
             ],
-            "docs": {
-                "name": "registry-docs-v1.2.3.tar.gz",
-                "sha256": sha256(files["registry-docs-v1.2.3.tar.gz"]),
-            },
             "sbom": {
                 "name": "registry-stack-v1.2.3.sbom.spdx.json",
                 "sha256": sha256(
@@ -1062,7 +1058,7 @@ class ReleaseCandidateTest(TestCase):
                     "sha256": sha256(files[f"security/{name}.grype.json"]),
                     "status": "passed",
                 }
-                for name in ("registry-relay",)
+                for name in ("relay",)
             ],
             "advisory": {
                 "name": "security/advisory-verdict.json",
@@ -1088,6 +1084,39 @@ class ReleaseCandidateTest(TestCase):
             ),
         }
         return candidate, bundle_path, bundle_root, run
+
+    def make_legacy_v2_candidate(self) -> dict:
+        candidate, _, _, _ = self.make_v2_candidate()
+        candidate["release"]["version"] = "0.18.0"
+        candidate["release"]["tag"] = "v0.18.0"
+        evidence = next(
+            item
+            for item in candidate["payloads"]
+            if item["kind"] == "security-evidence"
+        )
+        evidence["name"] = "registry-stack-v0.18.0-security-evidence.tar.gz"
+        candidate["bundle"]["name"] = "registry-stack-v0.18.0-candidate.tar.gz"
+        candidate["images"][0]["name"] = "registry-relay"
+        candidate["images"][0]["candidate_ref"] = (
+            "ghcr.io/registrystack/registry-relay-candidate@"
+            f"{IMAGE_DIGEST}"
+        )
+        candidate["images"][0]["final_ref"] = (
+            "ghcr.io/registrystack/registry-relay:v0.18.0"
+        )
+        candidate["scans"][0]["image"] = "registry-relay"
+        docs_name = "registry-docs-v0.18.0.tar.gz"
+        docs_sha = "8" * 64
+        candidate["payloads"].append(
+            {
+                "name": docs_name,
+                "kind": "docs",
+                "size": 128,
+                "sha256": docs_sha,
+            }
+        )
+        candidate["docs"] = {"name": docs_name, "sha256": docs_sha}
+        return candidate
 
     def test_v2_candidate_requires_source_to_equal_workflow_revision(self) -> None:
         candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
@@ -1120,7 +1149,10 @@ class ReleaseCandidateTest(TestCase):
         current, _, _, _ = self.make_v2_candidate()
         self.module.validate_candidate_manifest(current, now=self.now)
 
-        historical = copy.deepcopy(current)
+        previous = self.make_legacy_v2_candidate()
+        self.module.validate_candidate_manifest(previous, now=self.now)
+
+        historical = copy.deepcopy(previous)
         historical["release"]["version"] = "0.16.3"
         historical["release"]["tag"] = "v0.16.3"
         historical_evidence = next(
@@ -1165,17 +1197,102 @@ class ReleaseCandidateTest(TestCase):
         )
         self.module.validate_candidate_manifest(historical, now=self.now)
 
+    def test_v2_candidate_docs_contract_is_version_aware(self) -> None:
+        legacy = self.make_legacy_v2_candidate()
+        self.module.validate_candidate_manifest(legacy, now=self.now)
+
+        missing_field = copy.deepcopy(legacy)
+        missing_field.pop("docs")
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "manifest has a non-closed schema: missing docs",
+        ):
+            self.module.validate_candidate_manifest(missing_field, now=self.now)
+
+        missing_payload = copy.deepcopy(legacy)
+        missing_payload["payloads"] = [
+            item for item in missing_payload["payloads"] if item["kind"] != "docs"
+        ]
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "payloads must contain exactly one docs payload",
+        ):
+            self.module.validate_candidate_manifest(missing_payload, now=self.now)
+
+        current, _, _, _ = self.make_v2_candidate()
+        current["release"]["version"] = "0.19.0"
+        current["release"]["tag"] = "v0.19.0"
+        current["docs"] = copy.deepcopy(legacy["docs"])
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "manifest has a non-closed schema: unknown docs",
+        ):
+            self.module.validate_candidate_manifest(current, now=self.now)
+
+        too_old, _, _, _ = self.make_v2_candidate()
+        too_old["release"]["version"] = "0.15.2"
+        too_old["release"]["tag"] = "v0.15.2"
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "candidate v2 requires version 0.16.0 or later",
+        ):
+            self.module.validate_candidate_manifest(too_old, now=self.now)
+
+    def test_v2_candidate_payload_inventory_is_exact_and_excludes_registryctl(
+        self,
+    ) -> None:
+        candidate, _, _, _ = self.make_v2_candidate()
+        retired = copy.deepcopy(candidate)
+        relay = next(
+            record
+            for record in retired["payloads"]
+            if record["name"] == "relay-v1.2.3-linux-amd64"
+        )
+        retired["payloads"].remove(relay)
+        retired["payloads"].append(
+            {
+                **relay,
+                "name": "registryctl-v1.2.3-linux-amd64",
+            }
+        )
+
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "payload inventory.*missing.*relay-v1.2.3-linux-amd64.*"
+            "unexpected.*registryctl-v1.2.3-linux-amd64",
+        ):
+            self.module.validate_candidate_manifest(retired, now=self.now)
+
+        docs_payload = copy.deepcopy(candidate)
+        docs_payload["release"]["version"] = "0.19.0"
+        docs_payload["release"]["tag"] = "v0.19.0"
+        docs_payload["payloads"].append(
+            {
+                "name": "registry-docs-v1.2.3.tar.gz",
+                "kind": "docs",
+                "size": 1,
+                "sha256": "9" * 64,
+            }
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "payloads.*kind is unsupported",
+        ):
+            self.module.validate_candidate_manifest(docs_payload, now=self.now)
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             current_path = root / "current.tar.gz"
-            current_members = security_evidence_members()
+            current_members = security_evidence_members(
+                ("relay",), include_postgresql=False
+            )
             current_path.write_bytes(
                 security_evidence_tar(sorted(current_members.items()))
             )
             current_refs = {
-                "registry-relay": (
-                    "ghcr.io/registrystack/registry-relay-candidate@"
+                "relay": (
+                    "ghcr.io/registrystack/relay-candidate@"
                     f"{IMAGE_DIGEST}"
                 )
             }
@@ -1183,8 +1300,8 @@ class ReleaseCandidateTest(TestCase):
                 current_path,
                 product_image_refs=current_refs,
                 product_scan_sha256={
-                    "registry-relay": sha256(
-                        current_members["grype/registry-relay.grype.json"]
+                    "relay": sha256(
+                        current_members["grype/relay.grype.json"]
                     )
                 },
                 advisory_sha256=sha256(
@@ -1193,7 +1310,10 @@ class ReleaseCandidateTest(TestCase):
             )
 
             historical_refs = {
-                **current_refs,
+                "registry-relay": (
+                    "ghcr.io/registrystack/registry-relay-candidate@"
+                    f"{IMAGE_DIGEST}"
+                ),
                 "registry-notary": (
                     "ghcr.io/registrystack/registry-notary-candidate@"
                     f"{IMAGE_DIGEST}"
@@ -1201,7 +1321,7 @@ class ReleaseCandidateTest(TestCase):
             }
             with self.assertRaisesRegex(
                 self.module.CandidateError,
-                "security evidence archive is incomplete",
+                "security evidence archive has unexpected member",
             ):
                 self.module.validate_security_evidence_archive(
                     current_path,
@@ -1317,6 +1437,25 @@ class ReleaseCandidateTest(TestCase):
             "security-evidence",
             payload_schema["contains"]["properties"]["kind"]["const"],
         )
+        self.assertNotIn("docs", schema["required"])
+        self.assertIn("docs", schema["properties"])
+        self.assertIn(
+            "docs", payload_schema["items"]["properties"]["kind"]["enum"]
+        )
+        version_branch = schema["allOf"][0]
+        self.assertEqual(
+            "^0\\.1[6-8]\\.",
+            version_branch["if"]["properties"]["release"]["properties"][
+                "version"
+            ]["pattern"],
+        )
+        self.assertIn("docs", version_branch["then"]["required"])
+        self.assertEqual(
+            "docs",
+            version_branch["then"]["properties"]["payloads"]["contains"][
+                "properties"
+            ]["kind"]["const"],
+        )
 
         candidate, _, _, _ = self.make_v2_candidate()
         evidence = next(
@@ -1360,8 +1499,9 @@ class ReleaseCandidateTest(TestCase):
         self,
     ) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
-        members = security_evidence_members()
-        for missing in sorted(self.module.SECURITY_EVIDENCE_REQUIRED_FILES):
+        members = security_evidence_members(("relay",), include_postgresql=False)
+        required = self.module._security_evidence_required_files({"relay"})
+        for missing in sorted(required):
             with self.subTest(missing=missing):
                 incomplete = [
                     item
@@ -1387,7 +1527,11 @@ class ReleaseCandidateTest(TestCase):
         self,
     ) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
-        members = sorted(security_evidence_members().items())
+        members = sorted(
+            security_evidence_members(
+                ("relay",), include_postgresql=False
+            ).items()
+        )
         cases = (
             (
                 security_evidence_tar(members + [("../escape", b"escape")]),
@@ -1448,46 +1592,28 @@ class ReleaseCandidateTest(TestCase):
 
     def test_v2_security_evidence_archive_rejects_unbound_contents(self) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
-        base = security_evidence_members()
-
-        invalid_digest = dict(base)
-        invalid_digest["images/postgresql.digest"] = (
-            b"docker.io/library/postgres:latest\n"
-        )
-
-        unreviewed_digest = dict(base)
-        unreviewed_digest["images/postgresql.digest"] = (
-            b"docker.io/library/postgres@sha256:" + b"9" * 64 + b"\n"
-        )
-
-        unbound_spdx = dict(base)
-        spdx = json.loads(unbound_spdx["image-sbom/postgresql.spdx.json"])
-        spdx["documentDescribes"] = []
-        unbound_spdx["image-sbom/postgresql.spdx.json"] = json_bytes(spdx)
+        base = security_evidence_members(("relay",), include_postgresql=False)
 
         unbound_syft = dict(base)
-        syft = json.loads(unbound_syft["syft/registry-relay.syft.json"])
+        syft = json.loads(unbound_syft["syft/relay.syft.json"])
         syft["source"]["metadata"]["userInput"] = (
-            "ghcr.io/registrystack/registry-relay-candidate@sha256:"
+            "ghcr.io/registrystack/relay-candidate@sha256:"
             + "9" * 64
         )
-        unbound_syft["syft/registry-relay.syft.json"] = json_bytes(syft)
+        unbound_syft["syft/relay.syft.json"] = json_bytes(syft)
 
         incomplete_verdict = dict(base)
         verdict = json.loads(incomplete_verdict["advisory-verdict.json"])
-        verdict["subjects"].remove("postgresql-runtime")
+        verdict["subjects"].remove("relay-image")
         incomplete_verdict["advisory-verdict.json"] = json_bytes(verdict)
 
         substituted_scan = dict(base)
-        scan = json.loads(substituted_scan["grype/registry-relay.grype.json"])
+        scan = json.loads(substituted_scan["grype/relay.grype.json"])
         scan["substituted"] = True
-        substituted_scan["grype/registry-relay.grype.json"] = json_bytes(scan)
+        substituted_scan["grype/relay.grype.json"] = json_bytes(scan)
 
         for members, message in (
-            (invalid_digest, "PostgreSQL digest is not canonical or immutable"),
-            (unreviewed_digest, "does not match the reviewed release image"),
-            (unbound_spdx, "PostgreSQL SPDX subject is not bound"),
-            (unbound_syft, "registry-relay.syft.json.*is not bound"),
+            (unbound_syft, "relay.syft.json.*is not bound"),
             (incomplete_verdict, "does not cover every runtime"),
             (substituted_scan, "does not match its scan payload"),
         ):
@@ -1602,7 +1728,7 @@ class ReleaseCandidateTest(TestCase):
         with self.assertRaisesRegex(self.module.CandidateError, "non-closed"):
             self.module.validate_candidate_manifest(opened, now=self.now)
 
-        (bundle_root / candidate["docs"]["name"]).write_bytes(b"mutated")
+        (bundle_root / candidate["sbom"]["name"]).write_bytes(b"mutated")
         with self.assertRaisesRegex(self.module.CandidateError, "sha256 mismatch"):
             self.module.validate_candidate_manifest(
                 candidate,
@@ -1620,7 +1746,7 @@ class ReleaseCandidateTest(TestCase):
             (("advisory", "verdict"), "failed", "verdict must be passed"),
             (
                 ("images", 0, "final_ref"),
-                "ghcr.io/registrystack/registry-relay:v9.9.9",
+                "ghcr.io/registrystack/relay:v9.9.9",
                 "final_ref",
             ),
             (("bundle", "sha256"), "9" * 64, "bundle sha256 mismatch"),

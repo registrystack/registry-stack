@@ -24,7 +24,7 @@ release_image_context="${RELEASE_IMAGE_CONTEXT:-${repo_root}}"
 created_builder=false
 
 case "${name}" in
-  registry-relay)
+  relay)
     dockerfile="${repo_root}/release/docker/Dockerfile.${name}"
     ;;
   *)
@@ -32,17 +32,6 @@ case "${name}" in
     exit 2
     ;;
 esac
-
-product_label_args=()
-if [[ "${name}" == "registry-relay" ]]; then
-  relay_feature_profile="${repo_root}/crates/registry-relay/canonical-release-features.txt"
-  relay_release_features="$(<"${relay_feature_profile}")"
-  sh "${repo_root}/crates/registry-relay/scripts/validate-feature-profile.sh" \
-    "${relay_release_features}"
-  product_label_args+=(
-    --label "org.registrystack.registry-relay.features=${relay_release_features}"
-  )
-fi
 
 cache_args=()
 if [[ -n "${RELEASE_IMAGE_CACHE_FROM:-}" ]]; then
@@ -171,7 +160,6 @@ docker buildx build \
   --label "org.opencontainers.image.source=${source_label}" \
   --label "org.opencontainers.image.revision=${revision_label}" \
   --label "org.opencontainers.image.version=${version_label}" \
-  "${product_label_args[@]}" \
   --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}" \
   --metadata-file "${metadata_file}" \
   "${no_cache_args[@]}" \

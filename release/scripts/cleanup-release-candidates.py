@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Delete expired versions from the two private release-candidate packages."""
+"""Delete expired versions from exact private release-candidate packages."""
 
 from __future__ import annotations
 
@@ -21,15 +21,25 @@ RETENTION_DAYS = 8
 CANDIDATE_PACKAGES = (
     "registry-notary-candidate",
     "registry-relay-candidate",
+    "relay-candidate",
 )
 PUBLIC_PACKAGES = (
     "registry-notary",
     "registry-relay",
+    "relay",
 )
 
 
 class CleanupError(ValueError):
     """Raised when cleanup cannot prove that a version is safe to delete."""
+
+
+class GitHubApiError(CleanupError):
+    """An HTTP response from GitHub with a preserved status code."""
+
+    def __init__(self, method: str, url: str, status: int, detail: str) -> None:
+        self.status = status
+        super().__init__(f"GitHub API {method} {url} failed with {status}: {detail}")
 
 
 def parse_rfc3339(value: Any, *, field: str) -> datetime:
@@ -88,9 +98,7 @@ class GitHubClient:
                 return value, headers
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
-            raise CleanupError(
-                f"GitHub API {method} {url} failed with {error.code}: {detail}"
-            ) from error
+            raise GitHubApiError(method, url, error.code, detail) from error
         except (urllib.error.URLError, json.JSONDecodeError) as error:
             raise CleanupError(f"GitHub API {method} {url} failed: {error}") from error
 
@@ -227,7 +235,7 @@ def cleanup(
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Clean only registry-notary-candidate and registry-relay-candidate. "
+            "Clean only the exact Registry Stack release-candidate packages. "
             "The default is a dry run; --apply is required to delete."
         )
     )
@@ -236,7 +244,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="append",
         choices=CANDIDATE_PACKAGES,
         dest="packages",
-        help="candidate package to clean; defaults to both exact allowlisted packages",
+        help="candidate package to clean; defaults to all exact allowlisted packages",
     )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--output")

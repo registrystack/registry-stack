@@ -142,6 +142,10 @@ class SelectReleaseProofLevelTest(unittest.TestCase):
         self.commit("Cargo.lock")
         self.assertEqual("extended", self.select().proof_level)
 
+    def test_relay_v2_advisory_baseline_change_forces_extended(self) -> None:
+        self.commit("products/relay-v2/security/advisory-baseline.json", "{}\n")
+        self.assertEqual("extended", self.select().proof_level)
+
     def test_explicit_extended_has_no_standard_bypass(self) -> None:
         self.commit("crates/example/src/lib.rs")
         result = self.select(requested="extended")

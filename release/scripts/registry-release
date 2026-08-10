@@ -43,6 +43,7 @@ NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
 EVIDENCE_RELEASE_MINIMUM_VERSION = (0, 17, 0)
 EVIDENCE_OID4VCI_MINIMUM_VERSION = (0, 18, 0)
 REGISTRYCTL_INSTALLER_MINIMUM_VERSION = (0, 14, 0)
+RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 EXACT_ARTIFACT_INVENTORY = {
     "registry-notary",
     "registry-notary-cel-worker",
@@ -61,6 +62,18 @@ EVIDENCE_RELEASE_ARTIFACTS = {
     "evidence",
     "evidencectl",
     "mint",
+    "evidencectl-installer",
+    "evidence-client-node",
+    "evidence-client-python",
+}
+RELAY_V2_ARTIFACT_INVENTORY = {
+    "registry-manifest",
+    "relay",
+    "relayctl",
+    "evidence",
+    "evidencectl",
+    "mint",
+    "evidence-oid4vci",
     "evidencectl-installer",
     "evidence-client-node",
     "evidence-client-python",
@@ -103,6 +116,16 @@ OPENAPI_RELEASE_SURFACE_GLOBS = (
     "products/*/openapi/*.openapi.json",
     "crates/*/openapi/*.openapi.json",
 )
+RELAY_V2_RELEASE_CHANGELOG_PATHS = (
+    "products/manifest/CHANGELOG.md",
+    "products/platform/CHANGELOG.md",
+)
+RELAY_V2_PRODUCT_RELEASE_NOTE_PATHS = (
+    "products/manifest/docs/release-notes.md",
+)
+RELAY_V2_OPENAPI_RELEASE_SURFACE_PATHS = (
+    "products/evidence/generated/registry-evidence.openapi.json",
+)
 RELEASE_CANDIDATE_WORKFLOW = ".github/workflows/release-candidate.yml"
 RELEASE_BUILDER_IMAGE = (
     "rust:1.95-trixie@sha256:"
@@ -134,33 +157,51 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
     errors: list[str] = []
     if (
         parsed_version is not None
-        and parsed_version >= RELEASE_IMAGE_LOCK_MINIMUM_VERSION
+        and RELEASE_IMAGE_LOCK_MINIMUM_VERSION
+        <= parsed_version
+        < RELAY_V2_RELEASE_MINIMUM_VERSION
         and "registryctl-image-lock" not in artifacts
     ):
-        errors.append("artifact registryctl-image-lock is required for version 0.9.0 or later")
+        errors.append(
+            "artifact registryctl-image-lock is required for versions "
+            "0.9.0 through 0.18.x"
+        )
     if (
         parsed_version is not None
-        and parsed_version >= REGISTRYCTL_INSTALLER_MINIMUM_VERSION
+        and REGISTRYCTL_INSTALLER_MINIMUM_VERSION
+        <= parsed_version
+        < RELAY_V2_RELEASE_MINIMUM_VERSION
         and "registryctl-installer" not in artifacts
     ):
-        errors.append("artifact registryctl-installer is required for version 0.14.0 or later")
+        errors.append(
+            "artifact registryctl-installer is required for versions "
+            "0.14.0 through 0.18.x"
+        )
     if (
         parsed_version is not None
         and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
     ):
         artifact_names = set(artifacts)
-        expected_inventory = set(
-            POST_NOTARY_ARTIFACT_INVENTORY
-            if parsed_version >= NOTARY_RETIREMENT_MINIMUM_VERSION
-            else EXACT_ARTIFACT_INVENTORY
-        )
-        if parsed_version >= EVIDENCE_RELEASE_MINIMUM_VERSION:
-            expected_inventory.update(EVIDENCE_RELEASE_ARTIFACTS)
-        if parsed_version >= EVIDENCE_OID4VCI_MINIMUM_VERSION:
-            expected_inventory.add("evidence-oid4vci")
+        if parsed_version >= RELAY_V2_RELEASE_MINIMUM_VERSION:
+            expected_inventory = set(RELAY_V2_ARTIFACT_INVENTORY)
+        else:
+            expected_inventory = set(
+                POST_NOTARY_ARTIFACT_INVENTORY
+                if parsed_version >= NOTARY_RETIREMENT_MINIMUM_VERSION
+                else EXACT_ARTIFACT_INVENTORY
+            )
+            if parsed_version >= EVIDENCE_RELEASE_MINIMUM_VERSION:
+                expected_inventory.update(EVIDENCE_RELEASE_ARTIFACTS)
+            if parsed_version >= EVIDENCE_OID4VCI_MINIMUM_VERSION:
+                expected_inventory.add("evidence-oid4vci")
         missing = sorted(expected_inventory - artifact_names)
+        optional_artifacts = (
+            set()
+            if parsed_version >= RELAY_V2_RELEASE_MINIMUM_VERSION
+            else OPTIONAL_EXACT_ARTIFACTS
+        )
         unexpected = sorted(
-            artifact_names - expected_inventory - OPTIONAL_EXACT_ARTIFACTS
+            artifact_names - expected_inventory - optional_artifacts
         )
         if missing or unexpected:
             details = []
@@ -183,7 +224,13 @@ def require_registryctl_image_lock_release_version(version: str) -> None:
             f"got {version!r}"
         )
     if parsed < RELEASE_IMAGE_LOCK_MINIMUM_VERSION:
-        raise ValueError("registryctl image lock releases require version 0.9.0 or later")
+        raise ValueError(
+            "registryctl image lock releases require versions 0.9.0 through 0.18.x"
+        )
+    if parsed >= RELAY_V2_RELEASE_MINIMUM_VERSION:
+        raise ValueError(
+            "registryctl image lock releases are retired starting with version 0.19.0"
+        )
 
 
 def verify_registryctl_image_lock_release_version(version: str) -> int:
@@ -1996,13 +2043,39 @@ def release_surface_files(repo: Path, patterns: tuple[str, ...]) -> list[Path]:
     return sorted(paths)
 
 
+def release_surface_files_for_version(
+    repo: Path,
+    version: str,
+    *,
+    legacy_patterns: tuple[str, ...],
+    current_paths: tuple[str, ...],
+    label: str,
+) -> list[Path]:
+    parsed = release_version_tuple(version)
+    if parsed is None or parsed < RELAY_V2_RELEASE_MINIMUM_VERSION:
+        return release_surface_files(repo, legacy_patterns)
+    paths = [repo / relative for relative in current_paths]
+    missing = [relative_path(repo, path) for path in paths if not path.is_file()]
+    if missing:
+        raise ReleasePlanError(
+            f"missing current {label} release surfaces: {', '.join(missing)}"
+        )
+    return paths
+
+
 def validate_release_documents(
     repo: Path,
     version: str,
     release_id: str,
 ) -> dict[str, Any]:
     heading = re.compile(rf"^##\s+\[?v?{re.escape(version)}\]?(?:\s|$)", re.MULTILINE)
-    changelogs = release_surface_files(repo, RELEASE_CHANGELOG_GLOBS)
+    changelogs = release_surface_files_for_version(
+        repo,
+        version,
+        legacy_patterns=RELEASE_CHANGELOG_GLOBS,
+        current_paths=RELAY_V2_RELEASE_CHANGELOG_PATHS,
+        label="changelog",
+    )
     if not changelogs:
         raise ReleasePlanError("no product changelog release surfaces were found")
     for path in changelogs:
@@ -2010,7 +2083,13 @@ def validate_release_documents(
             raise ReleasePlanError(
                 f"changelog {relative_path(repo, path)} has no {version} release heading"
             )
-    product_notes = release_surface_files(repo, PRODUCT_RELEASE_NOTE_GLOBS)
+    product_notes = release_surface_files_for_version(
+        repo,
+        version,
+        legacy_patterns=PRODUCT_RELEASE_NOTE_GLOBS,
+        current_paths=RELAY_V2_PRODUCT_RELEASE_NOTE_PATHS,
+        label="product release-note",
+    )
     if not product_notes:
         raise ReleasePlanError("no product release-note surfaces were found")
     for path in product_notes:
@@ -2039,7 +2118,13 @@ def validate_release_documents(
 
 
 def validate_openapi_versions(repo: Path, version: str) -> list[Path]:
-    paths = release_surface_files(repo, OPENAPI_RELEASE_SURFACE_GLOBS)
+    paths = release_surface_files_for_version(
+        repo,
+        version,
+        legacy_patterns=OPENAPI_RELEASE_SURFACE_GLOBS,
+        current_paths=RELAY_V2_OPENAPI_RELEASE_SURFACE_PATHS,
+        label="OpenAPI",
+    )
     if not paths:
         raise ReleasePlanError("no committed OpenAPI release surfaces were found")
     for path in paths:
@@ -2055,7 +2140,7 @@ def validate_openapi_versions(repo: Path, version: str) -> list[Path]:
 def validate_crosswalk(
     record: dict[str, Any],
     workspace: dict[str, Any],
-    selected_docset: dict[str, Any],
+    selected_docset: dict[str, Any] | None,
     release_text: str,
 ) -> dict[str, Any]:
     dependencies = workspace["cargo"]["workspace"]["dependencies"]
@@ -2115,18 +2200,26 @@ def validate_crosswalk(
         raise ReleasePlanError(
             "selected manifest external.crosswalk.ref must match the Cargo.toml pin"
         )
-    products = selected_docset.get("products")
-    docset_crosswalk = products.get("crosswalk") if isinstance(products, dict) else None
-    if not isinstance(docset_crosswalk, dict) or docset_crosswalk.get("ref") != crosswalk_ref:
-        raise ReleasePlanError("selected docset Crosswalk ref must match the Cargo.toml pin")
     core = crosswalk_dependencies.get("crosswalk-core")
     core_version = core.get("version") if isinstance(core, dict) else None
     if not isinstance(core_version, str):
         raise ReleasePlanError("Cargo.toml crosswalk-core must declare an exact version")
-    if docset_crosswalk.get("version") != f"crosswalk-core-v{core_version}":
-        raise ReleasePlanError(
-            "selected docset Crosswalk version must match Cargo.toml crosswalk-core"
+    if selected_docset is not None:
+        products = selected_docset.get("products")
+        docset_crosswalk = (
+            products.get("crosswalk") if isinstance(products, dict) else None
         )
+        if (
+            not isinstance(docset_crosswalk, dict)
+            or docset_crosswalk.get("ref") != crosswalk_ref
+        ):
+            raise ReleasePlanError(
+                "selected docset Crosswalk ref must match the Cargo.toml pin"
+            )
+        if docset_crosswalk.get("version") != f"crosswalk-core-v{core_version}":
+            raise ReleasePlanError(
+                "selected docset Crosswalk version must match Cargo.toml crosswalk-core"
+            )
     if crosswalk_ref not in release_text:
         raise ReleasePlanError("release note must record the exact Crosswalk ref")
     return {
@@ -2166,21 +2259,32 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
             f"{workspace['workspace_package_count']} lock packages use {version}",
         )
     )
-    docsets_data, selected_docset, selected_docset_index = selected_docsets(repo, selected)
-    checks.append(
-        passed_check(
-            "docsets",
-            f"current unreleased docs and versioned v{version} agree with their sources",
-        )
+    parsed_version = release_version_tuple(version)
+    uses_release_docs = (
+        parsed_version is None
+        or parsed_version < RELAY_V2_RELEASE_MINIMUM_VERSION
     )
-    repo_docs_count = validate_repo_docs(repo)
-    checks.append(
-        passed_check(
-            "repo-docs",
-            f"{repo_docs_count} current repository documentation sources use "
-            f"{CURRENT_DOCS_VERSION!r} at HEAD",
+    docsets_data = None
+    selected_docset = None
+    selected_docset_index = None
+    if uses_release_docs:
+        docsets_data, selected_docset, selected_docset_index = selected_docsets(
+            repo, selected
         )
-    )
+        checks.append(
+            passed_check(
+                "docsets",
+                f"current unreleased docs and versioned v{version} agree with their sources",
+            )
+        )
+        repo_docs_count = validate_repo_docs(repo)
+        checks.append(
+            passed_check(
+                "repo-docs",
+                f"{repo_docs_count} current repository documentation sources use "
+                f"{CURRENT_DOCS_VERSION!r} at HEAD",
+            )
+        )
     documents = validate_release_documents(repo, version, release_id)
     checks.append(
         passed_check(
@@ -2202,18 +2306,24 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
         selected_docset,
         documents["release_text"],
     )
+    crosswalk_surfaces = (
+        "workspace, lock, manifest, docset, and release note"
+        if uses_release_docs
+        else "workspace, lock, manifest, and release note"
+    )
     checks.append(
         passed_check(
             "crosswalk-pin",
-            f"workspace, lock, manifest, docset, and release note agree on {crosswalk['ref']}",
+            f"{crosswalk_surfaces} agree on {crosswalk['ref']}",
         )
     )
-    checks.append(
-        passed_check(
-            "generated-docset-mirror",
-            "generated/docsets.json exactly mirrors docsets.yaml",
+    if uses_release_docs:
+        checks.append(
+            passed_check(
+                "generated-docset-mirror",
+                "generated/docsets.json exactly mirrors docsets.yaml",
+            )
         )
-    )
     return {
         "repo": repo,
         "selected": selected,
@@ -2226,6 +2336,7 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
         "documents": documents,
         "openapi_paths": openapi_paths,
         "crosswalk": crosswalk,
+        "uses_release_docs": uses_release_docs,
         "checks": checks,
     }
 
@@ -2247,10 +2358,18 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
         (context["selected"]["path"], "target-manifest"),
         (repo / "Cargo.toml", "workspace-version"),
         (repo / "Cargo.lock", "workspace-lock"),
-        (repo / "docs/site/src/data/docsets.yaml", "docset"),
-        (repo / "docs/site/src/data/generated/docsets.json", "generated-mirror"),
         (context["documents"]["release_note"], "release-note"),
     ]
+    if context["uses_release_docs"]:
+        surfaces.extend(
+            (
+                (repo / "docs/site/src/data/docsets.yaml", "docset"),
+                (
+                    repo / "docs/site/src/data/generated/docsets.json",
+                    "generated-mirror",
+                ),
+            )
+        )
     surfaces.extend((path, "changelog") for path in context["documents"]["changelogs"])
     surfaces.extend(
         (path, "product-release-note") for path in context["documents"]["product_notes"]
@@ -2352,22 +2471,29 @@ def finalize_ref_changes(
     ]
     mirror_changes: list[dict[str, str]] = []
 
-    docsets_path = repo / "docs/site/src/data/docsets.yaml"
-    generated_docsets_path = repo / "docs/site/src/data/generated/docsets.json"
-    external_names = set(context["selected"]["data"].get("external", {}))
-    products = context["selected_docset"]["products"]
-    docset_index = context["selected_docset_index"]
-    for name in sorted(products):
-        product = products[name]
-        if name in external_names or product.get("ref") != candidate:
-            continue
-        pointer = f"/docsets/{docset_index}/products/{name}/ref"
-        source_changes.append(
-            ref_change(repo, docsets_path, pointer, candidate, promotion_commit)
-        )
-        mirror_changes.append(
-            ref_change(repo, generated_docsets_path, pointer, candidate, promotion_commit)
-        )
+    if context["uses_release_docs"]:
+        docsets_path = repo / "docs/site/src/data/docsets.yaml"
+        generated_docsets_path = repo / "docs/site/src/data/generated/docsets.json"
+        external_names = set(context["selected"]["data"].get("external", {}))
+        products = context["selected_docset"]["products"]
+        docset_index = context["selected_docset_index"]
+        for name in sorted(products):
+            product = products[name]
+            if name in external_names or product.get("ref") != candidate:
+                continue
+            pointer = f"/docsets/{docset_index}/products/{name}/ref"
+            source_changes.append(
+                ref_change(repo, docsets_path, pointer, candidate, promotion_commit)
+            )
+            mirror_changes.append(
+                ref_change(
+                    repo,
+                    generated_docsets_path,
+                    pointer,
+                    candidate,
+                    promotion_commit,
+                )
+            )
 
     contracts_path = repo / "docs/site/src/data/contracts.yaml"
     contracts = required_yaml(contracts_path)

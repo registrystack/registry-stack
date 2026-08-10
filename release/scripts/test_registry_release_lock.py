@@ -713,7 +713,10 @@ class RegistryReleaseLockTests(unittest.TestCase):
         )
         self.assertNotIn("sigstore/cosign-installer@", workflow)
         install = workflow.index("name: Install pinned checksum signer")
-        image_lock = workflow.index("name: Render the final image lock", install)
+        image_lock = workflow.index(
+            "name: Render the historical registryctl image lock for pre-0.19 retries",
+            install,
+        )
         checksum = workflow.index(
             "find . -maxdepth 1 -type f ! -name SHA256SUMS", image_lock
         )
@@ -778,7 +781,9 @@ class RegistryReleaseLockTests(unittest.TestCase):
             workflow[cleanup:delete],
         )
 
-        render = workflow.index("Render the final image lock")
+        render = workflow.index(
+            "Render the historical registryctl image lock for pre-0.19 retries"
+        )
         inspect = workflow.index('crane manifest "${image_ref}"', render)
         image_lock_compare = workflow.index(
             'select(.kind == "image-lock" and .name == $name)',
@@ -790,19 +795,23 @@ class RegistryReleaseLockTests(unittest.TestCase):
         self.assertLess(image_lock_compare, checksum)
         self.assertNotIn("registry_release_lock.py create-payload", workflow)
         publish = workflow.index("- name: Publish immutable release")
-        dispatch = workflow.index("\n  dispatch-docs:", publish)
         self.assertIn(
             ".draft == true",
-            workflow[publish:dispatch],
+            workflow[publish:],
         )
-        self.assertNotIn("is_draft", workflow[publish:dispatch])
+        self.assertNotIn("is_draft", workflow[publish:])
         self.assertIn(
             "gh api --method PATCH",
-            workflow[publish:dispatch],
+            workflow[publish:],
         )
         self.assertIn(
             ".id == $release_id and\n             .draft == false",
-            workflow[publish:dispatch],
+            workflow[publish:],
+        )
+        dispatch = workflow.index("\n  dispatch-docs:", publish)
+        self.assertIn(
+            "if: needs.verify.outputs.docs_sha256 != ''",
+            workflow[dispatch:],
         )
 
 

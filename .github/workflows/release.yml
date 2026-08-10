@@ -212,10 +212,18 @@ jobs:
               --source-digest "${workflow_revision}" \
               --deny-self-hosted-runners
           done
+          docs_sha256=
+          IFS=. read -r major minor _ <<<"${{ steps.identity.outputs.version }}"
+          if ((major == 0 && minor >= 16 && minor < 19)); then
+            docs_sha256="$(
+              jq -er '.docs.sha256 | select(test("^[0-9a-f]{64}$"))' \
+                "${manifest}"
+            )"
+          fi
           {
             echo "release_id=${release_id}"
             echo "workflow_revision=${workflow_revision}"
-            echo "docs_sha256=$(jq -er .docs.sha256 "${manifest}")"
+            echo "docs_sha256=${docs_sha256}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Verify any existing draft is bound to the exact candidate
@@ -313,6 +321,12 @@ jobs:
             --trusted-run-metadata promotion/trusted-run.json
           while IFS= read -r name; do
             if [[ "${name}" == *-image-lock.json ]]; then
+              version="${{ needs.verify.outputs.version }}"
+              IFS=. read -r major minor _ <<<"${version}"
+              if ((major > 0 || minor >= 19)); then
+                echo "Current releases must not carry a legacy image lock" >&2
+                exit 1
+              fi
               continue
             fi
             cp "extracted/${name}" "release-assets/${name}"
@@ -397,9 +411,13 @@ jobs:
             "${RUNNER_TEMP}/staged-draft.json" >/dev/null
           {
             printf '%s\n' \
-              "registryctl-${tag}-image-lock.json" \
               SHA256SUMS \
               "registry-stack-${tag}-SHA256SUMS.sigstore.json"
+            version="${{ needs.verify.outputs.version }}"
+            IFS=. read -r major minor _ <<<"${version}"
+            if ((major == 0 && minor < 19)); then
+              printf '%s\n' "registryctl-${tag}-image-lock.json"
+            fi
           } | sort -u > contract/retryable-final-assets
           jq -r '.[].name' contract/staged-assets.json \
             | sort -u > contract/expected-staged-assets
@@ -609,6 +627,14 @@ jobs:
                 --namespace "${IMAGE_NAMESPACE}"
             )"
             IFS=$'\t' read -r package tag <<<"${destination}"
+            package_metadata="${RUNNER_TEMP}/${package}-package.json"
+            gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
+              > "${package_metadata}"
+            python3 release/scripts/release_workflow_guard.py \
+              require-package-visibility \
+              --metadata "${package_metadata}" \
+              --package "${package}" \
+              --visibility public
             versions="${RUNNER_TEMP}/${package}-versions.json"
             gh api --paginate --slurp \
               "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
@@ -770,10 +796,15 @@ jobs:
               contract/staged-assets.json
           )
 
-      - name: Render the final image lock
+      - name: Render the historical registryctl image lock for pre-0.19 retries
         shell: bash
         run: |
           set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          IFS=. read -r major minor _ <<<"${version}"
+          if ((major > 0 || minor >= 19)); then
+            exit 0
+          fi
           promotion="inputs/release-promotion-input-${GITHUB_RUN_ID}"
           candidate="${promotion}/release-candidate-manifest.json"
           release_manifest="$(
@@ -1052,9 +1083,6 @@ jobs:
             cd draft
             sha256sum --check --strict SHA256SUMS
           )
-          test "$(
-            sha256sum "draft/registry-docs-${tag}.tar.gz" | awk '{print $1}'
-          )" = "${{ needs.verify.outputs.docs_sha256 }}"
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main"
           cosign verify-blob draft/SHA256SUMS \
             --bundle \
@@ -1066,11 +1094,14 @@ jobs:
             test "$(crane digest "${final_ref}")" = "${digest}"
           done < <(jq -r '.images[] | [.digest,.final_ref] | @tsv' "${manifest}")
           required=(
-            "registry-docs-${tag}.tar.gz"
-            "registryctl-${tag}-image-lock.json"
             SHA256SUMS
             "registry-stack-${tag}-SHA256SUMS.sigstore.json"
           )
+          version="${{ needs.verify.outputs.version }}"
+          IFS=. read -r major minor _ <<<"${version}"
+          if ((major == 0 && minor < 19)); then
+            required+=("registryctl-${tag}-image-lock.json")
+          fi
           for name in "${required[@]}"; do
             jq -e --arg name "${name}" \
               '.assets[] | select(.name == $name)' \
@@ -1132,7 +1163,8 @@ jobs:
             published-release.json >/dev/null
 
   dispatch-docs:
-    name: Dispatch exact docs promotion
+    name: Dispatch authenticated legacy docs promotion
+    if: needs.verify.outputs.docs_sha256 != ''
     needs:
       - verify
       - publish
@@ -1141,7 +1173,7 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Dispatch authenticated docs promotion
+      - name: Dispatch authenticated legacy docs promotion
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

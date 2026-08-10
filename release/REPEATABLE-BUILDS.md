@@ -20,16 +20,16 @@ The workflow:
 
 1. Resolves an immutable published tag reachable from protected `main`.
 2. Downloads and authenticates `SHA256SUMS`, the Linux amd64 binaries, and the
-   release image lock.
+   release manifest.
 3. Rebuilds the canonical Linux payload with fresh Cargo and target
    directories.
 4. Requires byte equality for the seven declared Linux amd64 binaries.
-5. Rebuilds the Registry Relay image without cache.
+5. Rebuilds each release image without cache.
 6. Compares its image configuration and ordered root filesystem layers with
    the published digest-bound image.
 7. Records a compact result and retains it for 30 days.
 
-The proof excludes native macOS and Linux arm64 Registryctl binaries,
+The proof excludes native macOS and Linux arm64 Relayctl binaries,
 environment independence, generated SBOM or scan bytes, signatures,
 provenance envelopes, and documentation archives.
 
@@ -37,16 +37,14 @@ provenance envelopes, and documentation archives.
 
 `release/scripts/build-release-binaries.sh` sets `REGISTRY_RELEASE_TAG` to the
 exact release tag. That marker is what makes an executable report the bare
-released version, such as `registryctl 0.17.0`. A build without it reports a
-development version, such as `registryctl 0.17.0-dev`, so an executable built
-from the same source revision outside the release cannot be mistaken for the
+released version, such as `relayctl 0.19.0`. A build without it reports a
+development version, such as `relayctl 0.19.0-dev`, so an executable built from
+the same source revision outside the release cannot be mistaken for the
 published one.
 
 A rebuild must therefore go through that script, as this workflow does.
 `cargo build --release` over the same source produces a development version and
 different bytes, which is a different build rather than a failed reproduction.
-`registry-release verify-registryctl-binary-version` rejects a payload built
-without the marker.
 
 ## OpenSSF Silver claim boundary
 
@@ -79,7 +77,7 @@ time, result artifact SHA-256, and `silver_claim_valid_through` timestamp from
 | --- | --- |
 | Binary bytes differ | Treat as a build-integrity investigation; preserve both inventories |
 | Image configuration or ordered layers differ | Compare builder, recipe, base image, and lock changes |
-| Published checksum or image lock fails authentication | Follow the security reporting process in `SECURITY.md` |
+| Published checksum or release manifest fails authentication | Follow the security reporting process in `SECURITY.md` |
 | Runner or registry outage | Rerun without changing the published release |
 | Proof becomes older than 30 days | Mark the OpenSSF repeatability justification stale until a new proof passes |
 

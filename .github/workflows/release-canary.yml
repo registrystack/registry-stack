@@ -29,7 +29,7 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Exercise dispatch, candidate, advisory, draft, and docs contracts
+      - name: Exercise dispatch, candidate, advisory, and draft contracts
         shell: bash
         run: |
           set -euo pipefail
@@ -48,18 +48,28 @@ jobs:
           evidence_root=canary/security-evidence
           mkdir -p \
             canary/bundle-root/security \
-            "${evidence_root}"/images \
             "${evidence_root}"/image-sbom \
             "${evidence_root}"/syft \
             "${evidence_root}"/grype
-          printf 'canary payload\n' > canary/bundle-root/registryctl-${tag}-linux-amd64
-          printf 'canary docs\n' > canary/bundle-root/registry-docs-${tag}.tar.gz
+          python3 - "${version}" canary/bundle-root <<'PY'
+          import pathlib
+          import runpy
+          import sys
+
+          version, root_text = sys.argv[1:]
+          root = pathlib.Path(root_text)
+          inventory = runpy.run_path(
+              "release/scripts/release_candidate.py"
+          )["_relay_v2_payload_inventory"](version)
+          for name in inventory:
+              (root / name).write_text(
+                  f"release canary placeholder: {name}\n",
+                  encoding="utf-8",
+              )
+          PY
           printf '{"spdxVersion":"SPDX-2.3","name":"release-canary"}\n' \
             > canary/bundle-root/registry-stack-${tag}.sbom.spdx.json
-          relay_ref="ghcr.io/registrystack/registry-relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
-          printf '%s\n' "${postgresql_ref}" \
-            > "${evidence_root}/images/postgresql.digest"
+          relay_ref="ghcr.io/registrystack/relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
           write_image_reports() {
             local name="$1"
@@ -83,50 +93,59 @@ jobs:
                 }
               }' > "${evidence_root}/grype/${name}.grype.json"
           }
-          write_image_reports registry-relay "${relay_ref}"
-          write_image_reports postgresql "${postgresql_ref}"
-          postgresql_digest="${postgresql_ref##*@}"
-          jq -n \
-            --arg image_ref "${postgresql_ref}" \
-            --arg locator "pkg:oci/postgresql@${postgresql_digest}" \
-            '{
-              spdxVersion:"SPDX-2.3",
-              documentDescribes:["SPDXRef-RegistryStack-postgresql-digest-subject"],
-              packages:[{
-                SPDXID:"SPDXRef-RegistryStack-postgresql-digest-subject",
-                name:$image_ref,
-                externalRefs:[{referenceLocator:$locator}]
-              }]
-            }' > "${evidence_root}/image-sbom/postgresql.spdx.json"
+          write_image_reports relay "${relay_ref}"
           jq -n '{status:"valid"}' \
             > "${evidence_root}/grype/grype-db-status.json"
           jq -n '{
             schema_version:"registry-stack.advisory-verdict.v2",
             verdict:"passed",
             subjects:[
-              "registry-relay-image",
-              "postgresql-runtime"
+              "relay-image"
             ]
           }' > "${evidence_root}/advisory-verdict.json"
-          cp "${evidence_root}/grype/registry-relay.grype.json" \
-            canary/bundle-root/security/registry-relay.grype.json
+          cp "${evidence_root}/grype/relay.grype.json" \
+            canary/bundle-root/security/relay.grype.json
           cp "${evidence_root}/advisory-verdict.json" \
             canary/bundle-root/security/advisory-verdict.json
           evidence_name="registry-stack-${tag}-security-evidence.tar.gz"
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
             --numeric-owner -czf "canary/bundle-root/${evidence_name}" \
             -C "${evidence_root}" \
-              images image-sbom syft grype advisory-verdict.json
-          payload_sha="$(sha256sum canary/bundle-root/registryctl-${tag}-linux-amd64 | awk '{print $1}')"
-          docs_sha="$(sha256sum canary/bundle-root/registry-docs-${tag}.tar.gz | awk '{print $1}')"
+              image-sbom syft grype advisory-verdict.json
           sbom_sha="$(sha256sum canary/bundle-root/registry-stack-${tag}.sbom.spdx.json | awk '{print $1}')"
           evidence_sha="$(sha256sum "canary/bundle-root/${evidence_name}" | awk '{print $1}')"
-          relay_scan_sha="$(sha256sum canary/bundle-root/security/registry-relay.grype.json | awk '{print $1}')"
+          relay_scan_sha="$(sha256sum canary/bundle-root/security/relay.grype.json | awk '{print $1}')"
           advisory_sha="$(sha256sum canary/bundle-root/security/advisory-verdict.json | awk '{print $1}')"
-          payload_size="$(stat -c %s canary/bundle-root/registryctl-${tag}-linux-amd64)"
-          docs_size="$(stat -c %s canary/bundle-root/registry-docs-${tag}.tar.gz)"
           sbom_size="$(stat -c %s canary/bundle-root/registry-stack-${tag}.sbom.spdx.json)"
           evidence_size="$(stat -c %s "canary/bundle-root/${evidence_name}")"
+          python3 - "${version}" canary/bundle-root canary/payloads.json <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import runpy
+          import sys
+
+          version, root_text, output_text = sys.argv[1:]
+          root = pathlib.Path(root_text)
+          inventory = runpy.run_path(
+              "release/scripts/release_candidate.py"
+          )["_relay_v2_payload_inventory"](version)
+          payloads = []
+          for name, kind in sorted(inventory.items()):
+              payload = (root / name).read_bytes()
+              payloads.append(
+                  {
+                      "name": name,
+                      "kind": kind,
+                      "size": len(payload),
+                      "sha256": hashlib.sha256(payload).hexdigest(),
+                  }
+              )
+          pathlib.Path(output_text).write_text(
+              json.dumps(payloads, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
             --numeric-owner -czf canary/registry-stack-${tag}-candidate.tar.gz \
             -C canary/bundle-root .
@@ -143,10 +162,6 @@ jobs:
             --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg created_at "${created_at}" \
             --arg expires_at "${expires_at}" \
-            --arg payload_sha "${payload_sha}" \
-            --argjson payload_size "${payload_size}" \
-            --arg docs_sha "${docs_sha}" \
-            --argjson docs_size "${docs_size}" \
             --arg sbom_sha "${sbom_sha}" \
             --argjson sbom_size "${sbom_size}" \
             --arg evidence_name "${evidence_name}" \
@@ -156,6 +171,7 @@ jobs:
             --arg advisory_sha "${advisory_sha}" \
             --arg bundle_sha "${bundle_sha}" \
             --argjson bundle_size "${bundle_size}" \
+            --slurpfile payloads canary/payloads.json \
             '{
               schema_version: "registry-stack.release-candidate.v2",
               repository: $repository,
@@ -175,54 +191,25 @@ jobs:
                 created_at: $created_at,
                 expires_at: $expires_at
               },
-              payloads: [
-                {
-                  name: ("registryctl-" + $tag + "-linux-amd64"),
-                  kind: "binary",
-                  size: $payload_size,
-                  sha256: $payload_sha
-                },
-                {
-                  name: ("registry-docs-" + $tag + ".tar.gz"),
-                  kind: "docs",
-                  size: $docs_size,
-                  sha256: $docs_sha
-                },
-                {
-                  name: ("registry-stack-" + $tag + ".sbom.spdx.json"),
-                  kind: "sbom",
-                  size: $sbom_size,
-                  sha256: $sbom_sha
-                },
-                {
-                  name: $evidence_name,
-                  kind: "security-evidence",
-                  size: $evidence_size,
-                  sha256: $evidence_sha
-                }
-              ],
+              payloads: $payloads[0],
               images: [
                 {
-                  name: "registry-relay",
+                  name: "relay",
                   candidate_ref:
-                    "ghcr.io/registrystack/registry-relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "ghcr.io/registrystack/relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   digest:
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                  final_ref: ("ghcr.io/registrystack/registry-relay:" + $tag)
+                  final_ref: ("ghcr.io/registrystack/relay:" + $tag)
                 }
               ],
-              docs: {
-                name: ("registry-docs-" + $tag + ".tar.gz"),
-                sha256: $docs_sha
-              },
               sbom: {
                 name: ("registry-stack-" + $tag + ".sbom.spdx.json"),
                 sha256: $sbom_sha
               },
               scans: [
                 {
-                  image: "registry-relay",
-                  name: "security/registry-relay.grype.json",
+                  image: "relay",
+                  name: "security/relay.grype.json",
                   sha256: $relay_scan_sha,
                   status: "passed"
                 }
@@ -284,7 +271,6 @@ jobs:
           python3 release/scripts/release_candidate.py verify-canary \
             --metadata canary/trusted-canary-run.json \
             --workflow-revision "${workflow_revision}"
-          python3 crates/registry-relay/tests/advisory_baseline_check_test.py
           jq -n \
             --arg tag "${tag}" \
             --argjson isDraft true \
@@ -295,17 +281,6 @@ jobs:
             --arg expected "release-canary-${GITHUB_RUN_ID}" \
             '.draft == true and .name == $expected and (.assets | length == 0)' \
             canary/draft-release-api-fixture.json >/dev/null
-          jq -n \
-            --arg released_tag "${tag}" \
-            --arg docs_sha256 "${docs_sha}" \
-            '{
-              released_tag: $released_tag,
-              docs_sha256: $docs_sha256
-            } | select(
-              .released_tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")
-            ) | select(
-              .docs_sha256 | test("^[0-9a-f]{64}$")
-            )' > canary/docs-dispatch.json
           (
             cd canary/bundle-root
             find . -type f -print0 | sort -z | xargs -0 sha256sum

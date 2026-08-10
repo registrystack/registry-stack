@@ -4,7 +4,7 @@ Current Beta releases use two linked controls. The candidate workflow attests
 the exact candidate manifest and bundle. The protected-main publication
 workflow verifies those attestations before promotion, then keyless-signs one
 `SHA256SUMS` file covering every public payload, including the release
-manifest, image lock, consolidated SPDX SBOM, and security-evidence archive.
+manifest, consolidated SPDX SBOM, and security-evidence archive.
 
 ## Install tools
 
@@ -83,32 +83,8 @@ jq -e --arg tag "${tag}" '
 ' "${manifest}"
 ```
 
-The release image lock is covered by `SHA256SUMS`. Verify its closed release
-identity and immutable digest references:
-
-```sh
-image_lock="registryctl-${tag}-image-lock.json"
-
-jq -e --arg tag "${tag}" '
-  .schema_version == "registryctl.release_image_lock.v3" and
-  .release_tag == $tag and
-  .platform == "linux/amd64" and
-  ((.images | keys) == ["postgresql", "registry-relay"]) and
-  (.images["registry-relay"] |
-    test("^ghcr\\.io/registrystack/registry-relay@sha256:[0-9a-f]{64}$")) and
-  (.images["postgresql"] |
-    test("^docker\\.io/library/postgres@sha256:[0-9a-f]{64}$"))
-' "${image_lock}"
-
-for name in registry-relay postgresql; do
-  ref="$(jq -er --arg name "${name}" '.images[$name]' "${image_lock}")"
-  expected="${ref##*@}"
-  test "$(crane digest "${ref}")" = "${expected}"
-done
-```
-
 The final release tags recorded in the manifest must resolve to the same
-digests:
+digests as their candidate bindings:
 
 ```sh
 while IFS=$'\t' read -r digest final_ref; do

@@ -60,6 +60,49 @@ class ReleaseWorkflowGuardTests(unittest.TestCase):
                 with self.assertRaises(self.module.GuardError):
                     self.module.public_image_destination(value, "registrystack")
 
+    def test_package_visibility_requires_preprovisioned_exact_package(self) -> None:
+        public = {
+            "name": "relay",
+            "package_type": "container",
+            "visibility": "public",
+        }
+        private = {
+            "name": "relay-candidate",
+            "package_type": "container",
+            "visibility": "private",
+        }
+
+        self.assertIsNone(
+            self.module.require_package_visibility(
+                public, package="relay", visibility="public"
+            )
+        )
+        self.assertIsNone(
+            self.module.require_package_visibility(
+                private, package="relay-candidate", visibility="private"
+            )
+        )
+        with self.assertRaisesRegex(self.module.GuardError, "absent or mismatched"):
+            self.module.require_package_visibility(
+                {}, package="relay", visibility="public"
+            )
+        with self.assertRaisesRegex(self.module.GuardError, "absent or mismatched"):
+            self.module.require_package_visibility(
+                {}, package="relay-candidate", visibility="private"
+            )
+        with self.assertRaisesRegex(self.module.GuardError, "must be public"):
+            self.module.require_package_visibility(
+                {**public, "visibility": "private"},
+                package="relay",
+                visibility="public",
+            )
+        with self.assertRaisesRegex(self.module.GuardError, "must be private"):
+            self.module.require_package_visibility(
+                {**private, "visibility": "public"},
+                package="relay-candidate",
+                visibility="private",
+            )
+
     def test_image_tag_absence_burns_any_existing_version(self) -> None:
         digest = "sha256:" + "a" * 64
         document = [

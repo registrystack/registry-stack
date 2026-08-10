@@ -2425,39 +2425,16 @@ class FirstCountryReleaseFormTest(TestCase):
         candidate = WORKFLOW.read_text(encoding="utf-8")
         release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         binary = candidate.index("name: Build canonical Linux payload once")
-        docs = candidate.index("name: Package exact release docs archive")
-        authoring = candidate.index(
-            "name: Run exact candidate Registryctl against archived authoring journeys"
-        )
         stage = candidate.index("name: Stage canonical build products")
         seal = candidate.index("name: Seal compact candidate manifest and bundle")
-        self.assertLess(binary, docs)
-        self.assertLess(docs, authoring)
-        self.assertLess(authoring, stage)
+        self.assertLess(binary, stage)
         self.assertLess(stage, seal)
-        self.assertIn(
-            "REGISTRYCTL_BIN: ${{ github.workspace }}/dist/bin/"
-            "registryctl-${{ needs.validate.outputs.tag }}-linux-amd64",
-            candidate,
-        )
-        self.assertIn(
-            "REGISTRYCTL_RELEASED_DOCS_ARCHIVE: ${{ runner.temp }}/"
-            "registry-docs-${{ needs.validate.outputs.tag }}.tar.gz",
-            candidate,
-        )
-        self.assertIn(
-            "REGISTRYCTL_RELEASED_DOCS_ROOT: "
-            "${{ runner.temp }}/candidate-released-docs/version",
-            candidate,
-        )
-        self.assertIn("REGISTRYCTL_TUTORIAL_RUNTIME_MODE: authoring", candidate)
-        self.assertIn(
-            "bash docs/site/scripts/check-registryctl-tutorials.sh", candidate
-        )
+        self.assertNotIn("REGISTRYCTL_BIN", candidate)
+        self.assertNotIn("REGISTRYCTL_RELEASED_DOCS", candidate)
+        self.assertNotIn("REGISTRYCTL_TUTORIAL_RUNTIME_MODE", candidate)
+        self.assertNotIn("check-registryctl-tutorials.sh", candidate)
         self.assertIn("validate version-appropriate install inputs", candidate)
-        self.assertIn("if ((major >= 1)); then", candidate)
         self.assertNotIn("first-country-release-form.py run", candidate)
-        self.assertIn("registry_release_lock.py create-payload", candidate)
         self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", candidate)
         self.assertNotIn("REGISTRYCTL_ASSET_DIR", candidate)
         self.assertNotIn("registry-release-lock.v1.json", candidate)

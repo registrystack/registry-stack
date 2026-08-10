@@ -299,7 +299,19 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         repeatability = (WORKFLOWS / "release-repeatability.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn('.images | keys[] | select(startswith("registry-"))', repeatability)
+        self.assertIn(
+            ".images[] | [.name,.final_ref,.digest] | @tsv",
+            repeatability,
+        )
+        self.assertIn(
+            '.images | to_entries[] | select(.key | startswith("registry-"))',
+            repeatability,
+        )
+        self.assertIn("minor == 16 && patch >= 3", repeatability)
+        self.assertIn(
+            'echo "${TAG} has neither ${release_manifest} nor ${image_lock}"',
+            repeatability,
+        )
         self.assertNotIn("for name in registry-notary registry-relay", repeatability)
 
         module_path = ROOT / "release/scripts/release_candidate.py"
@@ -363,6 +375,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("Seal compact candidate manifest and bundle", text)
         self.assertIn("Reverify all bytes before requesting OIDC", text)
         self.assertIn("Attest manifest and bundle after re-verification", text)
+
+    def test_current_candidate_excludes_registry_docs(self) -> None:
+        text, _ = workflow("release-candidate.yml")
+        self.assertNotIn("registry-docs-", text)
+        self.assertNotIn("kind=docs", text)
+        self.assertNotIn("docs_name", text)
+        self.assertNotIn("validate-docsets", text)
 
     def test_every_published_binary_is_built_as_a_release_build(self) -> None:
         _, document = workflow("release-candidate.yml")
@@ -458,6 +477,12 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             step
             for step in document["jobs"]["build-canonical"]["steps"]
             if step.get("name") == "Restore reusable Cargo cache"
+        )
+        self.assertEqual(
+            cache["with"]["key"],
+            "registry-stack-release-${{ runner.os }}-"
+            "${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', "
+            "'release/scripts/build-release-binaries.sh') }}",
         )
         self.assertIn("registry-stack-release-${{ runner.os }}-", cache["with"]["restore-keys"])
         self.assertIn('created_at} + 7 days', text)
@@ -600,8 +625,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "finalize-assets",
             "Clean retryable final additions and reverify exact staged assets",
         )
-        retryable_names = (
-            '"registryctl-${tag}-image-lock.json"',
+        current_retryable_names = (
             "SHA256SUMS",
             '"registry-stack-${tag}-SHA256SUMS.sigstore.json"',
         )
@@ -610,13 +634,17 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 "> contract/retryable-final-assets"
             )
         ]
-        roster_lines = {
-            line.strip().removesuffix("\\").strip()
-            for line in retryable_roster.splitlines()[1:]
-            if line.strip() and not line.lstrip().startswith("}")
-        }
-        self.assertEqual(roster_lines, set(retryable_names))
-        for name in retryable_names:
+        for name in current_retryable_names:
+            self.assertIn(name, retryable_roster)
+        self.assertIn("if ((major == 0 && minor < 19)); then", retryable_roster)
+        self.assertIn(
+            'printf \'%s\\n\' "registryctl-${tag}-image-lock.json"',
+            retryable_roster,
+        )
+        for name in (
+            *current_retryable_names,
+            '"registryctl-${tag}-image-lock.json"',
+        ):
             self.assertNotIn(name, finalize)
         self.assertLess(
             stage.index('"${RUNNER_TEMP}/staged-draft.json" >/dev/null'),
@@ -672,17 +700,38 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("Generate signed 1.x lock", text)
         self.assertNotIn("registry-release-lock.v1.json", text)
 
-    def test_publishes_exact_assets_then_dispatches_exact_docs(self) -> None:
-        text, _ = workflow("release.yml")
+    def test_dispatches_docs_only_for_legacy_candidate_retries(self) -> None:
+        text, document = workflow("release.yml")
         self.assertIn("Recheck complete signed release and exact public images", text)
         self.assertIn("Publish immutable release", text)
         self.assertIn("-F draft=false", text)
         self.assertIn("-F prerelease=false", text)
-        self.assertIn('released_tag=${{ needs.verify.outputs.tag }}', text)
-        self.assertIn('docs_sha256=${{ needs.verify.outputs.docs_sha256 }}', text)
-        self.assertLess(
-            text.index("Publish immutable release"),
-            text.index("Dispatch authenticated docs promotion"),
+        self.assertNotIn("registry-docs-", text)
+        verify = step_run(
+            document,
+            "verify",
+            "Verify binding, candidate, and attestations",
+        )
+        self.assertIn(
+            "if ((major == 0 && minor >= 16 && minor < 19)); then",
+            verify,
+        )
+        self.assertIn(".docs.sha256", verify)
+        self.assertIn("docs_sha256=${docs_sha256}", verify)
+        dispatch = document["jobs"]["dispatch-docs"]
+        self.assertEqual(
+            dispatch["if"],
+            "needs.verify.outputs.docs_sha256 != ''",
+        )
+        dispatch_run = step_run(
+            document,
+            "dispatch-docs",
+            "Dispatch authenticated legacy docs promotion",
+        )
+        self.assertIn('released_tag=${{ needs.verify.outputs.tag }}', dispatch_run)
+        self.assertIn(
+            'docs_sha256=${{ needs.verify.outputs.docs_sha256 }}',
+            dispatch_run,
         )
 
 
@@ -783,6 +832,9 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             permissions = job.get("permissions", {})
             self.assertNotEqual(permissions.get("contents"), "write")
             self.assertNotEqual(permissions.get("packages"), "write")
+        self.assertNotIn("registry-docs-", text)
+        self.assertNotIn("docs_sha", text)
+        self.assertNotIn("docs-dispatch", text)
 
     def test_scorecard_is_schedule_or_manual_only(self) -> None:
         text, _ = workflow("scorecard.yml")

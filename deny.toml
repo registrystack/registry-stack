@@ -26,6 +26,14 @@ ignore = [
     # or Arrow/Parquet removes `paste` from the resolved graph, or before
     # upgrading those major versions.
     "RUSTSEC-2024-0436",
+    # RUSTSEC-2026-0249: `smartstring` 1.0.1 is unmaintained and has no patched
+    # release. It is pulled in by Rhai 1.25.1 for Evidence, its authoring tools,
+    # and legacy Relay. This is a maintenance-status advisory, not a reported
+    # vulnerability; Registry Stack executes only deployment-authored, bounded
+    # Rhai programs rather than requester-supplied scripts. Reviewed 2026-08-10.
+    # Review when Rhai replaces `smartstring`, before accepting untrusted
+    # scripts, or if the advisory gains security or correctness findings.
+    "RUSTSEC-2026-0249",
 ]
 
 [licenses]

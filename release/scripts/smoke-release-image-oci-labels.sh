@@ -6,18 +6,14 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 checker="${script_dir}/check-release-image-oci-labels.py"
 image_builder="${script_dir}/build-release-image.sh"
 layout_comparator="${script_dir}/compare-release-image-layouts.py"
-images=(registry-relay)
-relay_dockerfile="${repo_root}/release/docker/Dockerfile.registry-relay"
+images=(relay)
+relay_dockerfile="${repo_root}/release/docker/Dockerfile.relay"
 
 source_label="https://github.com/registrystack/registry-stack"
 revision_label="0123456789abcdef0123456789abcdef01234567"
 wrong_revision_label="89abcdef0123456789abcdef0123456789abcdef"
 version_label="v0.0.0-oci-label-smoke"
 source_date_epoch=0
-relay_release_features="$(<"${repo_root}/crates/registry-relay/canonical-release-features.txt")"
-sh "${repo_root}/crates/registry-relay/scripts/validate-feature-profile.sh" \
-  "${relay_release_features}"
-relay_features_label="org.registrystack.registry-relay.features=${relay_release_features}"
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/registry-stack-oci-labels.XXXXXX")"
 smoke_builder="registry-stack-release-smoke-$$-${RANDOM}"
@@ -30,8 +26,7 @@ true_binary=/bin/true
 if [[ ! -x "${true_binary}" ]]; then
   true_binary="$(type -P true)"
 fi
-cp "${true_binary}" "${context_dir}/dist/image-bin/registry-relay"
-cp "${true_binary}" "${context_dir}/dist/image-bin/registry-relay-rhai-worker"
+cp "${true_binary}" "${context_dir}/dist/image-bin/relay"
 cp "${repo_root}/LICENSE" "${context_dir}/LICENSE"
 
 docker buildx create \
@@ -98,31 +93,24 @@ for image in "${images[@]}"; do
   first_layout="${tmp_root}/correct-${image}-first"
   second_layout="${tmp_root}/correct-${image}-second"
   touch -t 200001010101 \
-    "${context_dir}/dist/image-bin/registry-relay" \
-    "${context_dir}/dist/image-bin/registry-relay-rhai-worker" \
+    "${context_dir}/dist/image-bin/relay" \
     "${context_dir}/LICENSE"
   build_layout "${image}" "${first_layout}" "${revision_label}" "${version_label}"
-  expected_label_args=()
-  if [[ "${image}" == "registry-relay" ]]; then
-    expected_label_args+=(--expected-label "${relay_features_label}")
-  fi
   python3 "${checker}" "oci-layout://${first_layout}" \
     --source "${source_label}" \
     --revision "${revision_label}" \
-    --version "${version_label}" \
-    "${expected_label_args[@]}"
+    --version "${version_label}"
 
   # Source mtimes and uncached RUN timestamps must not affect release-owned
   # layers. The exporter also normalizes inherited layers to the fixed epoch.
   touch -t 203001010101 \
-    "${context_dir}/dist/image-bin/registry-relay" \
-    "${context_dir}/dist/image-bin/registry-relay-rhai-worker" \
+    "${context_dir}/dist/image-bin/relay" \
     "${context_dir}/LICENSE"
   build_layout "${image}" "${second_layout}" "${revision_label}" "${version_label}"
   python3 "${layout_comparator}" "${first_layout}" "${second_layout}"
 done
 
-correct_layout="${tmp_root}/correct-registry-relay-first"
+correct_layout="${tmp_root}/correct-relay-first"
 missing_version_layout="${tmp_root}/missing-version"
 wrong_revision_layout="${tmp_root}/wrong-revision"
 
@@ -131,7 +119,6 @@ expect_failure "lower-case image config template" \
     --source "${source_label}" \
     --revision "${revision_label}" \
     --version "${version_label}" \
-    --expected-label "${relay_features_label}" \
     --format-template '{{json .Image.config}}'
 
 build_negative_layout "${relay_dockerfile}" "${missing_version_layout}" "${revision_label}"
@@ -139,8 +126,7 @@ expect_failure "image missing the version label" \
   python3 "${checker}" "oci-layout://${missing_version_layout}" \
     --source "${source_label}" \
     --revision "${revision_label}" \
-    --version "${version_label}" \
-    --expected-label "${relay_features_label}"
+    --version "${version_label}"
 
 build_negative_layout "${relay_dockerfile}" "${wrong_revision_layout}" \
   "${wrong_revision_label}" "${version_label}"
@@ -148,8 +134,7 @@ expect_failure "image with the wrong revision label" \
   python3 "${checker}" "oci-layout://${wrong_revision_layout}" \
     --source "${source_label}" \
     --revision "${revision_label}" \
-    --version "${version_label}" \
-    --expected-label "${relay_features_label}"
+    --version "${version_label}"
 python3 "${layout_comparator}" "${correct_layout}" "${wrong_revision_layout}" \
   --rootfs-only
 

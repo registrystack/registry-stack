@@ -436,8 +436,8 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
             return subprocess.run(
                 [
                     str(image_builder),
-                    "registry-relay",
-                    "example.invalid/registry-relay:test",
+                    "relay",
+                    "example.invalid/relay:test",
                     SOURCE,
                     REVISION,
                     VERSION,
@@ -459,10 +459,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("--provenance=false", result.stdout)
-        self.assertIn(
-            f"<{RELAY_FEATURE_LABEL}={RELAY_FEATURES}>",
-            result.stdout,
-        )
+        self.assertNotIn(RELAY_FEATURE_LABEL, result.stdout)
 
     def test_retained_oci_layout_disables_timestamped_provenance(self) -> None:
         result = self.run_wrapper(
@@ -626,14 +623,14 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
 
             self.assertEqual(
                 {
-                    str(ROOT / "release/docker/Dockerfile.registry-relay"),
+                    str(ROOT / "release/docker/Dockerfile.relay"),
                 },
                 set(dockerfiles),
             )
             self.assertEqual(
                 4,
                 dockerfiles.count(
-                    str(ROOT / "release/docker/Dockerfile.registry-relay")
+                    str(ROOT / "release/docker/Dockerfile.relay")
                 ),
             )
             python_calls = read_calls(checker_log)
@@ -646,7 +643,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             }
             self.assertEqual(
                 {
-                    "correct-registry-relay-first",
+                    "correct-relay-first",
                 },
                 {
                     Path(layout.removeprefix("oci-layout://")).name
@@ -659,15 +656,11 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 if call
                 and call[0].endswith("check-release-image-oci-labels.py")
                 and len(call) > 1
-                and "correct-registry-relay-first" in call[1]
+                and "correct-relay-first" in call[1]
                 and "--format-template" not in call
             ]
             self.assertEqual(1, len(relay_checks))
-            self.assertIn("--expected-label", relay_checks[0])
-            self.assertIn(
-                f"{RELAY_FEATURE_LABEL}={RELAY_FEATURES}",
-                relay_checks[0],
-            )
+            self.assertNotIn("--expected-label", relay_checks[0])
             comparisons = [
                 call
                 for call in python_calls
