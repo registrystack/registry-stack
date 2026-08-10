@@ -4,10 +4,10 @@ execution: products/relay-v2/scripts/test-http.sh
 scenarios:
   - {id: social-ready, project: social-assistance, journeyStep: readiness, assertion: One local protected Registry becomes ready from a generated package.}
   - {id: social-lookup, project: social-assistance, journeyStep: lookup-success, assertion: A bounded protected lookup returns only its selected governed properties.}
-  - {id: social-lookup-default, project: social-assistance, journeyStep: lookup-default, assertion: The default representation contains exactly the compiled disclosure profile.}
+  - {id: social-lookup-default, project: social-assistance, journeyStep: lookup-default, assertion: The default representation contains exactly the compiled disclosure profile and the exact safe partial-string result rather than the source identifier.}
   - {id: social-caseworker-representation, project: social-assistance, journeyStep: caseworker-representation, assertion: An entitled caseworker explicitly selects its full representation then narrows fields within it.}
-  - {id: social-unauthorized-representation, project: social-assistance, journeyStep: unauthorized-representation, assertion: A selected caseworker representation is denied without fallback to limited.}
-  - {id: social-unknown-representation, project: social-assistance, journeyStep: unknown-representation, assertion: An unknown representation is rejected before source access.}
+  - {id: social-unauthorized-representation, project: social-assistance, journeyStep: unauthorized-representation, assertion: A caller without the selected representation scope receives the same concealed resource outcome without fallback to limited.}
+  - {id: social-unknown-representation, project: social-assistance, journeyStep: unknown-representation, assertion: An unknown representation receives the same concealed resource outcome as a scope-hidden representation.}
   - {id: social-duplicate-representation, project: social-assistance, journeyStep: duplicate-representation, assertion: A malformed representation selection is rejected before source access.}
   - {id: social-lookup-second-subset, project: social-assistance, journeyStep: lookup-second-subset, assertion: A second valid field subset remains governed independently.}
   - {id: social-lookup-jsonld, project: social-assistance, journeyStep: lookup-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
@@ -25,6 +25,7 @@ scenarios:
   - {id: social-hidden, project: social-assistance, journeyStep: row-hidden, assertion: A row outside the caller binding has the unresolved outcome.}
   - {id: social-invalid, project: social-assistance, journeyStep: invalid-row, invalidSourceRowClass: missing-required, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid selected row fails closed as a source failure.}
   - {id: social-excessive, project: social-assistance, journeyStep: excessive-row, invalidSourceRowClass: excessive-size, expectedStatus: 503, expectedCode: source.unavailable, assertion: An excessively large source value fails closed as a source failure.}
+  - {id: social-invalid-transform, project: social-assistance, journeyStep: invalid-transform-input, invalidSourceRowClass: excessive-size, expectedStatus: 503, expectedCode: source.unavailable, assertion: An oversized partial-string source fails atomically as a value-free source failure.}
   - {id: social-quota, project: social-assistance, journeyStep: quota-exhausted, assertion: The named lookup fails closed after its compiled-operation quota is exhausted.}
   - {id: business-discovery, project: business-registry, journeyStep: registry-discovery, assertion: Discovery derives only the public Consultation capabilities.}
   - {id: business-first-page, project: business-registry, journeyStep: first-page, assertion: The snapshot list is paginated and has a cursor.}
@@ -36,8 +37,8 @@ scenarios:
   - {id: business-second-subset, project: business-registry, journeyStep: second-field-subset, assertion: A second valid field subset remains governed independently.}
   - {id: business-read, project: business-registry, journeyStep: identifier-read, assertion: An identifier read is cacheable under the snapshot posture.}
   - {id: business-registrar-read, project: business-registry, journeyStep: registrar-read, assertion: The protected registrar representation is selected explicitly and remains no-store.}
-  - {id: business-registrar-denied, project: business-registry, journeyStep: registrar-representation-denied, assertion: An unentitled caller cannot select the protected registrar representation.}
-  - {id: business-public-unknown-representation, project: business-registry, journeyStep: public-representation-unknown, assertion: Public discovery cannot turn an unknown representation into a fallback.}
+  - {id: business-registrar-denied, project: business-registry, journeyStep: registrar-representation-denied, assertion: A caller without the registrar representation scope receives the concealed resource outcome.}
+  - {id: business-public-unknown-representation, project: business-registry, journeyStep: public-representation-unknown, assertion: Public discovery cannot enumerate an unknown representation or turn it into a fallback.}
   - {id: business-read-jsonld, project: business-registry, journeyStep: identifier-read-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
   - {id: business-revalidation, project: business-registry, journeyStep: identifier-read-revalidated, assertion: A matching ETag produces an empty 304 response with the same validator.}
   - {id: business-unknown-field, project: business-registry, journeyStep: unknown-field, assertion: An unknown public property is rejected before source access.}
@@ -54,9 +55,9 @@ scenarios:
   - {id: civil-read-second-subset, project: civil-event, journeyStep: registrar-read-second-subset, assertion: A second valid field subset remains governed independently.}
   - {id: civil-read-jsonld, project: civil-event, journeyStep: registrar-read-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
   - {id: civil-lookup, project: civil-event, journeyStep: lookup-success, assertion: The verification scope receives its distinct disclosure profile.}
-  - {id: civil-supervisory-date-precision, project: civil-event, journeyStep: supervisory-date-precision, assertion: The supervisory representation returns reviewed date-precision output over the same exact lookup.}
-  - {id: civil-supervisory-denied, project: civil-event, journeyStep: supervisory-representation-denied, assertion: A registrar-verification grant cannot fall back from a denied supervisory representation.}
-  - {id: civil-invalid-representation, project: civil-event, journeyStep: invalid-representation, assertion: An invalid civil representation is rejected before lookup execution.}
+  - {id: civil-supervisory-date-precision, project: civil-event, journeyStep: supervisory-date-precision, assertion: The supervisory representation returns exact reviewed year and year-month outputs with distinct public types and semantic terms over the same exact lookup.}
+  - {id: civil-supervisory-denied, project: civil-event, journeyStep: supervisory-representation-denied, assertion: A registrar-verification grant receives the concealed resource outcome and cannot fall back from a supervisory representation.}
+  - {id: civil-invalid-representation, project: civil-event, journeyStep: invalid-representation, assertion: An unknown civil representation receives the concealed resource outcome before lookup execution.}
   - {id: civil-route, project: civil-event, journeyStep: no-list, assertion: A non-enumerable Registry has no collection route.}
   - {id: civil-scope, project: civil-event, journeyStep: scope-separation, assertion: A lookup scope cannot synthesize identifier read.}
   - {id: civil-reverse-scope, project: civil-event, journeyStep: reverse-scope-separation, assertion: A registrar read scope cannot synthesize verification lookup.}
@@ -70,4 +71,5 @@ scenarios:
   - {id: civil-no-match, project: civil-event, journeyStep: no-match, assertion: A missing civil-event lookup has the unresolved outcome.}
   - {id: civil-ambiguous, project: civil-event, journeyStep: ambiguous, assertion: An ambiguous lookup has the unresolved outcome.}
   - {id: civil-invalid, project: civil-event, journeyStep: invalid-row, invalidSourceRowClass: unexpected-value, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid source row fails closed as a source failure.}
+  - {id: civil-invalid-transform, project: civil-event, journeyStep: invalid-transform-input, invalidSourceRowClass: unexpected-value, expectedStatus: 503, expectedCode: source.unavailable, assertion: A noncanonical date transform input fails atomically as a value-free source failure.}
   - {id: civil-quota, project: civil-event, journeyStep: quota-exhausted, assertion: A distinct named lookup has its own bounded quota and value-free refusal.}

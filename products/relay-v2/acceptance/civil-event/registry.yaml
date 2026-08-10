@@ -105,6 +105,15 @@ resources:
         label: Registration year
         description: Reviewed year-precision form of the civil-event registration date.
         classification: {privacy: derived, institutional: confidential, handling: confidential, status: reviewed}
+      registrationYearMonth:
+        sourceColumn: registration_date
+        transform: {kind: date-precision, sourceType: date, precision: year-month}
+        type: year-month
+        sourceRequired: true
+        semanticTerm: local:registrationYearMonth
+        label: Registration year and month
+        description: Reviewed year-month-precision form of the civil-event registration date.
+        classification: {privacy: derived, institutional: confidential, handling: confidential, status: reviewed}
       registrationArea:
         sourceColumn: registration_area_code
         type: controlled-code
@@ -127,7 +136,7 @@ resources:
       verification-result:
         properties: [eventReference, eventType, registrationStatus, registrationDate, certificateAvailable]
       supervisory-verification:
-        properties: [eventReference, eventType, registrationStatus, registrationYear, certificateAvailable]
+        properties: [eventReference, eventType, registrationStatus, registrationYear, registrationYearMonth, certificateAvailable]
     operations:
       read:
         defaultRepresentation: registrar

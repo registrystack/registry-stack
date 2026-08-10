@@ -2,7 +2,7 @@ schemaVersion: relay.registrystack.org/generated-baselines/v1alpha1
 product: relay-v2
 projects:
   social-assistance:
-    packageRevision: sha256:0e97389ed80f35a90d075f3227365cd37acea51a4df0b30957b6c168617d2bf1
+    packageRevision: sha256:bb39e792cbe09e374e5e8fd3ebb468af64b99838158a273a6f48163b0179ae99
     contractRevision: sha256:0fd06f53b937afbb0252715010ff222c4cb8817a6c62648a2a72ac4d35eae282
     sourceSchemaFingerprints:
       assistance: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
@@ -26,7 +26,7 @@ projects:
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-caseworker.context.jsonld
       representationIdentifier: caseworker
-      sha256: sha256:17e5183e5fb37679179920acf100116ffa514857a67796986d0a9f62b39e77d3
+      sha256: sha256:220f8ac8890bd1167e90c4aa836d75858d89cc0016173227ac7aafaf6a8e9b07
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-caseworker-processing
       mediaType: application/json
@@ -40,14 +40,14 @@ projects:
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-caseworker.schema.json
       representationIdentifier: caseworker
-      sha256: sha256:df47a05280064f4e708271690a7906190ada19f1fdc622f38e021c09ba883030
+      sha256: sha256:c16f484f5255903f91f86fac25a81d5e7cbcf07ada0a5da1fa3b97c2c5b649cd
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-caseworker-shacl
       mediaType: text/turtle
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-caseworker.shacl.ttl
       representationIdentifier: caseworker
-      sha256: sha256:8a9552f08b8dcee6a8d40bab5abe9c0f20baf542d537c8731d0c7e0c34da1cb8
+      sha256: sha256:68664354ffccbe112d1a7e06dd68d96d5cd66bc681bc8e44495875b46696c076
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-caseworker-vocabulary
       mediaType: application/ld+json
@@ -75,7 +75,7 @@ projects:
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-limited.context.jsonld
       representationIdentifier: limited
-      sha256: sha256:c648dd137278de13ccb21d9b02f0628e8a46fac17327e3fc5ee2b8513da97c9a
+      sha256: sha256:58aec134af96c8b39f9f0a8dde7c5dd780fedc419637fe1848724a4120d54fc9
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-limited-processing
       mediaType: application/json
@@ -89,14 +89,14 @@ projects:
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-limited.schema.json
       representationIdentifier: limited
-      sha256: sha256:8dce934403094548bc7a0666f489d47632834522b53ba61f7082f9e5eb3b807b
+      sha256: sha256:728f6d4fdc24e33ccad2d36c17d7c403ed5927c93fbbc62578ed13b990c7c6a2
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-limited-shacl
       mediaType: text/turtle
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-limited.shacl.ttl
       representationIdentifier: limited
-      sha256: sha256:173bb033ad5b00f0edb1769f3815f9eee882292e93510d3e529a2629991395f2
+      sha256: sha256:ea795cccdde860699ed7998e38cdae8f4dd1784acda936242a82cb62b796f95f
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-limited-vocabulary
       mediaType: application/ld+json
@@ -138,14 +138,14 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/assistance-enrolment.full.schema.json
       representationIdentifier: null
-      sha256: sha256:48bfebf978cd34b49491fbd0e58d535394f1f224ff701b8cb4587305bf66cf26
+      sha256: sha256:4c669711db0b989ac58e1a36ec52afedd05fe2726f7439c0f204fcb0050bb79d
       visibility: operator-only
     - id: assistance-enrolment-full-shacl
       mediaType: text/turtle
       operationIdentifier: null
       path: generated/artifacts/assistance-enrolment.full.shacl.ttl
       representationIdentifier: null
-      sha256: sha256:0f5bf09cb74494b029e0b8e19ade99d0fe025ec0bee199e03fdd6ae277a1762b
+      sha256: sha256:53324cf42d1b66d8292897b7d046fe7a68f2c99802c3df7963bb17506ed9e1ad
       visibility: operator-only
     - id: assistance-enrolment-full-vocabulary
       mediaType: application/ld+json
@@ -252,7 +252,7 @@ projects:
       size: 6472
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:511b9a16ee7985a042a2cda944118d6173ee0f00c98478bf8f3dcc8e33f8fee6
+    packageRevision: sha256:6bc260ff78b6600b4c6b019e00a79a41e604cb92adcb64142eb0a15c464ca52d
     contractRevision: sha256:6c4ea84a578cf589ffb851722830f90d7c241998d82ea419f7b823640cd056b5
     sourceSchemaFingerprints:
       companies: sha256:5f12cd971dfa9cafd98018bd8723f2c3902e7d96b3c57ecf5c20e4885eb806a8
@@ -290,7 +290,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/registered-business--list--representation-public-register.context.jsonld
       representationIdentifier: null
-      sha256: sha256:64bac801dca4b23b1179d6d0e024546c51dc0d910348fcb261b8e69b99aeaf41
+      sha256: sha256:a484835aa45107953b758934d5b9d13e47fc8d7c7a06c11fe709ada7e740f2d2
       visibility: public
     - id: registered-business--list--representation-public-register-processing
       mediaType: application/json
@@ -304,14 +304,14 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/registered-business--list--representation-public-register.schema.json
       representationIdentifier: null
-      sha256: sha256:df98dea2622452d6729268e6d77f2b5bdf5982f2d5f6767189985c6f1dbf870f
+      sha256: sha256:fc9ae1d572bad5863d99b302c6168807ecfbbb09f0977d075096357d60bf7d78
       visibility: public
     - id: registered-business--list--representation-public-register-shacl
       mediaType: text/turtle
       operationIdentifier: null
       path: generated/artifacts/registered-business--list--representation-public-register.shacl.ttl
       representationIdentifier: null
-      sha256: sha256:52f7f327c7eaf3b215590b93679e6a7960218d2822f570c9971e8c001bb8706b
+      sha256: sha256:61ac61a72c888c6c1850c16ed11b6ec6be0bb96d8f592fc417759f38a1eaaee0
       visibility: public
     - id: registered-business--list--representation-public-register-vocabulary
       mediaType: application/ld+json
@@ -339,7 +339,7 @@ projects:
       operationIdentifier: registered-business.list
       path: generated/artifacts/registered-business--list--representation-registrar.context.jsonld
       representationIdentifier: registrar
-      sha256: sha256:4ded5db266e71750240973f012a644e1282325fc7a6e7fe717100cc79f16f8db
+      sha256: sha256:d9c017c057c7228e8145e149494961b7bd8edd4e46c882903af19fbb29d5c960
       visibility: operation-bound
     - id: registered-business--list--representation-registrar-processing
       mediaType: application/json
@@ -353,14 +353,14 @@ projects:
       operationIdentifier: registered-business.list
       path: generated/artifacts/registered-business--list--representation-registrar.schema.json
       representationIdentifier: registrar
-      sha256: sha256:faf6887e75f88da0552192e58fa918b48b7affebeb1d73268ca40119e24351ba
+      sha256: sha256:f2dc9e839f20415ad032c657744db091f732d2dc49133884f4d570a580b3fcc5
       visibility: operation-bound
     - id: registered-business--list--representation-registrar-shacl
       mediaType: text/turtle
       operationIdentifier: registered-business.list
       path: generated/artifacts/registered-business--list--representation-registrar.shacl.ttl
       representationIdentifier: registrar
-      sha256: sha256:a1942ba407f22a4cda0da41e757781270d5fbe7c489c4329f20f73f06e029c0b
+      sha256: sha256:c72599e5a94a0c7a8460b3551ef10506cf9e8fa3bd906c828c4a62092ac54581
       visibility: operation-bound
     - id: registered-business--list--representation-registrar-vocabulary
       mediaType: application/ld+json
@@ -381,7 +381,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/registered-business--read--representation-public-register.context.jsonld
       representationIdentifier: null
-      sha256: sha256:64bac801dca4b23b1179d6d0e024546c51dc0d910348fcb261b8e69b99aeaf41
+      sha256: sha256:a484835aa45107953b758934d5b9d13e47fc8d7c7a06c11fe709ada7e740f2d2
       visibility: public
     - id: registered-business--read--representation-public-register-processing
       mediaType: application/json
@@ -395,14 +395,14 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/registered-business--read--representation-public-register.schema.json
       representationIdentifier: null
-      sha256: sha256:727e234dcfac3cbfe0e9f1924412d4f5d06b9fea2b0ed3a8d5b29747fcdbf5ce
+      sha256: sha256:e57c261ade7808c2974aa86d0bd2d16ac10038b2fe2e0e3b08065099b0e7607c
       visibility: public
     - id: registered-business--read--representation-public-register-shacl
       mediaType: text/turtle
       operationIdentifier: null
       path: generated/artifacts/registered-business--read--representation-public-register.shacl.ttl
       representationIdentifier: null
-      sha256: sha256:52f7f327c7eaf3b215590b93679e6a7960218d2822f570c9971e8c001bb8706b
+      sha256: sha256:61ac61a72c888c6c1850c16ed11b6ec6be0bb96d8f592fc417759f38a1eaaee0
       visibility: public
     - id: registered-business--read--representation-public-register-vocabulary
       mediaType: application/ld+json
@@ -430,7 +430,7 @@ projects:
       operationIdentifier: registered-business.read
       path: generated/artifacts/registered-business--read--representation-registrar.context.jsonld
       representationIdentifier: registrar
-      sha256: sha256:4ded5db266e71750240973f012a644e1282325fc7a6e7fe717100cc79f16f8db
+      sha256: sha256:d9c017c057c7228e8145e149494961b7bd8edd4e46c882903af19fbb29d5c960
       visibility: operation-bound
     - id: registered-business--read--representation-registrar-processing
       mediaType: application/json
@@ -444,14 +444,14 @@ projects:
       operationIdentifier: registered-business.read
       path: generated/artifacts/registered-business--read--representation-registrar.schema.json
       representationIdentifier: registrar
-      sha256: sha256:f816daefa266ce44c6fb945eb6bee2fc6a573d9b7104e5d8c7ee1797eb645efc
+      sha256: sha256:aa6b7009b4a5aa191cce6c057b6a4f3ee7696768c7e21ff8a41802a2f3b44dba
       visibility: operation-bound
     - id: registered-business--read--representation-registrar-shacl
       mediaType: text/turtle
       operationIdentifier: registered-business.read
       path: generated/artifacts/registered-business--read--representation-registrar.shacl.ttl
       representationIdentifier: registrar
-      sha256: sha256:a1942ba407f22a4cda0da41e757781270d5fbe7c489c4329f20f73f06e029c0b
+      sha256: sha256:c72599e5a94a0c7a8460b3551ef10506cf9e8fa3bd906c828c4a62092ac54581
       visibility: operation-bound
     - id: registered-business--read--representation-registrar-vocabulary
       mediaType: application/ld+json
@@ -500,14 +500,14 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/registered-business.full.schema.json
       representationIdentifier: null
-      sha256: sha256:35dbdc7772cdd52829d101e49c18571cf3dbfe8f9737b3a281b9faf3d474a351
+      sha256: sha256:8266c4c05a0c304d255de8c69e78bac01b6d2ad86d540cde95e234ca775878fa
       visibility: operator-only
     - id: registered-business-full-shacl
       mediaType: text/turtle
       operationIdentifier: null
       path: generated/artifacts/registered-business.full.shacl.ttl
       representationIdentifier: null
-      sha256: sha256:6a43f572f14b05968039d17119f534b218eaa649c8a995921f80f47d0b52c098
+      sha256: sha256:5800a8e5dc107a5d7260e2567e36504afded088c3335af1a53d0969fdb099270
       visibility: operator-only
     - id: registered-business-full-vocabulary
       mediaType: application/ld+json
@@ -599,8 +599,8 @@ projects:
       size: 7020
       visibility: operator-only
   civil-event:
-    packageRevision: sha256:c02ef4ef1c364798ba6dc37fa6c4bc47c78dafbc323046d9ba01db1901ba19d0
-    contractRevision: sha256:649c03b1ad1538914fabd918de4617a6ccaa65227ee8d3ebc3b8c385f2348fa7
+    packageRevision: sha256:1321aa211982705a63644c45435dc716aacf36b9f0a5872013202fb1985446c1
+    contractRevision: sha256:44a3604af965eb51983e44c8cebbb2486cd0655bfe265ce8a47cef22c8f1246a
     sourceSchemaFingerprints:
       events: sha256:7f770d64cb19ec54caca2aa56378b13a43cd5edc206ff44b5fecc99ee9e63759
     artifacts:
@@ -616,21 +616,21 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
       representationIdentifier: null
-      sha256: sha256:a41bd39464a211c0b69c31fa98a0b512b32a093425252951cfa39c2a9f73a2a9
+      sha256: sha256:7ac021239eaf96b23637b3c0fb2606592272ecb46c79d72b2b4fdbf4213a0660
       visibility: operator-only
     - id: capability-inventory
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.json
       representationIdentifier: null
-      sha256: sha256:cd6407aed23bf39ea3dbc8736da2b8d0a2a2f02042fe06f0fd14c73d2756c246
+      sha256: sha256:c944ae58e0b91a404d70d492d46a1fd0ab45a7a455140a65642378c6fe57cdd6
       visibility: public
     - id: civil-event--lookup-verify-registration--representation-registrar-verification-capability
       mediaType: application/json
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-registrar-verification.capability.json
       representationIdentifier: registrar-verification
-      sha256: sha256:02441c3f6360721b5d81ba497a871d5f5655a002f5b2b87f55f971cd4407cc4a
+      sha256: sha256:f90a9e40f3c5c74fb6ac659a9d89526d2e9dfd1d2c43edfc28dba5b6d91014f7
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-registrar-verification-classifications
       mediaType: application/json
@@ -644,7 +644,7 @@ projects:
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-registrar-verification.context.jsonld
       representationIdentifier: registrar-verification
-      sha256: sha256:42c276f75d377fc0b86db9ddef7aff6a987c8dd8b3b035036b367ddc779d5cc6
+      sha256: sha256:cecc395f6eab42ed11603ded1b76d25980ede8fbe9e2b9adb02a71b8c3a4e423
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-registrar-verification-processing
       mediaType: application/json
@@ -658,14 +658,14 @@ projects:
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-registrar-verification.schema.json
       representationIdentifier: registrar-verification
-      sha256: sha256:4a5f34a0cc8804a3d94b0589a86cf4604bff836fa3bbf38b75efabeac3b526d2
+      sha256: sha256:9bfbfca6752f1cc81419c49bc2b2ccc9c23ce14a044500b6a6d071d409052bed
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-registrar-verification-shacl
       mediaType: text/turtle
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-registrar-verification.shacl.ttl
       representationIdentifier: registrar-verification
-      sha256: sha256:0198029033b327e73fe5774caa7e1ad887df29d2d63869a45e8ad0e562620c09
+      sha256: sha256:bd2e2326bc3e25c614dc239aa5bb56ee371f57b6155d8ced40ea2eccfcdaaf7a
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-registrar-verification-vocabulary
       mediaType: application/ld+json
@@ -679,56 +679,56 @@ projects:
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.capability.json
       representationIdentifier: supervisory
-      sha256: sha256:85da4410238a0e08ad671bcef84ac1bfb0819bbc969689cb748b3eaeab5419bd
+      sha256: sha256:d5cc6a898eb258f73e9c83828f4dbae6e981c528658dfb23b8f87c70c21a0dd1
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-supervisory-classifications
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.classifications.json
       representationIdentifier: null
-      sha256: sha256:8d5a6c08fbc15972ec65e1c93d1ef2094322f081d4f4ebb30a367cedf33b9005
+      sha256: sha256:4b4c5f7358022430baf7796849f42a89271d8a36273ef59526f3c12116820ba4
       visibility: operator-only
     - id: civil-event--lookup-verify-registration--representation-supervisory-context
       mediaType: application/ld+json
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.context.jsonld
       representationIdentifier: supervisory
-      sha256: sha256:8934a9f1af201270ce58eb6fc8237e68ab60584d87643387b0a6f3da47ce1766
+      sha256: sha256:e4408efdb0ddfed828dc8148f36f86c045ec0f558766ec5275908435dd92c689
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-supervisory-processing
       mediaType: application/json
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.processing.json
       representationIdentifier: supervisory
-      sha256: sha256:ed8bbdd4b6111c88dd16b3bf7aaa8a126d71344ca2ebae5f735c5e2fe497917e
+      sha256: sha256:21c4c9c4d72e9f110247029329be643e18bb96e6aaaac5eb99b6d762b1721b4c
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-supervisory-schema
       mediaType: application/schema+json
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.schema.json
       representationIdentifier: supervisory
-      sha256: sha256:49b8d47c5caffc83d776d7e3606f9bc6a86c2437048f7928b40552250582676d
+      sha256: sha256:77cc2dab5ac1334a9bddedd486eb669925fe7064c7ab068622d6204b1992338c
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-supervisory-shacl
       mediaType: text/turtle
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.shacl.ttl
       representationIdentifier: supervisory
-      sha256: sha256:1ff1315fa0f1f007d3619b6d1826f1af31ac9e11892875e53b6210a536d8eed2
+      sha256: sha256:193cdd4cc378c7252c0c734354ef5e9f8f5eea4eafc5a8dcf9729d0a48e69a7a
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-supervisory-vocabulary
       mediaType: application/ld+json
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.vocabulary.jsonld
       representationIdentifier: supervisory
-      sha256: sha256:be70442b29f25d3cd4455bbc4385512a5990dd787ee48bc4c08f34b04a8913ef
+      sha256: sha256:f69da73736b4c0847cb66bb1524fb8f6182b7ff71c81eecc73f3588778d172d7
       visibility: operation-bound
     - id: civil-event--read--representation-registrar-capability
       mediaType: application/json
       operationIdentifier: civil-event.read
       path: generated/artifacts/civil-event--read--representation-registrar.capability.json
       representationIdentifier: registrar
-      sha256: sha256:5fbb5f391438834f199fc3974daa9e41f990fc0c3210fccfbf76f2874c635e04
+      sha256: sha256:5c49bf297ff58f5e4e1cb2c7cc190471c1d56fb5ec4bfc42f5d62938245eb6a2
       visibility: operation-bound
     - id: civil-event--read--representation-registrar-classifications
       mediaType: application/json
@@ -742,7 +742,7 @@ projects:
       operationIdentifier: civil-event.read
       path: generated/artifacts/civil-event--read--representation-registrar.context.jsonld
       representationIdentifier: registrar
-      sha256: sha256:35d82eab1ee218e40fe01f1981949e19b4ee38b0fde3f2f6f0e4674a75959992
+      sha256: sha256:44bc76f5795bbf1fc53b33373b901a5ce1bf612f459a07715db6dd71ae1f2d5d
       visibility: operation-bound
     - id: civil-event--read--representation-registrar-processing
       mediaType: application/json
@@ -756,14 +756,14 @@ projects:
       operationIdentifier: civil-event.read
       path: generated/artifacts/civil-event--read--representation-registrar.schema.json
       representationIdentifier: registrar
-      sha256: sha256:d95b063faa78322eb16624fc0d9ed8eb08025c1206d15cd589f2a81d5f357471
+      sha256: sha256:bd423d35379df92607a77594e1befe474a62ba18c3860c3d1455ce1029f02558
       visibility: operation-bound
     - id: civil-event--read--representation-registrar-shacl
       mediaType: text/turtle
       operationIdentifier: civil-event.read
       path: generated/artifacts/civil-event--read--representation-registrar.shacl.ttl
       representationIdentifier: registrar
-      sha256: sha256:90cfe36f1e3ea53b8c098555ef4aa048d050cae75b0a4bf18f4efd55d8a9b8ea
+      sha256: sha256:33cb54f0a1a3a35a132e50a78a40b2c2f7dd5abaf0a7fd768e32fb4a1bb2f390
       visibility: operation-bound
     - id: civil-event--read--representation-registrar-vocabulary
       mediaType: application/ld+json
@@ -777,7 +777,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/civil-event.classifications.json
       representationIdentifier: null
-      sha256: sha256:89397956719cb52cadf2ae045a2c4cd86487ed4841aa3ff2ac958b0cbfc13e54
+      sha256: sha256:f5bbe318289cea6113fcf05873855ca972c0e0a1796d66f2b9ec28265cdaa25d
       visibility: operator-only
     - id: civil-event-codelist-0
       mediaType: application/schema+json
@@ -812,21 +812,21 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/civil-event.full.schema.json
       representationIdentifier: null
-      sha256: sha256:891f7eb10a59b8b8022d45fbceae485c5b17d769f6a4d582c1014009fd140cb3
+      sha256: sha256:8719ed7bf8ccb512b1da1a2ed33e70308a4f2e75d919d3b62d071ba6e76a8bbb
       visibility: operator-only
     - id: civil-event-full-shacl
       mediaType: text/turtle
       operationIdentifier: null
       path: generated/artifacts/civil-event.full.shacl.ttl
       representationIdentifier: null
-      sha256: sha256:904488714d833929b35a74de0017455c5ea9018af020a81367ed033f63f8b062
+      sha256: sha256:fbb6bb7991d85d5de37e5d4115318c43dc108a1a61f3449496a635221a435642
       visibility: operator-only
     - id: civil-event-full-vocabulary
       mediaType: application/ld+json
       operationIdentifier: null
       path: generated/artifacts/civil-event.full.vocabulary.jsonld
       representationIdentifier: null
-      sha256: sha256:0d5901e0b9479f0482022cb5a1b4d7af90bfb2bf4b087b56cc46d6550c2b3b86
+      sha256: sha256:437d021d8cd85c4e7847dc9df983c7375a8332efb0b5ac77ce7a5fda4fda3b58
       visibility: operator-only
     - id: civil-event-processing-full
       mediaType: application/json
@@ -840,7 +840,7 @@ projects:
       operationIdentifier: null
       path: generated/openapi.full.yaml
       representationIdentifier: null
-      sha256: sha256:0192677820ef2d9ba0d0bd1548fab606badd415763195407e6a48fca79f89211
+      sha256: sha256:04b9fc444ace2a9e3062f82fdf3e9cbd3d375422c109dd0c3bdd42fe7b8efdf4
       visibility: operator-only
     - id: openapi-public
       mediaType: application/json
@@ -883,13 +883,13 @@ projects:
     - generated: false
       mediaType: application/yaml
       path: governed/governance/classification-review-rationale.md
-      sha256: sha256:23a1ae8431bf2979f60a60191407a832b2d4fbae035bc3ca471465590b6243be
-      size: 185
+      sha256: sha256:bbd8dbc65fb78549df5f425d54f073182d2a7a977f4fafbf10d7ace0dde7f514
+      size: 258
       visibility: operator-only
     - generated: false
       mediaType: application/yaml
       path: governed/governance/classification-review.yaml
-      sha256: sha256:7de2425d26c6b841a44fa4651eb336b07eb74d5d564d502e9298536416904558
+      sha256: sha256:9ccdc02c3564c793540c21dc1a86d50a03ed890c83f54ec4d6ed1f0e06855864
       size: 423
       visibility: operator-only
     - generated: false
@@ -913,6 +913,6 @@ projects:
     - generated: false
       mediaType: application/yaml
       path: registry.yaml
-      sha256: sha256:59916fb89188b9eda0fddde75f96dee7f25027b694849c648f94acd023a424e1
-      size: 8151
+      sha256: sha256:6c6298aec06bb136d5851fc66fc0aa4d77bc7cf17e9ace2bf1bed35c6b387d4a
+      size: 8690
       visibility: operator-only

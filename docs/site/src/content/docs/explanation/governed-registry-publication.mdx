@@ -30,7 +30,7 @@ Each successful Record preserves Registry Core: Registry and Record identifiers,
 lifecycle state, Authority, recorded time, response-schema reference, and semantic-model reference.
 Only `domainData` varies by representation and requester field subset.
 The pair `(registryIdentifier, recordIdentifier)` remains authoritative when JSON for Linked Data
-(JSON-LD) adds a derived `@id`.
+(JSON-LD) adds a derived `@id` and the resource semantic class as `@type`.
 
 ## Compile a complete reviewed agreement
 
@@ -57,6 +57,8 @@ The profile is the maximum published-property set for that response.
 Callers choose the default by omitting `representation`, or request a supplied representation by
 name.
 Relay authorizes the exact choice and never falls back when it is unknown or denied.
+A syntactically valid unknown name and a scope-hidden name share the generic
+`404 resource.not_found` response, so callers cannot enumerate the finite representation map.
 `fields` runs after representation selection and can only narrow `domainData` within that profile.
 It cannot introduce SQL, source columns, joins, filters, ordering, expressions, transformations, or
 new authorization.
@@ -88,6 +90,8 @@ operations, or response signing.
 Relay supports two fixed transforms under the contract: partial strings use the `***` marker, and
 date precision produces typed `year` or `year-month` output.
 It does not offer caller-defined masks, hashes, pseudonyms, encryption, or transform expressions.
+An invalid selected source row or transform input fails the complete response as value-free
+`503 source.unavailable`; Relay never treats invalid source data as a normal unresolved lookup.
 
 ## Make records and artifacts visible together
 

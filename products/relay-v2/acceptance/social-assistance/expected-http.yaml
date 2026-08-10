@@ -55,6 +55,7 @@ steps:
       status: 200
       registryCoreRequired: true
       domainDataKeys: [maskedEnrolmentReference, enrolmentStatus, validThrough]
+      domainDataValues: {maskedEnrolmentReference: "***0001"}
   - id: caseworker-representation
     authorizationFixture: social-caseworker-area-a
     request:
@@ -73,7 +74,7 @@ steps:
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
       query: {representation: caseworker}
       body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
-    expect: {status: 403, code: consultation.denied}
+    expect: {status: 404, code: resource.not_found}
   - id: unknown-representation
     authorizationFixture: social-lookup-area-a
     request:
@@ -81,7 +82,7 @@ steps:
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
       query: {representation: unknown-profile}
       body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
-    expect: {status: 404, code: representation.not_found}
+    expect: {status: 404, code: resource.not_found}
   - id: duplicate-representation
     authorizationFixture: social-lookup-area-a
     request:
@@ -209,6 +210,13 @@ steps:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
       body: {caseReference: CASE-SYNTH-BAD2, personReference: PERSON-SYNTH-BAD2}
+    expect: {status: 503, code: source.unavailable}
+  - id: invalid-transform-input
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-XFORM, personReference: PERSON-SYNTH-XFORM}
     expect: {status: 503, code: source.unavailable}
   - id: quota-exhausted
     authorizationFixture: social-lookup-area-a

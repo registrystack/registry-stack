@@ -29,6 +29,15 @@ INVALID_SOURCE_ROW_CLASSES = {
     "unexpected-value",
     "excessive-size",
 }
+TRANSFORM_FAILURE_SCENARIOS = {
+    "social-invalid-transform",
+    "civil-invalid-transform",
+}
+REPRESENTATION_CONCEALMENT_STEPS = {
+    "social-assistance": {"unauthorized-representation", "unknown-representation"},
+    "business-registry": {"registrar-representation-denied", "public-representation-unknown"},
+    "civil-event": {"supervisory-representation-denied", "invalid-representation"},
+}
 SECURITY_INVARIANT_IDS = {
     "sec-contract-runtime-separation",
     "sec-package-activation-integrity",
@@ -38,6 +47,11 @@ SECURITY_INVARIANT_IDS = {
     "sec-token-profile-closed",
     "sec-resource-existence-concealment",
     "sec-operation-confinement",
+    "sec-classification-review-binding",
+    "sec-finite-representation-authorization",
+    "sec-public-representation-processing-floor",
+    "sec-closed-mask-and-date-transforms",
+    "sec-representation-state-and-metadata-binding",
     "sec-operation-quota",
     "sec-trusted-context",
     "sec-disclosure-monotonic",
@@ -381,6 +395,12 @@ def validate_catalogs(errors: list[str]) -> None:
             errors.append(f"artifact inventory: missing {required}")
 
     steps = journey_steps(errors)
+    for project, concealed_steps in REPRESENTATION_CONCEALMENT_STEPS.items():
+        for step in concealed_steps:
+            if steps.get(project, {}).get(step) != (404, "resource.not_found"):
+                errors.append(
+                    f"{project}: {step} must conceal representation existence as 404 resource.not_found"
+                )
     scenarios = mapping(
         load_yaml(PRODUCT_ROOT / "contracts/acceptance-scenario-matrix.yaml"),
         "scenario matrix",
@@ -444,6 +464,10 @@ def validate_catalogs(errors: list[str]) -> None:
         errors.append(
             "acceptance journeys: invalid source-row classes must cover "
             + ", ".join(sorted(INVALID_SOURCE_ROW_CLASSES))
+        )
+    if not TRANSFORM_FAILURE_SCENARIOS.issubset(scenario_ids):
+        errors.append(
+            "acceptance journeys: both bounded transforms require an atomic source-failure scenario"
         )
 
     matrix = mapping(

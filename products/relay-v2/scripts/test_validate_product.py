@@ -162,6 +162,76 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
             any("expectation disagrees with the journey" in error for error in errors), errors
         )
 
+    def test_invalid_transform_scenario_must_remain_a_source_failure(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_unresolved_transform(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "acceptance-scenario-matrix.yaml":
+                scenario = next(
+                    item
+                    for item in value["scenarios"]
+                    if item.get("id") == "social-invalid-transform"
+                )
+                scenario["expectedStatus"] = 404
+                scenario["expectedCode"] = "consultation.unresolved"
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_unresolved_transform
+        ):
+            VALIDATOR.validate_catalogs(errors)
+        self.assertTrue(
+            any("must expect 503 source.unavailable" in error for error in errors), errors
+        )
+
+    def test_both_bounded_transforms_require_a_failure_scenario(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_civil_transform_scenario(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "acceptance-scenario-matrix.yaml":
+                scenario = next(
+                    item
+                    for item in value["scenarios"]
+                    if item.get("id") == "civil-invalid-transform"
+                )
+                scenario["id"] = "civil-transform-failure-renamed"
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_without_civil_transform_scenario
+        ):
+            VALIDATOR.validate_catalogs(errors)
+        self.assertTrue(
+            any("both bounded transforms require" in error for error in errors), errors
+        )
+
+    def test_unknown_and_scope_hidden_representations_share_one_outcome(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_enumerable_unknown_representation(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "expected-http.yaml" and path.parent.name == "social-assistance":
+                step = next(
+                    item
+                    for item in value["steps"]
+                    if item.get("id") == "unknown-representation"
+                )
+                step["expect"]["code"] = "representation.not_found"
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_enumerable_unknown_representation
+        ):
+            VALIDATOR.validate_catalogs(errors)
+        self.assertTrue(
+            any("must conceal representation existence" in error for error in errors), errors
+        )
+
     def test_security_test_resolution_rejects_a_similar_prefix(self) -> None:
         errors: list[str] = []
         VALIDATOR.executable_test_resolves(

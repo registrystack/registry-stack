@@ -30,9 +30,12 @@ administrative trust boundary.
 
 Prepare a dedicated Unix service identity, a private listener behind Transport Layer Security
 (TLS) termination, a sealed package, the matching snapshot or live read-only source, an audit
-location, independent audit and cursor integrity keys, and a token issuer for protected
+location, independent audit-integrity and cursor-encryption keys, and a token issuer for protected
 representations.
 Do not place the package, source, secret, or audit path in a shared writable directory.
+For snapshot mode, make the SQLite file immutable outside Relay, preferably with a read-only mount.
+Relay verifies its captured digest before and after every statement, but a process cannot exclude a
+privileged writer that changes and restores bytes entirely between both checks.
 
 Relay validates trusted path components before use.
 They must not be symbolic links or writable by group or world, and must be owned by root or the
@@ -63,6 +66,14 @@ quotas: {requestsPerMinute: 120, burst: 20}
 A package with a protected representation needs the configured issuer at startup.
 The issuer's verified claims may establish scopes, purpose, and row authority, but cannot enable an
 operation or representation the package did not compile.
+A syntactically valid unknown representation and a valid principal without the selected
+representation scope receive the same concealed `404 resource.not_found` response. Relay does not
+fall back to a less restrictive representation.
+
+Relay authenticates and encrypts the complete cursor payload with a fresh nonce. The payload binds
+the source and contract revisions, operation, representation, disclosure profile, filters, fixed
+order, selected fields, authorization context, and expiry. Treat cursors as opaque continuation
+tokens even though they contain no plaintext filter or order values.
 
 `relay serve --runtime <file>` opens only the sealed package at `packagePath`.
 It rejects unsafe paths, a package inventory mismatch, source-schema drift, missing mandatory audit
@@ -117,7 +128,8 @@ listener directly.
 ## Retain value-free audit evidence
 
 For every data operation, including anonymous public access, Relay persists an attempt event before
-SQLite access and a terminal event before it releases the exact response bytes.
+SQLite access and a terminal release, unresolved, or source-failed event before returning.
+The release event covers the exact response bytes.
 An audit failure blocks source access or withholds the response.
 
 Audit binds the Registry, resource, operation, representation, disclosure profile, selected
@@ -150,5 +162,5 @@ Rollback activates a complete prior package only with its compatible source and 
 | --- | --- | --- |
 | Startup refuses a path | A component is a symlink, has the wrong owner, or is writable | Move the deployment to trusted Unix paths and correct ownership and modes. |
 | Startup reports a package or schema error | The package, source, or review revision does not match | Stop deployment and return the change to the authoring workflow. |
-| A protected representation is denied | The issuer or token does not satisfy that representation's exact access rule | Correct the issuer or caller authority. Do not expose a weaker representation as fallback. |
+| A protected representation returns `404 resource.not_found` | The issuer or token does not satisfy that representation's exact scope | Correct the issuer or caller authority. Do not expose a weaker representation as fallback. |
 | A response is withheld | The terminal audit write failed | Restore the audit sink and verify its integrity before accepting traffic. |

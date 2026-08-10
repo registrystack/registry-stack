@@ -128,8 +128,9 @@ Its profile defines the maximum property set that can reach `domainData`.
 Callers may omit `representation` to select the declared default, or supply one named
 representation.
 Relay authorizes the supplied representation exactly as requested.
-An unknown representation, invalid bearer, or denial never falls back to the default or another
-representation.
+A syntactically valid unknown name and a scope-hidden name receive the same
+`404 resource.not_found` response. An invalid bearer is `401`. None falls back to the default or
+another representation.
 The `fields` parameter can only select a non-empty subset of the selected representation's public
 properties.
 It cannot add a property, select a source column, change a transform, weaken handling, or bypass
@@ -157,8 +158,12 @@ Relay supports only two compiled, deterministic transforms:
 - `date-precision` accepts a canonical `date` or `date-time` and emits a `year` or `year-month`
   output property with its own type, semantic term, and classification.
 
-Invalid, noncanonical, oversized, or required missing transform input fails without releasing a
-value.
+Transforms are response-only. A transformed property cannot be a list filter or fixed-order key,
+because the SQLite query would otherwise compare its undisclosed raw input. Expose a separately
+reviewed pre-derived view column when the derived value must be queryable.
+
+Invalid, noncanonical, oversized, or required missing transform input fails the complete selected
+Record as value-free `503 source.unavailable` without releasing a value.
 Hashing, pseudonyms, encryption, regular-expression replacement, caller-defined masks or
 expressions, dynamic per-request masking, and a free-form policy engine are not supported.
 

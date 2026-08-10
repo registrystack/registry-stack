@@ -108,9 +108,9 @@ Every returned Record carries a non-selectable core context:
 - `domainData`, containing only the authorized and requested domain properties.
 
 The pair `(registryIdentifier, recordIdentifier)` identifies a Record. The
-record identifier is stable and cannot be reassigned. A JSON-LD `@id` may be
-derived as a global IRI, but it never replaces or changes the authoritative
-record identifier.
+record identifier is stable and cannot be reassigned. JSON-LD adds a derived
+global `@id` and the resource semantic class as `@type`, but neither replaces
+or changes the authoritative record identifier.
 
 Record identifier, record revision, lifecycle state, and recorded time are
 explicitly bound from the reviewed source view. Registry identity, authority,
@@ -297,6 +297,10 @@ exact equality. Any non-empty subset of declared filters is valid; the contract
 separately declares whether an unfiltered request is allowed. `pageSize`,
 `cursor`, `fields`, and `representation` are reserved names. Filters in query strings are
 limited to non-personal selectors. Relay binds their values as SQL parameters.
+Transforms are response-only: a transformed property cannot be a filter or
+fixed-order key because doing so would compare or order its undisclosed raw
+input. A Registry that needs that query shape exposes a separately reviewed
+pre-derived source property.
 Callers cannot introduce source columns, joins, operators, expressions,
 arbitrary sorting, or SQL.
 
@@ -321,7 +325,9 @@ map of reviewed representations, exactly one `defaultRepresentation`, and one
 access rule plus one disclosure profile per representation. An absent
 `representation` selects that sole declared default. A supplied representation
 is authorized exactly as requested: denial, an invalid bearer, or an unknown
-identifier never falls back to another profile. Within the selected profile,
+identifier never falls back to another profile. A syntactically valid unknown
+name and a scope-hidden name receive the same `resource.not_found` response, so
+callers cannot enumerate the finite map. Within the selected profile,
 requester-selected `fields` can only disclose less and never lower the
 operation's compiled handling level, authentication, audit, quota, metadata,
 or cache posture. Caller-dependent or tag-derived profiles remain out of
@@ -402,7 +408,10 @@ required, while a selectable `domainData` property is validated when present.
 A separate operator validation schema and SHACL shape describe the complete
 source Record and preserve source requiredness. `semanticModelReference` points
 to the generated local vocabulary/model, not merely the JSON-LD context. The
-context is linked separately in `meta`. Compilation fails unless every audience
+context is linked separately in `meta`. The context expands response `data` and
+`items` as RDF graph containers, nests `domainData` properties without a
+transport predicate, and applies the same IRI and datatype constraints emitted
+in the bound SHACL shape. Compilation fails unless every audience
 that can receive a Record can also retrieve safe projections of the exact
 schema and semantic model referenced by that Record.
 
@@ -415,7 +424,8 @@ is never propagated because Relay cannot establish that vendor state is
 value-free. Unknown, hidden, and ambiguous lookup outcomes use the same `404`
 status, problem code, fixed detail, schema, cache and security headers,
 differing only in independently generated trace correlation. A selected
-malformed source Record fails closed as `503 source.unavailable`. Problems
+malformed source Record, including invalid input to a compiled transform,
+fails closed atomically as `503 source.unavailable`. Problems
 never echo selectors, identifiers, source values, SQL, paths, tokens, or policy
 internals.
 
@@ -452,14 +462,14 @@ disclosure profile as described above.
 The initial access model combines:
 
 - a strictly verified OAuth 2.0 JWT access token when the operation is protected;
-- one explicit operation scope;
+- one explicit access rule for each finite representation, with an exact scope when protected;
 - optional trusted purpose;
 - optional authority-to-row binding from the resolved principal or a verified claim;
 - the selected disclosure profile.
 
 Purpose comes from, or is constrained by, verified authority. A caller header never creates authority. Principal binding is a compiler-declared equality boundary injected by Relay and cannot be replaced by caller filters.
 
-The resource posture and contract define the maximum compiled operation set. Token scopes can only narrow it. Separate scopes for list, read, and named lookup allow an issuer to give a client exact-lookup access without collection or identifier-read access. Conversely, no token can enable an operation the resource did not compile. Relay does not maintain a client registry; the trusted issuer registers clients and assigns scopes.
+The resource posture and contract define the maximum compiled operation set. Token scopes can only narrow it. Separate scopes for list, read, named lookup, and their finite representations allow an issuer to give a client exact-lookup access without collection or identifier-read access. A valid principal without the selected scope receives the same concealed `resource.not_found` outcome as an unknown operation. Conversely, no token can enable an operation or representation the resource did not compile. Relay does not maintain a client registry; the trusted issuer registers clients and assigns scopes.
 
 Each request produces a typed access decision followed by a typed disclosure plan. The plan contains the authorized operation and representation, row constraints, selected disclosure profile, and any requester-selected property subset. This architectural seam keeps authentication, authorization, row constraints, query construction, and serialization separate. Version one uses static reviewed disclosure plans and does not require a general PDP, CEL, dynamic masking, per-client field permissions, or tag-based ABAC.
 
@@ -518,10 +528,10 @@ silently, or hot-reloads a partially valid contract.
 
 Relay supports two explicit SQLite profiles:
 
-- snapshot: read-only immutable access, stable file identity and digest, no uncheckpointed sidecars, and exact source revision;
+- snapshot: read-only immutable access, stable file identity and digest, no uncheckpointed sidecars, exact source revision, and digest verification before and after every statement execution;
 - live read-only: another trusted process may update the database, while Relay keeps a fixed registry contract, uses a consistent read transaction per request, and verifies schema fingerprints when the SQLite schema changes.
 
-Snapshot mode provides stronger reproducibility and provenance, but is optional. Live mode never claims the exact historical reproducibility of a captured snapshot. In both modes the Relay process has read-only operating-system and SQLite access, even though a trusted publisher may hold separate write access to a live database.
+Snapshot mode provides stronger reproducibility and provenance, but is optional. The deployment must make the captured file immutable outside Relay, preferably through a read-only mount; per-execution digest checks detect drift but cannot exclude a privileged writer that changes and restores bytes entirely between both checks. Live mode never claims the exact historical reproducibility of a captured snapshot. In both modes the Relay process has read-only operating-system and SQLite access, even though a trusted publisher may hold separate write access to a live database.
 
 Snapshot responses identify the captured source digest and may support lists,
 cursors, and validators. Version one live sources are deliberately unversioned:
@@ -534,10 +544,11 @@ pagination, and live caching are deferred until a real registry requires them.
 
 Every data request, including anonymous public access, durably records either a
 refusal before returning or a pre-source attempt followed by a terminal
-release or unresolved outcome. Audit is a source-access and response-release
+release, unresolved, or source-failed outcome. Audit is a source-access and response-release
 gate. An event identifies the Registry, resource, operation, access-rule
-revision, purpose when present, applied row-boundary kind, disclosure profile,
-selected property identifiers or their digest, effective handling levels,
+revision, purpose when present, applied row-boundary kind, representation,
+disclosure profile, selected property identifiers or their digest, transform
+identifiers, effective handling levels,
 contract revision, and snapshot or live-source revision. Anonymous public
 events use an explicit anonymous principal kind and no synthetic person
 identifier. Audit contains no tokens, selector values, source values, response
@@ -698,7 +709,7 @@ The first coherent Relay V2 release should contain:
 5. generated local semantics, JSON-LD, JSON Schema, SHACL, full packaged OpenAPI, and safe public OpenAPI;
 6. property classification with provenance and the `public`, `internal`, `confidential`, and `restricted` handling levels;
 7. derived public, protected, or absent enumeration with independently compiled list, read, and named-lookup operations;
-8. `pageSize` and client-opaque integrity-protected cursor lists, direct predefined equality filters, and safe caller selection of fewer properties than the operation profile;
+8. `pageSize` and client-opaque authenticated-encrypted cursor lists, direct predefined equality filters, and safe caller selection of fewer properties than the selected representation;
 9. strict OAuth JWT access-token verification, operation scopes, trusted purpose, optional authority row binding, and an optional conforming Mint issuer;
 10. snapshot and live read-only SQLite profiles, including useful unversioned live read and lookup deployments;
 11. deterministic disclosure plans, bounded queries, stable `404` lookup outcomes, atomic activation, and Registry Stack problems;

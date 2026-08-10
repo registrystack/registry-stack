@@ -117,7 +117,8 @@ relayctl check "$project" --production
 ```
 
 After the command label, the report begins with a successful status and no
-diagnostics:
+diagnostics. This abridged excerpt omits the compiled configuration key paths
+at `details.configuration_key_paths`:
 
 ```json
 {
@@ -125,8 +126,8 @@ diagnostics:
   "diagnostics": [],
   "details": {
     "kind": "check",
-    "production": true,
-    "contract_revision": "sha256:<digest>"
+    "contract_revision": "sha256:<digest>",
+    "production": true
   }
 }
 ```
@@ -239,8 +240,9 @@ refusal case in the full journey and cannot change the compiled query.
 
 The contract also defines a protected `registrar` representation for the same read and list
 operations. The full fixture journey proves its distinct scope, no-store cache posture, a denied
-request, and an unknown representation. Relay authorizes the requested representation exactly and
-never falls back to the public default.
+request, and an unknown representation. The unknown and scope-hidden cases use the same generic
+`404 resource.not_found` response. Relay authorizes the requested representation exactly and never
+falls back to the public default.
 
 Starting the packaged service requires the configured token issuer to be reachable because the
 package contains protected representations, even when the request you plan to send is public.

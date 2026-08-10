@@ -81,12 +81,13 @@ steps:
     request:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
-      query: {representation: supervisory, fields: "eventType,registrationYear"}
+      query: {representation: supervisory, fields: "eventType,registrationYear,registrationYearMonth"}
       body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
     expect:
       status: 200
       registryCoreRequired: true
-      domainDataKeys: [eventType, registrationYear]
+      domainDataKeys: [eventType, registrationYear, registrationYearMonth]
+      domainDataValues: {registrationYear: "2026", registrationYearMonth: "2026-04"}
       cache: no-store
   - id: supervisory-representation-denied
     authorizationFixture: civil-verifier-ex-a
@@ -95,7 +96,7 @@ steps:
       path: /v2/resources/civil-event/lookups/verify-registration
       query: {representation: supervisory}
       body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
-    expect: {status: 403, code: consultation.denied}
+    expect: {status: 404, code: resource.not_found}
   - id: invalid-representation
     authorizationFixture: civil-verifier-ex-a
     request:
@@ -103,7 +104,7 @@ steps:
       path: /v2/resources/civil-event/lookups/verify-registration
       query: {representation: invalid}
       body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
-    expect: {status: 404, code: representation.not_found}
+    expect: {status: 404, code: resource.not_found}
   - id: no-list
     authorizationFixture: civil-registrar-ex-a
     request: {method: GET, path: /v2/resources/civil-event/records}
@@ -192,6 +193,14 @@ steps:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
       body: {registrationNumber: REG-SYNTH-INVALID1, eventType: BIRTH}
+    expect: {status: 503, code: source.unavailable}
+  - id: invalid-transform-input
+    authorizationFixture: civil-supervisor-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {representation: supervisory}
+      body: {registrationNumber: REG-SYNTH-XFORM1, eventType: BIRTH}
     expect: {status: 503, code: source.unavailable}
   - id: quota-exhausted
     authorizationFixture: civil-verifier-ex-a

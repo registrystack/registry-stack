@@ -95,29 +95,48 @@ The request parameter `representation` selects a named representation.
 When absent, Relay uses the declared default.
 When present, Relay authorizes that exact representation: an invalid bearer, denied request, or
 unknown name does not fall back to another representation.
+A syntactically valid unknown name and a scope-hidden name share the generic
+`404 resource.not_found` response, so the finite representation map is not enumerable.
 After selection, `fields` may request only a non-empty subset of that representation's properties.
-It cannot select a source column, switch profiles, bypass a row boundary,
+It cannot select a source column, switch profiles, change a transform, bypass a row boundary,
 or lower the compiled handling, audit, quota, metadata, or cache controls.
 
 This is requester minimization, not dynamic per-request masking or attribute authorization.
 Relay has no free-form policy engine or arbitrary expression language.
 
-The operator-only full JSON Schema and SHACL shape validate every
-`sourceRequired` property and mandatory Record-context binding in the reviewed
-view. Relay does not coerce or partially release an invalid selected row. For a
-sensitive exact lookup, a missing Record, ambiguous result, and hidden row share
-the same unresolved response so the result does not reveal which condition
-occurred. An invalid selected source Record fails closed as
-`503 source.unavailable` without releasing any part of the Record.
+## Apply only bounded transforms
 
-Relay performs no runtime masking or value transformation. When a Registry
-needs a masked, generalized, or precision-reduced value, its reviewed source
-view must expose that pre-derived value as a separately classified property.
+The transform set is deliberately finite and deterministic.
+`partial-string` produces the Relay-owned marker `***` with a bounded Unicode-scalar prefix or
+suffix.
+If the input has no more characters than the configured reveal length, the output is `***` alone.
+`date-precision` turns a canonical `date` or `date-time` into a `year` or `year-month` property.
+The transformed property has its own semantic term, output type, and classification.
+
+The operator-only full JSON Schema and SHACL shape validate every `sourceRequired` property and
+mandatory Record-context binding in the reviewed view.
+Relay does not coerce or partially release an invalid selected row.
+For a sensitive exact lookup, a missing Record, ambiguous result, and hidden row share the same
+unresolved response so the result does not reveal which condition occurred.
+Invalid, noncanonical, oversized, incompatible, or required missing transform input fails the
+complete selected Record as value-free `503 source.unavailable` without releasing source values.
+Optional null input omits the transformed property.
+
+Relay does not provide hashing, pseudonyms, encryption, regular-expression replacement, geographic
+or numeric transformations, codelist remapping, caller-defined masks, or dynamic masking policy.
+A public representation cannot use a transform to conceal a non-public source column. It must read
+a reviewed pre-derived public value from the SQLite view.
+Transformed properties also cannot be list filters or fixed-order keys. Queryable derived values
+must be separate reviewed pre-derived source properties, so filters and ordering never operate on
+an undisclosed transform input.
 
 ## Generate semantics without pretending equivalence
 
 Relay generates a local JSON for Linked Data (JSON-LD) vocabulary and context, JSON Schema, SHACL,
 codelist schemas, capability metadata, and representation-specific artifacts.
+The context expands response `data` and `items` as RDF graph containers, aliases `domainData` to
+JSON-LD `@nest`, emits the resource semantic class as `@type`, and applies the same IRI and XML
+Schema datatypes required by the operation-bound SHACL shape.
 An institution can add a reviewed and digest-pinned mapping to an external vocabulary with an
 explicit exact, close, broad, narrow, or related relation.
 Relay does not infer that relation or fetch remote vocabulary content while serving a request.

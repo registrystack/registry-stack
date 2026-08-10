@@ -148,7 +148,10 @@ Relay service user and must not be writable by another account; only a
 root-owned sticky directory is accepted as a shared ancestor. Production
 packages exclude fixtures and SQLite data. Snapshot and live database paths are
 deployment bindings; Relay captures a snapshot digest or explicitly reports an
-unversioned live source. `relay serve --runtime <file>` resolves the sealed
+unversioned live source. Snapshot execution verifies the captured digest before
+and after every statement; operators still provide external immutability,
+preferably a read-only mount, because no process can exclude a privileged
+change-and-restore entirely between those checks. `relay serve --runtime <file>` resolves the sealed
 package only from the runtime's `packagePath`; it never accepts a mutable
 authoring project or loose contract file.
 
@@ -237,7 +240,8 @@ Every successful Record has:
 ```
 
 The Registry and Record identifier pair is authoritative. JSON-LD adds a
-derived global `@id` but retains both identifiers. Lifecycle values come from
+derived global `@id` and the resource semantic class as `@type` but retains
+both identifiers. Lifecycle values come from
 the resource's governed codelist. `recordedAt` is source-owned and is never
 Relay observation time.
 
@@ -313,11 +317,13 @@ wrong scalar types, coercion, normalization, and extra nesting are rejected.
 `fields` remains in the query string and never appears in the body.
 
 For `application/ld+json`, each response carries `@context` and each Record adds
-a derived `@id`. The generated context maps
-`domainData` to JSON-LD `@nest`, maps its property keys to their semantic IRIs,
-types Registry Core IRI members as `@id`, and maps transport-only `meta` and
-`pageInfo` to null so they do not become domain triples. Ordinary JSON retains
-the shapes above without `@context` or `@id`.
+a derived `@id` plus its resource semantic class as `@type`. The generated
+context maps response `data` and `items` to JSON-LD `@graph`, aliases
+`domainData` to `@nest`, maps its property keys to their semantic IRIs, coerces
+Registry Core and domain values to the same IRI or XML Schema datatypes used by
+the bound SHACL shape, and maps transport-only `meta` and `pageInfo` to null so
+they do not become domain triples. Ordinary JSON retains the shapes above
+without `@context`, `@id`, or `@type`.
 
 ### HTTP binding and capabilities
 
@@ -385,10 +391,14 @@ List filters are direct declared camelCase query parameters, exact-equality
 only, non-personal, unique, and cannot be named `pageSize`, `cursor`, or
 `fields`. Any non-empty subset of declared filters is valid. The operation
 explicitly declares whether the empty subset is allowed with `allowUnfiltered`.
+Transformed properties are response-only and fail compilation when named as a
+filter or fixed-order key. A queryable derived value must be a separately
+reviewed pre-derived source property.
 `pageSize` is bounded by the operation default and maximum. Ordering is fixed
 with `recordIdentifier` as the unique tie-breaker.
 The client-opaque authenticated-encrypted cursor binds contract and source revisions, operation,
-filters, order, fields, authorization-relevant context, and expiry. Every page
+selected representation and disclosure profile, filters, fixed order, fields,
+authorization-relevant context, and expiry. Every page
 is reauthorized. Authenticated encryption prevents filters and keyset-order
 values from bypassing field minimization. A caller cannot sort, name a source
 column, add an operator, or traverse an uncompiled page.
@@ -481,10 +491,9 @@ error array is emitted.
 | Malformed, expired, stale, or differently bound cursor | 400 | `query.cursor_invalid` | `cursor is invalid for this query` |
 | Missing credential on a protected operation | 401 | `auth.missing_credential` | `a bearer access token is required` |
 | Invalid credential | 401 | `auth.invalid_credential` | `bearer access token validation failed` |
-| Valid credential without the operation scope | 404 | `resource.not_found` | `the requested resource was not found` |
+| Valid credential without the selected operation or representation scope | 404 | `resource.not_found` | `the requested resource was not found` |
 | Insufficient purpose or row authority after scope selection | 403 | `consultation.denied` | `the consultation is not permitted` |
-| Unknown or visibility-hidden resource or artifact | 404 | `resource.not_found` | `the requested resource was not found` |
-| Unknown or unavailable requested representation | 404 | `representation.not_found` | `the requested representation was not found` |
+| Unknown or visibility-hidden resource, artifact, operation, or representation | 404 | `resource.not_found` | `the requested resource was not found` |
 | Unknown, hidden, ambiguous, or policy-hidden Record outcome | 404 | `consultation.unresolved` | `the requested record was not resolved` |
 | Unsupported response `Accept` | 406 | `representation.unsupported` | `the requested representation is not supported` |
 | Request body too large | 413 | `internal.payload_too_large` | `request body exceeds the configured limit` |
@@ -492,7 +501,7 @@ error array is emitted.
 | Unsupported request body media type | 415 | `request.media_type_unsupported` | `request body must use application/json` |
 | Relay consultation quota exhausted | 429 | `consultation.rate_limited` | `the consultation quota is exhausted` |
 | Unhandled failure | 500 | `internal.unhandled` | `the request could not be served` |
-| Source unavailable or schema drifted | 503 | `source.unavailable` | `the authoritative source is unavailable` |
+| Source unavailable, schema drifted, invalid selected row, or invalid transform input | 503 | `source.unavailable` | `the authoritative source is unavailable` |
 | Durable audit unavailable | 503 | `audit.unavailable` | `required audit is unavailable` |
 | Service not ready or unhealthy | 503 | `service.not_ready` | `the service is not ready` |
 | Request deadline exceeded | 504 | `internal.timeout` | `request exceeded the configured timeout` |
@@ -528,15 +537,18 @@ Protected operations accept only a registered JWT access-token profile:
   single-use claim;
 - principal resolved in order from `sub`, `client_id`, then `azp`, with a
   malformed higher-priority claim failing rather than falling through;
-- one explicit operation scope plus any compiled purpose and row-binding claim.
+- one exact selected-representation scope plus any compiled purpose and row-binding claim.
 
 The deployment has at most one issuer verification configuration. Its exact
-issuer is checked before its keys can authorize the token. A missing
-bearer is allowed only for an explicitly public operation; an invalid bearer is
-never treated as anonymous. Caller purpose headers are rejected. Purpose and
+issuer is checked before its keys can authorize the token. A missing bearer is
+allowed only for an explicitly public default representation. An anonymous
+explicit request for a protected representation is concealed like an unknown
+representation; an invalid bearer is never treated as anonymous. Caller purpose
+headers are rejected. Purpose and
 row authority come only from verified claims assigned by the authorization
 server. Every protected operation scope is non-empty and unique across the
-Registry contract. An authority row binding explicitly selects either the
+Registry contract. Missing selected-representation scope is concealed as
+`resource.not_found` before source access. An authority row binding explicitly selects either the
 resolved principal or one direct verified scalar claim. Relay injects its
 hidden typed equality predicate; caller filters cannot satisfy or replace it.
 
@@ -545,13 +557,14 @@ as a release gate:
 
 1. append the attempt before source access;
 2. append any refusal before returning it;
-3. serialize and validate successful bytes;
-4. append the release outcome before those bytes leave the process.
+3. validate the selected row and transforms before serialization;
+4. append a source-failed outcome before returning a source failure;
+5. serialize successful bytes and append the release outcome before those exact bytes leave the process.
 
 Audit sink failure returns `503` and prevents source access or response release
 at the relevant gate. Events contain stable Registry, resource, operation,
-access-rule, processing, disclosure, selected-property, handling, contract, and
-truthful source revision identifiers. They contain no token, selector, SQL,
+representation, access-rule, processing, disclosure, transform,
+selected-property, handling, contract, and truthful source revision identifiers. They contain no token, selector, SQL,
 path, source or response value, or raw principal identifier.
 
 Registry Mint is optional. Relay production crates do not depend on Mint. A

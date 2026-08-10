@@ -77,7 +77,7 @@ invariants:
   - id: sec-classification-review-binding
     threat: A generated, stale, tampered, uncertain, or mismatched classification review silently authorizes a changed disclosure contract.
     enforcementPoint: Governed-file review parsing and compilation against the canonical classification inventory digest.
-    negativeCase: stale_or_unreviewed_classification_review_is_refused
+    negativeTest: stale_review_fails_production_but_remains_an_authoring_finding
     expected: Production compilation accepts only reviewed inventory-bound evidence; generated review additionally binds the accepted report and exact rule pack, while manual and imported review do not require a report.
     evidence: review-binding-compiler-tests
     tests:
@@ -86,8 +86,8 @@ invariants:
   - id: sec-finite-representation-authorization
     threat: A request selects an undeclared, malformed, or denied representation, crosses profiles with fields, or falls back to a different disclosure.
     enforcementPoint: Closed compiled representation map, one exact default, pre-source selection, and selected-profile field validation.
-    negativeCase: representation_selection_or_cross_profile_fields_fall_back_or_reach_source
-    expected: An operation has one declared default and finite names; access and disclosure are evaluated only for the exact selection, and fields cannot cross the selected profile.
+    negativeTest: representation_selection_authenticates_then_authorizes_the_exact_profile
+    expected: An operation has one declared default and finite names; access and disclosure are evaluated only for the exact selection, unknown and scope-hidden names are indistinguishable as resource.not_found, and fields cannot cross the selected profile.
     evidence: compiler-and-real-router-representation-tests
     tests:
       - {path: crates/registry-relay-v2/src/compiler.rs, name: representation_default_and_transform_parameters_fail_closed}
@@ -97,28 +97,29 @@ invariants:
   - id: sec-public-representation-processing-floor
     threat: A public masked or minimized representation reads a confidential or restricted raw source column.
     enforcementPoint: Per-representation processed-column closure and processing-handling compilation before route activation.
-    negativeCase: public_representation_processes_nonpublic_raw_source
+    negativeTest: public_masked_representation_cannot_process_restricted_source
     expected: Anonymous release requires public processing handling, including transform inputs and every selector, filter, order, and Registry Core source column.
     evidence: compiler-handling-tests
     tests:
       - {path: crates/registry-relay-v2/src/compiler.rs, name: public_masked_representation_cannot_process_restricted_source}
       - {path: crates/registry-relay-v2/src/compiler.rs, name: public_operation_cannot_process_nonpublic_columns}
   - id: sec-closed-mask-and-date-transforms
-    threat: Caller-directed or malformed transform input releases a raw, complete, noncanonical, wrongly typed, or over-precise value.
-    enforcementPoint: Compiled transform catalog and value-free source failure before response serialization.
-    negativeCase: transform_reveals_or_serializes_incompatible_input
-    expected: Only bounded partial-string with the Relay-owned marker and typed date-precision execute; short strings never reveal complete input and incompatible date input fails closed.
+    threat: Caller-directed or malformed transform input releases a raw, complete, noncanonical, wrongly typed, or over-precise value, or a transformed list filter or order key becomes an oracle over raw source values.
+    enforcementPoint: Response-only compiled transform catalog, compile-time filter and order exclusion, and value-free source failure before response serialization.
+    negativeTest: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes
+    expected: Only bounded partial-string with the Relay-owned marker and typed date-precision execute as response transforms; transformed properties can never be list filters or order keys, short strings never reveal complete input, and malformed selected transform input discards the whole response as value-free 503 source.unavailable.
     evidence: transform-unit-and-compiler-tests
     tests:
       - {path: crates/registry-relay-v2/src/transform.rs, name: partial_string_never_reveals_a_complete_short_input}
       - {path: crates/registry-relay-v2/src/transform.rs, name: partial_string_counts_unicode_scalars}
       - {path: crates/registry-relay-v2/src/transform.rs, name: date_precision_accepts_only_the_compiled_source_shape}
       - {path: crates/registry-relay-v2/src/compiler.rs, name: date_precision_is_typed_and_closed}
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: transformed_properties_cannot_be_list_filters_or_order_keys}
       - {path: crates/registry-relay-v2/tests/representation_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
   - id: sec-representation-state-and-metadata-binding
     threat: A cursor, ETag, metadata route, artifact, or quota crosses a representation boundary or reveals a protected profile.
     enforcementPoint: Representation-bound cursor and cache identity, exact representation artifact gates, and operation-owned quota state.
-    negativeCase: profile_state_or_metadata_crosses_representation_boundary
+    negativeTest: cursor_and_etag_are_bound_to_selected_representation
     expected: Cursor and ETag reuse across profiles fails; metadata and artifacts authorize one representation exactly; adding profiles does not multiply the operation quota.
     evidence: real-router-representation-state-tests
     tests:
@@ -161,14 +162,15 @@ invariants:
       - {path: crates/registry-relay-v2/src/problem.rs, name: unresolved_lookup_causes_have_one_public_body}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_three_registry_http_journeys_use_the_real_router}
   - id: sec-malformed-row-atomicity
-    threat: A malformed selected source row is coerced, skipped, partially released, or mistaken for a normal unresolved lookup.
-    enforcementPoint: Full source-row and cursor-order validation occurs before response serialization, followed by a source-failed terminal audit gate.
-    expected: Every malformed selected row discards the entire held response and returns value-free 503 source.unavailable.
+    threat: A malformed selected source row or transform input is coerced, skipped, partially released, or mistaken for a normal unresolved lookup.
+    enforcementPoint: Full source-row, transform-input, and cursor-order validation occurs before response serialization, followed by a source-failed terminal audit gate.
+    expected: Every malformed selected row, including a transform failure, discards the entire held response and returns value-free 503 source.unavailable.
     evidence: real-router-malformed-row-tests
     negativeTest: malformed_disclosed_property_type_and_requiredness_fail_closed
     tests:
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: malformed_disclosed_property_type_and_requiredness_fail_closed}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: business_list_with_a_late_malformed_row_fails_atomically}
+      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
   - id: sec-reference-visibility
     threat: A Record leaks protected metadata or points its caller to an unresolvable schema or semantic model.
     enforcementPoint: Compile-time visibility closure across operation, resource, schema, semantic, capability, and OpenAPI artifacts.
@@ -207,12 +209,15 @@ invariants:
       - {path: crates/registry-relay-v2/src/cursor.rs, name: cursor_refuses_every_mismatched_request_binding_and_expiry}
   - id: sec-source-truthfulness
     threat: Relay serves incompatible schema, mixed live state, or false revision and cache claims.
-    enforcementPoint: Schema fingerprint, one transaction per request, source-profile revisions, and path identity checks.
-    expected: Relay reports only revisions it can establish and never claims snapshot consistency for unversioned live data.
+    enforcementPoint: Schema fingerprint, one transaction per request, source-profile revisions, path identity checks, and per-execution snapshot digest verification before and after query execution.
+    expected: Relay reports only revisions it can establish, re-verifies snapshot content before and after every execution even when file identity is unchanged, and never claims snapshot consistency for unversioned live data.
     evidence: source-profile-tests
-    negativeTest: live_reads_allow_content_updates_but_refuse_path_replacement
+    negativeTest: snapshot_digest_is_rechecked_after_the_statement_finishes
     tests:
       - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: a_snapshot_is_digest_bound_and_read_immutably}
+      - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: async_snapshot_execution_refuses_same_inode_content_drift}
+      - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: startup_snapshot_execution_refuses_same_inode_content_drift}
+      - {path: crates/registry-platform-sqlite/src/statement.rs, name: snapshot_digest_is_rechecked_after_the_statement_finishes}
       - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: live_reads_allow_content_updates_but_refuse_path_replacement}
       - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: row_cell_and_response_bounds_are_enforced}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: readiness_fails_value_free_for_missing_replaced_and_drifted_sources}

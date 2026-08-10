@@ -1,7 +1,7 @@
 apiVersion: relay.registrystack.org/classification-review/v1
 kind: ClassificationReview
 registryIdentifier: urn:example:registry:civil-events
-classificationInventoryDigest: sha256:e5a24dd38da75c806b8e0f5ecf5fd043f5e5661315fab94ba072c40d13bdc32b
+classificationInventoryDigest: sha256:3da693b473e4989c6993fdd80ab9d312d650b6358335d20a32ea0de0836c10b7
 method: manual
 reviewer: urn:example:institution:civil-registration-authority
 reviewDate: 2026-08-10
