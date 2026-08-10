@@ -434,7 +434,11 @@ fn review_reports_are_canonical_value_free_and_cover_all_contextual_prompts() {
         .iter_mut()
         .find(|property| property.name == "notes")
         .expect("notes property");
-    notes.transform = Some(CompiledTransform::PartialString {
+    let registry_relay_v2::model::CompiledPropertyBinding::Scalar(binding) = &mut notes.binding
+    else {
+        panic!("notes is scalar");
+    };
+    binding.transform = Some(CompiledTransform::PartialString {
         identifier: "partial-string:suffix:4".into(),
         reveal: PartialStringReveal::Suffix,
         characters: 4,

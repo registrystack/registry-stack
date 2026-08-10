@@ -20,6 +20,10 @@ pub(crate) fn execute(command: Command) -> Result<ToolingReport, ToolingError> {
                 InspectionProfileArg::Snapshot => InspectionProfile::Snapshot,
                 InspectionProfileArg::LiveReadOnly => InspectionProfile::LiveReadOnly,
             },
+            statistical_view: args.statistical_view,
+            time_column: args.time_column,
+            measure_column: args.measure_column,
+            attribute_columns: args.attribute_column,
         }),
         Command::Check(args) => tooling::check_project(&CheckOptions {
             project_root: args.project,

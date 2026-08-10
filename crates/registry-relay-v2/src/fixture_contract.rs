@@ -69,6 +69,12 @@ pub struct FixtureExpectation {
     #[serde(default)]
     pub item_count: Option<u32>,
     #[serde(default)]
+    pub observation_count: Option<u32>,
+    #[serde(default)]
+    pub media_type: Option<String>,
+    #[serde(default)]
+    pub sdmx_json_types: Option<FixtureSdmxJsonTypes>,
+    #[serde(default)]
     pub next_cursor: Option<Value>,
     #[serde(default)]
     pub registry_core_required: Option<bool>,
@@ -92,6 +98,53 @@ pub struct FixtureExpectation {
     pub body_empty: Option<bool>,
     #[serde(default)]
     pub etag_same_as: Option<String>,
+    #[serde(default)]
+    pub geo_json_root: Option<FixtureGeoJsonRoot>,
+    #[serde(default)]
+    pub geometry_type: Option<FixtureGeometryType>,
+    #[serde(default)]
+    pub format_profile: Option<FixtureFormatProfile>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum FixtureGeoJsonRoot {
+    Feature,
+    FeatureCollection,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum FixtureGeometryType {
+    #[serde(rename = "Point")]
+    Point,
+    #[serde(rename = "null")]
+    Null,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FixtureFormatProfile {
+    Rfc7946,
+    Jsonfg,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FixtureSdmxJsonTypes {
+    #[serde(default)]
+    pub dimensions: BTreeMap<String, FixtureJsonScalarType>,
+    #[serde(default)]
+    pub measures: BTreeMap<String, FixtureJsonScalarType>,
+    #[serde(default)]
+    pub attributes: BTreeMap<String, FixtureJsonScalarType>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FixtureJsonScalarType {
+    String,
+    Number,
+    Boolean,
 }
 
 #[derive(Debug, Error)]

@@ -347,6 +347,26 @@ pub enum AuthorizationError {
     BindingDenied,
 }
 
+/// Stable refusal classes shared by data-plane adapters. Scope denial remains
+/// concealed, while purpose and row-binding failures are explicit denials.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthorizationRefusalClass {
+    MissingCredential,
+    ConcealedScopeDenial,
+    ExplicitDenial,
+}
+
+impl AuthorizationError {
+    #[must_use]
+    pub fn refusal_class(self) -> AuthorizationRefusalClass {
+        match self {
+            Self::AuthenticationRequired => AuthorizationRefusalClass::MissingCredential,
+            Self::ScopeDenied => AuthorizationRefusalClass::ConcealedScopeDenial,
+            Self::PurposeDenied | Self::BindingDenied => AuthorizationRefusalClass::ExplicitDenial,
+        }
+    }
+}
+
 /// Extract exactly one RFC 6750 Bearer credential. An invalid Authorization
 /// header is never interpreted as anonymous access, including on public
 /// operations and cacheable metadata routes.

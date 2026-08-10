@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path};
 
+use chrono::DateTime;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -11,22 +12,35 @@ use url::Url;
 
 use crate::contract::{
     AccessProfileDefinition, AccessRule, AuthorityRowBinding, ClassificationPartial, DataType,
-    DateInputType, DatePrecision, Handling, IdentificationMethod, RegistryContract, ReviewStatus,
-    SourceProfile, TransformDefinition,
+    DateInputType, DatePrecision, Handling, IdentificationMethod, PropertyBindingDefinition,
+    RegistryContract, ReviewStatus, SearchQueryDefinition, SourceProfile, StatisticalValueType,
+    TransformDefinition,
 };
 use crate::model::{
     CapabilityFamily, ColumnAccount, ColumnUse, CompileProfile, CompileReport, CompiledAccess,
     CompiledAccessProfile, CompiledClassificationReview, CompiledCodelist,
     CompiledDisclosureProfile, CompiledFilter, CompiledGeneratedIdentificationBinding,
     CompiledGovernedFile, CompiledMetadataVisibility, CompiledOperation, CompiledPagination,
-    CompiledProperty, CompiledPurpose, CompiledRecordContext, CompiledRegistry, CompiledResource,
-    CompiledRowBinding, CompiledSelector, CompiledSource, CompiledTransform, ConsultationPattern,
-    Diagnostic, DiagnosticSeverity, EffectiveClassification, ObservedSourceSchema, OperationKind,
-    QueryPlan, RowAuthoritySource, StarterColumn, StarterContract,
+    CompiledPointPropertyBinding, CompiledProperty, CompiledPropertyBinding, CompiledPurpose,
+    CompiledRecordContext, CompiledRegistry, CompiledResource, CompiledRowBinding,
+    CompiledScalarPropertyBinding, CompiledSdmxBindingProfile, CompiledSelector, CompiledSource,
+    CompiledSpatialBboxQuery, CompiledStatisticalAttribute, CompiledStatisticalDataset,
+    CompiledStatisticalDimension, CompiledStatisticalMeasure, CompiledStatisticalTimeDimension,
+    CompiledTransform, ConsultationPattern, Diagnostic, DiagnosticSeverity,
+    EffectiveClassification, ObservedSourceSchema, OperationKind, QueryPlan, RowAuthoritySource,
+    StarterColumn, StarterContract,
 };
 
 const API_VERSION: &str = "relay.registrystack.org/v2alpha1";
-const RESERVED_PARAMETERS: [&str; 4] = ["pageSize", "cursor", "fields", "accessProfile"];
+const CRS84: &str = "http://www.opengis.net/def/crs/OGC/0/CRS84";
+const RESERVED_PARAMETERS: [&str; 6] = [
+    "pageSize",
+    "cursor",
+    "fields",
+    "accessProfile",
+    "bbox",
+    "formatProfile",
+];
 const MAXIMUM_RESOURCES: usize = 128;
 const MAXIMUM_PROPERTIES_PER_RESOURCE: usize = 128;
 const MAXIMUM_DISCLOSURE_PROFILES_PER_RESOURCE: usize = 64;
@@ -37,6 +51,17 @@ const MAXIMUM_LIST_ORDER_KEYS: usize = 32;
 const MAXIMUM_LIST_PAGE_SIZE: u32 = 1_000;
 const MAXIMUM_LOOKUP_REQUEST_BODY_BYTES: u32 = 1024 * 1024;
 const MAXIMUM_LOOKUP_SELECTORS: usize = 32;
+const MAXIMUM_SEARCHES_PER_RESOURCE: usize = 16;
+const MAXIMUM_STATISTICAL_DATASETS: usize = 32;
+const MAXIMUM_SDMX_DIMENSIONS: usize = 16;
+const MAXIMUM_SDMX_ATTRIBUTES: usize = 32;
+const MAXIMUM_SDMX_OBSERVATIONS: u32 = 10_000;
+const MAXIMUM_SDMX_OFFSET: u32 = 1_000_000;
+const MAXIMUM_SDMX_COMPONENT_VALUE_BYTES: usize = 1024;
+const SDMX_REST_VERSION: &str = "2.2.2";
+const SDMX_DATA_JSON_VERSION: &str = "2.1.0";
+const SDMX_DATA_CSV_VERSION: &str = "2.1.0";
+const SDMX_STRUCTURE_JSON_VERSION: &str = "2.1.0";
 const MAXIMUM_SELECTOR_BYTES: u32 = 4 * 1024;
 const MAXIMUM_PARTIAL_STRING_CHARACTERS: u16 = 64;
 // Keep governed purpose values inside the exact direct-string claim ceiling
@@ -71,7 +96,10 @@ pub(crate) fn referenced_governed_files(contract: &RegistryContract) -> BTreeSet
     for resource in &contract.resources {
         references.insert(resource.record_context.lifecycle_state.codelist.as_str());
         for (_, property) in resource.properties.iter() {
-            if let Some(codelist) = property.codelist.as_deref() {
+            if let Some(codelist) = property
+                .scalar_binding()
+                .and_then(|binding| binding.codelist.as_deref())
+            {
                 references.insert(codelist);
             }
         }
@@ -83,6 +111,22 @@ pub(crate) fn referenced_governed_files(contract: &RegistryContract) -> BTreeSet
             }
         }
         for processing in &resource.processing_descriptions {
+            references.insert(processing.legal_basis_ref.as_str());
+            references.insert(processing.dpv_profile_ref.as_str());
+        }
+    }
+    for dataset in &contract.statistical_datasets {
+        for (_, dimension) in dataset.dimensions.iter() {
+            if let Some(vocabulary) = dimension.vocabulary.as_deref() {
+                references.insert(vocabulary);
+            }
+        }
+        for (_, attribute) in dataset.attributes.iter() {
+            if let Some(vocabulary) = attribute.vocabulary.as_deref() {
+                references.insert(vocabulary);
+            }
+        }
+        for processing in &dataset.processing_descriptions {
             references.insert(processing.legal_basis_ref.as_str());
             references.insert(processing.dpv_profile_ref.as_str());
         }
@@ -114,6 +158,7 @@ pub fn compile_contract(
     let mut compiler = Compiler::new(contract, observed, profile);
     compiler.validate_top_level();
     let resources = compiler.compile_resources();
+    let statistical_datasets = compiler.compile_statistical_datasets();
     let access_profile_executors = resources
         .iter()
         .flat_map(|resource| &resource.operations)
@@ -182,9 +227,11 @@ pub fn compile_contract(
             })
             .collect(),
         resources,
+        statistical_datasets,
         metadata_visibility: CompiledMetadataVisibility {
             service: contract.metadata_visibility.service,
             resources: contract.metadata_visibility.resources,
+            statistical_datasets: contract.metadata_visibility.statistical_datasets,
             semantics: contract.metadata_visibility.semantics,
             classifications: contract.metadata_visibility.classifications,
             processing: contract.metadata_visibility.processing,
@@ -270,7 +317,11 @@ fn governed_file_roles(
             roles.push(format!("codelist:{}:lifecycle-state", resource.id));
         }
         for (property, definition) in resource.properties.iter() {
-            if definition.codelist.as_deref() == Some(path) {
+            if definition
+                .scalar_binding()
+                .and_then(|binding| binding.codelist.as_deref())
+                == Some(path)
+            {
                 roles.push(format!("codelist:{}:{property}", resource.id));
             }
         }
@@ -295,6 +346,38 @@ fn governed_file_roles(
                 roles.push(format!(
                     "processing:{}:{}:dpv-profile",
                     resource.id, processing.id
+                ));
+            }
+        }
+    }
+    for dataset in &contract.statistical_datasets {
+        for (dimension_id, dimension) in dataset.dimensions.iter() {
+            if dimension.vocabulary.as_deref() == Some(path) {
+                roles.push(format!(
+                    "statistical-vocabulary:{}:{dimension_id}",
+                    dataset.id
+                ));
+            }
+        }
+        for (attribute_id, attribute) in dataset.attributes.iter() {
+            if attribute.vocabulary.as_deref() == Some(path) {
+                roles.push(format!(
+                    "statistical-vocabulary:{}:{attribute_id}",
+                    dataset.id
+                ));
+            }
+        }
+        for processing in &dataset.processing_descriptions {
+            if processing.legal_basis_ref == path {
+                roles.push(format!(
+                    "processing:{}:{}:legal-basis",
+                    dataset.id, processing.id
+                ));
+            }
+            if processing.dpv_profile_ref == path {
+                roles.push(format!(
+                    "processing:{}:{}:dpv-profile",
+                    dataset.id, processing.id
                 ));
             }
         }
@@ -347,7 +430,9 @@ struct Compiler<'a> {
     profile: CompileProfile,
     report: CompileReport,
     scopes: HashSet<String>,
-    resource_ids: HashSet<String>,
+    publication_ids: HashSet<String>,
+    statistical_endpoint_ids: HashSet<(String, String, String)>,
+    statistical_structure_ids: HashSet<(String, String, String)>,
     used_observed_sources: HashSet<&'a str>,
 }
 
@@ -377,7 +462,9 @@ impl<'a> Compiler<'a> {
             profile,
             report,
             scopes: HashSet::new(),
-            resource_ids: HashSet::new(),
+            publication_ids: HashSet::new(),
+            statistical_endpoint_ids: HashSet::new(),
+            statistical_structure_ids: HashSet::new(),
             used_observed_sources: HashSet::new(),
         }
     }
@@ -598,11 +685,11 @@ impl<'a> Compiler<'a> {
                 "at least one reviewed SQLite source is required",
             );
         }
-        if self.contract.resources.is_empty() {
+        if self.contract.resources.is_empty() && self.contract.statistical_datasets.is_empty() {
             self.error(
-                "resource.none",
+                "publication.none",
                 "resources",
-                "at least one resource is required",
+                "at least one resource or statistical dataset is required",
             );
         }
         if self.contract.resources.len() > MAXIMUM_RESOURCES {
@@ -610,6 +697,13 @@ impl<'a> Compiler<'a> {
                 "resource.bound_exceeded",
                 "resources",
                 "the governed resource count exceeds the product ceiling",
+            );
+        }
+        if self.contract.statistical_datasets.len() > MAXIMUM_STATISTICAL_DATASETS {
+            self.error(
+                "statistics.dataset_bound_exceeded",
+                "statisticalDatasets",
+                "the governed statistical-dataset count exceeds the product ceiling",
             );
         }
         for (source_id, source) in self.contract.sources.iter() {
@@ -666,6 +760,24 @@ impl<'a> Compiler<'a> {
                 "Registry service identity is always public",
             );
         }
+        if !self.contract.statistical_datasets.is_empty() {
+            match self.contract.metadata_visibility.statistical_datasets {
+                None => self.error(
+                    "metadata.statistical_datasets_missing",
+                    "metadataVisibility.statisticalDatasets",
+                    "statistical dataset visibility must be explicit when statistical datasets exist",
+                ),
+                Some(crate::contract::Visibility::OperatorOnly) => self.error(
+                    "metadata.statistical_datasets_unresolvable",
+                    "metadataVisibility.statisticalDatasets",
+                    "successful statistical data responses require resolvable statistical structure metadata",
+                ),
+                Some(
+                    crate::contract::Visibility::Public
+                    | crate::contract::Visibility::OperationBound,
+                ) => {}
+            }
+        }
     }
 
     fn compile_resources(&mut self) -> Vec<CompiledResource> {
@@ -686,7 +798,7 @@ impl<'a> Compiler<'a> {
                     "the governed disclosure-profile count exceeds the per-resource product ceiling",
                 );
             }
-            if !self.resource_ids.insert(resource.id.clone()) {
+            if !self.publication_ids.insert(resource.id.clone()) {
                 self.error(
                     "resource.id_duplicate",
                     &format!("{root}.id"),
@@ -760,6 +872,7 @@ impl<'a> Compiler<'a> {
             let mut property_names = HashSet::new();
             let mut property_columns: HashMap<&str, Vec<(&str, EffectiveClassification, bool)>> =
                 HashMap::new();
+            let mut point_property_names = Vec::new();
             let mut properties = Vec::with_capacity(resource.properties.len());
             for (name, property) in resource.properties.iter() {
                 let location = format!("{root}.properties.{name}");
@@ -777,60 +890,12 @@ impl<'a> Compiler<'a> {
                         "published properties require a non-empty label and description",
                     );
                 }
-                if !valid_sql_identifier(&property.source_column) {
-                    self.error(
-                        "property.column_invalid",
-                        &format!("{location}.sourceColumn"),
-                        "property columns must be simple SQLite identifiers",
-                    );
-                }
                 if !property_names.insert(name) {
                     self.error(
                         "property.name_duplicate",
                         &location,
                         "property keys must be unique",
                     );
-                }
-                if !column_exists(observed_columns.as_ref(), &property.source_column) {
-                    self.error(
-                        "property.column_unknown",
-                        &format!("{location}.sourceColumn"),
-                        "the property source column is absent from the reviewed view",
-                    );
-                }
-                validate_codelist(
-                    &mut self.report,
-                    property.data_type,
-                    property.codelist.as_deref(),
-                    &location,
-                );
-                if let Some(codelist) = property.codelist.as_deref() {
-                    if !valid_relative_reference(codelist) {
-                        self.error(
-                            "datatype.codelist_ref_invalid",
-                            &format!("{location}.codelist"),
-                            "codelists must be contained relative file references",
-                        );
-                    }
-                }
-                let transform = self.compile_transform(
-                    property.transform.as_ref(),
-                    property.data_type,
-                    &location,
-                );
-                if let Some(observed) = observed_view.and_then(|view| {
-                    view.columns
-                        .iter()
-                        .find(|column| column.name == property.source_column)
-                }) {
-                    let source_type = transform_source_type(transform.as_ref(), property.data_type);
-                    if !compatible_declared_type(source_type, &observed.declared_type) {
-                        self.error(
-                            "property.declared_type_incompatible",
-                            &format!("{location}.type"),
-                            "the published datatype is incompatible with the reviewed SQLite declaration",
-                        );
-                    }
                 }
                 let classification = effective_classification(
                     self.contract,
@@ -869,22 +934,165 @@ impl<'a> Compiler<'a> {
                         property.semantic_term.clone()
                     }
                 };
-                property_columns
-                    .entry(property.source_column.as_str())
-                    .or_default()
-                    .push((name, classification.clone(), transform.is_some()));
+                let binding = match &property.binding {
+                    PropertyBindingDefinition::Scalar(binding) => {
+                        if !valid_sql_identifier(&binding.source_column) {
+                            self.error(
+                                "property.column_invalid",
+                                &format!("{location}.sourceColumn"),
+                                "property columns must be simple SQLite identifiers",
+                            );
+                        }
+                        if !column_exists(observed_columns.as_ref(), &binding.source_column) {
+                            self.error(
+                                "property.column_unknown",
+                                &format!("{location}.sourceColumn"),
+                                "the property source column is absent from the reviewed view",
+                            );
+                        }
+                        validate_codelist(
+                            &mut self.report,
+                            binding.data_type,
+                            binding.codelist.as_deref(),
+                            &location,
+                        );
+                        if let Some(codelist) = binding.codelist.as_deref() {
+                            if !valid_relative_reference(codelist) {
+                                self.error(
+                                    "datatype.codelist_ref_invalid",
+                                    &format!("{location}.codelist"),
+                                    "codelists must be contained relative file references",
+                                );
+                            }
+                        }
+                        let transform = self.compile_transform(
+                            binding.transform.as_ref(),
+                            binding.data_type,
+                            &location,
+                        );
+                        if let Some(observed) =
+                            observed_column(observed_view, &binding.source_column)
+                        {
+                            let source_type =
+                                transform_source_type(transform.as_ref(), binding.data_type);
+                            if !compatible_declared_type(source_type, &observed.declared_type) {
+                                self.error(
+                                    "property.declared_type_incompatible",
+                                    &format!("{location}.type"),
+                                    "the published datatype is incompatible with the reviewed SQLite declaration",
+                                );
+                            }
+                        }
+                        property_columns
+                            .entry(binding.source_column.as_str())
+                            .or_default()
+                            .push((name, classification.clone(), transform.is_some()));
+                        CompiledPropertyBinding::Scalar(CompiledScalarPropertyBinding {
+                            source_column: binding.source_column.clone(),
+                            transform,
+                            data_type: binding.data_type,
+                            codelist: binding.codelist.clone(),
+                        })
+                    }
+                    PropertyBindingDefinition::Point(binding) => {
+                        point_property_names.push(name);
+                        if binding.crs != CRS84 {
+                            self.error(
+                                "geometry.crs_unsupported",
+                                &format!("{location}.crs"),
+                                "Point properties require the exact OGC CRS84 identifier",
+                            );
+                        }
+                        let longitude = &binding.source.longitude_column;
+                        let latitude = &binding.source.latitude_column;
+                        for (column, field) in
+                            [(longitude, "longitudeColumn"), (latitude, "latitudeColumn")]
+                        {
+                            let column_location = format!("{location}.source.{field}");
+                            if !valid_sql_identifier(column) {
+                                self.error(
+                                    "geometry.carrier_column_invalid",
+                                    &column_location,
+                                    "Point carrier columns must be simple SQLite identifiers",
+                                );
+                            }
+                            if !column_exists(observed_columns.as_ref(), column) {
+                                self.error(
+                                    "geometry.carrier_column_unknown",
+                                    &column_location,
+                                    "the Point carrier column is absent from the reviewed view",
+                                );
+                            }
+                            if observed_column(observed_view, column).is_some_and(|observed| {
+                                !has_sqlite_numeric_affinity(&observed.declared_type)
+                            }) {
+                                self.error(
+                                    "geometry.carrier_declared_type_incompatible",
+                                    &column_location,
+                                    "Point carriers require reviewed SQLite declarations with INTEGER, REAL, or NUMERIC affinity",
+                                );
+                            }
+                        }
+                        if longitude == latitude {
+                            self.error(
+                                "geometry.carrier_columns_duplicate",
+                                &format!("{location}.source.latitudeColumn"),
+                                "Point longitude and latitude require distinct carrier columns",
+                            );
+                        }
+                        for column in [longitude, latitude] {
+                            property_columns.entry(column.as_str()).or_default().push((
+                                name,
+                                classification.clone(),
+                                false,
+                            ));
+                        }
+                        CompiledPropertyBinding::Point(CompiledPointPropertyBinding {
+                            crs: binding.crs.clone(),
+                            longitude_column: longitude.clone(),
+                            latitude_column: latitude.clone(),
+                        })
+                    }
+                };
                 properties.push(CompiledProperty {
                     name: name.to_owned(),
                     label: property.label.clone(),
                     description: property.description.clone(),
-                    source_column: property.source_column.clone(),
-                    transform,
-                    data_type: property.data_type,
-                    codelist: property.codelist.clone(),
                     source_required: property.source_required,
                     semantic_iri,
                     classification,
+                    binding,
                 });
+            }
+
+            match point_property_names.as_slice() {
+                [] => {
+                    if resource.primary_geometry.is_some() {
+                        self.error(
+                            "geometry.primary_without_point",
+                            &format!("{root}.primaryGeometry"),
+                            "primaryGeometry requires exactly one Point property",
+                        );
+                    }
+                }
+                [point_name] => match resource.primary_geometry.as_deref() {
+                    None => self.error(
+                        "geometry.primary_required",
+                        &format!("{root}.primaryGeometry"),
+                        "a resource with a Point property must name it as primaryGeometry",
+                    ),
+                    Some(primary) if primary != *point_name => self.error(
+                        "geometry.primary_invalid",
+                        &format!("{root}.primaryGeometry"),
+                        "primaryGeometry must name the resource's one Point property",
+                    ),
+                    Some(_) => {}
+                },
+                _ => self.error(
+                    "geometry.point_count_exceeded",
+                    &format!("{root}.properties"),
+                    "a resource may define exactly one Point property",
+                ),
             }
 
             let mut disclosures = Vec::with_capacity(resource.disclosure_profiles.len());
@@ -1219,6 +1427,49 @@ impl<'a> Compiler<'a> {
                     operations.push(operation);
                 }
             }
+            if resource.operations.searches.len() > MAXIMUM_SEARCHES_PER_RESOURCE {
+                self.error(
+                    "operation.search_bound_exceeded",
+                    &format!("{root}.operations.searches"),
+                    "the named search count exceeds the per-resource product ceiling",
+                );
+            }
+            let mut search_ids = HashSet::new();
+            for (search_index, search) in resource.operations.searches.iter().enumerate() {
+                let location = format!("{root}.operations.searches[{search_index}]");
+                if !search_ids.insert(search.id.as_str()) {
+                    self.error(
+                        "operation.search_id_duplicate",
+                        &format!("{location}.id"),
+                        "search identifiers must be unique within a resource",
+                    );
+                }
+                if !valid_kebab_identifier(&search.id) {
+                    self.error(
+                        "operation.search_id_invalid",
+                        &format!("{location}.id"),
+                        "search identifiers must be URL-safe kebab case",
+                    );
+                }
+                if source.profile == SourceProfile::LiveReadOnly {
+                    self.error(
+                        "operation.search_live_forbidden",
+                        &location,
+                        "Version one live sources cannot compile a collection search",
+                    );
+                }
+                if let Some(operation) = self.compile_search(
+                    resource,
+                    &properties,
+                    &disclosures,
+                    observed_view,
+                    observed_columns.as_ref(),
+                    &location,
+                    search,
+                ) {
+                    operations.push(operation);
+                }
+            }
             if operations.is_empty() {
                 self.error(
                     "operation.none",
@@ -1294,6 +1545,7 @@ impl<'a> Compiler<'a> {
                     ),
                 },
                 properties,
+                primary_geometry: resource.primary_geometry.clone(),
                 disclosure_profiles: disclosures,
                 operations,
                 column_accounting,
@@ -1301,6 +1553,802 @@ impl<'a> Compiler<'a> {
             });
         }
         compiled
+    }
+
+    fn compile_statistical_datasets(&mut self) -> Vec<CompiledStatisticalDataset> {
+        let mut compiled = Vec::with_capacity(self.contract.statistical_datasets.len());
+        for (index, dataset) in self.contract.statistical_datasets.iter().enumerate() {
+            let root = format!("statisticalDatasets[{index}]");
+            if !self.publication_ids.insert(dataset.id.clone()) {
+                self.error(
+                    "statistics.dataset_id_duplicate",
+                    &format!("{root}.id"),
+                    "resource and statistical dataset identifiers must be globally unique",
+                );
+            }
+            if !valid_kebab_identifier(&dataset.id) {
+                self.error(
+                    "statistics.dataset_id_invalid",
+                    &format!("{root}.id"),
+                    "a statistical dataset identifier must be URL-safe kebab case",
+                );
+            }
+            if dataset.title.trim().is_empty() || dataset.description.trim().is_empty() {
+                self.error(
+                    "statistics.documentation_empty",
+                    &root,
+                    "statistical datasets require a non-empty title and description",
+                );
+            }
+            if DateTime::parse_from_rfc3339(&dataset.publication.release_at).is_err() {
+                self.error(
+                    "statistics.release_at_invalid",
+                    &format!("{root}.publication.releaseAt"),
+                    "a statistical publication release time must be an RFC 3339 timestamp",
+                );
+            }
+            if dataset.dimensions.len().saturating_add(1) > MAXIMUM_SDMX_DIMENSIONS {
+                self.error(
+                    "statistics.dimension_bound_invalid",
+                    &format!("{root}.dimensions"),
+                    "ordinary dimensions plus the time dimension exceed the product ceiling",
+                );
+            }
+            if dataset.attributes.len() > MAXIMUM_SDMX_ATTRIBUTES {
+                self.error(
+                    "statistics.attribute_bound_exceeded",
+                    &format!("{root}.attributes"),
+                    "the statistical attribute count exceeds the product ceiling",
+                );
+            }
+            if dataset.query.maximum_observations == 0
+                || dataset.query.maximum_observations > MAXIMUM_SDMX_OBSERVATIONS
+                || dataset.query.maximum_offset > MAXIMUM_SDMX_OFFSET
+            {
+                self.error(
+                    "statistics.query_bound_invalid",
+                    &format!("{root}.query"),
+                    "statistical observation and offset bounds must stay within the product ceilings",
+                );
+            }
+
+            let sdmx = &dataset.bindings.sdmx;
+            let generated_id = to_sdmx_id(&dataset.id);
+            let agency_id = sdmx
+                .agency_id
+                .clone()
+                .unwrap_or_else(|| to_sdmx_id(&self.contract.metadata.id));
+            let dataflow_id = sdmx
+                .dataflow_id
+                .clone()
+                .unwrap_or_else(|| generated_id.clone());
+            let version = sdmx.version.clone().unwrap_or_else(|| "1.0.0".into());
+            let data_structure_id = sdmx
+                .data_structure_id
+                .clone()
+                .unwrap_or_else(|| format!("{generated_id}_DSD"));
+            let concept_scheme_id = sdmx
+                .concept_scheme_id
+                .clone()
+                .unwrap_or_else(|| format!("{generated_id}_CONCEPTS"));
+            if !valid_sdmx_agency_id(&agency_id) {
+                self.error(
+                    "sdmx.identifier_invalid",
+                    &format!("{root}.bindings.sdmx.agencyId"),
+                    "an SDMX agency identifier must use dot-separated NCName-compatible segments",
+                );
+            }
+            for (value, location) in [
+                (&dataflow_id, format!("{root}.bindings.sdmx.dataflowId")),
+                (
+                    &data_structure_id,
+                    format!("{root}.bindings.sdmx.dataStructureId"),
+                ),
+                (
+                    &concept_scheme_id,
+                    format!("{root}.bindings.sdmx.conceptSchemeId"),
+                ),
+            ] {
+                if !valid_sdmx_maintainable_id(value) {
+                    self.error(
+                        "sdmx.identifier_invalid",
+                        &location,
+                        "an SDMX artefact identifier must use the single-level NCName-compatible profile",
+                    );
+                }
+            }
+            if !valid_sdmx_version(&version) {
+                self.error(
+                    "sdmx.version_invalid",
+                    &format!("{root}.bindings.sdmx.version"),
+                    "the SDMX binding requires one three-part numeric semantic version without leading zeroes",
+                );
+            }
+            if !self.statistical_endpoint_ids.insert((
+                agency_id.clone(),
+                dataflow_id.clone(),
+                version.clone(),
+            )) {
+                self.error(
+                    "sdmx.endpoint_duplicate",
+                    &format!("{root}.bindings.sdmx"),
+                    "SDMX agency, dataflow, and version tuples must be unique",
+                );
+            }
+            if !self.statistical_structure_ids.insert((
+                agency_id.clone(),
+                data_structure_id.clone(),
+                version.clone(),
+            )) {
+                self.error(
+                    "sdmx.structure_endpoint_duplicate",
+                    &format!("{root}.bindings.sdmx"),
+                    "SDMX agency, data structure, and version tuples must be unique",
+                );
+            }
+
+            if !valid_sql_identifier(&dataset.source.view) {
+                self.error(
+                    "statistics.view_invalid",
+                    &format!("{root}.source.view"),
+                    "reviewed SQLite view names must be simple identifiers",
+                );
+            }
+            let Some(source) = self.contract.sources.get(&dataset.source.source) else {
+                self.error(
+                    "statistics.source_unknown",
+                    &format!("{root}.source.source"),
+                    "the statistical dataset names no governed source",
+                );
+                continue;
+            };
+            if source.profile != SourceProfile::Snapshot {
+                self.error(
+                    "statistics.live_source_forbidden",
+                    &format!("{root}.source.source"),
+                    "statistical datasets require a versioned snapshot source",
+                );
+            }
+            let observed_view =
+                self.observed
+                    .get(dataset.source.source.as_str())
+                    .and_then(|schema| {
+                        schema
+                            .views
+                            .iter()
+                            .find(|view| view.name == dataset.source.view)
+                    });
+            if self.observed.contains_key(dataset.source.source.as_str()) && observed_view.is_none()
+            {
+                self.error(
+                    "statistics.view_unknown",
+                    &format!("{root}.source.view"),
+                    "the reviewed statistical view is absent from the observed source schema",
+                );
+            }
+            let observed_columns = observed_view.map(|view| {
+                view.columns
+                    .iter()
+                    .map(|column| column.name.as_str())
+                    .collect::<BTreeSet<_>>()
+            });
+            if effective_classification(self.contract, &dataset.classification_defaults, None)
+                .is_none()
+            {
+                self.error(
+                    "classification.defaults_incomplete",
+                    &format!("{root}.classificationDefaults"),
+                    "statistical-dataset classification defaults must resolve every dimension",
+                );
+            }
+
+            let mut component_ids = HashSet::new();
+            let mut component_columns = HashSet::new();
+            let mut classifications = BTreeMap::<String, EffectiveClassification>::new();
+            let mut dimensions = Vec::with_capacity(dataset.dimensions.len());
+            for (local_id, dimension) in dataset.dimensions.iter() {
+                let location = format!("{root}.dimensions.{local_id}");
+                if !valid_camel_identifier(local_id) {
+                    self.error(
+                        "statistics.component_id_invalid",
+                        &location,
+                        "statistical component identifiers must be camelCase",
+                    );
+                }
+                let component_id = to_sdmx_id(local_id);
+                self.validate_statistical_component_identity(
+                    &component_id,
+                    &dimension.label,
+                    &dimension.description,
+                    &dimension.column,
+                    &location,
+                    &mut component_ids,
+                    &mut component_columns,
+                    observed_columns.as_ref(),
+                );
+                if !matches!(
+                    dimension.data_type,
+                    StatisticalValueType::Code | StatisticalValueType::String
+                ) {
+                    self.error(
+                        "statistics.dimension_type_invalid",
+                        &format!("{location}.type"),
+                        "ordinary dimensions use only code or string values",
+                    );
+                }
+                if !compatible_sdmx_declared_type(
+                    dimension.data_type,
+                    observed_column(observed_view, &dimension.column)
+                        .map(|column| column.declared_type.as_str()),
+                ) {
+                    self.error(
+                        "statistics.component_type_incompatible",
+                        &format!("{location}.type"),
+                        "the statistical value type is incompatible with the reviewed SQLite declaration",
+                    );
+                }
+                let vocabulary_valid = match dimension.data_type {
+                    StatisticalValueType::Code => dimension
+                        .vocabulary
+                        .as_deref()
+                        .is_some_and(valid_relative_reference),
+                    StatisticalValueType::String => dimension.vocabulary.is_none(),
+                    _ => false,
+                };
+                if !vocabulary_valid {
+                    self.error(
+                        "statistics.dimension_vocabulary_invalid",
+                        &location,
+                        "code dimensions require one contained vocabulary and string dimensions cannot declare one",
+                    );
+                }
+                let Some(classification) = effective_classification(
+                    self.contract,
+                    &dataset.classification_defaults,
+                    Some(&dimension.classification),
+                ) else {
+                    self.error(
+                        "classification.property_incomplete",
+                        &format!("{location}.classification"),
+                        "the dimension classification is incomplete",
+                    );
+                    continue;
+                };
+                self.validate_statistical_output_classification(&classification, &location);
+                let semantic_iri = self.statistical_semantic_iri(&dimension.concept, &location);
+                classifications.insert(dimension.column.clone(), classification.clone());
+                dimensions.push(CompiledStatisticalDimension {
+                    id: component_id,
+                    label: dimension.label.clone(),
+                    description: dimension.description.clone(),
+                    source_column: dimension.column.clone(),
+                    data_type: dimension.data_type,
+                    codelist: dimension.vocabulary.clone(),
+                    semantic_iri,
+                    classification,
+                });
+            }
+
+            let time_definition = &dataset.time;
+            let time_location = format!("{root}.time");
+            self.validate_statistical_component_identity(
+                "TIME_PERIOD",
+                &time_definition.label,
+                &time_definition.description,
+                &time_definition.column,
+                &time_location,
+                &mut component_ids,
+                &mut component_columns,
+                observed_columns.as_ref(),
+            );
+            if !compatible_sdmx_time_declared_type(
+                observed_column(observed_view, &time_definition.column)
+                    .map(|column| column.declared_type.as_str()),
+            ) {
+                self.error(
+                    "statistics.component_type_incompatible",
+                    &format!("{time_location}.column"),
+                    "the time dimension requires a reviewed textual SQLite declaration",
+                );
+            }
+            let Some(time_classification) = effective_classification(
+                self.contract,
+                &dataset.classification_defaults,
+                Some(&time_definition.classification),
+            ) else {
+                self.error(
+                    "classification.property_incomplete",
+                    &format!("{time_location}.classification"),
+                    "the time-dimension classification is incomplete",
+                );
+                continue;
+            };
+            self.validate_statistical_output_classification(&time_classification, &time_location);
+            let time = CompiledStatisticalTimeDimension {
+                id: "TIME_PERIOD".into(),
+                label: time_definition.label.clone(),
+                description: time_definition.description.clone(),
+                source_column: time_definition.column.clone(),
+                granularity: time_definition.granularity,
+                semantic_iri: self
+                    .statistical_semantic_iri(&time_definition.concept, &time_location),
+                classification: time_classification.clone(),
+            };
+            classifications.insert(time_definition.column.clone(), time_classification);
+
+            let measure_definition = &dataset.measure;
+            let measure_location = format!("{root}.measure");
+            if !valid_camel_identifier(&measure_definition.id) {
+                self.error(
+                    "statistics.component_id_invalid",
+                    &format!("{measure_location}.id"),
+                    "statistical component identifiers must be camelCase",
+                );
+            }
+            let measure_id = to_sdmx_id(&measure_definition.id);
+            self.validate_statistical_component_identity(
+                &measure_id,
+                &measure_definition.label,
+                &measure_definition.description,
+                &measure_definition.column,
+                &measure_location,
+                &mut component_ids,
+                &mut component_columns,
+                observed_columns.as_ref(),
+            );
+            if !matches!(
+                measure_definition.data_type,
+                StatisticalValueType::Integer | StatisticalValueType::Decimal
+            ) {
+                self.error(
+                    "statistics.measure_invalid",
+                    &measure_location,
+                    "the statistical profile requires one integer or decimal measure",
+                );
+            }
+            if !compatible_sdmx_declared_type(
+                measure_definition.data_type,
+                observed_column(observed_view, &measure_definition.column)
+                    .map(|column| column.declared_type.as_str()),
+            ) {
+                self.error(
+                    "statistics.component_type_incompatible",
+                    &format!("{measure_location}.type"),
+                    "the statistical measure type is incompatible with the reviewed SQLite declaration",
+                );
+            }
+            let Some(measure_classification) = effective_classification(
+                self.contract,
+                &dataset.classification_defaults,
+                Some(&measure_definition.classification),
+            ) else {
+                self.error(
+                    "classification.property_incomplete",
+                    &format!("{measure_location}.classification"),
+                    "the measure classification is incomplete",
+                );
+                continue;
+            };
+            self.validate_statistical_output_classification(
+                &measure_classification,
+                &measure_location,
+            );
+            let measure = CompiledStatisticalMeasure {
+                id: measure_id,
+                label: measure_definition.label.clone(),
+                description: measure_definition.description.clone(),
+                source_column: measure_definition.column.clone(),
+                data_type: measure_definition.data_type,
+                semantic_iri: self
+                    .statistical_semantic_iri(&measure_definition.concept, &measure_location),
+                classification: measure_classification.clone(),
+            };
+            classifications.insert(measure_definition.column.clone(), measure_classification);
+
+            let mut attributes = Vec::with_capacity(dataset.attributes.len());
+            for (local_id, attribute) in dataset.attributes.iter() {
+                let location = format!("{root}.attributes.{local_id}");
+                if !valid_camel_identifier(local_id) {
+                    self.error(
+                        "statistics.component_id_invalid",
+                        &location,
+                        "statistical component identifiers must be camelCase",
+                    );
+                }
+                let component_id = to_sdmx_id(local_id);
+                self.validate_statistical_component_identity(
+                    &component_id,
+                    &attribute.label,
+                    &attribute.description,
+                    &attribute.column,
+                    &location,
+                    &mut component_ids,
+                    &mut component_columns,
+                    observed_columns.as_ref(),
+                );
+                let vocabulary_valid = match attribute.data_type {
+                    StatisticalValueType::Code => attribute
+                        .vocabulary
+                        .as_deref()
+                        .is_some_and(valid_relative_reference),
+                    StatisticalValueType::String
+                    | StatisticalValueType::Integer
+                    | StatisticalValueType::Decimal
+                    | StatisticalValueType::Boolean => attribute.vocabulary.is_none(),
+                };
+                if !vocabulary_valid {
+                    self.error(
+                        "statistics.attribute_invalid",
+                        &location,
+                        "code attributes require one contained vocabulary and other attributes cannot declare one",
+                    );
+                }
+                if !compatible_sdmx_declared_type(
+                    attribute.data_type,
+                    observed_column(observed_view, &attribute.column)
+                        .map(|column| column.declared_type.as_str()),
+                ) {
+                    self.error(
+                        "statistics.component_type_incompatible",
+                        &format!("{location}.type"),
+                        "the statistical attribute type is incompatible with the reviewed SQLite declaration",
+                    );
+                }
+                let Some(classification) = effective_classification(
+                    self.contract,
+                    &dataset.classification_defaults,
+                    Some(&attribute.classification),
+                ) else {
+                    self.error(
+                        "classification.property_incomplete",
+                        &format!("{location}.classification"),
+                        "the attribute classification is incomplete",
+                    );
+                    continue;
+                };
+                self.validate_statistical_output_classification(&classification, &location);
+                let semantic_iri = self.statistical_semantic_iri(&attribute.concept, &location);
+                classifications.insert(attribute.column.clone(), classification.clone());
+                attributes.push(CompiledStatisticalAttribute {
+                    id: component_id,
+                    label: attribute.label.clone(),
+                    description: attribute.description.clone(),
+                    source_column: attribute.column.clone(),
+                    data_type: attribute.data_type,
+                    codelist: attribute.vocabulary.clone(),
+                    source_required: attribute.required,
+                    semantic_iri,
+                    classification,
+                });
+            }
+
+            let Some(access) = self.compile_access(
+                &dataset.access,
+                observed_view,
+                observed_columns.as_ref(),
+                &root,
+            ) else {
+                continue;
+            };
+            let column_accounting = self.compile_statistical_column_accounting(
+                dataset,
+                &dimensions,
+                &time,
+                &measure,
+                &attributes,
+                &access,
+                &classifications,
+                observed_columns.as_ref(),
+                &root,
+            );
+            let processing_handling = column_accounting
+                .iter()
+                .map(|column| column.classification.handling)
+                .max()
+                .unwrap_or(Handling::Public);
+            let disclosure_handling = dimensions
+                .iter()
+                .map(|component| component.classification.handling)
+                .chain(std::iter::once(time.classification.handling))
+                .chain(std::iter::once(measure.classification.handling))
+                .chain(
+                    attributes
+                        .iter()
+                        .map(|component| component.classification.handling),
+                )
+                .max()
+                .unwrap_or(Handling::Public);
+            if processing_handling > Handling::Public && matches!(access, CompiledAccess::Public) {
+                self.error(
+                    "statistics.public_nonpublic_forbidden",
+                    &format!("{root}.access"),
+                    "anonymous statistical publication may process only public-handling columns",
+                );
+            }
+            self.validate_statistical_processing(dataset, &root);
+            self.validate_statistical_metadata_closure(processing_handling, &root);
+            compiled.push(CompiledStatisticalDataset {
+                id: dataset.id.clone(),
+                title: dataset.title.clone(),
+                description: dataset.description.clone(),
+                sdmx: CompiledSdmxBindingProfile {
+                    agency_id,
+                    dataflow_id,
+                    version,
+                    data_structure_id,
+                    concept_scheme_id,
+                    rest_version: SDMX_REST_VERSION.into(),
+                    data_json_version: SDMX_DATA_JSON_VERSION.into(),
+                    data_csv_version: SDMX_DATA_CSV_VERSION.into(),
+                    structure_json_version: SDMX_STRUCTURE_JSON_VERSION.into(),
+                },
+                release_at: dataset.publication.release_at.clone(),
+                source: dataset.source.source.clone(),
+                view: dataset.source.view.clone(),
+                dimensions,
+                time,
+                measure,
+                attributes,
+                access,
+                allow_unfiltered: dataset.query.allow_unfiltered,
+                maximum_observations: dataset.query.maximum_observations,
+                maximum_offset: dataset.query.maximum_offset,
+                processing_handling,
+                disclosure_handling,
+                column_accounting,
+                processing_descriptions: dataset.processing_descriptions.clone(),
+            });
+        }
+        compiled
+    }
+
+    fn statistical_semantic_iri(&mut self, concept: &str, location: &str) -> String {
+        match expand_local_term(&self.contract.semantics.local_vocabulary, concept) {
+            Some(value) => value,
+            None => {
+                self.error(
+                    "statistics.concept_invalid",
+                    &format!("{location}.concept"),
+                    "a statistical concept must be a local term or absolute HTTP IRI",
+                );
+                concept.to_owned()
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_statistical_component_identity(
+        &mut self,
+        id: &str,
+        label: &str,
+        description: &str,
+        source_column: &str,
+        location: &str,
+        component_ids: &mut HashSet<String>,
+        component_columns: &mut HashSet<String>,
+        observed_columns: Option<&BTreeSet<&str>>,
+    ) {
+        if !valid_sdmx_component_id(id) || !component_ids.insert(id.to_owned()) {
+            self.error(
+                "statistics.binding_component_id_invalid",
+                location,
+                "generated SDMX component identifiers must be unique uppercase identifiers",
+            );
+        }
+        if label.trim().is_empty() || description.trim().is_empty() {
+            self.error(
+                "statistics.component_documentation_empty",
+                location,
+                "statistical components require a label and description",
+            );
+        }
+        if !valid_sql_identifier(source_column) || !column_exists(observed_columns, source_column) {
+            self.error(
+                "statistics.component_column_invalid",
+                &format!("{location}.column"),
+                "a statistical component must bind one reviewed source column",
+            );
+        }
+        if !component_columns.insert(source_column.to_owned()) {
+            self.error(
+                "statistics.component_column_reused",
+                &format!("{location}.column"),
+                "one reviewed column cannot back more than one statistical component",
+            );
+        }
+    }
+
+    fn validate_statistical_output_classification(
+        &mut self,
+        classification: &EffectiveClassification,
+        location: &str,
+    ) {
+        self.validate_review_status(classification, &format!("{location}.classification"));
+        if classification.privacy != "non-personal" {
+            self.error(
+                "statistics.personal_output_forbidden",
+                &format!("{location}.classification.privacy"),
+                "statistical output components must be reviewed as non-personal",
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_statistical_column_accounting(
+        &mut self,
+        dataset: &crate::contract::StatisticalDatasetDefinition,
+        dimensions: &[CompiledStatisticalDimension],
+        time: &CompiledStatisticalTimeDimension,
+        measure: &CompiledStatisticalMeasure,
+        attributes: &[CompiledStatisticalAttribute],
+        access: &CompiledAccess,
+        classifications: &BTreeMap<String, EffectiveClassification>,
+        observed_columns: Option<&BTreeSet<&str>>,
+        root: &str,
+    ) -> Vec<ColumnAccount> {
+        let mut uses = BTreeMap::<String, BTreeSet<ColumnUse>>::new();
+        for dimension in dimensions {
+            uses.entry(dimension.source_column.clone())
+                .or_default()
+                .insert(ColumnUse::StatisticalDimension(dimension.id.clone()));
+        }
+        uses.entry(time.source_column.clone())
+            .or_default()
+            .insert(ColumnUse::StatisticalDimension(time.id.clone()));
+        uses.entry(measure.source_column.clone())
+            .or_default()
+            .insert(ColumnUse::StatisticalMeasure(measure.id.clone()));
+        for attribute in attributes {
+            uses.entry(attribute.source_column.clone())
+                .or_default()
+                .insert(ColumnUse::StatisticalAttribute(attribute.id.clone()));
+        }
+        if let CompiledAccess::Protected {
+            row_binding: Some(binding),
+            ..
+        } = access
+        {
+            uses.entry(binding.source_column.clone())
+                .or_default()
+                .insert(ColumnUse::RowBinding(format!(
+                    "{}.statistics.read",
+                    dataset.id
+                )));
+        }
+        if let Some(columns) = observed_columns {
+            for column in columns {
+                if !uses.contains_key(*column) {
+                    self.error(
+                        "source.column_unaccounted",
+                        &format!("{root}.source"),
+                        "the reviewed statistical view contains an unaccounted column",
+                    );
+                }
+            }
+        }
+        for (column, _) in dataset.source_column_classifications.iter() {
+            if !uses.contains_key(column) {
+                self.error(
+                    "classification.column_override_unknown",
+                    &format!("{root}.sourceColumnClassifications.{column}"),
+                    "a source-column classification override must name an accounted reviewed column",
+                );
+            }
+        }
+        let mut accounts = Vec::with_capacity(uses.len());
+        for (column, column_uses) in uses {
+            let source_override = dataset.source_column_classifications.get(&column);
+            if column_uses.len() > 1
+                && !source_override.is_some_and(explicit_reviewed_classification)
+            {
+                let location = format!("{root}.sourceColumnClassifications.{column}");
+                match self.profile {
+                    CompileProfile::Authoring => self.warning(
+                        "classification.column_explicit_review_required",
+                        &location,
+                        "a multiply-bound statistical source column requires its own complete reviewed classification",
+                    ),
+                    CompileProfile::Production => self.error(
+                        "classification.column_explicit_review_required",
+                        &location,
+                        "a multiply-bound statistical source column requires its own complete reviewed classification",
+                    ),
+                }
+            }
+            let base = classifications.get(&column).map_or_else(
+                || dataset.classification_defaults.clone(),
+                classification_to_partial,
+            );
+            let Some(classification) =
+                effective_classification(self.contract, &base, source_override)
+            else {
+                self.error(
+                    "classification.column_incomplete",
+                    &format!("{root}.sourceColumnClassifications.{column}"),
+                    "an accounted statistical source column has no complete classification",
+                );
+                continue;
+            };
+            if let Some(component) = classifications.get(&column) {
+                if classification.privacy != component.privacy {
+                    self.error(
+                        "classification.column_privacy_mismatch",
+                        &format!("{root}.sourceColumnClassifications.{column}.privacy"),
+                        "a statistical component and its source column require exact privacy agreement",
+                    );
+                }
+                if classification.handling < component.handling {
+                    self.error(
+                        "classification.column_weaker_than_property",
+                        &format!("{root}.sourceColumnClassifications.{column}.handling"),
+                        "a source-column classification cannot weaken component handling",
+                    );
+                }
+            }
+            self.validate_review_status(
+                &classification,
+                &format!("{root}.sourceColumnClassifications.{column}"),
+            );
+            accounts.push(ColumnAccount {
+                column,
+                uses: column_uses.into_iter().collect(),
+                classification,
+            });
+        }
+        accounts
+    }
+
+    fn validate_statistical_processing(
+        &mut self,
+        dataset: &crate::contract::StatisticalDatasetDefinition,
+        root: &str,
+    ) {
+        if dataset.processing_descriptions.is_empty() {
+            self.error(
+                "processing.description_missing",
+                &format!("{root}.processingDescriptions"),
+                "a statistical publication requires a reviewed processing description",
+            );
+        }
+        let mut ids = HashSet::new();
+        for (index, processing) in dataset.processing_descriptions.iter().enumerate() {
+            let location = format!("{root}.processingDescriptions[{index}]");
+            if !ids.insert(processing.id.as_str())
+                || !valid_kebab_identifier(&processing.id)
+                || processing.purpose.trim().is_empty()
+                || processing.recipient_class.trim().is_empty()
+                || processing.safeguards.is_empty()
+                || has_duplicates(&processing.safeguards)
+                || !valid_relative_reference(&processing.legal_basis_ref)
+                || !valid_relative_reference(&processing.dpv_profile_ref)
+            {
+                self.error(
+                    "processing.description_invalid",
+                    &location,
+                    "processing descriptions require stable identifiers, contained governance references, and reviewed safeguards",
+                );
+            }
+            if processing.operation_refs != ["statistics:read"] {
+                self.error(
+                    "processing.operations_invalid",
+                    &format!("{location}.operationRefs"),
+                    "a statistical processing description must name statistics:read",
+                );
+            }
+        }
+    }
+
+    fn validate_statistical_metadata_closure(&mut self, maximum_handling: Handling, root: &str) {
+        if maximum_handling >= Handling::Confidential
+            && self.contract.metadata_visibility.classifications
+                == crate::contract::Visibility::Public
+        {
+            self.error(
+                "metadata.classification_visibility_invalid",
+                root,
+                "confidential or restricted statistical components forbid public classification metadata",
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1352,11 +2400,13 @@ impl<'a> Compiler<'a> {
             OperationKind::Read => format!("{}.read", resource.id),
             OperationKind::List => format!("{}.list", resource.id),
             OperationKind::Lookup { name } => format!("{}.lookup.{name}", resource.id),
+            OperationKind::Search { name } => format!("{}.search.{name}", resource.id),
         };
         let pattern = match &kind {
             OperationKind::List => ConsultationPattern::List,
             OperationKind::Read => ConsultationPattern::Retrieve,
             OperationKind::Lookup { .. } => ConsultationPattern::Search,
+            OperationKind::Search { .. } => ConsultationPattern::Search,
         };
         let artifact_stem = operation_artifact_stem(&resource.id, &kind);
         let mut access_profiles = Vec::with_capacity(access_profile_definitions.len());
@@ -1392,7 +2442,7 @@ impl<'a> Compiler<'a> {
                 &mut self.report,
                 disclosure,
                 &access,
-                matches!(&kind, OperationKind::List),
+                matches!(&kind, OperationKind::List | OperationKind::Search { .. }),
                 &access_profile_location,
             );
             let access_profile_artifact_stem =
@@ -1413,9 +2463,12 @@ impl<'a> Compiler<'a> {
                             .iter()
                             .find(|property| property.name == *name)
                             .and_then(|property| {
-                                property.transform.as_ref().map(|transform| {
-                                    format!("{}={}", property.name, transform.identifier())
-                                })
+                                property
+                                    .scalar_binding()
+                                    .and_then(|binding| binding.transform.as_ref())
+                                    .map(|transform| {
+                                        format!("{}={}", property.name, transform.identifier())
+                                    })
                             })
                     })
                     .collect(),
@@ -1460,6 +2513,7 @@ impl<'a> Compiler<'a> {
                 source: resource.source.source.clone(),
                 view: resource.source.view.clone(),
                 filters: Vec::new(),
+                spatial_bbox: None,
                 selectors: Vec::new(),
                 order_by: Vec::new(),
                 allow_unfiltered: false,
@@ -1549,7 +2603,15 @@ impl<'a> Compiler<'a> {
                 .find(|property| property.name == filter.property)
             {
                 Some(property) => {
-                    if property.transform.is_some() {
+                    let Some(binding) = property.scalar_binding() else {
+                        self.error(
+                            "list.filter_property_point",
+                            &filter_location,
+                            "Point properties cannot be used as scalar list filters",
+                        );
+                        continue;
+                    };
+                    if binding.transform.is_some() {
                         self.error(
                             "list.filter_property_transformed",
                             &filter_location,
@@ -1557,7 +2619,7 @@ impl<'a> Compiler<'a> {
                         );
                         continue;
                     }
-                    if property.data_type != filter.data_type {
+                    if binding.data_type != filter.data_type {
                         self.error(
                             "list.filter_type_mismatch",
                             &filter_location,
@@ -1574,7 +2636,7 @@ impl<'a> Compiler<'a> {
                     operation.query.filters.push(CompiledFilter {
                         parameter: filter.name.clone(),
                         property: filter.property.clone(),
-                        source_column: property.source_column.clone(),
+                        source_column: binding.source_column.clone(),
                         data_type: filter.data_type,
                     });
                 }
@@ -1600,7 +2662,15 @@ impl<'a> Compiler<'a> {
                 .find(|property| property.name == *property_name)
             {
                 Some(property) => {
-                    if property.transform.is_some() {
+                    let Some(binding) = property.scalar_binding() else {
+                        self.error(
+                            "list.order_property_point",
+                            &format!("{location}.orderBy[{index}]"),
+                            "Point properties cannot be used as scalar fixed order keys",
+                        );
+                        continue;
+                    };
+                    if binding.transform.is_some() {
                         self.error(
                             "list.order_property_transformed",
                             &format!("{location}.orderBy[{index}]"),
@@ -1615,14 +2685,14 @@ impl<'a> Compiler<'a> {
                             "fixed order properties must be required in the governed source contract",
                         );
                     }
-                    if !cursor_order_type_supported(property.data_type) {
+                    if !cursor_order_type_supported(binding.data_type) {
                         self.error(
                             "list.order_property_type_unsupported",
                             &format!("{location}.orderBy"),
                             "fixed order properties must use a cursor-supported string, integer, or boolean value shape",
                         );
                     }
-                    if !order_columns.insert(property.source_column.as_str()) {
+                    if !order_columns.insert(binding.source_column.as_str()) {
                         self.error(
                             "list.order_column_duplicate",
                             &format!("{location}.orderBy"),
@@ -1631,14 +2701,11 @@ impl<'a> Compiler<'a> {
                     }
                     self.validate_cursor_order_column(
                         observed_view,
-                        &property.source_column,
-                        property.data_type,
+                        &binding.source_column,
+                        binding.data_type,
                         &format!("{location}.orderBy"),
                     );
-                    operation
-                        .query
-                        .order_by
-                        .push(property.source_column.clone());
+                    operation.query.order_by.push(binding.source_column.clone());
                 }
                 None => self.error(
                     "list.order_property_unknown",
@@ -1674,6 +2741,188 @@ impl<'a> Compiler<'a> {
         operation.query.pagination = Some(CompiledPagination {
             default_page_size: list.pagination.default_page_size,
             maximum_page_size: list.pagination.maximum_page_size,
+        });
+        Some(operation)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_search(
+        &mut self,
+        resource: &crate::contract::ResourceDefinition,
+        properties: &[CompiledProperty],
+        disclosures: &[CompiledDisclosureProfile],
+        observed_view: Option<&crate::model::ObservedView>,
+        observed_columns: Option<&BTreeSet<&str>>,
+        location: &str,
+        search: &crate::contract::SearchOperation,
+    ) -> Option<CompiledOperation> {
+        let mut operation = self.compile_simple_operation(
+            resource,
+            properties,
+            disclosures,
+            observed_view,
+            observed_columns,
+            location,
+            "search",
+            OperationKind::Search {
+                name: search.id.clone(),
+            },
+            &search.default_access_profile,
+            &search.access_profiles,
+        )?;
+        let Some(primary_name) = resource.primary_geometry.as_deref() else {
+            self.error(
+                "search.point_bbox_without_geometry",
+                &format!("{location}.query"),
+                "a point-bbox search requires one compiled primary Point property",
+            );
+            return Some(operation);
+        };
+        let Some(primary_property) = properties
+            .iter()
+            .find(|property| property.name == primary_name)
+        else {
+            return Some(operation);
+        };
+        let Some(point) = primary_property.point_binding() else {
+            return Some(operation);
+        };
+        if primary_property.classification.privacy != "non-personal" {
+            self.error(
+                "search.point_bbox_personal_forbidden",
+                &format!("{location}.query"),
+                "the point-bbox search profile permits only non-personal geometry",
+            );
+        }
+        let SearchQueryDefinition::PointBbox {
+            maximum_longitude_span_degrees,
+            maximum_latitude_span_degrees,
+        } = &search.query;
+        if *maximum_longitude_span_degrees == 0
+            || *maximum_longitude_span_degrees > 360
+            || *maximum_latitude_span_degrees == 0
+            || *maximum_latitude_span_degrees > 180
+        {
+            self.error(
+                "search.point_bbox_bound_invalid",
+                &format!("{location}.query"),
+                "point-bbox spans must be positive and no larger than the CRS84 world extent",
+            );
+        }
+        operation.query.spatial_bbox = Some(CompiledSpatialBboxQuery {
+            longitude_column: point.longitude_column.clone(),
+            latitude_column: point.latitude_column.clone(),
+            maximum_longitude_span_degrees: *maximum_longitude_span_degrees,
+            maximum_latitude_span_degrees: *maximum_latitude_span_degrees,
+        });
+
+        if search.order_by.len() > MAXIMUM_LIST_ORDER_KEYS {
+            self.error(
+                "search.order_bound_exceeded",
+                &format!("{location}.orderBy"),
+                "the governed order-key count exceeds the product ceiling",
+            );
+        }
+        let mut order = HashSet::new();
+        let mut order_columns = HashSet::new();
+        for (index, property_name) in search.order_by.iter().enumerate() {
+            if !order.insert(property_name.as_str()) {
+                self.error(
+                    "search.order_duplicate",
+                    &format!("{location}.orderBy"),
+                    "fixed search order keys must be unique",
+                );
+            }
+            match properties
+                .iter()
+                .find(|property| property.name == *property_name)
+            {
+                Some(property) => {
+                    let Some(binding) = property.scalar_binding() else {
+                        self.error(
+                            "search.order_property_point",
+                            &format!("{location}.orderBy[{index}]"),
+                            "Point properties cannot be fixed search order keys",
+                        );
+                        continue;
+                    };
+                    if binding.transform.is_some() {
+                        self.error(
+                            "search.order_property_transformed",
+                            &format!("{location}.orderBy[{index}]"),
+                            "transformed properties cannot be fixed search order keys",
+                        );
+                        continue;
+                    }
+                    if !property.source_required {
+                        self.error(
+                            "search.order_property_optional",
+                            &format!("{location}.orderBy"),
+                            "fixed search order properties must be required",
+                        );
+                    }
+                    if !cursor_order_type_supported(binding.data_type) {
+                        self.error(
+                            "search.order_property_type_unsupported",
+                            &format!("{location}.orderBy"),
+                            "fixed search order properties must use a cursor-supported scalar shape",
+                        );
+                    }
+                    if !order_columns.insert(binding.source_column.as_str()) {
+                        self.error(
+                            "search.order_column_duplicate",
+                            &format!("{location}.orderBy"),
+                            "fixed search order properties must resolve to distinct source columns",
+                        );
+                    }
+                    self.validate_cursor_order_column(
+                        observed_view,
+                        &binding.source_column,
+                        binding.data_type,
+                        &format!("{location}.orderBy"),
+                    );
+                    operation.query.order_by.push(binding.source_column.clone());
+                }
+                None => self.error(
+                    "search.order_property_unknown",
+                    &format!("{location}.orderBy"),
+                    "a fixed search order key must name a published property",
+                ),
+            }
+        }
+        let record_identifier = &resource.record_context.record_identifier.source_column;
+        operation
+            .query
+            .order_by
+            .retain(|column| column != record_identifier);
+        operation.query.order_by.push(record_identifier.clone());
+        self.validate_cursor_order_column(
+            observed_view,
+            record_identifier,
+            DataType::String,
+            &format!("{location}.orderBy"),
+        );
+        if operation.query.order_by.len() > MAXIMUM_LIST_ORDER_KEYS {
+            self.error(
+                "search.order_bound_exceeded",
+                &format!("{location}.orderBy"),
+                "fixed search order keys plus the record-identifier tie-breaker exceed the product ceiling",
+            );
+        }
+        if search.pagination.default_page_size == 0
+            || search.pagination.maximum_page_size == 0
+            || search.pagination.maximum_page_size > MAXIMUM_LIST_PAGE_SIZE
+            || search.pagination.default_page_size > search.pagination.maximum_page_size
+        {
+            self.error(
+                "search.pagination_invalid",
+                &format!("{location}.pagination"),
+                "page bounds must be positive and the default cannot exceed the maximum",
+            );
+        }
+        operation.query.pagination = Some(CompiledPagination {
+            default_page_size: search.pagination.default_page_size,
+            maximum_page_size: search.pagination.maximum_page_size,
         });
         Some(operation)
     }
@@ -1932,12 +3181,14 @@ impl<'a> Compiler<'a> {
             self.record_source_type(&mut interpretations, column, data_type, &location);
         }
         for property in properties {
-            self.record_source_type(
-                &mut interpretations,
-                &property.source_column,
-                transform_source_type(property.transform.as_ref(), property.data_type),
-                &format!("{root}.properties.{}", property.name),
-            );
+            if let Some(binding) = property.scalar_binding() {
+                self.record_source_type(
+                    &mut interpretations,
+                    &binding.source_column,
+                    transform_source_type(binding.transform.as_ref(), binding.data_type),
+                    &format!("{root}.properties.{}", property.name),
+                );
+            }
         }
         for operation in operations {
             for selector in &operation.query.selectors {
@@ -1993,9 +3244,21 @@ impl<'a> Compiler<'a> {
             uses.entry(column).or_default().insert(usage.clone());
         }
         for property in properties {
-            uses.entry(&property.source_column)
-                .or_default()
-                .insert(ColumnUse::Property(property.name.clone()));
+            match &property.binding {
+                CompiledPropertyBinding::Scalar(binding) => {
+                    uses.entry(&binding.source_column)
+                        .or_default()
+                        .insert(ColumnUse::Property(property.name.clone()));
+                }
+                CompiledPropertyBinding::Point(binding) => {
+                    uses.entry(&binding.longitude_column)
+                        .or_default()
+                        .insert(ColumnUse::PointLongitude(property.name.clone()));
+                    uses.entry(&binding.latitude_column)
+                        .or_default()
+                        .insert(ColumnUse::PointLatitude(property.name.clone()));
+                }
+            }
         }
         for operation in operations {
             for filter in &operation.query.filters {
@@ -2051,6 +3314,20 @@ impl<'a> Compiler<'a> {
         for (column, column_uses) in uses {
             let source_override = resource.source_column_classifications.get(column);
             let property_bindings = property_columns.get(column);
+            let point_use = column_uses.iter().find_map(|usage| match usage {
+                ColumnUse::PointLongitude(property) => Some((property.as_str(), "longitudeColumn")),
+                ColumnUse::PointLatitude(property) => Some((property.as_str(), "latitudeColumn")),
+                _ => None,
+            });
+            if let Some((property, field)) = point_use {
+                if column_uses.len() != 1 {
+                    self.error(
+                        "geometry.carrier_column_collision",
+                        &format!("{root}.properties.{property}.source.{field}"),
+                        "Point carriers cannot also serve Registry Core, scalar properties, filters, selectors, ordering, or row bindings",
+                    );
+                }
+            }
             let requires_explicit_review = property_bindings.is_some_and(|bindings| {
                 bindings.len() > 1 || bindings.iter().any(|(_, _, transformed)| *transformed)
             });
@@ -2099,18 +3376,31 @@ impl<'a> Compiler<'a> {
                 );
                 continue;
             };
+            if let Some((property_name, _)) = point_use {
+                if properties
+                    .iter()
+                    .find(|property| property.name == property_name)
+                    .is_some_and(|property| {
+                        property.classification.privacy != classification.privacy
+                    })
+                {
+                    self.error(
+                        "classification.geometry_carrier_privacy_mismatch",
+                        &format!("{root}.sourceColumnClassifications.{column}.privacy"),
+                        "a Point property and each carrier require exact reviewed privacy agreement",
+                    );
+                }
+            }
             if let Some(bindings) = property_bindings {
                 let strongest_direct = bindings
                     .iter()
                     .filter(|(_, _, transformed)| !*transformed)
                     .map(|(_, item, _)| item.handling)
                     .max();
-                if source_override.is_some_and(explicit_reviewed_classification)
-                    && strongest_direct.is_some_and(|handling| classification.handling < handling)
-                {
+                if strongest_direct.is_some_and(|handling| classification.handling < handling) {
                     self.error(
                         "classification.column_weaker_than_property",
-                        &format!("{root}.sourceColumnClassifications"),
+                        &format!("{root}.sourceColumnClassifications.{column}.handling"),
                         "a source-column classification cannot weaken a direct property handling floor",
                     );
                 }
@@ -2141,6 +3431,9 @@ impl<'a> Compiler<'a> {
                 OperationKind::Lookup { name } => {
                     format!("{root}.operations.lookups.{name}")
                 }
+                OperationKind::Search { name } => {
+                    format!("{root}.operations.searches.{name}")
+                }
             };
             for access_profile in &mut operation.access_profiles {
                 let mut referenced = BTreeSet::new();
@@ -2153,6 +3446,10 @@ impl<'a> Compiler<'a> {
                         .map(|filter| filter.source_column.as_str()),
                 );
                 referenced.extend(operation.query.order_by.iter().map(String::as_str));
+                if let Some(spatial) = &operation.query.spatial_bbox {
+                    referenced.insert(&spatial.longitude_column);
+                    referenced.insert(&spatial.latitude_column);
+                }
                 referenced.extend(
                     operation
                         .query
@@ -2185,7 +3482,10 @@ impl<'a> Compiler<'a> {
                     );
                 }
                 if access_profile.processing_handling == Handling::Restricted
-                    && matches!(&operation.kind, OperationKind::List)
+                    && matches!(
+                        &operation.kind,
+                        OperationKind::List | OperationKind::Search { .. }
+                    )
                 {
                     self.error(
                         "operation.restricted_list_forbidden",
@@ -2273,6 +3573,7 @@ impl<'a> Compiler<'a> {
                     OperationKind::List => reference == "list",
                     OperationKind::Read => reference == "read",
                     OperationKind::Lookup { name } => reference == &format!("lookup:{name}"),
+                    OperationKind::Search { name } => reference == &format!("search:{name}"),
                 });
                 if !present {
                     self.error(
@@ -2352,6 +3653,7 @@ pub fn classification_inventory_digest(
         registry_identifier: &'a str,
         sources: Vec<SourceInventory<'a>>,
         resources: Vec<ResourceInventory<'a>>,
+        statistical_datasets: Vec<StatisticalDatasetInventory<'a>>,
     }
 
     #[derive(Serialize)]
@@ -2370,6 +3672,8 @@ pub fn classification_inventory_digest(
         view: &'a str,
         record_context: RecordContextInventory<'a>,
         properties: Vec<PropertyInventory<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        primary_geometry: Option<&'a str>,
         column_accounting: Vec<ColumnInventory<'a>>,
         disclosure_profiles: Vec<DisclosureInventory<'a>>,
         operations: Vec<OperationInventory<'a>>,
@@ -2389,13 +3693,32 @@ pub fn classification_inventory_digest(
     #[serde(rename_all = "camelCase")]
     struct PropertyInventory<'a> {
         name: &'a str,
-        source_column: &'a str,
-        transform: &'a Option<CompiledTransform>,
-        data_type: DataType,
-        codelist: &'a Option<String>,
+        #[serde(flatten)]
+        binding: PropertyBindingInventory<'a>,
         source_required: bool,
         semantic_iri: &'a str,
         classification: &'a EffectiveClassification,
+    }
+
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum PropertyBindingInventory<'a> {
+        Scalar {
+            #[serde(rename = "sourceColumn")]
+            source_column: &'a str,
+            transform: Option<&'a CompiledTransform>,
+            #[serde(rename = "dataType")]
+            data_type: DataType,
+            codelist: Option<&'a str>,
+        },
+        Point {
+            kind: &'static str,
+            crs: &'a str,
+            #[serde(rename = "longitudeColumn")]
+            longitude_column: &'a str,
+            #[serde(rename = "latitudeColumn")]
+            latitude_column: &'a str,
+        },
     }
 
     #[derive(Serialize)]
@@ -2435,6 +3758,51 @@ pub fn classification_inventory_digest(
         transform_inventory: &'a [String],
     }
 
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatisticalDatasetInventory<'a> {
+        id: &'a str,
+        source: &'a str,
+        view: &'a str,
+        dimensions: Vec<StatisticalComponentInventory<'a>>,
+        time: StatisticalTimeInventory<'a>,
+        measure: StatisticalComponentInventory<'a>,
+        attributes: Vec<StatisticalAttributeInventory<'a>>,
+        access: &'a CompiledAccess,
+        processing_handling: Handling,
+        disclosure_handling: Handling,
+        column_accounting: Vec<ColumnInventory<'a>>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatisticalComponentInventory<'a> {
+        id: &'a str,
+        source_column: &'a str,
+        data_type: StatisticalValueType,
+        codelist: Option<&'a str>,
+        semantic_iri: &'a str,
+        classification: &'a EffectiveClassification,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatisticalTimeInventory<'a> {
+        id: &'a str,
+        source_column: &'a str,
+        granularity: crate::contract::StatisticalTimeGranularity,
+        semantic_iri: &'a str,
+        classification: &'a EffectiveClassification,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatisticalAttributeInventory<'a> {
+        #[serde(flatten)]
+        component: StatisticalComponentInventory<'a>,
+        source_required: bool,
+    }
+
     let inventory = Inventory {
         registry_identifier: &registry.registry_identifier,
         sources: registry
@@ -2463,17 +3831,35 @@ pub fn classification_inventory_digest(
                 properties: resource
                     .properties
                     .iter()
-                    .map(|property| PropertyInventory {
-                        name: &property.name,
-                        source_column: &property.source_column,
-                        transform: &property.transform,
-                        data_type: property.data_type,
-                        codelist: &property.codelist,
-                        source_required: property.source_required,
-                        semantic_iri: &property.semantic_iri,
-                        classification: &property.classification,
+                    .map(|property| {
+                        let binding = match &property.binding {
+                            CompiledPropertyBinding::Scalar(binding) => {
+                                PropertyBindingInventory::Scalar {
+                                    source_column: &binding.source_column,
+                                    transform: binding.transform.as_ref(),
+                                    data_type: binding.data_type,
+                                    codelist: binding.codelist.as_deref(),
+                                }
+                            }
+                            CompiledPropertyBinding::Point(binding) => {
+                                PropertyBindingInventory::Point {
+                                    kind: "point",
+                                    crs: &binding.crs,
+                                    longitude_column: &binding.longitude_column,
+                                    latitude_column: &binding.latitude_column,
+                                }
+                            }
+                        };
+                        PropertyInventory {
+                            name: &property.name,
+                            binding,
+                            source_required: property.source_required,
+                            semantic_iri: &property.semantic_iri,
+                            classification: &property.classification,
+                        }
                     })
                     .collect(),
+                primary_geometry: resource.primary_geometry.as_deref(),
                 column_accounting: resource
                     .column_accounting
                     .iter()
@@ -2512,6 +3898,69 @@ pub fn classification_inventory_digest(
                                 transform_inventory: &access_profile.transform_inventory,
                             })
                             .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        statistical_datasets: registry
+            .statistical_datasets
+            .iter()
+            .map(|dataset| StatisticalDatasetInventory {
+                id: &dataset.id,
+                source: &dataset.source,
+                view: &dataset.view,
+                dimensions: dataset
+                    .dimensions
+                    .iter()
+                    .map(|component| StatisticalComponentInventory {
+                        id: &component.id,
+                        source_column: &component.source_column,
+                        data_type: component.data_type,
+                        codelist: component.codelist.as_deref(),
+                        semantic_iri: &component.semantic_iri,
+                        classification: &component.classification,
+                    })
+                    .collect(),
+                time: StatisticalTimeInventory {
+                    id: &dataset.time.id,
+                    source_column: &dataset.time.source_column,
+                    granularity: dataset.time.granularity,
+                    semantic_iri: &dataset.time.semantic_iri,
+                    classification: &dataset.time.classification,
+                },
+                measure: StatisticalComponentInventory {
+                    id: &dataset.measure.id,
+                    source_column: &dataset.measure.source_column,
+                    data_type: dataset.measure.data_type,
+                    codelist: None,
+                    semantic_iri: &dataset.measure.semantic_iri,
+                    classification: &dataset.measure.classification,
+                },
+                attributes: dataset
+                    .attributes
+                    .iter()
+                    .map(|component| StatisticalAttributeInventory {
+                        component: StatisticalComponentInventory {
+                            id: &component.id,
+                            source_column: &component.source_column,
+                            data_type: component.data_type,
+                            codelist: component.codelist.as_deref(),
+                            semantic_iri: &component.semantic_iri,
+                            classification: &component.classification,
+                        },
+                        source_required: component.source_required,
+                    })
+                    .collect(),
+                access: &dataset.access,
+                processing_handling: dataset.processing_handling,
+                disclosure_handling: dataset.disclosure_handling,
+                column_accounting: dataset
+                    .column_accounting
+                    .iter()
+                    .map(|column| ColumnInventory {
+                        column: &column.column,
+                        uses: &column.uses,
+                        classification: &column.classification,
                     })
                     .collect(),
             })
@@ -2718,6 +4167,7 @@ fn validate_governed_files(
         return (Vec::new(), BTreeMap::new(), None, report);
     }
     let mut codelist_paths = BTreeSet::new();
+    let mut statistical_codelist_paths = BTreeSet::new();
     let mut sidecar_paths = BTreeSet::new();
     sidecar_paths.insert(contract.registry.identifier_lifecycle_policy_ref.as_str());
     sidecar_paths.insert(contract.classifications.provenance_ref.as_str());
@@ -2727,7 +4177,10 @@ fn validate_governed_files(
     for resource in &contract.resources {
         codelist_paths.insert(resource.record_context.lifecycle_state.codelist.as_str());
         for (_, property) in resource.properties.iter() {
-            if let Some(codelist) = property.codelist.as_deref() {
+            if let Some(codelist) = property
+                .scalar_binding()
+                .and_then(|binding| binding.codelist.as_deref())
+            {
                 codelist_paths.insert(codelist);
             }
         }
@@ -2739,6 +4192,24 @@ fn validate_governed_files(
             }
         }
         for processing in &resource.processing_descriptions {
+            sidecar_paths.insert(processing.legal_basis_ref.as_str());
+            sidecar_paths.insert(processing.dpv_profile_ref.as_str());
+        }
+    }
+    for dataset in &contract.statistical_datasets {
+        for (_, dimension) in dataset.dimensions.iter() {
+            if let Some(codelist) = dimension.vocabulary.as_deref() {
+                codelist_paths.insert(codelist);
+                statistical_codelist_paths.insert(codelist);
+            }
+        }
+        for (_, attribute) in dataset.attributes.iter() {
+            if let Some(codelist) = attribute.vocabulary.as_deref() {
+                codelist_paths.insert(codelist);
+                statistical_codelist_paths.insert(codelist);
+            }
+        }
+        for processing in &dataset.processing_descriptions {
             sidecar_paths.insert(processing.legal_basis_ref.as_str());
             sidecar_paths.insert(processing.dpv_profile_ref.as_str());
         }
@@ -2849,6 +4320,21 @@ fn validate_governed_files(
                 message:
                     "codelists require an identifier, scalar version, and unique non-empty values"
                         .into(),
+            });
+            continue;
+        }
+        if statistical_codelist_paths.contains(path)
+            && document
+                .values
+                .iter()
+                .any(|value| !valid_sdmx_code_value(value))
+        {
+            report.diagnostics.push(Diagnostic {
+                severity: DiagnosticSeverity::Error,
+                code: "sdmx.codelist_value_invalid".into(),
+                location: path.into(),
+                message: "statistical codelist values must use the bounded SDMX code profile"
+                    .into(),
             });
             continue;
         }
@@ -3025,7 +4511,9 @@ fn projected_columns(
     // never processes a hidden non-public source column.
     for name in disclosure {
         if let Some(property) = properties.iter().find(|property| property.name == *name) {
-            push_unique(&mut columns, &property.source_column);
+            for source_column in property.source_columns() {
+                push_unique(&mut columns, source_column);
+            }
         }
     }
     columns
@@ -3135,6 +4623,83 @@ fn valid_sql_identifier(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+fn valid_sdmx_ncname_segment(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(first) if first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn valid_sdmx_agency_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && value.split('.').all(valid_sdmx_ncname_segment)
+}
+
+fn valid_sdmx_maintainable_id(value: &str) -> bool {
+    value.len() <= 128 && valid_sdmx_ncname_segment(value)
+}
+
+fn valid_sdmx_component_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(first) if first.is_ascii_uppercase())
+        && value.len() <= 128
+        && bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn valid_sdmx_version(value: &str) -> bool {
+    let parts = value.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+                && (part == &"0" || !part.starts_with('0'))
+        })
+}
+
+fn valid_sdmx_code_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAXIMUM_SDMX_COMPONENT_VALUE_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'@' | b'$' | b'-'))
+}
+
+fn to_sdmx_id(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            if character.is_ascii_uppercase() && !output.is_empty() && !output.ends_with('_') {
+                output.push('_');
+            }
+            output.push(character.to_ascii_uppercase());
+        } else if !output.is_empty() && !output.ends_with('_') {
+            output.push('_');
+        }
+    }
+    output.trim_end_matches('_').to_owned()
+}
+
+fn compatible_sdmx_declared_type(
+    data_type: StatisticalValueType,
+    declared_type: Option<&str>,
+) -> bool {
+    let Some(declared_type) = declared_type else {
+        return true;
+    };
+    match data_type {
+        StatisticalValueType::Boolean | StatisticalValueType::Integer => {
+            sqlite_declared_type_affinity(declared_type) == SqliteTypeAffinity::Integer
+                || declared_type.trim().eq_ignore_ascii_case("BOOLEAN")
+        }
+        StatisticalValueType::Decimal => has_sqlite_numeric_affinity(declared_type),
+        StatisticalValueType::Code | StatisticalValueType::String => {
+            has_sqlite_text_affinity(declared_type)
+        }
+    }
+}
+
+fn compatible_sdmx_time_declared_type(declared_type: Option<&str>) -> bool {
+    declared_type.is_none_or(has_sqlite_text_affinity)
+}
+
 fn compatible_declared_type(data_type: DataType, declared_type: &str) -> bool {
     let affinity = sqlite_declared_type_affinity(declared_type);
     match data_type {
@@ -3157,6 +4722,13 @@ fn compatible_declared_type(data_type: DataType, declared_type: &str) -> bool {
 
 fn has_sqlite_text_affinity(declared_type: &str) -> bool {
     sqlite_declared_type_affinity(declared_type) == SqliteTypeAffinity::Text
+}
+
+fn has_sqlite_numeric_affinity(declared_type: &str) -> bool {
+    matches!(
+        sqlite_declared_type_affinity(declared_type),
+        SqliteTypeAffinity::Integer | SqliteTypeAffinity::Real | SqliteTypeAffinity::Numeric
+    )
 }
 
 fn sqlite_declared_type_affinity(declared_type: &str) -> SqliteTypeAffinity {
@@ -3400,6 +4972,7 @@ fn operation_artifact_stem(resource: &str, kind: &OperationKind) -> String {
         OperationKind::List => format!("{resource}--list"),
         OperationKind::Read => format!("{resource}--read"),
         OperationKind::Lookup { name } => format!("{resource}--lookup-{name}"),
+        OperationKind::Search { name } => format!("{resource}--search-{name}"),
     }
 }
 
@@ -3494,6 +5067,217 @@ pub(crate) mod tests {
         assert!(!valid_camel_identifier("source.column"));
         assert!(valid_kebab_identifier("registered-business"));
         assert!(!valid_kebab_identifier("RegisteredBusiness"));
+    }
+
+    #[test]
+    fn statistical_dataset_compiles_as_a_separate_fixed_profile() {
+        let contract = RegistryContract::parse_yaml(statistical_contract())
+            .expect("strict statistical contract");
+        let roundtrip =
+            serde_norway::to_string(&contract).expect("statistical contract serializes");
+        assert_eq!(
+            RegistryContract::parse_yaml(&roundtrip).expect("serialized contract parses"),
+            contract
+        );
+        let authored_targets = contract.registry.alignment_targets.clone();
+        let compiled = compile_contract(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("statistical contract compiles");
+
+        assert!(compiled.resources.is_empty());
+        assert_eq!(compiled.alignment_targets, authored_targets);
+        let dataset = &compiled.statistical_datasets[0];
+        assert_eq!(
+            dataset.operation_identifier(),
+            "labour-rates.statistics.read"
+        );
+        assert_eq!(dataset.source, "db");
+        assert_eq!(dataset.view, "statistical_observations");
+        assert_eq!(
+            dataset
+                .dimensions
+                .iter()
+                .map(|component| component.id.as_str())
+                .collect::<Vec<_>>(),
+            ["REF_AREA", "SEX"]
+        );
+        assert_eq!(dataset.time.id, "TIME_PERIOD");
+        assert_eq!(
+            dataset.time.granularity,
+            crate::contract::StatisticalTimeGranularity::Annual
+        );
+        assert_eq!(dataset.measure.id, "OBS_VALUE");
+        assert_eq!(dataset.attributes[0].id, "UNIT_MEASURE");
+        assert_eq!(dataset.sdmx.rest_version, "2.2.2");
+        assert_eq!(dataset.sdmx.data_json_version, "2.1.0");
+        assert_eq!(dataset.sdmx.data_csv_version, "2.1.0");
+        assert_eq!(dataset.sdmx.structure_json_version, "2.1.0");
+        assert!(matches!(dataset.access, CompiledAccess::Public));
+    }
+
+    #[test]
+    fn statistical_source_visibility_and_type_boundaries_fail_closed() {
+        let compile = |yaml: &str| {
+            let contract = RegistryContract::parse_yaml(yaml).expect("strict contract shape");
+            compile_contract(
+                &contract,
+                &[statistical_observed_schema()],
+                CompileProfile::Production,
+            )
+            .expect_err("unsupported statistical contract is refused")
+        };
+        for (yaml, code, location) in [
+            (
+                statistical_contract().replace("profile: snapshot", "profile: live-read-only"),
+                "statistics.live_source_forbidden",
+                "statisticalDatasets[0].source.source",
+            ),
+            (
+                statistical_contract().replace(", statisticalDatasets: public", ""),
+                "metadata.statistical_datasets_missing",
+                "metadataVisibility.statisticalDatasets",
+            ),
+            (
+                statistical_contract().replace(
+                    "statisticalDatasets: public",
+                    "statisticalDatasets: operator-only",
+                ),
+                "metadata.statistical_datasets_unresolvable",
+                "metadataVisibility.statisticalDatasets",
+            ),
+            (
+                statistical_contract()
+                    .replace("releaseAt: 2026-08-10T00:00:00Z", "releaseAt: pending"),
+                "statistics.release_at_invalid",
+                "statisticalDatasets[0].publication.releaseAt",
+            ),
+            (
+                statistical_contract()
+                    .replace("maximumObservations: 100", "maximumObservations: 0"),
+                "statistics.query_bound_invalid",
+                "statisticalDatasets[0].query",
+            ),
+            (
+                statistical_contract().replacen("type: code", "type: integer", 1),
+                "statistics.dimension_type_invalid",
+                "statisticalDatasets[0].dimensions.refArea.type",
+            ),
+            (
+                statistical_contract().replace("type: decimal", "type: string"),
+                "statistics.measure_invalid",
+                "statisticalDatasets[0].measure",
+            ),
+        ] {
+            let report = compile(&yaml);
+            assert!(
+                report.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.code == code && diagnostic.location == location
+                }),
+                "missing {code} at {location}: {report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_and_statistical_dataset_identifiers_share_one_namespace() {
+        let mut contract =
+            RegistryContract::parse_yaml(valid_contract()).expect("resource contract");
+        let statistical =
+            RegistryContract::parse_yaml(statistical_contract()).expect("statistical contract");
+        contract.statistical_datasets = statistical.statistical_datasets;
+        contract.statistical_datasets[0].id = contract.resources[0].id.clone();
+        contract.metadata_visibility.statistical_datasets =
+            Some(crate::contract::Visibility::Public);
+        let mut observed = observed_schema();
+        observed
+            .views
+            .push(statistical_observed_schema().views[0].clone());
+        let report = compile_contract(&contract, &[observed], CompileProfile::Production)
+            .expect_err("cross-surface identity collision is refused");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "statistics.dataset_id_duplicate"
+                && diagnostic.location == "statisticalDatasets[0].id"
+        }));
+    }
+
+    #[test]
+    fn statistical_codelists_use_the_runtime_sdmx_code_profile() {
+        let contract = RegistryContract::parse_yaml(statistical_contract())
+            .expect("strict statistical contract");
+        compile_contract_with_governed_files(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+            &governed_files_for(&contract),
+        )
+        .expect("valid statistical codelists compile");
+
+        let mut governed = governed_files_for(&contract);
+        governed.insert(
+            "codelists/areas.yaml".into(),
+            b"id: areas\nversion: 1\nvalues: ['not valid']\nstatus: reviewed\n".to_vec(),
+        );
+        let report = compile_contract_with_governed_files(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+            &governed,
+        )
+        .expect_err("a code rejected by the runtime SDMX profile fails compilation");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "sdmx.codelist_value_invalid"
+                && diagnostic.location == "codelists/areas.yaml"
+        }));
+    }
+
+    #[test]
+    fn statistical_processing_handling_includes_hidden_columns_but_disclosure_does_not() {
+        let yaml = statistical_contract()
+            .replace(
+                "    sourceColumnClassifications: {}",
+                "    sourceColumnClassifications:\n      tenant: {privacy: non-personal, institutional: internal, handling: confidential, status: reviewed}",
+            )
+            .replace(
+                "    access: public",
+                "    access:\n      scope: statistics:read\n      authorityRowBinding: {principal: true, sourceColumn: tenant}",
+            )
+            .replace(
+                "statisticalDatasets: public, semantics: public, classifications: public, processing: public",
+                "statisticalDatasets: public, semantics: public, classifications: operation-bound, processing: operation-bound",
+            );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("protected statistical contract");
+        let mut observed = statistical_observed_schema();
+        observed.views[0]
+            .columns
+            .push(crate::model::ObservedColumn {
+                name: "tenant".into(),
+                declared_type: "TEXT".into(),
+                nullable: false,
+                primary_key: false,
+            });
+        let compiled = compile_contract(&contract, &[observed], CompileProfile::Production)
+            .expect("protected statistical contract compiles");
+        let dataset = &compiled.statistical_datasets[0];
+        assert_eq!(dataset.processing_handling, Handling::Confidential);
+        assert_eq!(dataset.disclosure_handling, Handling::Public);
+        assert!(dataset.column_accounting.iter().any(|column| {
+            column.column == "tenant"
+                && column.classification.handling == Handling::Confidential
+                && column.uses == [ColumnUse::RowBinding(dataset.operation_identifier())]
+        }));
+        assert!(dataset
+            .dimensions
+            .iter()
+            .all(|component| component.source_column != "tenant"));
+        assert_ne!(dataset.time.source_column, "tenant");
+        assert_ne!(dataset.measure.source_column, "tenant");
+        assert!(dataset
+            .attributes
+            .iter()
+            .all(|component| component.source_column != "tenant"));
     }
 
     #[test]
@@ -3869,12 +5653,16 @@ pub(crate) mod tests {
         );
 
         let mut transform_changed = compiled.clone();
-        transform_changed.resources[0].properties[0].transform =
-            Some(CompiledTransform::PartialString {
-                identifier: "partial-string:suffix:2".into(),
-                reveal: crate::contract::PartialStringReveal::Suffix,
-                characters: 2,
-            });
+        let CompiledPropertyBinding::Scalar(binding) =
+            &mut transform_changed.resources[0].properties[0].binding
+        else {
+            panic!("fixture property is scalar");
+        };
+        binding.transform = Some(CompiledTransform::PartialString {
+            identifier: "partial-string:suffix:2".into(),
+            reveal: crate::contract::PartialStringReveal::Suffix,
+            characters: 2,
+        });
         assert_ne!(
             classification_inventory_digest(&transform_changed).expect("transform digest"),
             baseline
@@ -4699,8 +6487,10 @@ pub(crate) mod tests {
             compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
                 .expect("typed date precision compiles");
         assert_eq!(
-            compiled.resources[0].properties[1].data_type,
-            DataType::YearMonth
+            compiled.resources[0].properties[1]
+                .scalar_binding()
+                .map(|binding| binding.data_type),
+            Some(DataType::YearMonth)
         );
 
         let invalid = yaml.replace("type: year-month", "type: year");
@@ -4821,6 +6611,428 @@ pub(crate) mod tests {
             .any(|item| item.code == "metadata.reference_visibility_invalid"));
     }
 
+    #[test]
+    fn scalar_property_authoring_shape_remains_flat() {
+        let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let property = contract.resources[0]
+            .properties
+            .get("name")
+            .expect("name property");
+        let value = serde_json::to_value(property).expect("property serializes");
+        assert_eq!(value["sourceColumn"], "name");
+        assert_eq!(value["type"], "string");
+        for forbidden in ["binding", "kind", "source", "crs"] {
+            assert!(value.get(forbidden).is_none());
+        }
+    }
+
+    #[test]
+    fn point_property_shape_is_strict_and_rejects_the_inline_primary_branch() {
+        let contract = RegistryContract::parse_yaml(&point_contract()).expect("strict Point");
+        let point = contract.resources[0]
+            .properties
+            .get("location")
+            .and_then(crate::contract::PropertyDefinition::point_binding)
+            .expect("Point binding");
+        assert_eq!(point.crs, CRS84);
+        assert_eq!(point.source.longitude_column, "longitude");
+        let authored = contract.resources[0]
+            .properties
+            .get("location")
+            .expect("authored Point");
+        let encoded = serde_norway::to_string(authored).expect("Point serializes");
+        let decoded: crate::contract::PropertyDefinition =
+            serde_norway::from_str(&encoded).expect("Point deserializes");
+        assert_eq!(&decoded, authored);
+
+        for invalid in [
+            point_contract().replace(
+                "        type: point",
+                "        sourceColumn: longitude\n        type: point",
+            ),
+            point_contract().replace(
+                "        type: point",
+                "        type: point\n        unknownPointField: value",
+            ),
+            point_contract().replace(
+                "source: {longitudeColumn: longitude, latitudeColumn: latitude}",
+                "source: {longitudeColumn: longitude, latitudeColumn: latitude, altitudeColumn: altitude}",
+            ),
+            point_contract().replace(
+                "        label: Location",
+                "        label: Location\n        label: Duplicate location",
+            ),
+            point_contract().replace(
+                "source: {longitudeColumn: longitude, latitudeColumn: latitude}",
+                "source: {longitudeColumn: longitude, longitudeColumn: duplicate, latitudeColumn: latitude}",
+            ),
+            point_contract().replace(
+                "    primaryGeometry: location",
+                "    primaryGeometry: {name: location, crs: http://www.opengis.net/def/crs/OGC/0/CRS84}",
+            ),
+            valid_contract().replace(
+                "        sourceColumn: name",
+                "        sourceColumn: name\n        source: {longitudeColumn: longitude, latitudeColumn: latitude}",
+            ),
+        ] {
+            assert!(RegistryContract::parse_yaml(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn point_property_compiles_as_one_resolved_primary_binding() {
+        let contract = RegistryContract::parse_yaml(&point_contract()).expect("strict Point");
+        let compiled = compile_contract(
+            &contract,
+            &[point_observed_schema("INTEGER", "REAL")],
+            CompileProfile::Production,
+        )
+        .expect("governed Point compiles");
+        let resource = &compiled.resources[0];
+        assert_eq!(resource.primary_geometry.as_deref(), Some("location"));
+        let property = resource
+            .properties
+            .iter()
+            .find(|property| property.name == "location")
+            .expect("compiled Point property");
+        let encoded = serde_json::to_vec(property).expect("compiled Point serializes");
+        let decoded: CompiledProperty =
+            serde_json::from_slice(&encoded).expect("compiled Point deserializes");
+        assert_eq!(&decoded, property);
+        let value = serde_json::to_value(property).expect("compiled Point JSON");
+        assert_eq!(value["binding"]["kind"], "point");
+        assert_eq!(value["binding"]["longitudeColumn"], "longitude");
+        assert_eq!(value["binding"]["latitudeColumn"], "latitude");
+        let point = property.point_binding().expect("Point binding");
+        assert_eq!(point.crs, CRS84);
+        assert_eq!(point.longitude_column, "longitude");
+        assert_eq!(point.latitude_column, "latitude");
+        for (column_name, usage) in [
+            ("longitude", ColumnUse::PointLongitude("location".into())),
+            ("latitude", ColumnUse::PointLatitude("location".into())),
+        ] {
+            let column = resource
+                .column_accounting
+                .iter()
+                .find(|column| column.column == column_name)
+                .expect("Point carrier is accounted");
+            assert_eq!(column.uses, [usage]);
+            assert_eq!(column.classification, property.classification);
+        }
+    }
+
+    #[test]
+    fn point_count_and_primary_reference_are_closed() {
+        let no_point_primary = valid_contract().replace(
+            "    disclosureProfiles:",
+            "    primaryGeometry: location\n    disclosureProfiles:",
+        );
+        assert_point_code(
+            &no_point_primary,
+            observed_schema(),
+            "geometry.primary_without_point",
+            "resources[0].primaryGeometry",
+        );
+
+        let missing_primary = point_contract().replace("    primaryGeometry: location\n", "");
+        assert_point_code(
+            &missing_primary,
+            point_observed_schema("REAL", "REAL"),
+            "geometry.primary_required",
+            "resources[0].primaryGeometry",
+        );
+
+        let wrong_primary =
+            point_contract().replace("    primaryGeometry: location", "    primaryGeometry: name");
+        assert_point_code(
+            &wrong_primary,
+            point_observed_schema("REAL", "REAL"),
+            "geometry.primary_invalid",
+            "resources[0].primaryGeometry",
+        );
+
+        let two_points = point_contract().replace(
+            "    primaryGeometry: location",
+            "      secondLocation:\n        label: Second location\n        description: A second reviewed Point\n        type: point\n        crs: http://www.opengis.net/def/crs/OGC/0/CRS84\n        source: {longitudeColumn: second_longitude, latitudeColumn: second_latitude}\n        sourceRequired: true\n        semanticTerm: local:secondLocation\n    primaryGeometry: location",
+        );
+        let mut observed = point_observed_schema("REAL", "REAL");
+        for name in ["second_longitude", "second_latitude"] {
+            observed.views[0]
+                .columns
+                .push(crate::model::ObservedColumn {
+                    name: name.into(),
+                    declared_type: "REAL".into(),
+                    nullable: false,
+                    primary_key: false,
+                });
+        }
+        assert_point_code(
+            &two_points,
+            observed,
+            "geometry.point_count_exceeded",
+            "resources[0].properties",
+        );
+    }
+
+    #[test]
+    fn point_carriers_require_distinct_known_simple_numeric_columns() {
+        let wrong_crs = point_contract().replace(
+            "http://www.opengis.net/def/crs/OGC/0/CRS84",
+            "https://www.opengis.net/def/crs/OGC/0/CRS84",
+        );
+        assert_point_code(
+            &wrong_crs,
+            point_observed_schema("REAL", "REAL"),
+            "geometry.crs_unsupported",
+            "resources[0].properties.location.crs",
+        );
+
+        let invalid = point_contract().replace(
+            "longitudeColumn: longitude",
+            "longitudeColumn: longitude.value",
+        );
+        assert_point_code(
+            &invalid,
+            point_observed_schema("REAL", "REAL"),
+            "geometry.carrier_column_invalid",
+            "resources[0].properties.location.source.longitudeColumn",
+        );
+
+        let unknown = point_contract().replace(
+            "longitudeColumn: longitude",
+            "longitudeColumn: missing_longitude",
+        );
+        assert_point_code(
+            &unknown,
+            point_observed_schema("REAL", "REAL"),
+            "geometry.carrier_column_unknown",
+            "resources[0].properties.location.source.longitudeColumn",
+        );
+
+        let duplicate =
+            point_contract().replace("latitudeColumn: latitude", "latitudeColumn: longitude");
+        assert_point_code(
+            &duplicate,
+            point_observed_schema("REAL", "REAL"),
+            "geometry.carrier_columns_duplicate",
+            "resources[0].properties.location.source.latitudeColumn",
+        );
+
+        assert_point_code(
+            &point_contract(),
+            point_observed_schema("TEXT", "REAL"),
+            "geometry.carrier_declared_type_incompatible",
+            "resources[0].properties.location.source.longitudeColumn",
+        );
+    }
+
+    #[test]
+    fn point_carrier_classification_inherits_and_obeys_monotonic_overrides() {
+        let stricter = point_contract().replace(
+            "    sourceColumnClassifications: {}",
+            "    sourceColumnClassifications: {longitude: {handling: internal}}",
+        );
+        let contract = RegistryContract::parse_yaml(&stricter).expect("strict Point");
+        let compiled = compile_contract(
+            &contract,
+            &[point_observed_schema("REAL", "NUMERIC")],
+            CompileProfile::Production,
+        )
+        .expect("a stricter carrier handling override compiles");
+        let longitude = compiled.resources[0]
+            .column_accounting
+            .iter()
+            .find(|column| column.column == "longitude")
+            .expect("longitude account");
+        assert_eq!(longitude.classification.handling, Handling::Internal);
+
+        let weaker = point_contract()
+            .replace(
+                "        semanticTerm: local:location",
+                "        semanticTerm: local:location\n        classification: {handling: internal}",
+            )
+            .replace(
+                "    sourceColumnClassifications: {}",
+                "    sourceColumnClassifications: {longitude: {handling: public}}",
+            );
+        assert_point_code(
+            &weaker,
+            point_observed_schema("REAL", "NUMERIC"),
+            "classification.column_weaker_than_property",
+            "resources[0].sourceColumnClassifications.longitude.handling",
+        );
+
+        let privacy_mismatch = point_contract().replace(
+            "    sourceColumnClassifications: {}",
+            "    sourceColumnClassifications: {latitude: {privacy: identifying}}",
+        );
+        assert_point_code(
+            &privacy_mismatch,
+            point_observed_schema("REAL", "NUMERIC"),
+            "classification.geometry_carrier_privacy_mismatch",
+            "resources[0].sourceColumnClassifications.latitude.privacy",
+        );
+    }
+
+    #[test]
+    fn geometry_disclosure_is_access_profile_scoped() {
+        let disclosed = point_contract().replace(
+            "disclosureProfiles: {public: {properties: [name]}}",
+            "disclosureProfiles: {public: {properties: [name, location]}}",
+        );
+        let contract = RegistryContract::parse_yaml(&disclosed).expect("strict Point contract");
+        let compiled = compile_contract(
+            &contract,
+            &[point_observed_schema("REAL", "REAL")],
+            CompileProfile::Production,
+        )
+        .expect("Point disclosure compiles");
+        assert_eq!(
+            compiled.resources[0].operations[0].access_profiles[0].projected_columns,
+            [
+                "id",
+                "revision",
+                "lifecycle",
+                "recorded_at",
+                "name",
+                "longitude",
+                "latitude"
+            ]
+        );
+        let mut hidden = compiled.resources[0].operations[0].access_profiles[0].clone();
+        hidden
+            .selectable_properties
+            .retain(|property| property != "location");
+        hidden
+            .projected_columns
+            .retain(|column| column != "longitude" && column != "latitude");
+        assert!(!hidden.selectable_properties.contains(&"location".into()));
+        assert!(!hidden
+            .projected_columns
+            .iter()
+            .any(|column| column == "longitude" || column == "latitude"));
+    }
+
+    #[test]
+    fn point_carriers_cannot_collide_with_existing_column_uses() {
+        let core = point_contract().replace("longitudeColumn: longitude", "longitudeColumn: id");
+        let scalar =
+            point_contract().replace("longitudeColumn: longitude", "longitudeColumn: name");
+        let selector = point_contract().replace(
+            "      read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+            "      lookups:\n        - id: by-coordinate\n          requestBody:\n            maximumBytes: 64\n            selectors:\n              coordinate: {sourceColumn: longitude, type: integer}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {access: public, disclosureProfile: public}",
+        );
+        let row_binding = point_contract().replace(
+            "access: public",
+            "access: {scope: registry:records:read, authorityRowBinding: {claim: region, sourceColumn: longitude}}",
+        );
+        let filter = point_contract()
+            .replace(
+                "sourceColumn: name\n        type: string",
+                "sourceColumn: longitude\n        type: integer",
+            )
+            .replace(
+                "      read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "      list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: integer}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            );
+        let order = point_contract()
+            .replace(
+                "sourceColumn: name\n        type: string",
+                "sourceColumn: longitude\n        type: integer",
+            )
+            .replace(
+                "      read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "      list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            );
+
+        for yaml in [core, scalar, selector, row_binding, filter, order] {
+            assert_point_code(
+                &yaml,
+                point_observed_schema("INTEGER", "REAL"),
+                "geometry.carrier_column_collision",
+                "resources[0].properties.location.source.longitudeColumn",
+            );
+        }
+    }
+
+    fn assert_point_code(yaml: &str, observed: ObservedSourceSchema, code: &str, location: &str) {
+        let contract = RegistryContract::parse_yaml(yaml).expect("strict Point contract");
+        let report = compile_contract(&contract, &[observed], CompileProfile::Production)
+            .expect_err("invalid Point contract is refused");
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("missing {code}: {:?}", report.diagnostics));
+        assert_eq!(diagnostic.location, location);
+    }
+
+    fn point_contract() -> String {
+        valid_contract()
+            .replace(
+                "        semanticTerm: local:name\n    disclosureProfiles:",
+                "        semanticTerm: local:name\n      location:\n        label: Location\n        description: Reviewed Point location\n        type: point\n        crs: http://www.opengis.net/def/crs/OGC/0/CRS84\n        source: {longitudeColumn: longitude, latitudeColumn: latitude}\n        sourceRequired: true\n        semanticTerm: local:location\n    primaryGeometry: location\n    disclosureProfiles:",
+            )
+    }
+
+    #[test]
+    fn named_point_bbox_search_compiles_against_the_primary_point_property() {
+        let contract = spatial_contract();
+        let compiled = compile_contract(
+            &contract,
+            &[point_observed_schema("INTEGER", "REAL")],
+            CompileProfile::Production,
+        )
+        .expect("named Point bbox search compiles");
+        let operation = &compiled.resources[0].operations[0];
+        assert_eq!(operation.identifier, "record.search.within-bbox");
+        assert_eq!(
+            operation.query.spatial_bbox.as_ref(),
+            Some(&CompiledSpatialBboxQuery {
+                longitude_column: "longitude".into(),
+                latitude_column: "latitude".into(),
+                maximum_longitude_span_degrees: 2,
+                maximum_latitude_span_degrees: 2,
+            })
+        );
+        assert_eq!(operation.query.order_by, ["name", "id"]);
+    }
+
+    pub(crate) fn spatial_contract() -> RegistryContract {
+        let yaml = point_contract()
+            .replace(
+                "disclosureProfiles: {public: {properties: [name]}}",
+                "disclosureProfiles: {public: {properties: [name, location]}}",
+            )
+            .replace(
+                "      read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "      searches:\n        - id: within-bbox\n          query: {kind: point-bbox, maximumLongitudeSpanDegrees: 2, maximumLatitudeSpanDegrees: 2}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {access: public, disclosureProfile: public}\n          orderBy: [name]\n          pagination: {defaultPageSize: 10, maximumPageSize: 100}",
+            )
+            .replace(
+                "operationRefs: [read]",
+                "operationRefs: [search:within-bbox]",
+            );
+        RegistryContract::parse_yaml(&yaml).expect("strict spatial contract")
+    }
+
+    pub(crate) fn point_observed_schema(
+        longitude_type: &str,
+        latitude_type: &str,
+    ) -> ObservedSourceSchema {
+        let mut observed = observed_schema();
+        for (name, declared_type) in [("longitude", longitude_type), ("latitude", latitude_type)] {
+            observed.views[0]
+                .columns
+                .push(crate::model::ObservedColumn {
+                    name: name.into(),
+                    declared_type: declared_type.into(),
+                    nullable: false,
+                    primary_key: false,
+                });
+        }
+        observed
+    }
+
     pub(crate) fn observed_schema() -> ObservedSourceSchema {
         ObservedSourceSchema {
             source: "db".into(),
@@ -4846,13 +7058,103 @@ pub(crate) mod tests {
         governed_files_for(&contract)
     }
 
+    pub(crate) fn statistical_observed_schema() -> ObservedSourceSchema {
+        ObservedSourceSchema {
+            source: "db".into(),
+            fingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .into(),
+            views: vec![crate::model::ObservedView {
+                name: "statistical_observations".into(),
+                columns: [
+                    ("ref_area", "TEXT"),
+                    ("sex", "TEXT"),
+                    ("time_period", "TEXT"),
+                    ("obs_value", "REAL"),
+                    ("unit_measure", "TEXT"),
+                ]
+                .into_iter()
+                .map(|(name, declared_type)| crate::model::ObservedColumn {
+                    name: name.into(),
+                    declared_type: declared_type.into(),
+                    nullable: false,
+                    primary_key: false,
+                })
+                .collect(),
+            }],
+        }
+    }
+
+    pub(crate) fn statistical_contract() -> &'static str {
+        r#"apiVersion: relay.registrystack.org/v2alpha1
+kind: RegistryContract
+metadata: {id: statistics, version: "1", title: Statistics}
+registry:
+  registryIdentifier: urn:example:registry:statistics
+  name: Statistics
+  authority: {identifier: urn:example:authority, name: Registry Authority}
+  authoritativeScope: Reviewed aggregate observations
+  baseUri: https://statistics.example.invalid/registry/
+  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
+  alignmentTargets:
+    - {name: govstack-digital-registries, version: 3.0.0-alpha.2, status: directional}
+governance: {controller: urn:example:authority, publisher: urn:example:authority, auditOwner: urn:example:audit}
+semantics: {localVocabulary: https://statistics.example.invalid/vocabulary/}
+classifications:
+  privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
+  institutional: {scheme: urn:example:classification, version: "1"}
+  handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
+  provenanceRef: governance/classification-review.yaml
+sources:
+  db: {kind: sqlite, profile: snapshot, expectedSchemaFingerprint: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+statisticalDatasets:
+  - id: labour-rates
+    title: Labour rates
+    description: Reviewed aggregate labour rates
+    publication: {releaseAt: 2026-08-10T00:00:00Z}
+    source: {source: db, view: statistical_observations}
+    classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    sourceColumnClassifications: {}
+    dimensions:
+      refArea: {label: Reference area, description: Observation area, column: ref_area, type: code, vocabulary: codelists/areas.yaml, concept: local:refArea}
+      sex: {label: Sex, description: Observation sex, column: sex, type: code, vocabulary: codelists/sex.yaml, concept: local:sex}
+    time: {label: Time period, description: Annual observation period, column: time_period, granularity: annual, concept: local:timePeriod}
+    measure: {id: obsValue, label: Observation value, description: Labour rate, column: obs_value, type: decimal, concept: local:obsValue}
+    attributes:
+      unitMeasure: {label: Unit, description: Observation unit, column: unit_measure, type: code, vocabulary: codelists/units.yaml, required: true, concept: local:unitMeasure}
+    access: public
+    query: {allowUnfiltered: true, maximumObservations: 100, maximumOffset: 1000}
+    bindings: {sdmx: {}}
+    processingDescriptions:
+      - id: statistical-publication
+        operationRefs: [statistics:read]
+        purpose: statistical-publication
+        recipientClass: public
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/processing.dpv.yaml
+        safeguards: [pre-aggregated-publication]
+metadataVisibility: {service: public, resources: operator-only, statisticalDatasets: public, semantics: public, classifications: public, processing: public}
+"#
+    }
+
     pub(crate) fn governed_files_for(contract: &RegistryContract) -> GovernedFileSet {
-        let compiled = compile_contract(contract, &[observed_schema()], CompileProfile::Production)
+        let observed = if !contract.statistical_datasets.is_empty() {
+            statistical_observed_schema()
+        } else if contract
+            .resources
+            .iter()
+            .any(|resource| resource.primary_geometry.is_some())
+        {
+            point_observed_schema("INTEGER", "REAL")
+        } else {
+            observed_schema()
+        };
+        let compiled = compile_contract(contract, &[observed], CompileProfile::Production)
             .expect("inventory compiles");
         let inventory_digest =
             classification_inventory_digest(&compiled).expect("inventory digest");
+        let registry_identifier = &contract.registry.registry_identifier;
         let review = format!(
-            "apiVersion: relay.registrystack.org/classification-review/v1\nkind: ClassificationReview\nregistryIdentifier: urn:example:registry:records\nclassificationInventoryDigest: {inventory_digest}\nmethod: manual\nreviewer: urn:example:authority\nreviewDate: 2026-08-10\nstatus: reviewed\nrationaleRef: governance/review-rationale\n"
+            "apiVersion: relay.registrystack.org/classification-review/v1\nkind: ClassificationReview\nregistryIdentifier: {registry_identifier}\nclassificationInventoryDigest: {inventory_digest}\nmethod: manual\nreviewer: urn:example:authority\nreviewDate: 2026-08-10\nstatus: reviewed\nrationaleRef: governance/review-rationale\n"
         );
         let mut files = [
             (
@@ -4883,6 +7185,20 @@ pub(crate) mod tests {
             "governance/classification-review.yaml".into(),
             review.into_bytes(),
         );
+        if !contract.statistical_datasets.is_empty() {
+            files.remove("codelists/record-lifecycle.yaml");
+            for (path, id, values) in [
+                ("codelists/areas.yaml", "areas", "[AREA_A, AREA_B]"),
+                ("codelists/sex.yaml", "sex", "[F, M, TOTAL]"),
+                ("codelists/units.yaml", "units", "[PERCENT]"),
+            ] {
+                files.insert(
+                    path.into(),
+                    format!("id: {id}\nversion: 1\nvalues: {values}\nstatus: reviewed\n")
+                        .into_bytes(),
+                );
+            }
+        }
         files
     }
 

@@ -6,7 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::contract::Visibility;
-use crate::model::{CompiledAccess, CompiledOperation, CompiledRegistry, CompiledResource};
+use crate::model::{
+    CompiledAccess, CompiledOperation, CompiledPropertyBinding, CompiledRegistry, CompiledResource,
+    CompiledStatisticalDataset,
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +53,9 @@ pub enum ChangeClass {
     GovernanceIdentityChanged,
     ResourceAdded,
     ResourceRemoved,
+    StatisticalDatasetAdded,
+    StatisticalDatasetRemoved,
+    StatisticalDatasetChanged,
     ResourceMeaningChanged,
     PropertyAdded,
     PropertyRemoved,
@@ -69,6 +75,11 @@ pub enum ChangeClass {
     FilterAdded,
     FilterRemoved,
     FilterChanged,
+    SpatialQueryAdded,
+    SpatialQueryRemoved,
+    SpatialQueryExpanded,
+    SpatialQueryNarrowed,
+    SpatialQueryChanged,
     UnfilteredEnabled,
     UnfilteredDisabled,
     SelectorChanged,
@@ -209,6 +220,33 @@ pub fn diff_registries(
         }
     }
 
+    let previous_statistics = statistical_dataset_map(previous);
+    let current_statistics = statistical_dataset_map(current);
+    for id in previous_statistics
+        .keys()
+        .chain(current_statistics.keys())
+        .collect::<BTreeSet<_>>()
+    {
+        match (previous_statistics.get(*id), current_statistics.get(*id)) {
+            (None, Some(_)) => push(
+                &mut changes,
+                ChangeClass::StatisticalDatasetAdded,
+                ChangeImpact::Widening,
+                format!("statisticalDatasets.{id}"),
+                "a published statistical dataset was added",
+            ),
+            (Some(_), None) => push(
+                &mut changes,
+                ChangeClass::StatisticalDatasetRemoved,
+                ChangeImpact::Breaking,
+                format!("statisticalDatasets.{id}"),
+                "a published statistical dataset was removed",
+            ),
+            (Some(before), Some(after)) => diff_statistical_dataset(before, after, &mut changes),
+            (None, None) => unreachable!(),
+        }
+    }
+
     diff_visibility(previous, current, &mut changes);
     if previous.semantic_alignments != current.semantic_alignments {
         push(
@@ -291,6 +329,117 @@ fn resource_map(registry: &CompiledRegistry) -> BTreeMap<&str, &CompiledResource
         .collect()
 }
 
+fn statistical_dataset_map(
+    registry: &CompiledRegistry,
+) -> BTreeMap<&str, &CompiledStatisticalDataset> {
+    registry
+        .statistical_datasets
+        .iter()
+        .map(|dataset| (dataset.id.as_str(), dataset))
+        .collect()
+}
+
+fn diff_statistical_dataset(
+    previous: &CompiledStatisticalDataset,
+    current: &CompiledStatisticalDataset,
+    changes: &mut Vec<ContractChange>,
+) {
+    let root = format!("statisticalDatasets.{}", current.id);
+    if previous.source != current.source || previous.view != current.view {
+        push(
+            changes,
+            ChangeClass::SourceViewChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.source"),
+            "the reviewed statistical source or view changed",
+        );
+    }
+    if previous.title != current.title
+        || previous.description != current.description
+        || previous.release_at != current.release_at
+        || previous.sdmx != current.sdmx
+        || previous.dimensions != current.dimensions
+        || previous.time != current.time
+        || previous.measure != current.measure
+        || previous.attributes != current.attributes
+    {
+        push(
+            changes,
+            ChangeClass::StatisticalDatasetChanged,
+            ChangeImpact::Breaking,
+            root.clone(),
+            "statistical meaning, components, publication facts, or binding identity changed",
+        );
+    }
+    if previous.column_accounting != current.column_accounting {
+        push(
+            changes,
+            ChangeClass::ClassificationChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.sourceColumnClassifications"),
+            "effective classifications or uses of reviewed statistical columns changed",
+        );
+    }
+    if previous.processing_descriptions != current.processing_descriptions {
+        push(
+            changes,
+            ChangeClass::ProcessingChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.processingDescriptions"),
+            "the reviewed statistical processing description set changed",
+        );
+    }
+    match (previous.allow_unfiltered, current.allow_unfiltered) {
+        (false, true) => push(
+            changes,
+            ChangeClass::UnfilteredEnabled,
+            ChangeImpact::Widening,
+            format!("{root}.query.allowUnfiltered"),
+            "unfiltered statistical access was enabled",
+        ),
+        (true, false) => push(
+            changes,
+            ChangeClass::UnfilteredDisabled,
+            ChangeImpact::Narrowing,
+            format!("{root}.query.allowUnfiltered"),
+            "unfiltered statistical access was disabled",
+        ),
+        _ => {}
+    }
+    for (name, before, after) in [
+        (
+            "maximumObservations",
+            previous.maximum_observations,
+            current.maximum_observations,
+        ),
+        (
+            "maximumOffset",
+            previous.maximum_offset,
+            current.maximum_offset,
+        ),
+    ] {
+        if before != after {
+            let expanded = after > before;
+            push(
+                changes,
+                if expanded {
+                    ChangeClass::RequestBoundExpanded
+                } else {
+                    ChangeClass::RequestBoundNarrowed
+                },
+                if expanded {
+                    ChangeImpact::Widening
+                } else {
+                    ChangeImpact::Narrowing
+                },
+                format!("{root}.query.{name}"),
+                "a statistical query bound changed",
+            );
+        }
+    }
+    diff_access(&previous.access, &current.access, &root, changes);
+}
+
 fn diff_resource(
     previous: &CompiledResource,
     current: &CompiledResource,
@@ -340,6 +489,15 @@ fn diff_resource(
             ChangeImpact::Breaking,
             format!("{root}.recordContext"),
             "a Registry Core binding or reference changed",
+        );
+    }
+    if previous.primary_geometry != current.primary_geometry {
+        push(
+            changes,
+            ChangeClass::PropertyMeaningChanged,
+            ChangeImpact::Breaking,
+            format!("{root}.primaryGeometry"),
+            "the resolved primary Point property changed",
         );
     }
     if previous.column_accounting != current.column_accounting {
@@ -421,9 +579,7 @@ fn diff_resource(
                     );
                 }
                 if before.semantic_iri != after.semantic_iri
-                    || before.data_type != after.data_type
-                    || before.codelist != after.codelist
-                    || before.source_column != after.source_column
+                    || property_binding_meaning_differs(&before.binding, &after.binding)
                     || before.source_required != after.source_required
                 {
                     push(
@@ -434,7 +590,13 @@ fn diff_resource(
                         "a property binding, meaning, datatype, codelist, or requiredness changed",
                     );
                 }
-                if before.transform != after.transform {
+                let before_transform = before
+                    .scalar_binding()
+                    .and_then(|binding| binding.transform.as_ref());
+                let after_transform = after
+                    .scalar_binding()
+                    .and_then(|binding| binding.transform.as_ref());
+                if before_transform != after_transform {
                     push(
                         changes,
                         ChangeClass::TransformationChanged,
@@ -504,6 +666,25 @@ fn diff_resource(
             (Some(before), Some(after)) => diff_operation(before, after, &location, changes),
             (None, None) => unreachable!(),
         }
+    }
+}
+
+fn property_binding_meaning_differs(
+    before: &CompiledPropertyBinding,
+    after: &CompiledPropertyBinding,
+) -> bool {
+    match (before, after) {
+        (CompiledPropertyBinding::Scalar(before), CompiledPropertyBinding::Scalar(after)) => {
+            before.source_column != after.source_column
+                || before.data_type != after.data_type
+                || before.codelist != after.codelist
+        }
+        (CompiledPropertyBinding::Point(before), CompiledPropertyBinding::Point(after)) => {
+            before.crs != after.crs
+                || before.longitude_column != after.longitude_column
+                || before.latitude_column != after.latitude_column
+        }
+        _ => true,
     }
 }
 
@@ -634,6 +815,12 @@ fn diff_operation(
             _ => {}
         }
     }
+    diff_spatial_query(
+        previous.query.spatial_bbox.as_ref(),
+        current.query.spatial_bbox.as_ref(),
+        location,
+        changes,
+    );
     match (
         previous.query.allow_unfiltered,
         current.query.allow_unfiltered,
@@ -684,6 +871,72 @@ fn diff_operation(
         location,
         changes,
     );
+}
+
+fn diff_spatial_query(
+    previous: Option<&crate::model::CompiledSpatialBboxQuery>,
+    current: Option<&crate::model::CompiledSpatialBboxQuery>,
+    location: &str,
+    changes: &mut Vec<ContractChange>,
+) {
+    match (previous, current) {
+        (None, Some(_)) => push(
+            changes,
+            ChangeClass::SpatialQueryAdded,
+            ChangeImpact::Widening,
+            format!("{location}.query"),
+            "an exact point bbox query was added",
+        ),
+        (Some(_), None) => push(
+            changes,
+            ChangeClass::SpatialQueryRemoved,
+            ChangeImpact::Breaking,
+            format!("{location}.query"),
+            "the exact point bbox query was removed",
+        ),
+        (Some(before), Some(after)) if before != after => {
+            let location = format!("{location}.query");
+            if before.longitude_column != after.longitude_column
+                || before.latitude_column != after.latitude_column
+            {
+                push(
+                    changes,
+                    ChangeClass::SpatialQueryChanged,
+                    ChangeImpact::Breaking,
+                    location,
+                    "the exact point bbox source binding changed",
+                );
+            } else {
+                let expanded = after.maximum_longitude_span_degrees
+                    >= before.maximum_longitude_span_degrees
+                    && after.maximum_latitude_span_degrees >= before.maximum_latitude_span_degrees;
+                let narrowed = after.maximum_longitude_span_degrees
+                    <= before.maximum_longitude_span_degrees
+                    && after.maximum_latitude_span_degrees <= before.maximum_latitude_span_degrees;
+                let (class, impact, description) = if expanded {
+                    (
+                        ChangeClass::SpatialQueryExpanded,
+                        ChangeImpact::Widening,
+                        "the accepted bbox span expanded",
+                    )
+                } else if narrowed {
+                    (
+                        ChangeClass::SpatialQueryNarrowed,
+                        ChangeImpact::Narrowing,
+                        "the accepted bbox span narrowed",
+                    )
+                } else {
+                    (
+                        ChangeClass::SpatialQueryChanged,
+                        ChangeImpact::Breaking,
+                        "the bbox span bounds changed non-monotonically",
+                    )
+                };
+                push(changes, class, impact, location, description);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn diff_access_profile(
@@ -1052,6 +1305,30 @@ fn diff_visibility(
             },
         );
     }
+    if before.statistical_datasets != after.statistical_datasets {
+        let left = before.statistical_datasets.map_or(3, visibility_rank);
+        let right = after.statistical_datasets.map_or(3, visibility_rank);
+        let relaxed = right < left;
+        push(
+            changes,
+            if relaxed {
+                ChangeClass::MetadataVisibilityRelaxed
+            } else {
+                ChangeClass::MetadataVisibilityTightened
+            },
+            if relaxed {
+                ChangeImpact::Widening
+            } else {
+                ChangeImpact::Narrowing
+            },
+            "metadataVisibility.statisticalDatasets".into(),
+            if relaxed {
+                "statistical metadata became visible to a wider audience"
+            } else {
+                "statistical metadata became visible to a narrower audience"
+            },
+        );
+    }
 }
 
 fn visibility_rank(value: Visibility) -> u8 {
@@ -1107,12 +1384,58 @@ mod tests {
         }
     }
 
+    fn compiled_statistics() -> CompiledRegistry {
+        let contract = RegistryContract::parse_yaml(compiler_tests::statistical_contract())
+            .expect("statistical contract parses");
+        crate::compiler::compile_contract(
+            &contract,
+            &[compiler_tests::statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("statistical contract compiles")
+    }
+
     #[test]
     fn visibility_order_is_security_monotonic() {
         assert!(visibility_rank(Visibility::Public) < visibility_rank(Visibility::OperationBound));
         assert!(
             visibility_rank(Visibility::OperationBound) < visibility_rank(Visibility::OperatorOnly)
         );
+    }
+
+    #[test]
+    fn statistical_binding_access_and_bounds_are_reported() {
+        let previous = compiled_statistics();
+        let mut current = previous.clone();
+        let dataset = &mut current.statistical_datasets[0];
+        dataset.sdmx.dataflow_id = "LABOUR_RATES_V2".into();
+        dataset.allow_unfiltered = false;
+        dataset.maximum_observations += 1;
+        dataset.access = CompiledAccess::Protected {
+            scope: "statistics:read".into(),
+            purpose: None,
+            row_binding: None,
+        };
+
+        let report = diff_registries(&previous, &current);
+        for class in [
+            ChangeClass::StatisticalDatasetChanged,
+            ChangeClass::UnfilteredDisabled,
+            ChangeClass::RequestBoundExpanded,
+            ChangeClass::ScopeChanged,
+        ] {
+            assert!(
+                report.changes.iter().any(|change| change.class == class),
+                "missing {class:?}: {report:?}"
+            );
+        }
+
+        let mut without = previous.clone();
+        without.statistical_datasets.clear();
+        assert!(diff_registries(&without, &previous)
+            .changes
+            .iter()
+            .any(|change| change.class == ChangeClass::StatisticalDatasetAdded));
     }
 
     #[test]

@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::artifacts::{
-    generate_artifacts, ArtifactSet, GeneratedArtifact, OperationArtifactBindings,
+    generate_artifacts, ArtifactAccessBinding, ArtifactSet, GeneratedArtifact,
+    OperationArtifactBindings,
 };
 use crate::compiler::{
     compile_contract_with_governed_files, referenced_governed_files, GovernedFileSet,
@@ -21,7 +22,7 @@ use crate::model::{
     CompileProfile, CompiledClassificationReview, CompiledRegistry, ObservedSourceSchema,
 };
 
-const PACKAGE_VERSION: &str = "relay.registrystack.org/package/v1alpha2";
+const PACKAGE_VERSION: &str = "relay.registrystack.org/package/v1alpha3";
 const COMPILED_REGISTRY_PATH: &str = "compiled/registry.json";
 const MAX_AUTHORED_FILES: usize = 256;
 const MAX_AUTHORED_BYTES: u64 = 16 * 1024 * 1024;
@@ -49,8 +50,11 @@ pub struct PackageArtifact {
     pub path: String,
     pub media_type: String,
     pub visibility: Visibility,
+    /// Ownership is retained for operation-bound Record artifacts and every
+    /// statistical structure artifact, including public or operator-only ones.
     pub operation_identifier: Option<String>,
-    pub access_profile_identifier: Option<String>,
+    /// The closed ownership mechanism paired with `operation_identifier`.
+    pub access_binding: Option<ArtifactAccessBinding>,
     pub sha256: String,
 }
 
@@ -165,7 +169,7 @@ pub fn build_package(
             media_type: artifact.media_type.clone(),
             visibility: artifact.visibility,
             operation_identifier: artifact.operation_identifier.clone(),
-            access_profile_identifier: artifact.access_profile_identifier.clone(),
+            access_binding: artifact.access_binding.clone(),
             sha256: artifact.sha256.clone(),
         })
         .collect::<Vec<_>>();
@@ -289,6 +293,7 @@ fn validate_build_inputs(
     verify_compiled_derivation(contract, compiled, governed, &observed)?;
     verify_artifact_derivation(compiled, artifacts)?;
     let expected_operation_access_profiles = operation_access_profile_pairs(compiled);
+    let expected_fixed_operations = fixed_statistical_operations(compiled);
     let mut artifact_ids = BTreeSet::new();
     let mut artifact_paths = BTreeSet::new();
     for artifact in &artifacts.artifacts {
@@ -296,13 +301,13 @@ fn validate_build_inputs(
         if !artifact_ids.insert(artifact.id.as_str())
             || !artifact_paths.insert(artifact.path.as_str())
             || artifact.sha256 != digest(&artifact.content)
-            || artifact
-                .operation_identifier
-                .as_deref()
-                .zip(artifact.access_profile_identifier.as_deref())
-                .is_some_and(|pair| !expected_operation_access_profiles.contains(&pair))
-            || artifact.operation_identifier.is_some()
-                != artifact.access_profile_identifier.is_some()
+            || !valid_artifact_access_binding(
+                artifact.visibility,
+                artifact.operation_identifier.as_deref(),
+                artifact.access_binding.as_ref(),
+                &expected_operation_access_profiles,
+                &expected_fixed_operations,
+            )
         {
             return Err(PackageError::Verification);
         }
@@ -553,6 +558,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
     }
 
     let expected_operation_access_profiles = operation_access_profile_pairs(&registry);
+    let expected_fixed_operations = fixed_statistical_operations(&registry);
     let mut artifact_ids = BTreeSet::new();
     let mut artifact_paths = BTreeSet::new();
     let mut generated_artifacts = Vec::with_capacity(manifest.artifacts.len());
@@ -564,13 +570,13 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
         if relative_path.is_empty()
             || !artifact_ids.insert(artifact.id.as_str())
             || !artifact_paths.insert(relative_path)
-            || artifact
-                .operation_identifier
-                .as_deref()
-                .zip(artifact.access_profile_identifier.as_deref())
-                .is_some_and(|pair| !expected_operation_access_profiles.contains(&pair))
-            || artifact.operation_identifier.is_some()
-                != artifact.access_profile_identifier.is_some()
+            || !valid_artifact_access_binding(
+                artifact.visibility,
+                artifact.operation_identifier.as_deref(),
+                artifact.access_binding.as_ref(),
+                &expected_operation_access_profiles,
+                &expected_fixed_operations,
+            )
         {
             return Err(PackageError::Verification);
         }
@@ -597,7 +603,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
             media_type: artifact.media_type.clone(),
             visibility: artifact.visibility,
             operation_identifier: artifact.operation_identifier.clone(),
-            access_profile_identifier: artifact.access_profile_identifier.clone(),
+            access_binding: artifact.access_binding.clone(),
             sha256: artifact.sha256.clone(),
             content,
         });
@@ -683,6 +689,42 @@ fn operation_access_profile_pairs(registry: &CompiledRegistry) -> BTreeSet<(&str
                 .map(|access_profile| (operation.identifier.as_str(), access_profile.id.as_str()))
         })
         .collect()
+}
+
+fn fixed_statistical_operations(registry: &CompiledRegistry) -> BTreeSet<String> {
+    registry
+        .statistical_datasets
+        .iter()
+        .map(|dataset| dataset.operation_identifier())
+        .collect()
+}
+
+fn valid_artifact_access_binding(
+    visibility: Visibility,
+    operation_identifier: Option<&str>,
+    access_binding: Option<&ArtifactAccessBinding>,
+    record_bindings: &BTreeSet<(&str, &str)>,
+    fixed_operations: &BTreeSet<String>,
+) -> bool {
+    match (visibility, operation_identifier, access_binding) {
+        (
+            Visibility::OperationBound,
+            Some(operation),
+            Some(ArtifactAccessBinding::AccessProfile { identifier }),
+        ) => record_bindings.contains(&(operation, identifier.as_str())),
+        (
+            Visibility::OperationBound,
+            Some(operation),
+            Some(ArtifactAccessBinding::FixedOperation),
+        ) => fixed_operations.contains(operation),
+        (
+            Visibility::Public | Visibility::OperatorOnly,
+            Some(operation),
+            Some(ArtifactAccessBinding::FixedOperation),
+        ) => fixed_operations.contains(operation),
+        (Visibility::Public | Visibility::OperatorOnly, None, None) => true,
+        _ => false,
+    }
 }
 
 fn capture_governed_closure(
@@ -1171,6 +1213,104 @@ mod tests {
         assert_eq!(verified.artifacts.operation_bindings.len(), 3);
     }
 
+    #[test]
+    fn statistical_structure_artifacts_are_exactly_bound_in_v1alpha3_package() {
+        let yaml = crate::compiler::tests::statistical_contract()
+            .replace(
+                "    access: public\n    query:",
+                "    access: {scope: statistics:read}\n    query:",
+            )
+            .replace(
+                "statisticalDatasets: public",
+                "statisticalDatasets: operation-bound",
+            );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("protected statistics contract");
+        let governed = crate::compiler::tests::governed_files_for(&contract);
+        let registry = compile_contract_with_governed_files(
+            &contract,
+            &[crate::compiler::tests::statistical_observed_schema()],
+            CompileProfile::Production,
+            &governed,
+        )
+        .expect("protected statistics Registry compiles");
+        let artifacts = generate_artifacts(&registry).expect("statistical artifacts generate");
+
+        let temporary = tempfile::tempdir().expect("temporary project");
+        let project = temporary.path().join("project");
+        fs::create_dir(&project).expect("project directory");
+        fs::write(project.join("registry.yaml"), &yaml).expect("registry contract");
+        for (relative, content) in &governed {
+            let path = project.join(relative);
+            fs::create_dir_all(path.parent().expect("governed parent"))
+                .expect("governed directory");
+            fs::write(path, content).expect("governed file");
+        }
+
+        let package_path = temporary.path().join("package");
+        let manifest = build_package(&project, &package_path, &contract, &registry, &artifacts)
+            .expect("statistical package builds");
+        assert_eq!(manifest.package_version, PACKAGE_VERSION);
+        let operation_identifier = registry.statistical_datasets[0].operation_identifier();
+        let record_bindings = BTreeSet::new();
+        let fixed_operations = fixed_statistical_operations(&registry);
+        for visibility in [Visibility::Public, Visibility::OperatorOnly] {
+            assert!(valid_artifact_access_binding(
+                visibility,
+                Some(&operation_identifier),
+                Some(&ArtifactAccessBinding::FixedOperation),
+                &record_bindings,
+                &fixed_operations,
+            ));
+        }
+        for id in [
+            "labour-rates-sdmx-dataflow-structure",
+            "labour-rates-sdmx-datastructure-structure",
+        ] {
+            let packaged = manifest
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.id == id)
+                .unwrap_or_else(|| panic!("missing {id}"));
+            assert_eq!(packaged.visibility, Visibility::OperationBound);
+            assert_eq!(
+                packaged.operation_identifier.as_deref(),
+                Some(operation_identifier.as_str())
+            );
+            assert_eq!(
+                packaged.access_binding,
+                Some(ArtifactAccessBinding::FixedOperation)
+            );
+            let generated = artifacts
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.id == id)
+                .expect("generated structure artifact");
+            assert_eq!(
+                fs::read(package_path.join(&packaged.path)).expect("packaged structure bytes"),
+                generated.content
+            );
+        }
+        let manifest_value = serde_json::to_value(&manifest).expect("manifest serializes");
+        assert!(manifest_value["artifacts"]
+            .as_array()
+            .expect("package artifacts")
+            .iter()
+            .filter(|artifact| {
+                artifact["id"] == "labour-rates-sdmx-dataflow-structure"
+                    || artifact["id"] == "labour-rates-sdmx-datastructure-structure"
+            })
+            .all(|artifact| artifact.get("accessProfileIdentifier").is_none()));
+
+        let verified = load_package(
+            &package_path
+                .canonicalize()
+                .expect("statistical package resolves"),
+        )
+        .expect("statistical package loads");
+        assert_eq!(verified.manifest, manifest);
+        assert_eq!(verified.artifacts, artifacts);
+    }
+
     #[cfg(unix)]
     #[test]
     fn governed_capture_rejects_intermediate_symlinks() {
@@ -1393,7 +1533,8 @@ mod tests {
             .expect("artifact array")
             .iter()
             .filter(|artifact| artifact["operationIdentifier"].is_string())
-            .all(|artifact| artifact.get("accessProfileIdentifier").is_some()
+            .all(|artifact| artifact.get("accessBinding").is_some()
+                && artifact.get("accessProfileIdentifier").is_none()
                 && artifact.get("representationIdentifier").is_none()));
 
         assert_resealed_package_rejected(

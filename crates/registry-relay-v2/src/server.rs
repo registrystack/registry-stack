@@ -132,8 +132,24 @@ pub fn router(service: Arc<RelayService>) -> Router {
             post(crate::api::record_lookup),
         )
         .route(
+            "/v2/resources/{resource}/searches/{search}",
+            get(crate::api::record_search),
+        )
+        .route(
             "/v2/artifacts/{artifact_identifier}",
             get(crate::api::artifact),
+        )
+        .route(
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}",
+            get(crate::sdmx_http::data_keyed),
+        )
+        .route(
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}",
+            get(crate::sdmx_http::data_omitted_key),
+        )
+        .route(
+            "/sdmx/v2/structure/{artefact_type}/{agency}/{resource}/{version}",
+            get(crate::sdmx_http::structure),
         )
         .fallback(crate::api::not_found)
         .with_state(service)
@@ -189,32 +205,39 @@ fn operational_route(uri: &http::Uri) -> &'static str {
         segments.next(),
         segments.next(),
         segments.next(),
+        segments.next(),
     );
     if segments.next().is_some() {
         return "unmatched";
     }
     match parts {
-        (Some("health"), None, None, None, None, None, None) => "/health",
-        (Some("ready"), None, None, None, None, None, None) => "/ready",
-        (Some("openapi.json"), None, None, None, None, None, None) => "/openapi.json",
-        (Some("v2"), None, None, None, None, None, None) => "/v2",
-        (Some("v2"), Some("resources"), None, None, None, None, None) => "/v2/resources",
-        (Some("v2"), Some("resources"), Some(resource), None, None, None, None)
+        (Some("health"), None, None, None, None, None, None, None) => "/health",
+        (Some("ready"), None, None, None, None, None, None, None) => "/ready",
+        (Some("openapi.json"), None, None, None, None, None, None, None) => "/openapi.json",
+        (Some("v2"), None, None, None, None, None, None, None) => "/v2",
+        (Some("v2"), Some("resources"), None, None, None, None, None, None) => "/v2/resources",
+        (Some("v2"), Some("resources"), Some(resource), None, None, None, None, None)
             if !resource.is_empty() =>
         {
             "/v2/resources/{resource}"
-        }
-        (Some("v2"), Some("resources"), Some(resource), Some("records"), None, None, None)
-            if !resource.is_empty() =>
-        {
-            "/v2/resources/{resource}/records"
         }
         (
             Some("v2"),
             Some("resources"),
             Some(resource),
             Some("records"),
+            None,
+            None,
+            None,
+            None,
+        ) if !resource.is_empty() => "/v2/resources/{resource}/records",
+        (
+            Some("v2"),
+            Some("resources"),
+            Some(resource),
+            Some("records"),
             Some(record_identifier),
+            None,
             None,
             None,
         ) if !resource.is_empty() && !record_identifier.is_empty() => {
@@ -228,13 +251,80 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             Some(lookup),
             None,
             None,
+            None,
         ) if !resource.is_empty() && !lookup.is_empty() => {
             "/v2/resources/{resource}/lookups/{lookup}"
         }
-        (Some("v2"), Some("artifacts"), Some(artifact_identifier), None, None, None, None)
-            if !artifact_identifier.is_empty() =>
+        (
+            Some("v2"),
+            Some("resources"),
+            Some(resource),
+            Some("searches"),
+            Some(search),
+            None,
+            None,
+            None,
+        ) if !resource.is_empty() && !search.is_empty() => {
+            "/v2/resources/{resource}/searches/{search}"
+        }
+        (
+            Some("v2"),
+            Some("artifacts"),
+            Some(artifact_identifier),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ) if !artifact_identifier.is_empty() => "/v2/artifacts/{artifact_identifier}",
+        (
+            Some("sdmx"),
+            Some("v2"),
+            Some("data"),
+            Some(context),
+            Some(agency),
+            Some(resource),
+            Some(version),
+            None,
+        ) if !context.is_empty()
+            && !agency.is_empty()
+            && !resource.is_empty()
+            && !version.is_empty() =>
         {
-            "/v2/artifacts/{artifact_identifier}"
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}"
+        }
+        (
+            Some("sdmx"),
+            Some("v2"),
+            Some("data"),
+            Some(context),
+            Some(agency),
+            Some(resource),
+            Some(version),
+            Some(key),
+        ) if !context.is_empty()
+            && !agency.is_empty()
+            && !resource.is_empty()
+            && !version.is_empty()
+            && !key.is_empty() =>
+        {
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}"
+        }
+        (
+            Some("sdmx"),
+            Some("v2"),
+            Some("structure"),
+            Some(artefact_type),
+            Some(agency),
+            Some(resource),
+            Some(version),
+            None,
+        ) if !artefact_type.is_empty()
+            && !agency.is_empty()
+            && !resource.is_empty()
+            && !version.is_empty() =>
+        {
+            "/sdmx/v2/structure/{artefact_type}/{agency}/{resource}/{version}"
         }
         _ => "unmatched",
     }
@@ -341,6 +431,47 @@ mod tests {
         );
         assert!(!operational_route(&uri).contains("private-registry"));
         assert!(!operational_route(&uri).contains("protected-record"));
+        let search_uri: http::Uri =
+            "/v2/resources/private-registry/searches/within-secret?bbox=100,-20,101,-19"
+                .parse()
+                .expect("search URI");
+        assert_eq!(
+            operational_route(&search_uri),
+            "/v2/resources/{resource}/searches/{search}"
+        );
+        assert!(!operational_route(&search_uri).contains("private-registry"));
+        assert!(!operational_route(&search_uri).contains("within-secret"));
+        assert!(!operational_route(&search_uri).contains("100"));
+        let sdmx_data: http::Uri = concat!(
+            "/sdmx/v2/data/dataflow/PRIVATE_AGENCY/PRIVATE_FLOW/9.9.9/SECRET.KEY?",
+            "c%5BTIME_PERIOD%5D=classified-period"
+        )
+        .parse()
+        .expect("SDMX data URI");
+        assert_eq!(
+            operational_route(&sdmx_data),
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}"
+        );
+        for hidden in [
+            "PRIVATE_AGENCY",
+            "PRIVATE_FLOW",
+            "9.9.9",
+            "SECRET.KEY",
+            "classified-period",
+        ] {
+            assert!(!operational_route(&sdmx_data).contains(hidden));
+        }
+        let sdmx_structure: http::Uri =
+            "/sdmx/v2/structure/datastructure/PRIVATE_AGENCY/PRIVATE_DSD/9.9.9?references=secret"
+                .parse()
+                .expect("SDMX structure URI");
+        assert_eq!(
+            operational_route(&sdmx_structure),
+            "/sdmx/v2/structure/{artefact_type}/{agency}/{resource}/{version}"
+        );
+        for hidden in ["PRIVATE_AGENCY", "PRIVATE_DSD", "9.9.9", "secret"] {
+            assert!(!operational_route(&sdmx_structure).contains(hidden));
+        }
         assert_eq!(
             operational_method(&http::Method::from_bytes(b"ATTACKER-CONTROLLED").expect("method")),
             "OTHER"

@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::contract::{
     AlignmentTarget, DataType, DateInputType, DatePrecision, Handling, IdentificationMethod,
-    PartialStringReveal, ProcessingDescription, SemanticAlignment, SourceProfile, Visibility,
+    PartialStringReveal, ProcessingDescription, SemanticAlignment, SourceProfile,
+    StatisticalTimeGranularity, StatisticalValueType, Visibility,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -97,6 +98,8 @@ pub struct CompiledRegistry {
     pub codelists: Vec<CompiledCodelist>,
     pub sources: Vec<CompiledSource>,
     pub resources: Vec<CompiledResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statistical_datasets: Vec<CompiledStatisticalDataset>,
     pub metadata_visibility: CompiledMetadataVisibility,
 }
 
@@ -137,10 +140,107 @@ pub struct CompiledResource {
     pub view: String,
     pub record_context: CompiledRecordContext,
     pub properties: Vec<CompiledProperty>,
+    pub primary_geometry: Option<String>,
     pub disclosure_profiles: Vec<CompiledDisclosureProfile>,
     pub operations: Vec<CompiledOperation>,
     pub column_accounting: Vec<ColumnAccount>,
     pub processing_descriptions: Vec<ProcessingDescription>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalDataset {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub sdmx: CompiledSdmxBindingProfile,
+    pub release_at: String,
+    pub source: String,
+    pub view: String,
+    pub dimensions: Vec<CompiledStatisticalDimension>,
+    pub time: CompiledStatisticalTimeDimension,
+    pub measure: CompiledStatisticalMeasure,
+    pub attributes: Vec<CompiledStatisticalAttribute>,
+    pub access: CompiledAccess,
+    pub allow_unfiltered: bool,
+    pub maximum_observations: u32,
+    pub maximum_offset: u32,
+    pub processing_handling: Handling,
+    pub disclosure_handling: Handling,
+    pub column_accounting: Vec<ColumnAccount>,
+    pub processing_descriptions: Vec<ProcessingDescription>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledSdmxBindingProfile {
+    pub agency_id: String,
+    pub dataflow_id: String,
+    pub version: String,
+    pub data_structure_id: String,
+    pub concept_scheme_id: String,
+    pub rest_version: String,
+    pub data_json_version: String,
+    pub data_csv_version: String,
+    pub structure_json_version: String,
+}
+
+impl CompiledStatisticalDataset {
+    #[must_use]
+    pub fn operation_identifier(&self) -> String {
+        format!("{}.statistics.read", self.id)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalDimension {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub data_type: StatisticalValueType,
+    pub codelist: Option<String>,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalTimeDimension {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub granularity: StatisticalTimeGranularity,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalMeasure {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub data_type: StatisticalValueType,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalAttribute {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub data_type: StatisticalValueType,
+    pub codelist: Option<String>,
+    pub source_required: bool,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -161,13 +261,72 @@ pub struct CompiledProperty {
     pub name: String,
     pub label: String,
     pub description: String,
+    pub source_required: bool,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
+    pub binding: CompiledPropertyBinding,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CompiledPropertyBinding {
+    Scalar(CompiledScalarPropertyBinding),
+    Point(CompiledPointPropertyBinding),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledScalarPropertyBinding {
     pub source_column: String,
     pub transform: Option<CompiledTransform>,
     pub data_type: DataType,
     pub codelist: Option<String>,
-    pub source_required: bool,
-    pub semantic_iri: String,
-    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledPointPropertyBinding {
+    pub crs: String,
+    pub longitude_column: String,
+    pub latitude_column: String,
+}
+
+impl CompiledProperty {
+    #[must_use]
+    pub fn scalar_binding(&self) -> Option<&CompiledScalarPropertyBinding> {
+        match &self.binding {
+            CompiledPropertyBinding::Scalar(binding) => Some(binding),
+            CompiledPropertyBinding::Point(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn point_binding(&self) -> Option<&CompiledPointPropertyBinding> {
+        match &self.binding {
+            CompiledPropertyBinding::Point(binding) => Some(binding),
+            CompiledPropertyBinding::Scalar(_) => None,
+        }
+    }
+
+    pub fn source_columns(&self) -> impl Iterator<Item = &str> {
+        match &self.binding {
+            CompiledPropertyBinding::Scalar(binding) => {
+                [Some(binding.source_column.as_str()), None]
+                    .into_iter()
+                    .flatten()
+            }
+            CompiledPropertyBinding::Point(binding) => [
+                Some(binding.longitude_column.as_str()),
+                Some(binding.latitude_column.as_str()),
+            ]
+            .into_iter()
+            .flatten(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -286,12 +445,20 @@ pub enum ConsultationPattern {
     Search,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum FormatProfile {
+    Rfc7946,
+    JsonFg,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum OperationKind {
     List,
     Read,
     Lookup { name: String },
+    Search { name: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -332,12 +499,24 @@ pub struct QueryPlan {
     pub source: String,
     pub view: String,
     pub filters: Vec<CompiledFilter>,
+    pub spatial_bbox: Option<CompiledSpatialBboxQuery>,
     pub selectors: Vec<CompiledSelector>,
     pub order_by: Vec<String>,
     pub allow_unfiltered: bool,
     pub pagination: Option<CompiledPagination>,
     pub maximum_request_body_bytes: Option<u32>,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledSpatialBboxQuery {
+    pub longitude_column: String,
+    pub latitude_column: String,
+    pub maximum_longitude_span_degrees: u16,
+    pub maximum_latitude_span_degrees: u16,
+}
+
+pub const POINT_BBOX_PREDICATE: &str = "inclusive-point-within-bbox";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -382,10 +561,15 @@ pub enum ColumnUse {
     LifecycleState,
     RecordedAt,
     Property(String),
+    PointLongitude(String),
+    PointLatitude(String),
     Filter(String),
     Order,
     Selector(String),
     RowBinding(String),
+    StatisticalDimension(String),
+    StatisticalMeasure(String),
+    StatisticalAttribute(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -393,6 +577,7 @@ pub enum ColumnUse {
 pub struct CompiledMetadataVisibility {
     pub service: Visibility,
     pub resources: Visibility,
+    pub statistical_datasets: Option<Visibility>,
     pub semantics: Visibility,
     pub classifications: Visibility,
     pub processing: Visibility,

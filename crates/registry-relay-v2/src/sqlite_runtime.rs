@@ -19,10 +19,12 @@ use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::auth::RowAuthority;
-use crate::contract::{DataType, SourceProfile};
+use crate::contract::{DataType, SourceProfile, StatisticalValueType};
 use crate::model::{
-    CompiledAccessProfile, CompiledOperation, CompiledRegistry, CompiledResource, OperationKind,
+    CompiledAccess, CompiledAccessProfile, CompiledOperation, CompiledRegistry, CompiledResource,
+    CompiledStatisticalDataset, OperationKind,
 };
+use crate::sdmx::{DataQuery, StatisticalRow, StatisticalValue};
 
 const MAXIMUM_CELL_BYTES: usize = 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -30,6 +32,9 @@ const MAXIMUM_STATEMENT_STEPS: u64 = 2_000_000;
 const SCHEMA_MAXIMUM_OBJECTS: usize = 10_000;
 const SCHEMA_MAXIMUM_SQL_BYTES: usize = 8 * 1024 * 1024;
 const SCHEMA_MAXIMUM_STEPS: u64 = 1_000_000;
+const MAXIMUM_STATISTICAL_VALUES_PER_COMPONENT: usize = 16;
+
+pub(crate) type SqlValue = Value;
 
 #[derive(Clone, Debug)]
 pub struct SqliteRuntimeLimits {
@@ -66,12 +71,49 @@ pub struct OperationQuery {
     pub row_authority: Option<RowAuthority>,
     pub after_order: Option<Vec<Value>>,
     pub fetch_limit: Option<u32>,
+    pub bbox: Option<PointBbox>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointBbox {
+    pub west: f64,
+    pub south: f64,
+    pub east: f64,
+    pub north: f64,
+}
+
+impl PointBbox {
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        [self.west, self.south, self.east, self.north]
+            .into_iter()
+            .all(f64::is_finite)
+            && (-180.0..=180.0).contains(&self.west)
+            && (-180.0..=180.0).contains(&self.east)
+            && (-90.0..=90.0).contains(&self.south)
+            && (-90.0..=90.0).contains(&self.north)
+            && self.west <= self.east
+            && self.south <= self.north
+    }
+
+    #[must_use]
+    pub fn is_within(self, spatial: &crate::model::CompiledSpatialBboxQuery) -> bool {
+        self.is_valid()
+            && self.east - self.west <= f64::from(spatial.maximum_longitude_span_degrees)
+            && self.north - self.south <= f64::from(spatial.maximum_latitude_span_degrees)
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct OperationResult {
     pub rows: Vec<ResultRow>,
     pub source_revision: SourceRevision,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StatisticalOperationResult {
+    pub(crate) rows: Vec<StatisticalRow>,
+    pub(crate) source_revision: SourceRevision,
 }
 
 #[derive(Debug, Error)]
@@ -84,6 +126,8 @@ pub enum SqliteRuntimeError {
     SchemaMismatch,
     #[error("source result shape does not match the governed contract")]
     InvalidSourceShape,
+    #[error("the statistical result exceeds the governed observation bound")]
+    ResultTooLarge,
     #[error("compiled SQLite plan is invalid")]
     InvalidPlan,
     #[error("SQLite query admission timed out")]
@@ -105,6 +149,13 @@ struct OperationInventory {
     access_profiles: BTreeMap<String, OperationExecutor>,
 }
 
+struct StatisticalExecutor {
+    statement: Arc<ReadOnlyStatement>,
+    dataset: CompiledStatisticalDataset,
+    source_revision: SourceRevision,
+    observation_count_column: String,
+}
+
 #[derive(Clone)]
 struct ReadinessSource {
     profile: DatabaseProfile,
@@ -114,6 +165,7 @@ struct ReadinessSource {
 /// Fixed operation inventory over one compiled Registry.
 pub struct SqliteRuntime {
     operations: BTreeMap<String, OperationInventory>,
+    statistical_operations: BTreeMap<String, StatisticalExecutor>,
     readiness_sources: Vec<ReadinessSource>,
     admission: Arc<Semaphore>,
     timeout: Duration,
@@ -224,8 +276,44 @@ impl SqliteRuntime {
             }
         }
 
+        let mut statistical_operations = BTreeMap::new();
+        for dataset in &registry.statistical_datasets {
+            let (profile, source_revision) = profiles
+                .get(&dataset.source)
+                .ok_or(SqliteRuntimeError::MissingSource)?;
+            let source = registry
+                .sources
+                .iter()
+                .find(|source| source.id == dataset.source)
+                .ok_or(SqliteRuntimeError::MissingSource)?;
+            let PreparedStatisticalStatement {
+                contract,
+                observation_count_column,
+            } = statistical_statement_contract(
+                dataset,
+                &limits,
+                &source.expected_schema_fingerprint,
+            )?;
+            let statement = ReadOnlyStatement::open(profile.clone(), contract)?;
+            if statistical_operations
+                .insert(
+                    dataset.operation_identifier(),
+                    StatisticalExecutor {
+                        statement: Arc::new(statement),
+                        dataset: dataset.clone(),
+                        source_revision: source_revision.clone(),
+                        observation_count_column,
+                    },
+                )
+                .is_some()
+            {
+                return Err(SqliteRuntimeError::InvalidPlan);
+            }
+        }
+
         Ok(Self {
             operations,
+            statistical_operations,
             readiness_sources,
             admission: Arc::new(Semaphore::new(limits.concurrent_queries)),
             timeout: limits.request_timeout,
@@ -266,6 +354,11 @@ impl SqliteRuntime {
         self.operations
             .get(operation)
             .map(|item| &item.source_revision)
+            .or_else(|| {
+                self.statistical_operations
+                    .get(operation)
+                    .map(|item| &item.source_revision)
+            })
     }
 
     pub async fn execute(
@@ -297,12 +390,455 @@ impl SqliteRuntime {
         })
     }
 
+    pub(crate) async fn execute_statistical(
+        &self,
+        operation_identifier: &str,
+        query: DataQuery,
+        row_authority: Option<SqlValue>,
+    ) -> Result<StatisticalOperationResult, SqliteRuntimeError> {
+        let executor = self
+            .statistical_operations
+            .get(operation_identifier)
+            .ok_or(SqliteRuntimeError::UnknownOperation)?;
+        let permit = self.acquire().await?;
+        let values = bind_statistical_values(&executor.dataset, &query, row_authority)?;
+        let result = executor.statement.execute(&values).await;
+        drop(permit);
+
+        let raw_rows = result?.rows;
+        let mut rows = Vec::with_capacity(raw_rows.len());
+        for mut row in raw_rows {
+            if row.remove(&executor.observation_count_column) != Some(Value::Integer(1)) {
+                return Err(SqliteRuntimeError::InvalidSourceShape);
+            }
+            rows.push(normalize_statistical_row(&executor.dataset, row)?);
+        }
+        if !query.explicit_limit && rows.len() > executor.dataset.maximum_observations as usize {
+            return Err(SqliteRuntimeError::ResultTooLarge);
+        }
+        Ok(StatisticalOperationResult {
+            rows,
+            source_revision: executor.source_revision.clone(),
+        })
+    }
+
     async fn acquire(&self) -> Result<OwnedSemaphorePermit, SqliteRuntimeError> {
         tokio::time::timeout(self.timeout, Arc::clone(&self.admission).acquire_owned())
             .await
             .map_err(|_| SqliteRuntimeError::AdmissionTimeout)?
             .map_err(|_| SqliteRuntimeError::InvalidPlan)
     }
+}
+
+struct PreparedStatisticalStatement {
+    contract: StatementContract,
+    observation_count_column: String,
+}
+
+#[derive(Clone)]
+struct StatisticalResultColumn {
+    name: String,
+    value_type: ColumnType,
+}
+
+fn statistical_statement_contract(
+    dataset: &CompiledStatisticalDataset,
+    limits: &SqliteRuntimeLimits,
+    expected_schema_fingerprint: &str,
+) -> Result<PreparedStatisticalStatement, SqliteRuntimeError> {
+    let columns = statistical_result_columns(dataset);
+    let names = columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    let observation_count_column = collision_free_statistical_count_column(&names);
+    let mut result_contract = columns
+        .iter()
+        .map(|column| ColumnContract {
+            name: column.name.clone(),
+            value_type: column.value_type,
+        })
+        .collect::<Vec<_>>();
+    result_contract.push(ColumnContract {
+        name: observation_count_column.clone(),
+        value_type: ColumnType::Integer,
+    });
+
+    let mut parameters = Vec::new();
+    let mut predicates = Vec::new();
+    for (index, dimension) in dataset.dimensions.iter().enumerate() {
+        add_statistical_exact_predicate(
+            index,
+            &dimension.source_column,
+            dimension.data_type,
+            &mut parameters,
+            &mut predicates,
+        );
+    }
+    let time_index = dataset.dimensions.len();
+    add_statistical_exact_predicate(
+        time_index,
+        &dataset.time.source_column,
+        StatisticalValueType::String,
+        &mut parameters,
+        &mut predicates,
+    );
+    for (suffix, operator) in [("lower", ">="), ("upper", "<=")] {
+        let present = format!("stat_{time_index}_{suffix}_present");
+        let value = format!("stat_{time_index}_{suffix}");
+        parameters.push(parameter(&present));
+        parameters.push(parameter(&value));
+        let column = quote_identifier(&dataset.time.source_column);
+        predicates.push(format!(
+            "(:{present} = 0 OR (typeof({column}) = 'text' AND typeof(:{value}) = 'text' AND {column} COLLATE BINARY {operator} :{value}))"
+        ));
+    }
+    if let CompiledAccess::Protected {
+        row_binding: Some(binding),
+        ..
+    } = &dataset.access
+    {
+        parameters.push(parameter("stat_row_authority"));
+        predicates.push(statistical_exact_equality_predicate(
+            &binding.source_column,
+            "stat_row_authority",
+            StatisticalValueType::String,
+        ));
+    }
+    parameters.push(parameter("stat_limit"));
+    parameters.push(parameter("stat_offset"));
+
+    let partition_key = dataset
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.source_column.as_str())
+        .chain(std::iter::once(dataset.time.source_column.as_str()))
+        .flat_map(|column| {
+            let column = quote_identifier(column);
+            [
+                format!("typeof({column})"),
+                format!("{column} COLLATE BINARY"),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let order = dataset
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.source_column.as_str())
+        .chain(std::iter::once(dataset.time.source_column.as_str()))
+        .map(|column| format!("{} COLLATE BINARY ASC", quote_identifier(column)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "WITH \"__relay_statistical_scope\" AS (SELECT {}, COUNT(*) OVER (PARTITION BY {partition_key}) AS {} FROM {} WHERE {}) SELECT {}, {} FROM \"__relay_statistical_scope\" ORDER BY {order} LIMIT :stat_limit OFFSET :stat_offset",
+        select_list(&names),
+        quote_identifier(&observation_count_column),
+        quote_identifier(&dataset.view),
+        predicates.join(" AND "),
+        select_list(&names),
+        quote_identifier(&observation_count_column),
+    );
+
+    Ok(PreparedStatisticalStatement {
+        contract: StatementContract {
+            sql,
+            columns: result_contract,
+            parameters,
+            limits: StatementLimits {
+                maximum_rows: u64::from(dataset.maximum_observations).saturating_add(1),
+                maximum_cell_bytes: MAXIMUM_CELL_BYTES,
+                maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+                maximum_statement_steps: MAXIMUM_STATEMENT_STEPS,
+                timeout: limits.request_timeout,
+                concurrency: 1,
+            },
+            schema: Some(SchemaBinding {
+                expected_fingerprint: expected_schema_fingerprint.to_owned(),
+                maximum_objects: SCHEMA_MAXIMUM_OBJECTS,
+                maximum_sql_bytes: SCHEMA_MAXIMUM_SQL_BYTES,
+            }),
+        },
+        observation_count_column,
+    })
+}
+
+fn statistical_result_columns(
+    dataset: &CompiledStatisticalDataset,
+) -> Vec<StatisticalResultColumn> {
+    dataset
+        .dimensions
+        .iter()
+        .map(|component| StatisticalResultColumn {
+            name: component.source_column.clone(),
+            value_type: statistical_column_type(component.data_type),
+        })
+        .chain(std::iter::once(StatisticalResultColumn {
+            name: dataset.time.source_column.clone(),
+            value_type: ColumnType::String,
+        }))
+        .chain(std::iter::once(StatisticalResultColumn {
+            name: dataset.measure.source_column.clone(),
+            value_type: statistical_column_type(dataset.measure.data_type),
+        }))
+        .chain(
+            dataset
+                .attributes
+                .iter()
+                .map(|component| StatisticalResultColumn {
+                    name: component.source_column.clone(),
+                    value_type: statistical_column_type(component.data_type),
+                }),
+        )
+        .collect()
+}
+
+fn statistical_column_type(value_type: StatisticalValueType) -> ColumnType {
+    match value_type {
+        StatisticalValueType::Code | StatisticalValueType::String => ColumnType::String,
+        StatisticalValueType::Integer => ColumnType::Integer,
+        StatisticalValueType::Decimal => ColumnType::Number,
+        StatisticalValueType::Boolean => ColumnType::Boolean,
+    }
+}
+
+fn add_statistical_exact_predicate(
+    index: usize,
+    column: &str,
+    value_type: StatisticalValueType,
+    parameters: &mut Vec<ParameterContract>,
+    predicates: &mut Vec<String>,
+) {
+    let present = format!("stat_{index}_exact_present");
+    parameters.push(parameter(&present));
+    let mut alternatives = Vec::with_capacity(MAXIMUM_STATISTICAL_VALUES_PER_COMPONENT);
+    for value_index in 0..MAXIMUM_STATISTICAL_VALUES_PER_COMPONENT {
+        let value_present = format!("stat_{index}_exact_{value_index}_present");
+        let value = format!("stat_{index}_exact_{value_index}");
+        parameters.push(parameter(&value_present));
+        parameters.push(parameter(&value));
+        alternatives.push(format!(
+            "(:{value_present} = 1 AND {})",
+            statistical_exact_equality_predicate(column, &value, value_type)
+        ));
+    }
+    predicates.push(format!(
+        "(:{present} = 0 OR ({}))",
+        alternatives.join(" OR ")
+    ));
+}
+
+fn statistical_exact_equality_predicate(
+    column: &str,
+    parameter: &str,
+    value_type: StatisticalValueType,
+) -> String {
+    let column = quote_identifier(column);
+    match value_type {
+        StatisticalValueType::Code | StatisticalValueType::String => format!(
+            "(typeof({column}) = 'text' AND typeof(:{parameter}) = 'text' AND {column} COLLATE BINARY = :{parameter})"
+        ),
+        StatisticalValueType::Integer | StatisticalValueType::Boolean => format!(
+            "(typeof({column}) = 'integer' AND typeof(:{parameter}) = 'integer' AND {column} = :{parameter})"
+        ),
+        StatisticalValueType::Decimal => format!(
+            "(typeof({column}) = typeof(:{parameter}) AND typeof({column}) IN ('integer', 'real') AND {column} = :{parameter})"
+        ),
+    }
+}
+
+fn collision_free_statistical_count_column(columns: &[String]) -> String {
+    const BASE: &str = "__relay_observation_key_count";
+    if !columns
+        .iter()
+        .any(|column| column.eq_ignore_ascii_case(BASE))
+    {
+        return BASE.to_owned();
+    }
+    for suffix in 1..=columns.len() {
+        let candidate = format!("{BASE}_{suffix}");
+        if !columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(&candidate))
+        {
+            return candidate;
+        }
+    }
+    format!("{BASE}_{}", columns.len().saturating_add(1))
+}
+
+fn bind_statistical_values(
+    dataset: &CompiledStatisticalDataset,
+    query: &DataQuery,
+    row_authority: Option<SqlValue>,
+) -> Result<BTreeMap<String, Value>, SqliteRuntimeError> {
+    if query.limit == 0
+        || query.limit > dataset.maximum_observations
+        || query.offset > dataset.maximum_offset
+        || (!dataset.allow_unfiltered && query.constraints.is_empty())
+    {
+        return Err(SqliteRuntimeError::InvalidPlan);
+    }
+    let declared = dataset
+        .dimensions
+        .iter()
+        .map(|dimension| dimension.id.as_str())
+        .chain(std::iter::once(dataset.time.id.as_str()))
+        .collect::<BTreeSet<_>>();
+    if query
+        .constraints
+        .keys()
+        .any(|identifier| !declared.contains(identifier.as_str()))
+    {
+        return Err(SqliteRuntimeError::InvalidPlan);
+    }
+
+    let mut values = BTreeMap::new();
+    for (index, (identifier, value_type)) in dataset
+        .dimensions
+        .iter()
+        .map(|dimension| (dimension.id.as_str(), dimension.data_type))
+        .chain(std::iter::once((
+            dataset.time.id.as_str(),
+            StatisticalValueType::String,
+        )))
+        .enumerate()
+    {
+        let constraint = query.constraints.get(identifier);
+        let exact = constraint.map_or(&[][..], |constraint| constraint.exact.as_slice());
+        if exact.len() > MAXIMUM_STATISTICAL_VALUES_PER_COMPONENT
+            || (identifier != dataset.time.id
+                && constraint.is_some_and(|constraint| {
+                    constraint.lower.is_some() || constraint.upper.is_some()
+                }))
+        {
+            return Err(SqliteRuntimeError::InvalidPlan);
+        }
+        values.insert(
+            format!("stat_{index}_exact_present"),
+            Value::Integer(i64::from(!exact.is_empty())),
+        );
+        for value_index in 0..MAXIMUM_STATISTICAL_VALUES_PER_COMPONENT {
+            let value = exact.get(value_index);
+            values.insert(
+                format!("stat_{index}_exact_{value_index}_present"),
+                Value::Integer(i64::from(value.is_some())),
+            );
+            values.insert(
+                format!("stat_{index}_exact_{value_index}"),
+                value
+                    .map(|value| statistical_query_value(value, value_type))
+                    .transpose()?
+                    .unwrap_or(Value::Null),
+            );
+        }
+    }
+    let time_index = dataset.dimensions.len();
+    let time_constraint = query.constraints.get(&dataset.time.id);
+    for (suffix, value) in [
+        (
+            "lower",
+            time_constraint.and_then(|constraint| constraint.lower.as_ref()),
+        ),
+        (
+            "upper",
+            time_constraint.and_then(|constraint| constraint.upper.as_ref()),
+        ),
+    ] {
+        values.insert(
+            format!("stat_{time_index}_{suffix}_present"),
+            Value::Integer(i64::from(value.is_some())),
+        );
+        values.insert(
+            format!("stat_{time_index}_{suffix}"),
+            value.cloned().map(Value::String).unwrap_or(Value::Null),
+        );
+    }
+
+    match (&dataset.access, row_authority) {
+        (
+            CompiledAccess::Protected {
+                row_binding: Some(_),
+                ..
+            },
+            Some(Value::String(authority)),
+        ) => {
+            values.insert("stat_row_authority".into(), Value::String(authority));
+        }
+        (CompiledAccess::Public, None)
+        | (
+            CompiledAccess::Protected {
+                row_binding: None, ..
+            },
+            None,
+        ) => {}
+        _ => return Err(SqliteRuntimeError::InvalidPlan),
+    }
+    let fetch_limit = if query.explicit_limit {
+        query.limit
+    } else {
+        dataset.maximum_observations.saturating_add(1)
+    };
+    values.insert("stat_limit".into(), Value::Integer(i64::from(fetch_limit)));
+    values.insert(
+        "stat_offset".into(),
+        Value::Integer(i64::from(query.offset)),
+    );
+    Ok(values)
+}
+
+fn statistical_query_value(
+    value: &StatisticalValue,
+    expected: StatisticalValueType,
+) -> Result<Value, SqliteRuntimeError> {
+    match (expected, value) {
+        (
+            StatisticalValueType::Code | StatisticalValueType::String,
+            StatisticalValue::String(value),
+        ) => Ok(Value::String(value.clone())),
+        (StatisticalValueType::Integer, StatisticalValue::Integer(value)) => {
+            Ok(Value::Integer(*value))
+        }
+        (StatisticalValueType::Decimal, StatisticalValue::Integer(value)) => {
+            Ok(Value::Integer(*value))
+        }
+        (StatisticalValueType::Decimal, StatisticalValue::Decimal(value)) if value.is_finite() => {
+            Ok(Value::Number(*value))
+        }
+        (StatisticalValueType::Boolean, StatisticalValue::Boolean(value)) => {
+            Ok(Value::Boolean(*value))
+        }
+        _ => Err(SqliteRuntimeError::InvalidPlan),
+    }
+}
+
+fn normalize_statistical_row(
+    dataset: &CompiledStatisticalDataset,
+    mut row: ResultRow,
+) -> Result<StatisticalRow, SqliteRuntimeError> {
+    let expected = statistical_result_columns(dataset);
+    if row.len() != expected.len() {
+        return Err(SqliteRuntimeError::InvalidSourceShape);
+    }
+    let mut normalized = BTreeMap::new();
+    for column in expected {
+        let value = row
+            .remove(&column.name)
+            .ok_or(SqliteRuntimeError::InvalidSourceShape)?;
+        let value = match value {
+            Value::Null => StatisticalValue::Null,
+            Value::String(value) => StatisticalValue::String(value),
+            Value::Integer(value) => StatisticalValue::Integer(value),
+            Value::Number(value) if value.is_finite() => StatisticalValue::Decimal(value),
+            Value::Boolean(value) => StatisticalValue::Boolean(value),
+            Value::Number(_) => return Err(SqliteRuntimeError::InvalidSourceShape),
+        };
+        normalized.insert(column.name, value);
+    }
+    if !row.is_empty() {
+        return Err(SqliteRuntimeError::InvalidSourceShape);
+    }
+    Ok(normalized)
 }
 
 struct PreparedStatementContract {
@@ -327,8 +863,11 @@ fn statement_contract(
             })
         })
         .collect::<Result<Vec<_>, SqliteRuntimeError>>()?;
-    let list_identifier_count_column = matches!(&operation.kind, OperationKind::List)
-        .then(|| collision_free_identifier_count_column(&result_columns));
+    let list_identifier_count_column = matches!(
+        &operation.kind,
+        OperationKind::List | OperationKind::Search { .. }
+    )
+    .then(|| collision_free_identifier_count_column(&result_columns));
     if let Some(column) = &list_identifier_count_column {
         columns.push(ColumnContract {
             name: column.clone(),
@@ -337,7 +876,7 @@ fn statement_contract(
     }
     let mut parameters = Vec::new();
     let sql = match &operation.kind {
-        OperationKind::List => list_sql(
+        OperationKind::List | OperationKind::Search { .. } => list_sql(
             resource,
             operation,
             access_profile,
@@ -359,7 +898,7 @@ fn statement_contract(
         }
     };
     let maximum_rows = match &operation.kind {
-        OperationKind::List => u64::from(
+        OperationKind::List | OperationKind::Search { .. } => u64::from(
             operation
                 .query
                 .pagination
@@ -406,6 +945,13 @@ fn result_columns(
             columns.push(column.clone());
         }
     }
+    if let Some(spatial) = &operation.query.spatial_bbox {
+        for column in [&spatial.longitude_column, &spatial.latitude_column] {
+            if !columns.contains(column) {
+                columns.push(column.clone());
+            }
+        }
+    }
     columns
 }
 
@@ -420,13 +966,22 @@ fn column_type(
         || column == record_context.recorded_at_column)
         .then_some(ColumnType::String);
     resolve_column_type(
-        core_type.into_iter().chain(
-            resource
-                .properties
-                .iter()
-                .filter(|property| property.source_column == column)
-                .map(|property| data_type(property.data_type)),
-        ),
+        core_type
+            .into_iter()
+            .chain(resource.properties.iter().filter_map(|property| {
+                property.point_binding().and_then(|binding| {
+                    (binding.longitude_column == column || binding.latitude_column == column)
+                        .then_some(ColumnType::Number)
+                })
+            }))
+            .chain(
+                resource
+                    .properties
+                    .iter()
+                    .filter_map(|property| property.scalar_binding())
+                    .filter(|binding| binding.source_column == column)
+                    .map(|binding| data_type(binding.data_type)),
+            ),
     )
 }
 
@@ -487,6 +1042,16 @@ fn list_sql(
         scope_predicates.push(format!(
             "(:{present} = 0 OR {})",
             exact_equality_predicate(&filter.source_column, &value, filter.data_type)
+        ));
+    }
+    if let Some(spatial) = &operation.query.spatial_bbox {
+        for name in ["bbox_west", "bbox_south", "bbox_east", "bbox_north"] {
+            parameters.push(parameter(name));
+        }
+        let longitude = quote_identifier(&spatial.longitude_column);
+        let latitude = quote_identifier(&spatial.latitude_column);
+        scope_predicates.push(format!(
+            "(typeof({latitude}) IN ('integer', 'real') AND typeof({longitude}) IN ('integer', 'real') AND {latitude} >= :bbox_south AND {latitude} <= :bbox_north AND {longitude} >= :bbox_west AND {longitude} <= :bbox_east)"
         ));
     }
     add_row_authority(access_profile, parameters, &mut scope_predicates);
@@ -712,7 +1277,7 @@ fn bind_operation_values(
 ) -> Result<BTreeMap<String, Value>, SqliteRuntimeError> {
     let mut values = BTreeMap::new();
     match &operation.kind {
-        OperationKind::List => {
+        OperationKind::List | OperationKind::Search { .. } => {
             let declared = operation
                 .query
                 .filters
@@ -733,6 +1298,19 @@ fn bind_operation_values(
                     Value::Integer(i64::from(value.is_some())),
                 );
                 values.insert(format!("filter_{index}"), value.unwrap_or(Value::Null));
+            }
+            match (&operation.kind, &operation.query.spatial_bbox, query.bbox) {
+                (OperationKind::Search { .. }, Some(spatial), Some(bbox)) => {
+                    if !bbox.is_within(spatial) {
+                        return Err(SqliteRuntimeError::InvalidPlan);
+                    }
+                    values.insert("bbox_west".into(), Value::Number(bbox.west));
+                    values.insert("bbox_south".into(), Value::Number(bbox.south));
+                    values.insert("bbox_east".into(), Value::Number(bbox.east));
+                    values.insert("bbox_north".into(), Value::Number(bbox.north));
+                }
+                (OperationKind::List, None, None) => {}
+                _ => return Err(SqliteRuntimeError::InvalidPlan),
             }
             let after = query.after_order.unwrap_or_default();
             if !after.is_empty() && after.len() != operation.query.order_by.len() {
@@ -756,6 +1334,9 @@ fn bind_operation_values(
             );
         }
         OperationKind::Read => {
+            if query.bbox.is_some() {
+                return Err(SqliteRuntimeError::InvalidPlan);
+            }
             values.insert(
                 "record_identifier".into(),
                 Value::String(
@@ -766,6 +1347,9 @@ fn bind_operation_values(
             );
         }
         OperationKind::Lookup { .. } => {
+            if query.bbox.is_some() {
+                return Err(SqliteRuntimeError::InvalidPlan);
+            }
             if query.selectors.len() != operation.query.selectors.len() {
                 return Err(SqliteRuntimeError::InvalidPlan);
             }
@@ -802,12 +1386,268 @@ mod tests {
     use registry_platform_sqlite::{materialize_fixture, CapturedSnapshot};
 
     use super::*;
-    use crate::contract::Handling;
+    use crate::contract::{Handling, ReviewStatus, StatisticalTimeGranularity};
     use crate::model::{
         CapabilityFamily, CompiledAccess, CompiledFilter, CompiledPagination,
-        CompiledRecordContext, CompiledRowBinding, CompiledSelector, ConsultationPattern,
-        QueryPlan, RowAuthoritySource,
+        CompiledRecordContext, CompiledRowBinding, CompiledSdmxBindingProfile, CompiledSelector,
+        CompiledSpatialBboxQuery, CompiledStatisticalAttribute, CompiledStatisticalDimension,
+        CompiledStatisticalMeasure, CompiledStatisticalTimeDimension, ConsultationPattern,
+        EffectiveClassification, QueryPlan, RowAuthoritySource,
     };
+
+    #[tokio::test]
+    async fn sdmx_sqlite_predicates_preserve_declared_storage_classes() {
+        let temp = tempfile::tempdir().expect("temporary fixture");
+        let database = temp.path().join("statistical-storage.sqlite");
+        materialize_fixture(
+            &database,
+            "CREATE TABLE observations (ref_area, time_period, obs_value, unit_measure);\
+             INSERT INTO observations VALUES\
+                 ('AREA', '2025', 7, 'PERCENT'),\
+                 ('1', '2026', 7.5, 'PERCENT'),\
+                 (1, '2027', 8, 'PERCENT');",
+        )
+        .expect("fixture materializes");
+        let dataset = statistical_dataset(10);
+        let runtime = statistical_runtime(&database, dataset.clone());
+        let prepared = statistical_statement_contract(
+            &dataset,
+            &SqliteRuntimeLimits {
+                request_timeout: Duration::from_secs(2),
+                concurrent_queries: 1,
+            },
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("statistical SQL compiles");
+        assert!(!prepared.contract.sql.contains(" IN ("));
+        assert!(prepared.contract.sql.contains(
+            "typeof(\"ref_area\") = 'text' AND typeof(:stat_0_exact_0) = 'text' AND \"ref_area\" COLLATE BINARY = :stat_0_exact_0"
+        ));
+        assert!(prepared.contract.sql.contains(
+            "ORDER BY \"ref_area\" COLLATE BINARY ASC, \"time_period\" COLLATE BINARY ASC"
+        ));
+
+        let result = runtime
+            .execute_statistical(
+                &dataset.operation_identifier(),
+                statistical_query("1", 0, 10, true),
+                None,
+            )
+            .await
+            .expect("text-exact statistical query executes");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(
+            result.rows[0].get("ref_area"),
+            Some(&StatisticalValue::String("1".into()))
+        );
+        assert_eq!(
+            result.rows[0].get("obs_value"),
+            Some(&StatisticalValue::Decimal(7.5))
+        );
+
+        let integer_measure = runtime
+            .execute_statistical(
+                &dataset.operation_identifier(),
+                statistical_query("AREA", 0, 10, true),
+                None,
+            )
+            .await
+            .expect("integer-backed decimal measure executes");
+        assert_eq!(
+            integer_measure.rows[0].get("obs_value"),
+            Some(&StatisticalValue::Integer(7))
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_sdmx_observation_keys_fail_closed_across_page_boundaries() {
+        let temp = tempfile::tempdir().expect("temporary fixture");
+        let database = temp.path().join("statistical-duplicates.sqlite");
+        materialize_fixture(
+            &database,
+            "CREATE TABLE observations (ref_area TEXT, time_period TEXT, obs_value REAL, unit_measure TEXT);\
+             INSERT INTO observations VALUES\
+                 ('AREA', '2025', 7.0, 'PERCENT'),\
+                 ('AREA', '2025', 8.0, 'PERCENT');",
+        )
+        .expect("fixture materializes");
+        let dataset = statistical_dataset(1);
+        let runtime = statistical_runtime(&database, dataset.clone());
+        let error = runtime
+            .execute_statistical(
+                &dataset.operation_identifier(),
+                statistical_query("AREA", 1, 1, true),
+                None,
+            )
+            .await
+            .expect_err("duplicate key split across pages fails closed");
+        assert!(matches!(error, SqliteRuntimeError::InvalidSourceShape));
+    }
+
+    #[tokio::test]
+    async fn implicit_statistical_limit_probes_one_row_and_fails_categorically() {
+        let temp = tempfile::tempdir().expect("temporary fixture");
+        let database = temp.path().join("statistical-bound.sqlite");
+        materialize_fixture(
+            &database,
+            "CREATE TABLE observations (ref_area TEXT, time_period TEXT, obs_value REAL, unit_measure TEXT);\
+             INSERT INTO observations VALUES\
+                 ('AREA', '2025', 7.0, 'PERCENT'),\
+                 ('AREA', '2026', 8.0, 'PERCENT');",
+        )
+        .expect("fixture materializes");
+        let dataset = statistical_dataset(1);
+        let runtime = statistical_runtime(&database, dataset.clone());
+        let error = runtime
+            .execute_statistical(
+                &dataset.operation_identifier(),
+                statistical_query("AREA", 0, 1, false),
+                None,
+            )
+            .await
+            .expect_err("implicit maximum probes one additional observation");
+        assert!(matches!(error, SqliteRuntimeError::ResultTooLarge));
+    }
+
+    fn statistical_runtime(
+        database: &std::path::Path,
+        dataset: CompiledStatisticalDataset,
+    ) -> SqliteRuntime {
+        let limits = SqliteRuntimeLimits {
+            request_timeout: Duration::from_secs(2),
+            concurrent_queries: 1,
+        };
+        let mut prepared = statistical_statement_contract(
+            &dataset,
+            &limits,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("statistical statement compiles");
+        prepared.contract.schema = None;
+        let snapshot = CapturedSnapshot::capture(database).expect("fixture captures");
+        let revision = SourceRevision::Snapshot(snapshot.digest().to_owned());
+        let statement =
+            ReadOnlyStatement::open(DatabaseProfile::Snapshot(snapshot), prepared.contract)
+                .expect("statistical statement opens");
+        SqliteRuntime {
+            operations: BTreeMap::new(),
+            statistical_operations: BTreeMap::from([(
+                dataset.operation_identifier(),
+                StatisticalExecutor {
+                    statement: Arc::new(statement),
+                    dataset,
+                    source_revision: revision,
+                    observation_count_column: prepared.observation_count_column,
+                },
+            )]),
+            readiness_sources: Vec::new(),
+            admission: Arc::new(Semaphore::new(1)),
+            timeout: limits.request_timeout,
+        }
+    }
+
+    fn statistical_query(area: &str, offset: u32, limit: u32, explicit_limit: bool) -> DataQuery {
+        DataQuery {
+            constraints: BTreeMap::from([(
+                "REF_AREA".into(),
+                crate::sdmx::ComponentConstraint {
+                    exact: vec![StatisticalValue::String(area.into())],
+                    lower: None,
+                    upper: None,
+                },
+            )]),
+            offset,
+            limit,
+            explicit_limit,
+            dimension_at_observation: crate::sdmx::DimensionAtObservation::TimePeriod,
+        }
+    }
+
+    fn statistical_dataset(maximum_observations: u32) -> CompiledStatisticalDataset {
+        let classification = public_classification();
+        CompiledStatisticalDataset {
+            id: "labour-rates".into(),
+            title: "Labour rates".into(),
+            description: "Reviewed aggregate labour rates".into(),
+            sdmx: CompiledSdmxBindingProfile {
+                agency_id: "REGISTRY".into(),
+                dataflow_id: "LABOUR_RATES".into(),
+                version: "1.0.0".into(),
+                data_structure_id: "LABOUR_RATES_DSD".into(),
+                concept_scheme_id: "LABOUR_RATES_CONCEPTS".into(),
+                rest_version: "2.2.2".into(),
+                data_json_version: "2.1.0".into(),
+                data_csv_version: "2.1.0".into(),
+                structure_json_version: "2.1.0".into(),
+            },
+            release_at: "2026-08-10T00:00:00Z".into(),
+            source: "db".into(),
+            view: "observations".into(),
+            dimensions: vec![CompiledStatisticalDimension {
+                id: "REF_AREA".into(),
+                label: "Reference area".into(),
+                description: "Observation area".into(),
+                source_column: "ref_area".into(),
+                data_type: StatisticalValueType::Code,
+                codelist: Some("codelists/areas.yaml".into()),
+                semantic_iri: "https://example.invalid/refArea".into(),
+                classification: classification.clone(),
+            }],
+            time: CompiledStatisticalTimeDimension {
+                id: "TIME_PERIOD".into(),
+                label: "Time period".into(),
+                description: "Annual observation period".into(),
+                source_column: "time_period".into(),
+                granularity: StatisticalTimeGranularity::Annual,
+                semantic_iri: "https://example.invalid/timePeriod".into(),
+                classification: classification.clone(),
+            },
+            measure: CompiledStatisticalMeasure {
+                id: "OBS_VALUE".into(),
+                label: "Observation value".into(),
+                description: "Labour rate".into(),
+                source_column: "obs_value".into(),
+                data_type: StatisticalValueType::Decimal,
+                semantic_iri: "https://example.invalid/obsValue".into(),
+                classification: classification.clone(),
+            },
+            attributes: vec![CompiledStatisticalAttribute {
+                id: "UNIT_MEASURE".into(),
+                label: "Unit".into(),
+                description: "Observation unit".into(),
+                source_column: "unit_measure".into(),
+                data_type: StatisticalValueType::Code,
+                codelist: Some("codelists/units.yaml".into()),
+                source_required: true,
+                semantic_iri: "https://example.invalid/unitMeasure".into(),
+                classification: classification.clone(),
+            }],
+            access: CompiledAccess::Public,
+            allow_unfiltered: true,
+            maximum_observations,
+            maximum_offset: 100,
+            processing_handling: Handling::Public,
+            disclosure_handling: Handling::Public,
+            column_accounting: Vec::new(),
+            processing_descriptions: Vec::new(),
+        }
+    }
+
+    fn public_classification() -> EffectiveClassification {
+        EffectiveClassification {
+            privacy: "non-personal".into(),
+            privacy_scheme: "https://w3id.org/dpv".into(),
+            privacy_version: "2.3".into(),
+            institutional: "public".into(),
+            institutional_scheme: "urn:example:classification".into(),
+            institutional_version: "1".into(),
+            handling: Handling::Public,
+            handling_scheme: "https://id.registrystack.org/vocab/handling".into(),
+            handling_version: "1".into(),
+            status: ReviewStatus::Reviewed,
+            provenance_ref: "governance/classification-review.yaml".into(),
+        }
+    }
 
     #[tokio::test]
     async fn exact_lookup_equality_rejects_collation_and_storage_class_equivalents() {
@@ -933,6 +1773,7 @@ mod tests {
                     source: "source".into(),
                     view: "records".into(),
                     filters: Vec::new(),
+                    spatial_bbox: None,
                     selectors: Vec::new(),
                     order_by: Vec::new(),
                     allow_unfiltered: false,
@@ -1221,6 +2062,7 @@ mod tests {
                 source: "source".into(),
                 view: "records".into(),
                 filters: Vec::new(),
+                spatial_bbox: None,
                 selectors: Vec::new(),
                 order_by: vec!["id".into()],
                 allow_unfiltered: true,
@@ -1231,6 +2073,109 @@ mod tests {
                 maximum_request_body_bytes: None,
             },
         }
+    }
+
+    #[test]
+    fn point_bbox_validation_is_numeric_and_crs84_bounded() {
+        assert!(PointBbox {
+            west: 100.0,
+            south: -20.0,
+            east: 101.0,
+            north: -16.0,
+        }
+        .is_valid());
+        for bbox in [
+            PointBbox {
+                west: f64::NAN,
+                south: 0.0,
+                east: 1.0,
+                north: 1.0,
+            },
+            PointBbox {
+                west: -181.0,
+                south: 0.0,
+                east: 1.0,
+                north: 1.0,
+            },
+            PointBbox {
+                west: 0.0,
+                south: 2.0,
+                east: 1.0,
+                north: 1.0,
+            },
+        ] {
+            assert!(!bbox.is_valid());
+        }
+    }
+
+    #[test]
+    fn point_bbox_refuses_dateline_crossing() {
+        let spatial = CompiledSpatialBboxQuery {
+            longitude_column: "longitude".into(),
+            latitude_column: "latitude".into(),
+            maximum_longitude_span_degrees: 1,
+            maximum_latitude_span_degrees: 1,
+        };
+        assert!(PointBbox {
+            west: 100.0,
+            south: 10.0,
+            east: 101.0,
+            north: 11.0,
+        }
+        .is_within(&spatial));
+        assert!(!PointBbox {
+            west: 177.0,
+            south: -20.0,
+            east: -178.0,
+            north: -16.0,
+        }
+        .is_valid());
+    }
+
+    #[test]
+    fn named_search_requires_one_valid_bounded_bbox_and_list_refuses_it() {
+        let access_profile = access_profile();
+        let mut search = list_operation();
+        search.identifier = "record.search.within-bbox".into();
+        search.kind = OperationKind::Search {
+            name: "within-bbox".into(),
+        };
+        search.pattern = ConsultationPattern::Search;
+        search.query.spatial_bbox = Some(CompiledSpatialBboxQuery {
+            longitude_column: "longitude".into(),
+            latitude_column: "latitude".into(),
+            maximum_longitude_span_degrees: 2,
+            maximum_latitude_span_degrees: 2,
+        });
+        let query = OperationQuery {
+            fetch_limit: Some(11),
+            bbox: Some(PointBbox {
+                west: 100.0,
+                south: -20.0,
+                east: 101.0,
+                north: -19.0,
+            }),
+            ..OperationQuery::default()
+        };
+        let values = bind_operation_values(&search, &access_profile, query.clone())
+            .expect("bounded bbox binds");
+        assert_eq!(values.get("bbox_west"), Some(&Value::Number(100.0)));
+
+        let mut oversized = query.clone();
+        oversized.bbox = Some(PointBbox {
+            west: 100.0,
+            south: -20.0,
+            east: 103.0,
+            north: -19.0,
+        });
+        assert!(matches!(
+            bind_operation_values(&search, &access_profile, oversized),
+            Err(SqliteRuntimeError::InvalidPlan)
+        ));
+        assert!(matches!(
+            bind_operation_values(&list_operation(), &access_profile, query),
+            Err(SqliteRuntimeError::InvalidPlan)
+        ));
     }
 
     fn lookup_operation(
@@ -1251,6 +2196,7 @@ mod tests {
                 source: "source".into(),
                 view: "records".into(),
                 filters: Vec::new(),
+                spatial_bbox: None,
                 selectors: vec![CompiledSelector {
                     name: "key".into(),
                     source_column: source_column.into(),
@@ -1362,6 +2308,7 @@ mod tests {
                 semantic_model_reference: "https://example.invalid/model".into(),
             },
             properties: Vec::new(),
+            primary_geometry: None,
             disclosure_profiles: Vec::new(),
             operations: Vec::new(),
             column_accounting: Vec::new(),

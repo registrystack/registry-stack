@@ -12,10 +12,13 @@ pub mod diff;
 pub mod fixture_contract;
 #[cfg(feature = "tooling")]
 pub mod fixtures;
+pub mod format_capabilities;
 pub mod identification;
 pub mod model;
 pub mod package;
 pub mod problem;
+mod sdmx;
+mod sdmx_http;
 pub mod semantics;
 pub mod server;
 mod source_observation;

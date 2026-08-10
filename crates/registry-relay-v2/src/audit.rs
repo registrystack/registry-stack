@@ -12,7 +12,7 @@ use ulid::Ulid;
 use crate::problem::TraceId;
 use crate::sqlite_runtime::SourceRevision;
 
-pub const AUDIT_SCHEMA: &str = "registry.relay.consultation-audit/v2alpha1";
+pub const AUDIT_SCHEMA: &str = "registry.relay.audit/v2alpha1";
 
 #[derive(Clone)]
 pub struct RelayAudit {
@@ -105,11 +105,15 @@ pub struct AuditContext {
     pub registry_identifier: String,
     pub resource_identifier: Option<String>,
     pub operation_identifier: Option<String>,
+    pub operation_surface: OperationSurface,
+    pub query_shape: Option<QueryShape>,
     pub access_rule_revision: Option<String>,
     pub purpose: Option<String>,
     pub row_boundary_kind: RowBoundaryKind,
     pub access_profile: Option<String>,
     pub disclosure_profile: Option<String>,
+    pub wire_format: Option<String>,
+    pub format_profile: Option<String>,
     pub processing_description_identifiers: Vec<String>,
     pub selected_properties: Vec<String>,
     pub processing_handling: Option<String>,
@@ -118,6 +122,33 @@ pub struct AuditContext {
     pub contract_revision: String,
     pub source_revision: Option<SourceRevision>,
     pub principal_kind: PrincipalKind,
+}
+
+/// Value-free request category. The stable capability identity remains in
+/// `operation_identifier`; this field distinguishes the HTTP action and wire
+/// surface sharing that capability without inventing a second entitlement.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OperationSurface {
+    RecordList,
+    RecordRead,
+    RecordLookup,
+    RecordSearch,
+    SdmxData,
+    SdmxDataflowStructure,
+    SdmxDatastructureStructure,
+    Unknown,
+}
+
+/// The only SDMX request-shape distinctions retained by audit. Component
+/// names, keys, constraints, offsets, limits, and source values remain absent.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum QueryShape {
+    SdmxKeyedTimePeriod,
+    SdmxKeyedAllDimensions,
+    SdmxOmittedKeyTimePeriod,
+    SdmxOmittedKeyAllDimensions,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -174,6 +205,9 @@ struct AuditEvent {
     resource_identifier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     operation_identifier: Option<String>,
+    operation_surface: OperationSurface,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    query_shape: Option<QueryShape>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_rule_revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -183,6 +217,10 @@ struct AuditEvent {
     access_profile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disclosure_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wire_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format_profile: Option<String>,
     processing_description_identifiers: Vec<String>,
     selected_properties: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -212,11 +250,15 @@ impl AuditEvent {
             registry_identifier: context.registry_identifier.clone(),
             resource_identifier: context.resource_identifier.clone(),
             operation_identifier: context.operation_identifier.clone(),
+            operation_surface: context.operation_surface,
+            query_shape: context.query_shape,
             access_rule_revision: context.access_rule_revision.clone(),
             purpose: context.purpose.clone(),
             row_boundary_kind: context.row_boundary_kind,
             access_profile: context.access_profile.clone(),
             disclosure_profile: context.disclosure_profile.clone(),
+            wire_format: context.wire_format.clone(),
+            format_profile: context.format_profile.clone(),
             processing_description_identifiers: context.processing_description_identifiers.clone(),
             selected_properties: context.selected_properties.clone(),
             processing_handling: context.processing_handling.clone(),
@@ -257,11 +299,15 @@ mod tests {
             registry_identifier: "registry-1".into(),
             resource_identifier: Some("record".into()),
             operation_identifier: Some("record.read".into()),
+            operation_surface: OperationSurface::RecordRead,
+            query_shape: None,
             access_rule_revision: Some("sha256:access".into()),
             purpose: None,
             row_boundary_kind: RowBoundaryKind::None,
             access_profile: Some("public".into()),
             disclosure_profile: Some("public".into()),
+            wire_format: None,
+            format_profile: None,
             processing_description_identifiers: Vec::new(),
             selected_properties: vec!["name".into()],
             processing_handling: Some("public".into()),
@@ -279,6 +325,7 @@ mod tests {
         .expect("audit serializes");
 
         assert_eq!(value["accessProfile"], "public");
+        assert_eq!(value["operationSurface"], "record-read");
         assert!(value.get("representation").is_none());
     }
 }

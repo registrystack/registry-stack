@@ -18,8 +18,14 @@ const OIDC_DISCOVERY_SUFFIX: &str = "/.well-known/openid-configuration";
 ///
 /// Property and selector order is authored behavior, while ordinary map
 /// containers would erase both duplicate keys and order before compilation.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderedMap<T>(Vec<(String, T)>);
+
+impl<T> Default for OrderedMap<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
 
 impl<T> OrderedMap<T> {
     pub fn iter(&self) -> impl Iterator<Item = (&str, &T)> {
@@ -128,7 +134,10 @@ pub struct RegistryContract {
     pub semantics: Semantics,
     pub classifications: ClassificationCatalog,
     pub sources: OrderedMap<SourceDefinition>,
+    #[serde(default)]
     pub resources: Vec<ResourceDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statistical_datasets: Vec<StatisticalDatasetDefinition>,
     pub metadata_visibility: MetadataVisibility,
 }
 
@@ -143,22 +152,17 @@ pub(crate) fn runtime_cursor_configuration_is_valid(
     runtime: &RelayRuntime,
 ) -> bool {
     runtime.cursor.is_some()
-        || (!contract
+        || (!contract.resources.iter().any(|resource| {
+            resource.operations.list.is_some() || !resource.operations.searches.is_empty()
+        }) && contract
             .resources
             .iter()
-            .any(|resource| resource.operations.list.is_some())
-            && contract
-                .resources
-                .iter()
-                .filter(|resource| {
-                    resource_can_appear_in_metadata(
-                        resource,
-                        contract.metadata_visibility.resources,
-                    )
-                })
-                .take(2)
-                .count()
-                <= 1)
+            .filter(|resource| {
+                resource_can_appear_in_metadata(resource, contract.metadata_visibility.resources)
+            })
+            .take(2)
+            .count()
+            <= 1)
 }
 
 fn resource_can_appear_in_metadata(resource: &ResourceDefinition, visibility: Visibility) -> bool {
@@ -182,6 +186,12 @@ fn resource_can_appear_in_metadata(resource: &ResourceDefinition, visibility: Vi
                 .map(|(_, item)| &item.access)
         }))
         .chain(resource.operations.lookups.iter().flat_map(|operation| {
+            operation
+                .access_profiles
+                .iter()
+                .map(|(_, item)| &item.access)
+        }))
+        .chain(resource.operations.searches.iter().flat_map(|operation| {
             operation
                 .access_profiles
                 .iter()
@@ -301,6 +311,8 @@ pub struct ResourceDefinition {
     #[serde(default)]
     pub source_column_classifications: OrderedMap<ClassificationPartial>,
     pub properties: OrderedMap<PropertyDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_geometry: Option<String>,
     pub disclosure_profiles: OrderedMap<DisclosureProfile>,
     pub operations: Operations,
     #[serde(default)]
@@ -312,6 +324,143 @@ pub struct ResourceDefinition {
 pub struct ResourceSource {
     pub source: String,
     pub view: String,
+}
+
+/// One governed, pre-aggregated statistical dataset. The authored shape is
+/// independent of the fixed SDMX exchange binding compiled from it.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalDatasetDefinition {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub publication: StatisticalPublication,
+    pub source: ResourceSource,
+    pub classification_defaults: ClassificationPartial,
+    #[serde(default)]
+    pub source_column_classifications: OrderedMap<ClassificationPartial>,
+    pub dimensions: OrderedMap<StatisticalDimensionDefinition>,
+    pub time: StatisticalTimeDimensionDefinition,
+    pub measure: StatisticalMeasureDefinition,
+    #[serde(default)]
+    pub attributes: OrderedMap<StatisticalAttributeDefinition>,
+    pub access: AccessRule,
+    pub query: StatisticalQueryProfile,
+    pub bindings: StatisticalBindings,
+    #[serde(default)]
+    pub processing_descriptions: Vec<ProcessingDescription>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalPublication {
+    pub release_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalDimensionDefinition {
+    pub label: String,
+    pub description: String,
+    pub column: String,
+    #[serde(rename = "type")]
+    pub data_type: StatisticalValueType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<String>,
+    pub concept: String,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalTimeDimensionDefinition {
+    pub label: String,
+    pub description: String,
+    pub column: String,
+    pub granularity: StatisticalTimeGranularity,
+    pub concept: String,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatisticalTimeGranularity {
+    Annual,
+    Quarterly,
+    Monthly,
+    Daily,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalMeasureDefinition {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub column: String,
+    #[serde(rename = "type")]
+    pub data_type: StatisticalValueType,
+    pub concept: String,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalAttributeDefinition {
+    pub label: String,
+    pub description: String,
+    pub column: String,
+    #[serde(rename = "type")]
+    pub data_type: StatisticalValueType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<String>,
+    pub required: bool,
+    pub concept: String,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatisticalValueType {
+    Code,
+    String,
+    Integer,
+    Decimal,
+    Boolean,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalQueryProfile {
+    pub allow_unfiltered: bool,
+    pub maximum_observations: u32,
+    pub maximum_offset: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalBindings {
+    pub sdmx: SdmxBindingDefinition,
+}
+
+/// Optional identity overrides for the fixed compiler-owned SDMX profile.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SdmxBindingDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agency_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dataflow_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_structure_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concept_scheme_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -366,23 +515,240 @@ pub struct CodelistColumnBinding {
     pub codelist: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PropertyDefinition {
     pub label: String,
     pub description: String,
-    pub source_column: String,
-    #[serde(rename = "type")]
-    pub data_type: DataType,
-    #[serde(default)]
-    pub codelist: Option<String>,
     pub source_required: bool,
     pub semantic_term: String,
-    #[serde(default)]
-    pub transform: Option<TransformDefinition>,
-    #[serde(default)]
     pub classification: ClassificationPartial,
+    pub binding: PropertyBindingDefinition,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PropertyBindingDefinition {
+    Scalar(ScalarPropertyBinding),
+    Point(PointPropertyBinding),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScalarPropertyBinding {
+    pub source_column: String,
+    pub data_type: DataType,
+    pub codelist: Option<String>,
+    pub transform: Option<TransformDefinition>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PointPropertyBinding {
+    pub crs: String,
+    pub source: PointSourceDefinition,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PointSourceDefinition {
+    pub longitude_column: String,
+    pub latitude_column: String,
+}
+
+impl PropertyDefinition {
+    #[must_use]
+    pub fn scalar_binding(&self) -> Option<&ScalarPropertyBinding> {
+        match &self.binding {
+            PropertyBindingDefinition::Scalar(binding) => Some(binding),
+            PropertyBindingDefinition::Point(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn point_binding(&self) -> Option<&PointPropertyBinding> {
+        match &self.binding {
+            PropertyBindingDefinition::Point(binding) => Some(binding),
+            PropertyBindingDefinition::Scalar(_) => None,
+        }
+    }
+}
+
+impl Serialize for PropertyDefinition {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("label", &self.label)?;
+        map.serialize_entry("description", &self.description)?;
+        match &self.binding {
+            PropertyBindingDefinition::Scalar(binding) => {
+                map.serialize_entry("sourceColumn", &binding.source_column)?;
+                map.serialize_entry("type", &binding.data_type)?;
+                map.serialize_entry("codelist", &binding.codelist)?;
+                map.serialize_entry("sourceRequired", &self.source_required)?;
+                map.serialize_entry("semanticTerm", &self.semantic_term)?;
+                map.serialize_entry("transform", &binding.transform)?;
+            }
+            PropertyBindingDefinition::Point(binding) => {
+                map.serialize_entry("type", "point")?;
+                map.serialize_entry("crs", &binding.crs)?;
+                map.serialize_entry("source", &binding.source)?;
+                map.serialize_entry("sourceRequired", &self.source_required)?;
+                map.serialize_entry("semanticTerm", &self.semantic_term)?;
+            }
+        }
+        map.serialize_entry("classification", &self.classification)?;
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for PropertyDefinition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(PropertyDefinitionVisitor)
+    }
+}
+
+struct PropertyDefinitionVisitor;
+
+impl<'de> Visitor<'de> for PropertyDefinitionVisitor {
+    type Value = PropertyDefinition;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a closed scalar or point property definition")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut label = None;
+        let mut description = None;
+        let mut source_column = None;
+        let mut property_type = None;
+        let mut codelist = None;
+        let mut source_required = None;
+        let mut semantic_term = None;
+        let mut transform = None;
+        let mut classification = None;
+        let mut crs = None;
+        let mut source = None;
+
+        while let Some(field) = map.next_key::<String>()? {
+            match field.as_str() {
+                "label" => set_once(&mut label, map.next_value()?, "label")?,
+                "description" => set_once(&mut description, map.next_value()?, "description")?,
+                "sourceColumn" => set_once(&mut source_column, map.next_value()?, "sourceColumn")?,
+                "type" => set_once(&mut property_type, map.next_value()?, "type")?,
+                "codelist" => set_once(&mut codelist, map.next_value()?, "codelist")?,
+                "sourceRequired" => {
+                    set_once(&mut source_required, map.next_value()?, "sourceRequired")?
+                }
+                "semanticTerm" => set_once(&mut semantic_term, map.next_value()?, "semanticTerm")?,
+                "transform" => set_once(&mut transform, map.next_value()?, "transform")?,
+                "classification" => {
+                    set_once(&mut classification, map.next_value()?, "classification")?
+                }
+                "crs" => set_once(&mut crs, map.next_value()?, "crs")?,
+                "source" => set_once(&mut source, map.next_value()?, "source")?,
+                _ => return Err(de::Error::unknown_field(&field, PROPERTY_FIELDS)),
+            }
+        }
+
+        let label = label.ok_or_else(|| de::Error::missing_field("label"))?;
+        let description = description.ok_or_else(|| de::Error::missing_field("description"))?;
+        let property_type: String =
+            property_type.ok_or_else(|| de::Error::missing_field("type"))?;
+        let source_required =
+            source_required.ok_or_else(|| de::Error::missing_field("sourceRequired"))?;
+        let semantic_term =
+            semantic_term.ok_or_else(|| de::Error::missing_field("semanticTerm"))?;
+        let classification = classification.unwrap_or_default();
+
+        let binding = if property_type == "point" {
+            if source_column.is_some() || codelist.is_some() || transform.is_some() {
+                return Err(de::Error::custom(
+                    "point properties reject scalar sourceColumn, codelist, and transform fields",
+                ));
+            }
+            PropertyBindingDefinition::Point(PointPropertyBinding {
+                crs: crs.ok_or_else(|| de::Error::missing_field("crs"))?,
+                source: source.ok_or_else(|| de::Error::missing_field("source"))?,
+            })
+        } else {
+            if crs.is_some() || source.is_some() {
+                return Err(de::Error::custom(
+                    "scalar properties reject point crs and source fields",
+                ));
+            }
+            let data_type = match property_type.as_str() {
+                "string" => DataType::String,
+                "boolean" => DataType::Boolean,
+                "integer" => DataType::Integer,
+                "date" => DataType::Date,
+                "date-time" => DataType::DateTime,
+                "year" => DataType::Year,
+                "year-month" => DataType::YearMonth,
+                "controlled-code" => DataType::ControlledCode,
+                _ => return Err(de::Error::unknown_variant(&property_type, PROPERTY_TYPES)),
+            };
+            PropertyBindingDefinition::Scalar(ScalarPropertyBinding {
+                source_column: source_column
+                    .ok_or_else(|| de::Error::missing_field("sourceColumn"))?,
+                data_type,
+                codelist: codelist.unwrap_or_default(),
+                transform: transform.unwrap_or_default(),
+            })
+        };
+
+        Ok(PropertyDefinition {
+            label,
+            description,
+            source_required,
+            semantic_term,
+            classification,
+            binding,
+        })
+    }
+}
+
+fn set_once<T, E>(slot: &mut Option<T>, value: T, field: &'static str) -> Result<(), E>
+where
+    E: de::Error,
+{
+    if slot.replace(value).is_some() {
+        Err(E::duplicate_field(field))
+    } else {
+        Ok(())
+    }
+}
+
+const PROPERTY_FIELDS: &[&str] = &[
+    "label",
+    "description",
+    "sourceColumn",
+    "type",
+    "codelist",
+    "sourceRequired",
+    "semanticTerm",
+    "transform",
+    "classification",
+    "crs",
+    "source",
+];
+
+const PROPERTY_TYPES: &[&str] = &[
+    "string",
+    "boolean",
+    "integer",
+    "date",
+    "date-time",
+    "year",
+    "year-month",
+    "controlled-code",
+    "point",
+];
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -447,6 +813,8 @@ pub struct Operations {
     pub read: Option<RecordOperation>,
     #[serde(default)]
     pub lookups: Vec<LookupOperation>,
+    #[serde(default)]
+    pub searches: Vec<SearchOperation>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -475,6 +843,31 @@ pub struct LookupOperation {
     pub request_body: LookupRequestBody,
     pub default_access_profile: String,
     pub access_profiles: OrderedMap<AccessProfileDefinition>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SearchOperation {
+    pub id: String,
+    pub query: SearchQueryDefinition,
+    pub default_access_profile: String,
+    pub access_profiles: OrderedMap<AccessProfileDefinition>,
+    pub order_by: Vec<String>,
+    pub pagination: Pagination,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum SearchQueryDefinition {
+    PointBbox {
+        maximum_longitude_span_degrees: u16,
+        maximum_latitude_span_degrees: u16,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -623,6 +1016,8 @@ pub struct ProcessingDescription {
 pub struct MetadataVisibility {
     pub service: Visibility,
     pub resources: Visibility,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statistical_datasets: Option<Visibility>,
     pub semantics: Visibility,
     pub classifications: Visibility,
     pub processing: Visibility,
@@ -1055,5 +1450,28 @@ disclosureProfiles: {}
             .replace("defaultAccessProfile", "defaultRepresentation")
             .replace("accessProfiles", "representations");
         assert!(RegistryContract::parse_yaml(&yaml).is_err());
+    }
+
+    #[test]
+    fn statistical_authoring_is_strict_and_roundtrips_without_binding_aliases() {
+        let yaml = crate::compiler::tests::statistical_contract();
+        let contract = RegistryContract::parse_yaml(yaml).expect("statistical contract parses");
+        let serialized = serde_norway::to_string(&contract).expect("contract serializes");
+        assert_eq!(
+            RegistryContract::parse_yaml(&serialized).expect("serialized contract parses"),
+            contract
+        );
+        assert_eq!(contract.statistical_datasets.len(), 1);
+
+        for rejected in [
+            yaml.replacen("statisticalDatasets:", "statisticalDataflows:", 1),
+            yaml.replacen("    bindings: {sdmx: {}}\n", "    bindings: {}\n", 1),
+            yaml.replacen(" granularity: annual,", "", 1),
+        ] {
+            assert!(
+                RegistryContract::parse_yaml(&rejected).is_err(),
+                "unsupported statistical authoring shape must be rejected"
+            );
+        }
     }
 }

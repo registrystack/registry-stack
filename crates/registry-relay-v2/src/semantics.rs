@@ -4,7 +4,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::contract::DataType;
-use crate::model::{CompiledProperty, CompiledRegistry, CompiledResource};
+use crate::model::{CompiledProperty, CompiledPropertyBinding, CompiledRegistry, CompiledResource};
 
 pub fn local_vocabulary(
     registry: &CompiledRegistry,
@@ -19,16 +19,30 @@ pub fn local_vocabulary(
         "rdfs:comment": resource.description,
     }));
     for property in selected_properties(resource, selected) {
-        graph.push(json!({
-            "@id": property.semantic_iri,
-            "@type": "rdf:Property",
-            "rdfs:label": property.label,
-            "rdfs:comment": property.description,
-            "rdfs:domain": {"@id": resource.semantic_class},
-            "rdfs:range": {"@id": datatype_iri(property.data_type)},
-            "https://id.registrystack.org/vocab/sourceRequired": property.source_required,
-            "https://id.registrystack.org/vocab/codelist": property.codelist,
-        }));
+        let item = match &property.binding {
+            CompiledPropertyBinding::Scalar(binding) => json!({
+                "@id": property.semantic_iri,
+                "@type": "rdf:Property",
+                "rdfs:label": property.label,
+                "rdfs:comment": property.description,
+                "rdfs:domain": {"@id": resource.semantic_class},
+                "rdfs:range": {"@id": datatype_iri(binding.data_type)},
+                "https://id.registrystack.org/vocab/sourceRequired": property.source_required,
+                "https://id.registrystack.org/vocab/codelist": binding.codelist,
+            }),
+            CompiledPropertyBinding::Point(binding) => json!({
+                "@id": property.semantic_iri,
+                "@type": "rdf:Property",
+                "rdfs:label": property.label,
+                "rdfs:comment": property.description,
+                "rdfs:domain": {"@id": resource.semantic_class},
+                "rdfs:range": {"@id": "rdf:JSON"},
+                "https://id.registrystack.org/vocab/geometryType": "Point",
+                "https://id.registrystack.org/vocab/coordinateReferenceSystem": binding.crs,
+                "https://id.registrystack.org/vocab/sourceRequired": property.source_required,
+            }),
+        };
+        graph.push(item);
     }
     json!({
         "@context": {
@@ -74,12 +88,16 @@ pub fn json_ld_context(
     );
     context.insert("domainData".into(), json!("@nest"));
     for property in selected_properties(resource, selected) {
+        let data_type = match &property.binding {
+            CompiledPropertyBinding::Scalar(binding) => json!(datatype_iri(binding.data_type)),
+            CompiledPropertyBinding::Point(_) => json!("@json"),
+        };
         context.insert(
             property.name.clone(),
             json!({
                 "@id": property.semantic_iri,
                 "@nest": "domainData",
-                "@type": datatype_iri(property.data_type),
+                "@type": data_type,
             }),
         );
     }
@@ -252,35 +270,52 @@ fn shacl(
         ));
     }
     for property in selected_properties(resource, selected) {
-        let controlled_values = match property.data_type {
-            DataType::ControlledCode => {
-                let path = property.codelist.as_deref().unwrap_or_else(|| {
-                    panic!(
-                        "compiled semantics invariant: controlled property {} has no codelist",
-                        property.name
-                    )
-                });
-                shacl_in(&require_codelist(registry, path).values)
+        match &property.binding {
+            CompiledPropertyBinding::Scalar(binding) => {
+                let controlled_values = match binding.data_type {
+                    DataType::ControlledCode => {
+                        let path = binding.codelist.as_deref().unwrap_or_else(|| {
+                            panic!(
+                                "compiled semantics invariant: controlled property {} has no codelist",
+                                property.name
+                            )
+                        });
+                        shacl_in(&require_codelist(registry, path).values)
+                    }
+                    _ => String::new(),
+                };
+                output.push_str(&format!(
+                    " ;\n  sh:property [ sh:path <{}> ; sh:datatype <{}>{} ; sh:minCount {} ; sh:maxCount 1 ]",
+                    property.semantic_iri,
+                    datatype_iri(binding.data_type),
+                    controlled_values,
+                    usize::from(full && property.source_required)
+                ));
             }
-            _ => String::new(),
-        };
-        output.push_str(&format!(
-            " ;\n  sh:property [ sh:path <{}> ; sh:datatype <{}>{} ; sh:minCount {} ; sh:maxCount 1 ]",
-            property.semantic_iri,
-            datatype_iri(property.data_type),
-            controlled_values,
-            usize::from(full && property.source_required)
-        ));
+            CompiledPropertyBinding::Point(_) => output.push_str(&format!(
+                " ;\n  sh:property [ sh:path <{}> ; sh:datatype <http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> ; sh:minCount {} ; sh:maxCount 1 ]",
+                property.semantic_iri,
+                usize::from(full && property.source_required)
+            )),
+        }
     }
     output.push_str(" .\n");
     output
 }
 
 fn property_schema(registry: &CompiledRegistry, property: &CompiledProperty) -> Value {
-    match property.data_type {
+    let CompiledPropertyBinding::Scalar(binding) = &property.binding else {
+        let CompiledPropertyBinding::Point(binding) = &property.binding else {
+            unreachable!();
+        };
+        let mut schema = point_geometry_schema();
+        schema["x-registry-crs"] = json!(binding.crs);
+        return schema;
+    };
+    match binding.data_type {
         DataType::String => json!({"type": "string"}),
         DataType::ControlledCode => {
-            let path = property.codelist.as_deref().unwrap_or_else(|| {
+            let path = binding.codelist.as_deref().unwrap_or_else(|| {
                 panic!(
                     "compiled semantics invariant: controlled property {} has no codelist",
                     property.name
@@ -304,6 +339,27 @@ fn property_schema(registry: &CompiledRegistry, property: &CompiledProperty) -> 
             "x-registry-datatype": "year-month"
         }),
     }
+}
+
+fn point_geometry_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "coordinates"],
+        "properties": {
+            "type": {"const": "Point"},
+            "coordinates": {
+                "type": "array",
+                "prefixItems": [
+                    {"type": "number", "minimum": -180, "maximum": 180},
+                    {"type": "number", "minimum": -90, "maximum": 90}
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+            }
+        }
+    })
 }
 
 fn require_codelist<'a>(
@@ -391,8 +447,13 @@ mod tests {
         let mut registry = registry();
         registry.codelists.push(codelist("state.yaml", &["ACTIVE"]));
         let mut resource = resource();
-        resource.properties[0].data_type = DataType::ControlledCode;
-        resource.properties[0].codelist = Some("codes.yaml".into());
+        let crate::model::CompiledPropertyBinding::Scalar(binding) =
+            &mut resource.properties[0].binding
+        else {
+            panic!("fixture property is scalar");
+        };
+        binding.data_type = DataType::ControlledCode;
+        binding.codelist = Some("codes.yaml".into());
         let _ = full_record_schema(&registry, &resource);
     }
 
@@ -406,8 +467,13 @@ mod tests {
             .codelists
             .push(codelist("codes.yaml", &["ONE", "TWO"]));
         let mut resource = resource();
-        resource.properties[0].data_type = DataType::ControlledCode;
-        resource.properties[0].codelist = Some("codes.yaml".into());
+        let crate::model::CompiledPropertyBinding::Scalar(binding) =
+            &mut resource.properties[0].binding
+        else {
+            panic!("fixture property is scalar");
+        };
+        binding.data_type = DataType::ControlledCode;
+        binding.codelist = Some("codes.yaml".into());
 
         let schema = full_record_schema(&registry, &resource);
         assert_eq!(
@@ -432,6 +498,80 @@ mod tests {
         assert!(shacl.contains("sh:nodeKind sh:IRI"));
         assert!(shacl.contains("sh:in ( \"ACTIVE\" \"RETIRED\" )"));
         assert!(shacl.contains("sh:in ( \"ONE\" \"TWO\" )"));
+    }
+
+    #[test]
+    fn full_point_artifacts_are_bounded_json_without_carrier_or_geosparql_claims() {
+        let mut registry = registry();
+        registry
+            .codelists
+            .push(codelist("state.yaml", &["ACTIVE", "RETIRED"]));
+        let mut resource = resource();
+        let classification = resource.properties[0].classification.clone();
+        resource.properties.push(CompiledProperty {
+            name: "location".into(),
+            label: "Location".into(),
+            description: "Reviewed Point location".into(),
+            source_required: true,
+            semantic_iri: "https://example.invalid/vocab/location".into(),
+            classification,
+            binding: CompiledPropertyBinding::Point(crate::model::CompiledPointPropertyBinding {
+                crs: "http://www.opengis.net/def/crs/OGC/0/CRS84".into(),
+                longitude_column: "private_longitude_carrier".into(),
+                latitude_column: "private_latitude_carrier".into(),
+            }),
+        });
+        resource.primary_geometry = Some("location".into());
+        let selected = vec!["name".into(), "location".into()];
+
+        let schema = full_record_schema(&registry, &resource);
+        let point = &schema["properties"]["domainData"]["properties"]["location"];
+        assert_eq!(point["properties"]["type"]["const"], "Point");
+        assert_eq!(
+            point["properties"]["coordinates"]["prefixItems"][0]["minimum"],
+            -180
+        );
+        assert_eq!(
+            point["properties"]["coordinates"]["prefixItems"][1]["maximum"],
+            90
+        );
+        assert_eq!(point["properties"]["coordinates"]["items"], false);
+        assert_eq!(
+            point["x-registry-crs"],
+            "http://www.opengis.net/def/crs/OGC/0/CRS84"
+        );
+        let context = json_ld_context(&registry, &resource, &selected);
+        assert_eq!(context["@context"]["location"]["@type"], "@json");
+
+        let vocabulary = local_vocabulary(&registry, &resource, &selected);
+        let vocabulary_property = vocabulary["@graph"]
+            .as_array()
+            .expect("vocabulary graph")
+            .iter()
+            .find(|item| item["@id"] == "https://example.invalid/vocab/location")
+            .expect("Point vocabulary property");
+        assert_eq!(
+            vocabulary_property["https://id.registrystack.org/vocab/geometryType"],
+            "Point"
+        );
+        assert_eq!(
+            vocabulary_property["https://id.registrystack.org/vocab/coordinateReferenceSystem"],
+            "http://www.opengis.net/def/crs/OGC/0/CRS84"
+        );
+        let shacl = full_record_shacl(&registry, &resource);
+        let encoded = format!(
+            "{}\n{}\n{}\n{}",
+            serde_json::to_string(&schema).expect("schema serializes"),
+            serde_json::to_string(&context).expect("context serializes"),
+            serde_json::to_string(&vocabulary).expect("vocabulary serializes"),
+            shacl
+        );
+        assert!(encoded.contains("rdf:JSON"));
+        assert!(encoded.contains("rdf-syntax-ns#JSON"));
+        assert!(encoded.contains("geometryType"));
+        assert!(!encoded.to_ascii_lowercase().contains("geosparql"));
+        assert!(!encoded.contains("private_longitude_carrier"));
+        assert!(!encoded.contains("private_latitude_carrier"));
     }
 
     fn codelist(path: &str, values: &[&str]) -> crate::model::CompiledCodelist {
@@ -467,10 +607,6 @@ mod tests {
                 name: "name".into(),
                 label: "Name".into(),
                 description: "Name".into(),
-                source_column: "name".into(),
-                transform: None,
-                data_type: DataType::String,
-                codelist: None,
                 source_required: true,
                 semantic_iri: "https://example.invalid/vocab/name".into(),
                 classification: EffectiveClassification {
@@ -486,7 +622,16 @@ mod tests {
                     status: ReviewStatus::Reviewed,
                     provenance_ref: "review.yaml".into(),
                 },
+                binding: crate::model::CompiledPropertyBinding::Scalar(
+                    crate::model::CompiledScalarPropertyBinding {
+                        source_column: "name".into(),
+                        transform: None,
+                        data_type: DataType::String,
+                        codelist: None,
+                    },
+                ),
             }],
+            primary_geometry: None,
             disclosure_profiles: Vec::new(),
             operations: Vec::new(),
             column_accounting: Vec::new(),
@@ -521,9 +666,11 @@ mod tests {
             codelists: Vec::new(),
             sources: Vec::new(),
             resources: Vec::new(),
+            statistical_datasets: Vec::new(),
             metadata_visibility: CompiledMetadataVisibility {
                 service: Visibility::Public,
                 resources: Visibility::Public,
+                statistical_datasets: None,
                 semantics: Visibility::Public,
                 classifications: Visibility::Public,
                 processing: Visibility::Public,

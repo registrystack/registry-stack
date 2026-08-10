@@ -166,7 +166,10 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
         output_dir: package,
     })
     .expect("sealed package operation succeeds");
-    assert!(report.is_success(), "acceptance project packages");
+    assert!(
+        report.is_success(),
+        "acceptance project packages: {report:?}"
+    );
 
     let client = Client::builder()
         .no_proxy()
@@ -188,17 +191,28 @@ fn make_business_project_public_only(project: &Path, source: &Path) {
         &fs::read_to_string(&contract_path).expect("business contract reads"),
     )
     .expect("business contract becomes a value");
+    let resources = value
+        .get_mut("resources")
+        .and_then(Value::as_array_mut)
+        .expect("business resources");
+    let business = resources
+        .iter_mut()
+        .find(|resource| resource.get("id").and_then(Value::as_str) == Some("registered-business"))
+        .expect("registered business resource exists");
     for pointer in [
-        "/resources/0/operations/list/accessProfiles",
-        "/resources/0/operations/read/accessProfiles",
+        "/operations/list/accessProfiles",
+        "/operations/read/accessProfiles",
     ] {
-        value
+        business
             .pointer_mut(pointer)
             .and_then(Value::as_object_mut)
             .expect("business access profile map")
             .remove("registrar")
             .expect("registrar access profile exists");
     }
+    resources.retain(|resource| {
+        resource.get("id").and_then(Value::as_str) == Some("registered-business")
+    });
     fs::write(
         &contract_path,
         serde_norway::to_string(&value).expect("public-only contract serializes"),

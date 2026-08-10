@@ -27,8 +27,9 @@ use registry_relay_v2::cursor::CursorKey;
 use registry_relay_v2::model::{
     CapabilityFamily, CompiledAccess, CompiledAccessProfile, CompiledCodelist,
     CompiledDisclosureProfile, CompiledMetadataVisibility, CompiledOperation, CompiledPagination,
-    CompiledProperty, CompiledPurpose, CompiledRecordContext, CompiledRegistry, CompiledResource,
-    CompiledRowBinding, CompiledSelector, CompiledSource, CompiledTransform, ConsultationPattern,
+    CompiledProperty, CompiledPropertyBinding, CompiledPurpose, CompiledRecordContext,
+    CompiledRegistry, CompiledResource, CompiledRowBinding, CompiledScalarPropertyBinding,
+    CompiledSelector, CompiledSource, CompiledTransform, ConsultationPattern,
     EffectiveClassification, OperationKind, QueryPlan, RowAuthoritySource,
 };
 use registry_relay_v2::server::{
@@ -1203,7 +1204,14 @@ async fn metadata_and_artifacts_authorize_each_access_profile_exactly() {
         .artifacts
         .artifacts
         .iter()
-        .find(|artifact| artifact.access_profile_identifier.as_deref() == Some("limited"))
+        .find(|artifact| {
+            matches!(
+                &artifact.access_binding,
+                Some(registry_relay_v2::artifacts::ArtifactAccessBinding::AccessProfile {
+                    identifier
+                }) if identifier == "limited"
+            )
+        })
         .expect("limited access profile artifact");
     let path = format!("/v2/artifacts/{}", limited_artifact.id);
     let caseworker = harness.token(&["registry:caseworker"], "review", "area-a");
@@ -1568,6 +1576,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             source: SOURCE.into(),
             view: "relay_records".into(),
             filters: Vec::new(),
+            spatial_bbox: None,
             selectors: Vec::new(),
             order_by: vec!["record_id".into()],
             allow_unfiltered: true,
@@ -1589,6 +1598,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             source: SOURCE.into(),
             view: "relay_records".into(),
             filters: Vec::new(),
+            spatial_bbox: None,
             selectors: Vec::new(),
             order_by: Vec::new(),
             allow_unfiltered: false,
@@ -1609,6 +1619,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             source: SOURCE.into(),
             view: "relay_records".into(),
             filters: Vec::new(),
+            spatial_bbox: None,
             selectors: vec![CompiledSelector {
                 name: "lookupKey".into(),
                 source_column: "lookup_key".into(),
@@ -1674,6 +1685,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
                     .into(),
             },
             properties: properties(),
+            primary_geometry: None,
             disclosure_profiles: vec![
                 disclosure(
                     "public-disclosure",
@@ -1695,9 +1707,11 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             column_accounting: Vec::new(),
             processing_descriptions: Vec::new(),
         }],
+        statistical_datasets: Vec::new(),
         metadata_visibility: CompiledMetadataVisibility {
             service: Visibility::Public,
             resources: Visibility::Public,
+            statistical_datasets: None,
             semantics: Visibility::Public,
             classifications: Visibility::OperatorOnly,
             processing: Visibility::OperatorOnly,
@@ -1817,10 +1831,6 @@ fn property(
         name: name.into(),
         label: name.into(),
         description: format!("Synthetic {name}"),
-        source_column: source_column.into(),
-        transform,
-        data_type,
-        codelist: None,
         source_required,
         semantic_iri: format!("https://registry.example.invalid/vocabulary/{name}"),
         classification: EffectiveClassification {
@@ -1836,6 +1846,12 @@ fn property(
             status: ReviewStatus::Reviewed,
             provenance_ref: "governance/review.yaml".into(),
         },
+        binding: CompiledPropertyBinding::Scalar(CompiledScalarPropertyBinding {
+            source_column: source_column.into(),
+            transform,
+            data_type,
+            codelist: None,
+        }),
     }
 }
 

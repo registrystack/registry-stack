@@ -71,6 +71,27 @@ struct InspectArgs {
     /// Write compiler-derived, visibly unreviewed starters to this directory.
     #[arg(long, value_name = "DIRECTORY")]
     starters: Option<std::path::PathBuf>,
+
+    /// Generate a format-neutral statistical component starter for this view.
+    #[arg(
+        long,
+        value_name = "VIEW",
+        requires = "starters",
+        requires_all = ["time_column", "measure_column"]
+    )]
+    statistical_view: Option<String>,
+
+    /// Exact source column for the required time-period dimension.
+    #[arg(long, value_name = "COLUMN", requires = "statistical_view")]
+    time_column: Option<String>,
+
+    /// Exact source column for the required observation measure.
+    #[arg(long, value_name = "COLUMN", requires = "statistical_view")]
+    measure_column: Option<String>,
+
+    /// Exact source column to treat as an observation attribute instead of a dimension.
+    #[arg(long, value_name = "COLUMN", requires = "statistical_view")]
+    attribute_column: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
@@ -246,6 +267,72 @@ mod tests {
         assert!(help.contains("--profile <PROFILE>"));
         assert!(help.contains("live-read-only"));
         assert!(help.contains("snapshot"));
+        assert!(help.contains("--statistical-view"));
+        assert!(help.contains("--time-column"));
+        assert!(help.contains("--measure-column"));
+        assert!(help.contains("--attribute-column"));
+        assert!(help.contains("format-neutral statistical component starter"));
+    }
+
+    #[test]
+    fn statistical_starter_selection_is_explicit_and_complete() {
+        let cli = Cli::try_parse_from([
+            "relayctl",
+            "inspect",
+            "registry.sqlite",
+            "--starters",
+            "generated",
+            "--statistical-view",
+            "published_rates",
+            "--time-column",
+            "time_period",
+            "--measure-column",
+            "obs_value",
+            "--attribute-column",
+            "unit_measure",
+        ])
+        .expect("statistical starter request parses");
+        let Command::Inspect(args) = cli.command else {
+            panic!("inspect command is retained");
+        };
+        assert_eq!(args.statistical_view.as_deref(), Some("published_rates"));
+        assert_eq!(args.time_column.as_deref(), Some("time_period"));
+        assert_eq!(args.measure_column.as_deref(), Some("obs_value"));
+        assert_eq!(args.attribute_column, ["unit_measure"]);
+        assert_eq!(
+            args.starters.as_deref(),
+            Some(std::path::Path::new("generated"))
+        );
+
+        for arguments in [
+            vec![
+                "relayctl",
+                "inspect",
+                "registry.sqlite",
+                "--starters",
+                "generated",
+                "--statistical-view",
+                "published_rates",
+            ],
+            vec![
+                "relayctl",
+                "inspect",
+                "registry.sqlite",
+                "--statistical-view",
+                "published_rates",
+                "--time-column",
+                "time_period",
+                "--measure-column",
+                "obs_value",
+            ],
+        ] {
+            let error = Cli::try_parse_from(arguments)
+                .expect_err("a partial statistical starter request is refused");
+            assert_eq!(
+                error.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument
+            );
+        }
     }
 
     #[test]

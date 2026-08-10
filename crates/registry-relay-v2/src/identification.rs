@@ -287,6 +287,7 @@ pub struct ClassificationInventoryReport {
     pub registry_identifier: String,
     pub classification_inventory_digest: String,
     pub resources: Vec<ResourceClassificationInventory>,
+    pub statistical_datasets: Vec<StatisticalDatasetClassificationInventory>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -311,9 +312,40 @@ pub struct SourceColumnClassificationInventory {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PropertyClassificationInventory {
     pub property: String,
-    pub source_column: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_column: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point: Option<PointPropertyClassificationInventory>,
     pub semantic_term: String,
     pub transform: Option<String>,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PointPropertyClassificationInventory {
+    pub crs: String,
+    pub longitude_column: String,
+    pub latitude_column: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalDatasetClassificationInventory {
+    pub statistical_dataset: String,
+    pub source: String,
+    pub view: String,
+    pub source_columns: Vec<SourceColumnClassificationInventory>,
+    pub components: Vec<StatisticalComponentClassificationInventory>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalComponentClassificationInventory {
+    pub component: String,
+    pub role: String,
+    pub source_column: String,
+    pub semantic_term: String,
     pub classification: EffectiveClassification,
 }
 
@@ -339,15 +371,34 @@ pub fn classification_inventory_report(
             let mut properties = resource
                 .properties
                 .iter()
-                .map(|property| PropertyClassificationInventory {
-                    property: property.name.clone(),
-                    source_column: property.source_column.clone(),
-                    semantic_term: property.semantic_iri.clone(),
-                    transform: property
-                        .transform
-                        .as_ref()
-                        .map(|transform| transform.identifier().to_owned()),
-                    classification: property.classification.clone(),
+                .map(|property| {
+                    let (source_column, point, transform) = match &property.binding {
+                        crate::model::CompiledPropertyBinding::Scalar(binding) => (
+                            Some(binding.source_column.clone()),
+                            None,
+                            binding
+                                .transform
+                                .as_ref()
+                                .map(|transform| transform.identifier().to_owned()),
+                        ),
+                        crate::model::CompiledPropertyBinding::Point(binding) => (
+                            None,
+                            Some(PointPropertyClassificationInventory {
+                                crs: binding.crs.clone(),
+                                longitude_column: binding.longitude_column.clone(),
+                                latitude_column: binding.latitude_column.clone(),
+                            }),
+                            None,
+                        ),
+                    };
+                    PropertyClassificationInventory {
+                        property: property.name.clone(),
+                        source_column,
+                        point,
+                        semantic_term: property.semantic_iri.clone(),
+                        transform,
+                        classification: property.classification.clone(),
+                    }
                 })
                 .collect::<Vec<_>>();
             properties.sort_by(|left, right| left.property.cmp(&right.property));
@@ -361,12 +412,81 @@ pub fn classification_inventory_report(
         })
         .collect::<Vec<_>>();
     resources.sort_by(|left, right| left.resource.cmp(&right.resource));
+    let mut statistical_datasets = registry
+        .statistical_datasets
+        .iter()
+        .map(|dataset| {
+            let mut source_columns = dataset
+                .column_accounting
+                .iter()
+                .map(|column| SourceColumnClassificationInventory {
+                    source_column: column.column.clone(),
+                    uses: column.uses.clone(),
+                    classification: column.classification.clone(),
+                })
+                .collect::<Vec<_>>();
+            source_columns.sort_by(|left, right| left.source_column.cmp(&right.source_column));
+            let mut components = dataset
+                .dimensions
+                .iter()
+                .map(|component| StatisticalComponentClassificationInventory {
+                    component: component.id.clone(),
+                    role: "dimension".into(),
+                    source_column: component.source_column.clone(),
+                    semantic_term: component.semantic_iri.clone(),
+                    classification: component.classification.clone(),
+                })
+                .chain(std::iter::once(
+                    StatisticalComponentClassificationInventory {
+                        component: dataset.time.id.clone(),
+                        role: "time".into(),
+                        source_column: dataset.time.source_column.clone(),
+                        semantic_term: dataset.time.semantic_iri.clone(),
+                        classification: dataset.time.classification.clone(),
+                    },
+                ))
+                .chain(std::iter::once(
+                    StatisticalComponentClassificationInventory {
+                        component: dataset.measure.id.clone(),
+                        role: "measure".into(),
+                        source_column: dataset.measure.source_column.clone(),
+                        semantic_term: dataset.measure.semantic_iri.clone(),
+                        classification: dataset.measure.classification.clone(),
+                    },
+                ))
+                .chain(dataset.attributes.iter().map(|component| {
+                    StatisticalComponentClassificationInventory {
+                        component: component.id.clone(),
+                        role: "attribute".into(),
+                        source_column: component.source_column.clone(),
+                        semantic_term: component.semantic_iri.clone(),
+                        classification: component.classification.clone(),
+                    }
+                }))
+                .collect::<Vec<_>>();
+            components.sort_by(|left, right| {
+                left.role
+                    .cmp(&right.role)
+                    .then(left.component.cmp(&right.component))
+            });
+            StatisticalDatasetClassificationInventory {
+                statistical_dataset: dataset.id.clone(),
+                source: dataset.source.clone(),
+                view: dataset.view.clone(),
+                source_columns,
+                components,
+            }
+        })
+        .collect::<Vec<_>>();
+    statistical_datasets
+        .sort_by(|left, right| left.statistical_dataset.cmp(&right.statistical_dataset));
     Ok(ClassificationInventoryReport {
         api_version: "relay.registrystack.org/classification-inventory/v1".into(),
         kind: "ClassificationInventory".into(),
         registry_identifier: registry.registry_identifier.clone(),
         classification_inventory_digest: classification_inventory_digest.into(),
         resources,
+        statistical_datasets,
     })
 }
 
@@ -384,6 +504,22 @@ pub struct AccessProfileReport {
     pub registry_identifier: String,
     pub classification_inventory_digest: String,
     pub resources: Vec<ResourceAccessProfileReport>,
+    pub statistical_datasets: Vec<StatisticalDatasetAccessBoundary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalDatasetAccessBoundary {
+    pub dataset: String,
+    pub source: String,
+    pub view: String,
+    pub operation: String,
+    pub fixed_access: CompiledAccess,
+    pub bindings: Vec<String>,
+    pub processed_source_columns: Vec<String>,
+    pub disclosed_components: Vec<String>,
+    pub processing_handling: Handling,
+    pub disclosure_handling: Handling,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -468,12 +604,48 @@ pub fn access_profile_report(
         })
         .collect::<Vec<_>>();
     resources.sort_by(|left, right| left.resource.cmp(&right.resource));
+    let mut statistical_datasets = registry
+        .statistical_datasets
+        .iter()
+        .map(|dataset| StatisticalDatasetAccessBoundary {
+            dataset: dataset.id.clone(),
+            source: dataset.source.clone(),
+            view: dataset.view.clone(),
+            operation: dataset.operation_identifier(),
+            fixed_access: dataset.access.clone(),
+            bindings: vec!["sdmx".into()],
+            processed_source_columns: sorted_unique(
+                dataset
+                    .column_accounting
+                    .iter()
+                    .map(|column| column.column.clone()),
+            ),
+            disclosed_components: sorted_unique(
+                dataset
+                    .dimensions
+                    .iter()
+                    .map(|component| component.id.clone())
+                    .chain(std::iter::once(dataset.time.id.clone()))
+                    .chain(std::iter::once(dataset.measure.id.clone()))
+                    .chain(
+                        dataset
+                            .attributes
+                            .iter()
+                            .map(|component| component.id.clone()),
+                    ),
+            ),
+            processing_handling: dataset.processing_handling,
+            disclosure_handling: dataset.disclosure_handling,
+        })
+        .collect::<Vec<_>>();
+    statistical_datasets.sort_by(|left, right| left.dataset.cmp(&right.dataset));
     Ok(AccessProfileReport {
         api_version: "relay.registrystack.org/access-profile-report/v1".into(),
         kind: "AccessProfileReport".into(),
         registry_identifier: registry.registry_identifier.clone(),
         classification_inventory_digest: classification_inventory_digest.into(),
         resources,
+        statistical_datasets,
     })
 }
 
@@ -568,7 +740,7 @@ pub fn contextual_review_findings(
                 linkable.iter().map(|property| property.name.clone()),
                 linkable
                     .iter()
-                    .map(|property| property.source_column.clone()),
+                    .flat_map(|property| property.source_columns().map(str::to_owned)),
                 "multiple properties may become linkable in combination",
             );
         }
@@ -593,20 +765,22 @@ pub fn contextual_review_findings(
                     .map(|property| property.name.clone()),
                 personal_public
                     .iter()
-                    .map(|property| property.source_column.clone()),
+                    .flat_map(|property| property.source_columns().map(str::to_owned)),
                 "personal properties have public institutional classification and require an explicit publication basis review",
             );
         }
 
-        for property in resource
-            .properties
-            .iter()
-            .filter(|property| property.transform.is_some())
-        {
+        for property in &resource.properties {
+            let Some(binding) = property
+                .scalar_binding()
+                .filter(|binding| binding.transform.is_some())
+            else {
+                continue;
+            };
             let source = resource
                 .column_accounting
                 .iter()
-                .find(|column| column.column == property.source_column);
+                .find(|column| column.column == binding.source_column);
             if source.is_some_and(|column| {
                 column.classification.handling > property.classification.handling
             }) {
@@ -617,7 +791,7 @@ pub fn contextual_review_findings(
                     None,
                     None,
                     [property.name.clone()],
-                    [property.source_column.clone()],
+                    [binding.source_column.clone()],
                     "a transformed property has weaker handling than its source column",
                 );
             }
@@ -625,10 +799,12 @@ pub fn contextual_review_findings(
 
         let mut properties_by_column: BTreeMap<&str, Vec<_>> = BTreeMap::new();
         for property in &resource.properties {
-            properties_by_column
-                .entry(&property.source_column)
-                .or_default()
-                .push(property);
+            for source_column in property.source_columns() {
+                properties_by_column
+                    .entry(source_column)
+                    .or_default()
+                    .push(property);
+            }
         }
         for (column, properties) in properties_by_column {
             let incompatible = properties.iter().enumerate().any(|(index, left)| {
@@ -677,8 +853,10 @@ pub fn contextual_review_findings(
                         "one or more selectors are more restrictive than disclosed properties",
                     );
                 }
-                if matches!(operation.kind, OperationKind::List)
-                    && access_profile.disclosure_handling >= Handling::Confidential
+                if matches!(
+                    operation.kind,
+                    OperationKind::List | OperationKind::Search { .. }
+                ) && access_profile.disclosure_handling >= Handling::Confidential
                 {
                     push_finding(
                         &mut findings,
@@ -715,6 +893,41 @@ pub fn contextual_review_findings(
                     }
                 }
             }
+        }
+    }
+    for dataset in &registry.statistical_datasets {
+        if dataset.processing_handling > dataset.disclosure_handling {
+            findings.push(ContextualReviewFinding {
+                code: "classification.context.statistics_processing_exceeds_disclosure".into(),
+                status: ContextualFindingStatus::ReviewRequired,
+                resource: dataset.id.clone(),
+                operation: Some(dataset.operation_identifier()),
+                access_profile: None,
+                properties: sorted_unique(
+                    dataset
+                        .dimensions
+                        .iter()
+                        .map(|component| component.id.clone())
+                        .chain(std::iter::once(dataset.time.id.clone()))
+                        .chain(std::iter::once(dataset.measure.id.clone()))
+                        .chain(
+                            dataset
+                                .attributes
+                                .iter()
+                                .map(|component| component.id.clone()),
+                        ),
+                ),
+                source_columns: sorted_unique(
+                    dataset
+                        .column_accounting
+                        .iter()
+                        .filter(|column| {
+                            column.classification.handling > dataset.disclosure_handling
+                        })
+                        .map(|column| column.column.clone()),
+                ),
+                message: "the statistical query processes source columns with stronger handling than the disclosed components".into(),
+            });
         }
     }
     findings.sort_by(|left, right| {
@@ -1179,36 +1392,60 @@ fn authored_hints(contract: &RegistryContract) -> BTreeMap<(String, String, Stri
         );
 
         for (property_name, property) in resource.properties.iter() {
-            let entry = column_hint(&mut hints, source, view, &property.source_column);
-            entry.roles.insert(AuthoredRole::Property);
-            entry
-                .properties
-                .insert((property_name.into(), property.semantic_term.clone()));
-            if property.codelist.is_some() {
-                entry.roles.insert(AuthoredRole::Codelist);
-                entry.codelist = true;
+            match &property.binding {
+                crate::contract::PropertyBindingDefinition::Scalar(binding) => {
+                    let entry = column_hint(&mut hints, source, view, &binding.source_column);
+                    entry.roles.insert(AuthoredRole::Property);
+                    entry
+                        .properties
+                        .insert((property_name.into(), property.semantic_term.clone()));
+                    if binding.codelist.is_some() {
+                        entry.roles.insert(AuthoredRole::Codelist);
+                        entry.codelist = true;
+                    }
+                }
+                crate::contract::PropertyBindingDefinition::Point(binding) => {
+                    for source_column in [
+                        &binding.source.longitude_column,
+                        &binding.source.latitude_column,
+                    ] {
+                        let entry = column_hint(&mut hints, source, view, source_column);
+                        entry.roles.insert(AuthoredRole::Property);
+                        entry
+                            .properties
+                            .insert((property_name.into(), property.semantic_term.clone()));
+                    }
+                }
             }
         }
 
         if let Some(operation) = &resource.operations.list {
             for filter in &operation.filters {
-                if let Some(property) = resource.properties.get(&filter.property) {
+                if let Some(binding) = resource
+                    .properties
+                    .get(&filter.property)
+                    .and_then(|property| property.scalar_binding())
+                {
                     add_role(
                         &mut hints,
                         source,
                         view,
-                        &property.source_column,
+                        &binding.source_column,
                         AuthoredRole::Filter,
                     );
                 }
             }
             for property_name in &operation.order_by {
-                if let Some(property) = resource.properties.get(property_name) {
+                if let Some(binding) = resource
+                    .properties
+                    .get(property_name)
+                    .and_then(|property| property.scalar_binding())
+                {
                     add_role(
                         &mut hints,
                         source,
                         view,
-                        &property.source_column,
+                        &binding.source_column,
                         AuthoredRole::Order,
                     );
                 }
@@ -1526,6 +1763,7 @@ fn operation_kind(kind: &OperationKind) -> String {
         OperationKind::List => "list".into(),
         OperationKind::Read => "read".into(),
         OperationKind::Lookup { name } => format!("lookup:{name}"),
+        OperationKind::Search { name } => format!("search:{name}"),
     }
 }
 
@@ -1546,6 +1784,10 @@ fn processed_columns(
             .map(|filter| filter.source_column.clone()),
     );
     columns.extend(operation.query.order_by.iter().cloned());
+    if let Some(spatial) = &operation.query.spatial_bbox {
+        columns.insert(spatial.longitude_column.clone());
+        columns.insert(spatial.latitude_column.clone());
+    }
     columns.extend(
         operation
             .query
@@ -1580,9 +1822,15 @@ fn disclosed_source_columns(
         if let Some(property) = resource
             .properties
             .iter()
-            .find(|property| property.name == *name && property.transform.is_none())
+            .find(|property| property.name == *name)
         {
-            columns.insert(property.source_column.clone());
+            match property.scalar_binding() {
+                Some(binding) if binding.transform.is_none() => {
+                    columns.insert(binding.source_column.clone());
+                }
+                Some(_) => {}
+                None => columns.extend(property.source_columns().map(str::to_owned)),
+            }
         }
     }
     columns

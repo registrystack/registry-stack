@@ -10,7 +10,15 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::contract::Visibility;
+use crate::format_capabilities::{
+    response_format_capabilities, supports_geojson, CRS84_URI, JSON_FG_CORE_CONFORMANCE,
+    JSON_FG_TYPES_CONFORMANCE,
+};
 use crate::model::{CompiledAccess, CompiledRegistry, OperationKind};
+use crate::sdmx::{
+    serialize_structure_json, StructureKind, DATA_CSV_MEDIA_TYPE, DATA_JSON_MEDIA_TYPE,
+    STRUCTURE_JSON_MEDIA_TYPE,
+};
 use crate::semantics::{
     access_profile_schema, access_profile_shacl, full_record_schema, full_record_shacl,
     json_ld_context, local_vocabulary,
@@ -37,14 +45,27 @@ pub struct GeneratedArtifact {
     pub path: String,
     pub media_type: String,
     pub visibility: Visibility,
-    /// Present only for operation-bound artifacts. The HTTP layer must mount
-    /// the artifact behind this exact compiled operation's static access gate.
+    /// Present for operation-bound Record artifacts and every statistical
+    /// structure artifact. The HTTP layer uses the latter ownership link to
+    /// prove it serves bytes generated for the exact parent capability.
     pub operation_identifier: Option<String>,
-    /// Present with `operation_identifier` when an operation-bound artifact
-    /// belongs to one exact finite access profile.
-    pub access_profile_identifier: Option<String>,
+    /// Records bind to one finite access profile when operation-bound;
+    /// statistical structures always bind to their dataset's fixed operation.
+    pub access_binding: Option<ArtifactAccessBinding>,
     pub sha256: String,
     pub content: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum ArtifactAccessBinding {
+    AccessProfile { identifier: String },
+    FixedOperation,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -66,6 +87,8 @@ pub enum ArtifactError {
     CanonicalJson,
     #[error("a compiled operation refers to a missing disclosure profile")]
     MissingDisclosure,
+    #[error("a compiled statistical structure could not be serialized")]
+    StatisticalStructure,
 }
 
 pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, ArtifactError> {
@@ -256,6 +279,24 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                         &access_profile.semantic_model_reference,
                     ),
                 )?;
+                if supports_geojson(resource, access_profile) {
+                    push_access_profile_json(
+                        &mut artifacts,
+                        &format!("{suffix}-geojson-schema"),
+                        &format!("artifacts/{suffix}.geojson.schema.json"),
+                        "application/schema+json",
+                        semantic_visibility,
+                        &operation.identifier,
+                        &access_profile.id,
+                        &geojson_response_schema(
+                            registry,
+                            operation,
+                            access_profile,
+                            resource,
+                            true,
+                        ),
+                    )?;
+                }
                 push_access_profile_text(
                     &mut artifacts,
                     &format!("{suffix}-shacl"),
@@ -291,7 +332,8 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                             .map(|property| json!({
                                 "property": property.name,
                                 "classification": property.classification,
-                                "transform": property.transform,
+                                "transform": property.scalar_binding()
+                                    .and_then(|binding| binding.transform.as_ref()),
                             }))
                             .collect::<Vec<_>>(),
                     }),
@@ -337,11 +379,15 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
         let codelists = resource
             .properties
             .iter()
-            .filter_map(|property| property.codelist.as_ref())
+            .filter_map(|property| {
+                property
+                    .scalar_binding()
+                    .and_then(|binding| binding.codelist.as_deref())
+            })
             .chain(std::iter::once(
-                &resource.record_context.lifecycle_state_codelist,
+                resource.record_context.lifecycle_state_codelist.as_str(),
             ))
-            .cloned()
+            .map(str::to_owned)
             .collect::<BTreeSet<_>>();
         for (index, codelist) in codelists.into_iter().enumerate() {
             push_json(
@@ -358,6 +404,37 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                     "x-registry-codelist": codelist,
                 }),
             )?;
+        }
+    }
+
+    for dataset in &registry.statistical_datasets {
+        let visibility = projection_visibility(
+            registry
+                .metadata_visibility
+                .statistical_datasets
+                .unwrap_or(Visibility::OperatorOnly),
+            &dataset.access,
+        );
+        let operation_identifier = dataset.operation_identifier();
+        for (kind, id_suffix, path_suffix) in [
+            (StructureKind::Dataflow, "dataflow", "sdmx.dataflow.json"),
+            (
+                StructureKind::DataStructure,
+                "datastructure",
+                "sdmx.datastructure.json",
+            ),
+        ] {
+            let content = serialize_structure_json(dataset, kind)
+                .map_err(|_| ArtifactError::StatisticalStructure)?;
+            push_fixed_operation_text(
+                &mut artifacts,
+                &format!("{}-sdmx-{id_suffix}-structure", dataset.id),
+                &format!("artifacts/{}.{path_suffix}", dataset.id),
+                STRUCTURE_JSON_MEDIA_TYPE,
+                visibility,
+                &operation_identifier,
+                content,
+            );
         }
     }
 
@@ -392,6 +469,7 @@ fn operation_contract_reference(kind: &OperationKind) -> String {
         OperationKind::List => "list".into(),
         OperationKind::Read => "read".into(),
         OperationKind::Lookup { name } => format!("lookup:{name}"),
+        OperationKind::Search { name } => format!("search:{name}"),
     }
 }
 
@@ -400,6 +478,7 @@ fn operation_artifact_stem(resource: &str, kind: &OperationKind) -> String {
         OperationKind::List => format!("{resource}--list"),
         OperationKind::Read => format!("{resource}--read"),
         OperationKind::Lookup { name } => format!("{resource}--lookup-{name}"),
+        OperationKind::Search { name } => format!("{resource}--search-{name}"),
     }
 }
 
@@ -461,7 +540,9 @@ fn push_access_profile_json(
     artifacts
         .last_mut()
         .expect("an access-profile artifact was appended")
-        .access_profile_identifier = bound.then(|| access_profile_identifier.to_owned());
+        .access_binding = bound.then(|| ArtifactAccessBinding::AccessProfile {
+        identifier: access_profile_identifier.to_owned(),
+    });
     Ok(())
 }
 
@@ -489,7 +570,34 @@ fn push_access_profile_text(
     artifacts
         .last_mut()
         .expect("an access-profile artifact was appended")
-        .access_profile_identifier = bound.then(|| access_profile_identifier.to_owned());
+        .access_binding = bound.then(|| ArtifactAccessBinding::AccessProfile {
+        identifier: access_profile_identifier.to_owned(),
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_fixed_operation_text(
+    artifacts: &mut Vec<GeneratedArtifact>,
+    id: &str,
+    path: &str,
+    media_type: &str,
+    visibility: Visibility,
+    operation_identifier: &str,
+    content: Vec<u8>,
+) {
+    push_text(
+        artifacts,
+        id,
+        path,
+        media_type,
+        visibility,
+        Some(operation_identifier.to_owned()),
+        content,
+    );
+    artifacts
+        .last_mut()
+        .expect("a fixed-operation artifact was appended")
+        .access_binding = Some(ArtifactAccessBinding::FixedOperation);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -508,7 +616,7 @@ fn push_text(
         media_type: media_type.into(),
         visibility,
         operation_identifier,
-        access_profile_identifier: None,
+        access_binding: None,
         sha256: format!("sha256:{}", hex::encode(Sha256::digest(&content))),
         content,
     });
@@ -619,6 +727,11 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     format!("/v2/resources/{}/lookups/{name}", resource.id),
                     "search",
                 ),
+                OperationKind::Search { name } => (
+                    "get",
+                    format!("/v2/resources/{}/searches/{name}", resource.id),
+                    "search",
+                ),
             };
             let has_public = visible_access_profiles
                 .iter()
@@ -665,8 +778,18 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "description": "Duplicate-free comma-separated subset of the selected access profile"
                 }),
             ];
+            let has_geojson = visible_access_profiles
+                .iter()
+                .any(|access_profile| supports_geojson(resource, access_profile));
+            if has_geojson {
+                parameters.push(json!({
+                    "name": "formatProfile", "in": "query", "required": false,
+                    "schema": {"type": "string", "enum": ["rfc7946", "jsonfg"], "default": "rfc7946"},
+                    "description": "GeoJSON response profile; valid only when application/geo+json is selected"
+                }));
+            }
             match &operation.kind {
-                OperationKind::List => {
+                OperationKind::List | OperationKind::Search { .. } => {
                     let pagination = operation
                         .query
                         .pagination
@@ -681,6 +804,21 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                             "required": false,
                             "schema": openapi_type(filter.data_type),
                             "x-registry-exact-equality": true,
+                        }));
+                    }
+                    if let Some(spatial) = &operation.query.spatial_bbox {
+                        parameters.push(json!({
+                            "name": "bbox", "in": "query", "required": false,
+                            "schema": {"type": "string", "minLength": 7, "maxLength": 256},
+                            "description": format!(
+                                "Required on the first page and mutually exclusive with cursor. CRS84 west,south,east,north bounds with maximum spans {} by {} degrees",
+                                spatial.maximum_longitude_span_degrees,
+                                spatial.maximum_latitude_span_degrees,
+                            ),
+                            "x-registry-crs": CRS84_URI,
+                            "x-registry-inclusive": true,
+                            "x-registry-required-on-first-page": true,
+                            "x-registry-mutually-exclusive-with": "cursor",
                         }));
                     }
                 }
@@ -704,10 +842,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "schemaReference": access_profile.schema_reference,
                     "semanticModelReference": access_profile.semantic_model_reference,
                     "contextReference": access_profile.context_reference,
-                    "wireFormats": [
-                        {"id": "json", "mediaType": "application/json", "formatProfiles": []},
-                        {"id": "json-ld", "mediaType": "application/ld+json", "formatProfiles": []},
-                    ],
+                    "wireFormats": response_format_capabilities(resource, access_profile),
                 })).collect::<Vec<_>>(),
                 "security": security,
                 "parameters": parameters,
@@ -722,6 +857,30 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "default": {"$ref": "#/components/responses/Problem"}
                 }
             });
+            if has_geojson {
+                let schemas = visible_access_profiles
+                    .iter()
+                    .filter(|access_profile| supports_geojson(resource, access_profile))
+                    .map(|access_profile| {
+                        geojson_response_schema(
+                            registry,
+                            operation,
+                            access_profile,
+                            resource,
+                            false,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let schema = if schemas.len() == 1 {
+                    schemas.into_iter().next().expect("one GeoJSON schema")
+                } else {
+                    json!({"anyOf": schemas})
+                };
+                operation_value["responses"]["200"]["content"]
+                    .as_object_mut()
+                    .expect("OpenAPI response content object")
+                    .insert("application/geo+json".into(), json!({"schema": schema}));
+            }
             let source_is_snapshot = registry
                 .sources
                 .iter()
@@ -802,6 +961,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 .insert(method.into(), operation_value);
         }
     }
+    add_statistical_openapi_paths(registry, public_only, &mut paths);
     paths.insert(
         "/v2/artifacts/{artifactIdentifier}".into(),
         json!({"get": {
@@ -824,7 +984,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
         "info": {
             "title": registry.registry_name,
             "version": registry.contract_version,
-            "description": "Generated Registry Relay Consultation API. This document makes no conformance or certification claim."
+            "description": "Generated Registry Relay read API. Its SDMX routes are a bounded aligned subset and make no conformance or certification claim."
         },
         "servers": [{"url": registry.base_uri}],
         "paths": paths,
@@ -870,6 +1030,174 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
     })
 }
 
+fn add_statistical_openapi_paths(
+    registry: &CompiledRegistry,
+    public_only: bool,
+    paths: &mut Map<String, Value>,
+) {
+    for dataset in &registry.statistical_datasets {
+        let visibility = projection_visibility(
+            registry
+                .metadata_visibility
+                .statistical_datasets
+                .unwrap_or(Visibility::OperatorOnly),
+            &dataset.access,
+        );
+        if public_only && visibility != Visibility::Public {
+            continue;
+        }
+
+        let parent_operation = dataset.operation_identifier();
+        let security = if matches!(&dataset.access, CompiledAccess::Public) {
+            json!([])
+        } else {
+            json!([{"bearerAuth": []}])
+        };
+        let mut data_parameters = vec![
+            json!({
+                "name": "offset", "in": "query", "required": false,
+                "schema": {"type": "integer", "minimum": 0, "maximum": dataset.maximum_offset, "default": 0}
+            }),
+            json!({
+                "name": "limit", "in": "query", "required": false,
+                "schema": {"type": "integer", "minimum": 1, "maximum": dataset.maximum_observations, "default": dataset.maximum_observations}
+            }),
+            json!({
+                "name": "dimensionAtObservation", "in": "query", "required": false,
+                "schema": {"type": "string", "enum": [dataset.time.id, "AllDimensions"], "default": dataset.time.id}
+            }),
+        ];
+        data_parameters.extend(dataset.dimensions.iter().map(|dimension| {
+            json!({
+                "name": format!("c[{}]", dimension.id), "in": "query", "required": false,
+                "schema": {"type": "string", "minLength": 1}
+            })
+        }));
+        data_parameters.push(json!({
+            "name": format!("c[{}]", dataset.time.id), "in": "query", "required": false,
+            "schema": {"type": "string", "minLength": 1}
+        }));
+
+        let data_base = format!(
+            "/sdmx/v2/data/dataflow/{}/{}/{}",
+            dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+        );
+        for (path, suffix, keyed) in [
+            (format!("{data_base}/{{key}}"), "data.keyed", true),
+            (data_base, "data.omitted-key", false),
+        ] {
+            let mut parameters = data_parameters.clone();
+            if keyed {
+                parameters.insert(
+                    0,
+                    json!({
+                        "name": "key", "in": "path", "required": true,
+                        "schema": {"type": "string", "minLength": 1}
+                    }),
+                );
+            }
+            let mut responses = statistical_data_responses();
+            if visibility == Visibility::Public {
+                add_not_modified_response(&mut responses);
+            }
+            let mut operation = json!({
+                "operationId": format!("{parent_operation}.{suffix}"),
+                "description": "Read bounded snapshot observations through the aligned SDMX REST subset",
+                "x-registry-family": "aggregate-data",
+                "x-registry-pattern": "statistical-dataflow",
+                "x-registry-capability-operation": parent_operation,
+                "security": security,
+                "parameters": parameters,
+                "responses": responses,
+            });
+            add_statistical_scope(&mut operation, &dataset.access);
+            paths.insert(path, json!({"get": operation}));
+        }
+
+        for (path, suffix, description) in [
+            (
+                format!(
+                    "/sdmx/v2/structure/dataflow/{}/{}/{}",
+                    dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+                ),
+                "structure.dataflow",
+                "Read the generated SDMX dataflow structure",
+            ),
+            (
+                format!(
+                    "/sdmx/v2/structure/datastructure/{}/{}/{}",
+                    dataset.sdmx.agency_id, dataset.sdmx.data_structure_id, dataset.sdmx.version
+                ),
+                "structure.datastructure",
+                "Read the generated SDMX data structure definition",
+            ),
+        ] {
+            let mut responses = statistical_structure_responses();
+            if visibility == Visibility::Public {
+                add_not_modified_response(&mut responses);
+            }
+            let mut operation = json!({
+                "operationId": format!("{parent_operation}.{suffix}"),
+                "description": description,
+                "x-registry-family": "aggregate-data",
+                "x-registry-pattern": "statistical-dataflow",
+                "x-registry-capability-operation": parent_operation,
+                "security": security,
+                "parameters": [{
+                    "name": "references", "in": "query", "required": false,
+                    "schema": {"type": "string", "const": "none", "default": "none"}
+                }],
+                "responses": responses,
+            });
+            add_statistical_scope(&mut operation, &dataset.access);
+            paths.insert(path, json!({"get": operation}));
+        }
+    }
+}
+
+fn add_statistical_scope(operation: &mut Value, access: &CompiledAccess) {
+    if let CompiledAccess::Protected { scope, .. } = access {
+        operation
+            .as_object_mut()
+            .expect("statistical OpenAPI operation object")
+            .insert("x-registry-required-scope".into(), json!(scope));
+    }
+}
+
+fn statistical_data_responses() -> Value {
+    let mut content = Map::new();
+    content.insert(
+        DATA_JSON_MEDIA_TYPE.into(),
+        json!({"schema": {"type": "object"}}),
+    );
+    content.insert(
+        DATA_CSV_MEDIA_TYPE.into(),
+        json!({"schema": {"type": "string"}}),
+    );
+    json!({
+        "200": {
+            "description": "A bounded SDMX data message",
+            "content": content,
+        },
+        "default": {"$ref": "#/components/responses/Problem"}
+    })
+}
+
+fn statistical_structure_responses() -> Value {
+    let mut content = Map::new();
+    content.insert(
+        STRUCTURE_JSON_MEDIA_TYPE.into(),
+        json!({"schema": {"type": "object"}}),
+    );
+    json!({
+        "200": {
+            "description": "A generated SDMX structure message",
+            "content": content,
+        },
+        "default": {"$ref": "#/components/responses/Problem"}
+    })
+}
+
 fn add_not_modified_response(responses: &mut Value) {
     responses
         .as_object_mut()
@@ -896,7 +1224,7 @@ fn operation_response_schema(
         })
     };
     let mut schema = match &operation.kind {
-        OperationKind::List => json!({
+        OperationKind::List | OperationKind::Search { .. } => json!({
             "type": "object", "additionalProperties": false,
             "required": ["items", "pageInfo", "meta"],
             "properties": {
@@ -936,6 +1264,151 @@ fn operation_response_schema(
     schema
 }
 
+fn geojson_response_schema(
+    registry: &CompiledRegistry,
+    operation: &crate::model::CompiledOperation,
+    access_profile: &crate::model::CompiledAccessProfile,
+    resource: &crate::model::CompiledResource,
+    include_identity: bool,
+) -> Value {
+    let mut schema = match &operation.kind {
+        OperationKind::List | OperationKind::Search { .. } => json!({
+            "type": "object", "additionalProperties": false,
+            "required": ["type", "features", "pageInfo", "meta"],
+            "properties": {
+                "type": {"const": "FeatureCollection"},
+                "features": {"type": "array", "items": geojson_feature_schema(registry, access_profile, resource, false)},
+                "pageInfo": {"type": "object", "additionalProperties": false, "required": ["nextCursor"], "properties": {"nextCursor": {"type": ["string", "null"]}}},
+                "meta": {"type": "object"},
+                "conformsTo": json_fg_conforms_to_schema(),
+                "featureType": {"const": resource.id},
+                "coordRefSys": {"const": CRS84_URI}
+            },
+            "dependentRequired": {
+                "conformsTo": ["featureType", "coordRefSys"],
+                "featureType": ["conformsTo", "coordRefSys"],
+                "coordRefSys": ["conformsTo", "featureType"]
+            }
+        }),
+        OperationKind::Read | OperationKind::Lookup { .. } => {
+            geojson_feature_schema(registry, access_profile, resource, true)
+        }
+    };
+    if include_identity {
+        let object = schema.as_object_mut().expect("GeoJSON schema object");
+        object.insert(
+            "$schema".into(),
+            json!("https://json-schema.org/draft/2020-12/schema"),
+        );
+        object.insert(
+            "$id".into(),
+            json!(access_profile
+                .schema_reference
+                .strip_suffix("-schema")
+                .map(|base| format!("{base}-geojson-schema"))
+                .unwrap_or_else(|| format!("{}-geojson", access_profile.schema_reference))),
+        );
+    }
+    schema
+}
+
+fn geojson_feature_schema(
+    registry: &CompiledRegistry,
+    access_profile: &crate::model::CompiledAccessProfile,
+    resource: &crate::model::CompiledResource,
+    require_meta: bool,
+) -> Value {
+    let mut required = vec![
+        json!("type"),
+        json!("id"),
+        json!("geometry"),
+        json!("properties"),
+    ];
+    if require_meta {
+        required.push(json!("meta"));
+    }
+    let mut properties = json!({
+        "type": {"const": "Feature"},
+        "id": {"type": "string", "minLength": 1},
+        "geometry": {"oneOf": [point_geometry_schema(), {"type": "null"}]},
+        "properties": geojson_record_properties_schema(registry, access_profile, resource)
+    });
+    if require_meta {
+        let object = properties
+            .as_object_mut()
+            .expect("Feature properties schema");
+        object.insert("meta".into(), json!({"type": "object"}));
+        object.insert("conformsTo".into(), json_fg_conforms_to_schema());
+        object.insert("featureType".into(), json!({"const": resource.id}));
+        object.insert("coordRefSys".into(), json!({"const": CRS84_URI}));
+    }
+    let mut schema = json!({
+        "type": "object", "additionalProperties": false,
+        "required": required,
+        "properties": properties
+    });
+    if require_meta {
+        schema["dependentRequired"] = json!({
+            "conformsTo": ["featureType", "coordRefSys"],
+            "featureType": ["conformsTo", "coordRefSys"],
+            "coordRefSys": ["conformsTo", "featureType"]
+        });
+    }
+    schema
+}
+
+fn geojson_record_properties_schema(
+    registry: &CompiledRegistry,
+    access_profile: &crate::model::CompiledAccessProfile,
+    resource: &crate::model::CompiledResource,
+) -> Value {
+    let selected = access_profile
+        .selectable_properties
+        .iter()
+        .filter(|property| resource.primary_geometry.as_ref() != Some(*property))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut schema = access_profile_schema(
+        registry,
+        resource,
+        &selected,
+        &access_profile.schema_reference,
+        &access_profile.semantic_model_reference,
+    );
+    let object = schema
+        .as_object_mut()
+        .expect("Registry Record schema object");
+    object.remove("$schema");
+    object.remove("$id");
+    schema
+}
+
+fn point_geometry_schema() -> Value {
+    json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["type", "coordinates"],
+        "properties": {
+            "type": {"const": "Point"},
+            "coordinates": {
+                "type": "array",
+                "prefixItems": [
+                    {"type": "number", "minimum": -180, "maximum": 180},
+                    {"type": "number", "minimum": -90, "maximum": 90}
+                ],
+                "items": false, "minItems": 2, "maxItems": 2
+            }
+        }
+    })
+}
+
+fn json_fg_conforms_to_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {"type": "string", "enum": [JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE]},
+        "minItems": 2, "maxItems": 2, "uniqueItems": true
+    })
+}
+
 fn openapi_type(data_type: crate::contract::DataType) -> Value {
     use crate::contract::DataType;
     match data_type {
@@ -968,7 +1441,7 @@ fn capability_inventory(
     registry: &CompiledRegistry,
     projection: CapabilityProjection<'_>,
 ) -> Value {
-    let capabilities = registry
+    let mut capabilities = registry
         .resources
         .iter()
         .flat_map(|resource| {
@@ -994,6 +1467,7 @@ fn capability_inventory(
                         OperationKind::List => "list",
                         OperationKind::Read => "retrieve",
                         OperationKind::Lookup { .. } => "search",
+                        OperationKind::Search { .. } => "search",
                     };
                     Some(json!({
                         "resource": resource.id,
@@ -1006,15 +1480,73 @@ fn capability_inventory(
                         "schemaReference": access_profile.schema_reference,
                         "semanticModelReference": access_profile.semantic_model_reference,
                         "contextReference": access_profile.context_reference,
-                        "wireFormats": [
-                            {"id": "json", "mediaType": "application/json", "formatProfiles": []},
-                            {"id": "json-ld", "mediaType": "application/ld+json", "formatProfiles": []},
-                        ],
+                        "wireFormats": response_format_capabilities(resource, access_profile),
                     }))
                 })
             })
         })
         .collect::<Vec<_>>();
+    capabilities.extend(registry.statistical_datasets.iter().filter_map(|dataset| {
+        let visibility = projection_visibility(
+            registry
+                .metadata_visibility
+                .statistical_datasets
+                .unwrap_or(Visibility::OperatorOnly),
+            &dataset.access,
+        );
+        let include = match projection {
+            CapabilityProjection::Public => visibility == Visibility::Public,
+            CapabilityProjection::Full => true,
+            CapabilityProjection::AccessProfile(_, _) => false,
+        };
+        include.then(|| {
+            let data = format!(
+                "/sdmx/v2/data/dataflow/{}/{}/{}",
+                dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+            );
+            json!({
+                "statisticalDatasetIdentifier": dataset.id,
+                "operationIdentifier": dataset.operation_identifier(),
+                "family": "aggregate-data",
+                "pattern": "statistical-dataflow",
+                "profile": {
+                    "sdmxRestVersion": dataset.sdmx.rest_version,
+                    "sdmxDataJsonVersion": dataset.sdmx.data_json_version,
+                    "sdmxDataCsvVersion": dataset.sdmx.data_csv_version,
+                    "sdmxStructureJsonVersion": dataset.sdmx.structure_json_version,
+                },
+                "wireFormats": [
+                    {"id": "sdmx-json", "mediaType": DATA_JSON_MEDIA_TYPE},
+                    {"id": "sdmx-csv", "mediaType": DATA_CSV_MEDIA_TYPE},
+                    {"id": "sdmx-structure-json", "mediaType": STRUCTURE_JSON_MEDIA_TYPE},
+                ],
+                "href": data,
+                "structureLinks": {
+                    "dataflow": format!(
+                        "/sdmx/v2/structure/dataflow/{}/{}/{}",
+                        dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+                    ),
+                    "datastructure": format!(
+                        "/sdmx/v2/structure/datastructure/{}/{}/{}",
+                        dataset.sdmx.agency_id,
+                        dataset.sdmx.data_structure_id,
+                        dataset.sdmx.version
+                    ),
+                },
+            })
+        })
+    }));
+    let mut unsupported_families = vec![
+        "provisioning",
+        "evidence",
+        "write",
+        "notification",
+        "access-transparency",
+        "identity-federation",
+    ];
+    if registry.statistical_datasets.is_empty() {
+        unsupported_families.insert(4, "aggregate-data");
+    }
     json!({
         "registryIdentifier": registry.registry_identifier,
         "authorityIdentifier": registry.authority_identifier,
@@ -1023,7 +1555,7 @@ fn capability_inventory(
         "alignmentTargets": registry.alignment_targets,
         "metadataVisibility": registry.metadata_visibility,
         "capabilities": capabilities,
-        "unsupportedFamilies": ["provisioning", "evidence", "write", "notification", "aggregate-data", "access-transparency", "identity-federation"]
+        "unsupportedFamilies": unsupported_families
     })
 }
 
@@ -1031,11 +1563,12 @@ fn audit_event_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha1",
-        "title": "Registry Relay value-free consultation audit event",
+        "title": "Registry Relay value-free audit event",
         "type": "object",
         "additionalProperties": false,
         "required": [
             "schema", "phase", "operationId", "traceId", "registryIdentifier",
+            "operationSurface",
             "rowBoundaryKind", "processingDescriptionIdentifiers", "selectedProperties",
             "transformIdentifiers", "contractRevision", "principalKind"
         ],
@@ -1047,11 +1580,25 @@ fn audit_event_schema() -> Value {
             "registryIdentifier": {"type": "string", "minLength": 1},
             "resourceIdentifier": {"type": "string", "minLength": 1},
             "operationIdentifier": {"type": "string", "minLength": 1},
+            "operationSurface": {"enum": [
+                "record-list", "record-read", "record-lookup", "record-search",
+                "sdmx-data", "sdmx-dataflow-structure",
+                "sdmx-datastructure-structure", "unknown"
+            ]},
+            "queryShape": {"enum": [
+                "sdmx-keyed-time-period", "sdmx-keyed-all-dimensions",
+                "sdmx-omitted-key-time-period", "sdmx-omitted-key-all-dimensions"
+            ]},
             "accessRuleRevision": {"type": "string", "minLength": 1},
             "purpose": {"type": "string", "minLength": 1},
             "rowBoundaryKind": {"enum": ["none", "principal", "verified-claim", "unknown"]},
             "accessProfile": {"type": "string", "minLength": 1},
             "disclosureProfile": {"type": "string", "minLength": 1},
+            "wireFormat": {"enum": [
+                "json", "json-ld", "geojson",
+                "sdmx-json", "sdmx-csv", "sdmx-structure-json"
+            ]},
+            "formatProfile": {"enum": ["rfc7946", "jsonfg"]},
             "processingDescriptionIdentifiers": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
             "selectedProperties": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
             "processingHandling": {"enum": ["public", "internal", "confidential", "restricted"]},
@@ -1084,6 +1631,337 @@ mod tests {
     use crate::compiler::{compile_contract_with_governed_files, tests as compiler_tests};
     use crate::contract::RegistryContract;
     use crate::model::CompileProfile;
+
+    fn compiled_statistical_registry() -> CompiledRegistry {
+        let contract = RegistryContract::parse_yaml(compiler_tests::statistical_contract())
+            .expect("statistical contract parses");
+        compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::statistical_observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files_for(&contract),
+        )
+        .expect("statistical contract compiles")
+    }
+
+    #[test]
+    fn generated_sdmx_dataflow_and_dsd_artifacts_are_canonical_and_route_identical() {
+        let registry = compiled_statistical_registry();
+        let dataset = &registry.statistical_datasets[0];
+        let operation_identifier = dataset.operation_identifier();
+        let generated = generate_artifacts(&registry).expect("statistical artifacts generate");
+        assert_eq!(
+            generated,
+            generate_artifacts(&registry).expect("statistical artifacts repeat")
+        );
+
+        for (id, path, kind) in [
+            (
+                format!("{}-sdmx-dataflow-structure", dataset.id),
+                format!("artifacts/{}.sdmx.dataflow.json", dataset.id),
+                StructureKind::Dataflow,
+            ),
+            (
+                format!("{}-sdmx-datastructure-structure", dataset.id),
+                format!("artifacts/{}.sdmx.datastructure.json", dataset.id),
+                StructureKind::DataStructure,
+            ),
+        ] {
+            let artifact = generated
+                .get(&path)
+                .unwrap_or_else(|| panic!("missing {path}"));
+            assert_eq!(artifact.id, id);
+            assert_eq!(artifact.media_type, STRUCTURE_JSON_MEDIA_TYPE);
+            assert_eq!(artifact.visibility, Visibility::Public);
+            assert_eq!(
+                artifact.operation_identifier.as_deref(),
+                Some(operation_identifier.as_str())
+            );
+            assert_eq!(
+                artifact.access_binding,
+                Some(ArtifactAccessBinding::FixedOperation)
+            );
+            assert_eq!(
+                artifact.content,
+                serialize_structure_json(dataset, kind).expect("route serializer bytes")
+            );
+            let value: Value =
+                serde_json::from_slice(&artifact.content).expect("structure artifact is JSON");
+            assert_eq!(
+                artifact.content,
+                canonicalize_json(&value).expect("structure artifact canonicalizes")
+            );
+        }
+
+        let full_openapi: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.full.yaml")
+                .expect("full OpenAPI")
+                .content,
+        )
+        .expect("full OpenAPI parses");
+        let public_openapi: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.public.json")
+                .expect("public OpenAPI")
+                .content,
+        )
+        .expect("public OpenAPI parses");
+        let data_base = format!(
+            "/sdmx/v2/data/dataflow/{}/{}/{}",
+            dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+        );
+        let paths = [
+            (format!("{data_base}/{{key}}"), "data.keyed"),
+            (data_base, "data.omitted-key"),
+            (
+                format!(
+                    "/sdmx/v2/structure/dataflow/{}/{}/{}",
+                    dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+                ),
+                "structure.dataflow",
+            ),
+            (
+                format!(
+                    "/sdmx/v2/structure/datastructure/{}/{}/{}",
+                    dataset.sdmx.agency_id, dataset.sdmx.data_structure_id, dataset.sdmx.version
+                ),
+                "structure.datastructure",
+            ),
+        ];
+        for (path, suffix) in &paths {
+            let operation = &full_openapi["paths"][path.as_str()]["get"];
+            assert_eq!(
+                operation["operationId"],
+                format!("{operation_identifier}.{suffix}")
+            );
+            assert_eq!(
+                operation["x-registry-capability-operation"],
+                operation_identifier
+            );
+            assert_eq!(operation["x-registry-family"], "aggregate-data");
+            assert_eq!(operation["x-registry-pattern"], "statistical-dataflow");
+            assert_eq!(
+                public_openapi["paths"].get(path.as_str()),
+                full_openapi["paths"].get(path.as_str())
+            );
+        }
+        assert!(
+            full_openapi["paths"][paths[0].0.as_str()]["get"]["responses"]["200"]["content"]
+                .get(DATA_JSON_MEDIA_TYPE)
+                .is_some()
+        );
+        assert!(
+            full_openapi["paths"][paths[0].0.as_str()]["get"]["responses"]["200"]["content"]
+                .get(DATA_CSV_MEDIA_TYPE)
+                .is_some()
+        );
+        assert!(
+            full_openapi["paths"][paths[2].0.as_str()]["get"]["responses"]["200"]["content"]
+                .get(STRUCTURE_JSON_MEDIA_TYPE)
+                .is_some()
+        );
+        assert!(full_openapi["paths"]
+            .as_object()
+            .expect("OpenAPI paths")
+            .keys()
+            .all(|path| !path.contains("/schema") && !path.contains("/availability")));
+
+        let capabilities: Value = serde_json::from_slice(
+            &generated
+                .get("artifacts/capabilities.json")
+                .expect("public capabilities")
+                .content,
+        )
+        .expect("public capabilities parse");
+        assert_eq!(
+            capabilities["alignmentTargets"],
+            json!(registry.alignment_targets)
+        );
+        assert!(capabilities["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .iter()
+            .any(|capability| {
+                capability["operationIdentifier"] == operation_identifier
+                    && capability["family"] == "aggregate-data"
+                    && capability["pattern"] == "statistical-dataflow"
+            }));
+        assert!(!capabilities["unsupportedFamilies"]
+            .as_array()
+            .expect("unsupported families")
+            .contains(&json!("aggregate-data")));
+
+        let audit: Value = serde_json::from_slice(
+            &generated
+                .get("artifacts/audit-event.schema.json")
+                .expect("audit schema")
+                .content,
+        )
+        .expect("audit schema parses");
+        let wire_formats = audit["properties"]["wireFormat"]["enum"]
+            .as_array()
+            .expect("wire-format enum");
+        for wire_format in [
+            "json",
+            "json-ld",
+            "geojson",
+            "sdmx-json",
+            "sdmx-csv",
+            "sdmx-structure-json",
+        ] {
+            assert!(wire_formats.contains(&json!(wire_format)));
+        }
+
+        let mut protected = registry.clone();
+        protected.metadata_visibility.statistical_datasets = Some(Visibility::OperationBound);
+        protected.statistical_datasets[0].access = CompiledAccess::Protected {
+            scope: "statistics:read".into(),
+            purpose: None,
+            row_binding: None,
+        };
+        let protected_generated =
+            generate_artifacts(&protected).expect("protected statistical artifacts");
+        for path in [
+            format!("artifacts/{}.sdmx.dataflow.json", dataset.id),
+            format!("artifacts/{}.sdmx.datastructure.json", dataset.id),
+        ] {
+            let artifact = protected_generated.get(&path).expect("protected artifact");
+            assert_eq!(artifact.visibility, Visibility::OperationBound);
+            assert_eq!(
+                artifact.operation_identifier.as_deref(),
+                Some(operation_identifier.as_str())
+            );
+            assert_eq!(
+                artifact.access_binding,
+                Some(ArtifactAccessBinding::FixedOperation)
+            );
+        }
+        let protected_public: Value = serde_json::from_slice(
+            &protected_generated
+                .get("openapi.public.json")
+                .expect("protected public OpenAPI")
+                .content,
+        )
+        .expect("protected public OpenAPI parses");
+        assert!(paths
+            .iter()
+            .all(|(path, _)| protected_public["paths"].get(path.as_str()).is_none()));
+        let protected_full: Value = serde_json::from_slice(
+            &protected_generated
+                .get("openapi.full.yaml")
+                .expect("protected full OpenAPI")
+                .content,
+        )
+        .expect("protected full OpenAPI parses");
+        for (path, _) in &paths {
+            let operation = &protected_full["paths"][path.as_str()]["get"];
+            assert_eq!(operation["security"], json!([{"bearerAuth": []}]));
+            assert_eq!(operation["x-registry-required-scope"], "statistics:read");
+        }
+        let protected_capabilities: Value = serde_json::from_slice(
+            &protected_generated
+                .get("artifacts/capabilities.json")
+                .expect("protected public capabilities")
+                .content,
+        )
+        .expect("protected public capabilities parse");
+        assert!(protected_capabilities["capabilities"]
+            .as_array()
+            .expect("protected public capabilities")
+            .iter()
+            .all(|capability| capability["operationIdentifier"] != operation_identifier));
+
+        let mut operator_only = protected;
+        operator_only.metadata_visibility.statistical_datasets = Some(Visibility::OperatorOnly);
+        let operator_generated =
+            generate_artifacts(&operator_only).expect("operator-only statistical artifacts");
+        let artifact = operator_generated
+            .get(&format!("artifacts/{}.sdmx.dataflow.json", dataset.id))
+            .expect("operator-only artifact");
+        assert_eq!(artifact.visibility, Visibility::OperatorOnly);
+        assert_eq!(
+            artifact.operation_identifier.as_deref(),
+            Some(operation_identifier.as_str())
+        );
+        assert_eq!(
+            artifact.access_binding,
+            Some(ArtifactAccessBinding::FixedOperation)
+        );
+    }
+
+    #[test]
+    fn spatial_artifacts_are_deterministic_bounded_and_carrier_free() {
+        let contract = compiler_tests::spatial_contract();
+        let registry = crate::compiler::compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::point_observed_schema("INTEGER", "REAL")],
+            CompileProfile::Production,
+            &compiler_tests::governed_files_for(&contract),
+        )
+        .expect("spatial contract compiles");
+        let generated = generate_artifacts(&registry).expect("spatial artifacts generate");
+        assert_eq!(
+            generated,
+            generate_artifacts(&registry).expect("spatial artifacts repeat")
+        );
+        assert!(generated
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.content.len() <= 8 * 1024 * 1024));
+        for artifact in generated.artifacts.iter().filter(|artifact| {
+            artifact.path.ends_with(".schema.json")
+                || artifact.path.ends_with(".context.jsonld")
+                || artifact.path.ends_with(".vocabulary.jsonld")
+                || artifact.path.ends_with(".shacl.ttl")
+        }) {
+            let text = String::from_utf8_lossy(&artifact.content);
+            assert!(
+                !text.contains("longitude"),
+                "{} leaked a carrier",
+                artifact.path
+            );
+            assert!(
+                !text.contains("latitude"),
+                "{} leaked a carrier",
+                artifact.path
+            );
+        }
+        let geojson_schema: Value = serde_json::from_slice(
+            &generated
+                .get("artifacts/record--search-within-bbox--access-profile-public.geojson.schema.json")
+                .expect("GeoJSON schema")
+                .content,
+        )
+        .expect("GeoJSON schema parses");
+        let coordinates = &geojson_schema["properties"]["features"]["items"]["properties"]
+            ["geometry"]["oneOf"][0]["properties"]["coordinates"];
+        assert_eq!(coordinates["prefixItems"][0]["minimum"], -180);
+        assert_eq!(coordinates["prefixItems"][0]["maximum"], 180);
+        assert_eq!(coordinates["prefixItems"][1]["minimum"], -90);
+        assert_eq!(coordinates["prefixItems"][1]["maximum"], 90);
+        assert_eq!(coordinates["items"], false);
+        let document: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.full.yaml")
+                .expect("full OpenAPI")
+                .content,
+        )
+        .expect("OpenAPI JSON");
+        let operation = &document["paths"]["/v2/resources/record/searches/within-bbox"]["get"];
+        let bbox = operation["parameters"]
+            .as_array()
+            .expect("parameters")
+            .iter()
+            .find(|parameter| parameter["name"] == "bbox")
+            .expect("bbox parameter");
+        assert_eq!(bbox["required"], false);
+        assert_eq!(bbox["x-registry-required-on-first-page"], true);
+        assert_eq!(bbox["x-registry-mutually-exclusive-with"], "cursor");
+        assert!(operation["responses"]["200"]["content"]
+            .get("application/geo+json")
+            .is_some());
+    }
 
     #[test]
     fn generated_inventory_covers_required_v1_artifact_classes_only() {
@@ -1126,6 +2004,17 @@ mod tests {
         ] {
             assert!(!paths.contains(deferred), "deferred artifact {deferred}");
         }
+        let capabilities: Value = serde_json::from_slice(
+            &generated
+                .get("artifacts/capabilities.json")
+                .expect("public capabilities")
+                .content,
+        )
+        .expect("public capabilities parse");
+        assert!(capabilities["unsupportedFamilies"]
+            .as_array()
+            .expect("unsupported families")
+            .contains(&json!("aggregate-data")));
     }
 
     #[test]
@@ -1443,8 +2332,10 @@ mod tests {
                 Some("record.read")
             );
             assert_eq!(
-                artifact.access_profile_identifier.as_deref(),
-                Some("public")
+                artifact.access_binding,
+                Some(ArtifactAccessBinding::AccessProfile {
+                    identifier: "public".into()
+                })
             );
         }
 

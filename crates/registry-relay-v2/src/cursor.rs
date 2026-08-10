@@ -41,6 +41,12 @@ pub struct CursorPayload {
     pub selected_fields_digest: String,
     pub authorization_digest: String,
     pub order_digest: String,
+    #[serde(default)]
+    pub bbox: Option<[String; 4]>,
+    #[serde(default = "default_response_format")]
+    pub response_format: String,
+    #[serde(default)]
+    pub format_profile: Option<String>,
     pub last_record_identifier: String,
     #[serde(default)]
     pub page_size: u32,
@@ -97,6 +103,9 @@ impl CursorPayload {
             selected_fields_digest: bindings.selected_fields_digest,
             authorization_digest: bindings.authorization_digest,
             order_digest: bindings.order_digest,
+            bbox: None,
+            response_format: default_response_format(),
+            format_profile: None,
             last_record_identifier: bindings.last_record_identifier,
             page_size: 0,
             filters: BTreeMap::new(),
@@ -119,6 +128,23 @@ impl CursorPayload {
         self.last_order_values = last_order_values;
         self
     }
+
+    #[must_use]
+    pub fn with_response_context(
+        mut self,
+        bbox: Option<[String; 4]>,
+        response_format: String,
+        format_profile: Option<String>,
+    ) -> Self {
+        self.bbox = bbox;
+        self.response_format = response_format;
+        self.format_profile = format_profile;
+        self
+    }
+}
+
+fn default_response_format() -> String {
+    "json".into()
 }
 
 /// Cursor protection key. `Debug` intentionally cannot expose key material.

@@ -17,6 +17,7 @@ const PROBLEM_BASE: &str = "https://id.registrystack.org/problems/registry-relay
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProblemCode {
     ConsultationInvalidRequest,
+    AggregateDataInvalidRequest,
     FieldsInvalid,
     UnknownFilter,
     InvalidFilter,
@@ -25,13 +26,16 @@ pub enum ProblemCode {
     MissingCredential,
     InvalidCredential,
     ConsultationDenied,
+    AggregateDataDenied,
     ResourceNotFound,
     ConsultationUnresolved,
     UnsupportedFormat,
     BodyTooLarge,
+    AggregateDataTooLarge,
     UriTooLong,
     UnsupportedMediaType,
     RateLimited,
+    AggregateDataRateLimited,
     Internal,
     SourceUnavailable,
     AuditUnavailable,
@@ -44,6 +48,7 @@ impl ProblemCode {
     pub const fn code(self) -> &'static str {
         match self {
             Self::ConsultationInvalidRequest => "consultation.invalid_request",
+            Self::AggregateDataInvalidRequest => "aggregate-data.invalid_request",
             Self::FieldsInvalid => "request.fields_invalid",
             Self::UnknownFilter => "filter.unknown_field",
             Self::InvalidFilter => "filter.invalid_value",
@@ -52,13 +57,16 @@ impl ProblemCode {
             Self::MissingCredential => "auth.missing_credential",
             Self::InvalidCredential => "auth.invalid_credential",
             Self::ConsultationDenied => "consultation.denied",
+            Self::AggregateDataDenied => "aggregate-data.denied",
             Self::ResourceNotFound => "resource.not_found",
             Self::ConsultationUnresolved => "consultation.unresolved",
             Self::UnsupportedFormat => "format.unsupported",
             Self::BodyTooLarge => "internal.payload_too_large",
+            Self::AggregateDataTooLarge => "aggregate-data.too_large",
             Self::UriTooLong => "internal.uri_too_long",
             Self::UnsupportedMediaType => "request.media_type_unsupported",
             Self::RateLimited => "consultation.rate_limited",
+            Self::AggregateDataRateLimited => "aggregate-data.rate_limited",
             Self::SourceUnavailable => "source.unavailable",
             Self::AuditUnavailable => "audit.unavailable",
             Self::Internal => "internal.unhandled",
@@ -71,6 +79,7 @@ impl ProblemCode {
     pub const fn title(self) -> &'static str {
         match self {
             Self::ConsultationInvalidRequest => "Consultation request is invalid",
+            Self::AggregateDataInvalidRequest => "Aggregate data request is invalid",
             Self::FieldsInvalid => "Field selection is invalid",
             Self::UnknownFilter => "Filter is not declared",
             Self::InvalidFilter => "Filter value is invalid",
@@ -79,13 +88,16 @@ impl ProblemCode {
             Self::MissingCredential => "Bearer access token is required",
             Self::InvalidCredential => "Bearer access token is invalid",
             Self::ConsultationDenied => "Consultation is not permitted",
+            Self::AggregateDataDenied => "Aggregate data access is not permitted",
             Self::ResourceNotFound => "Requested resource was not found",
             Self::ConsultationUnresolved => "Requested record was not resolved",
             Self::UnsupportedFormat => "Requested format is not supported",
             Self::BodyTooLarge => "Request body is too large",
+            Self::AggregateDataTooLarge => "Aggregate data request is too broad",
             Self::UriTooLong => "Request URI is too long",
             Self::UnsupportedMediaType => "Request media type is not supported",
             Self::RateLimited => "Consultation quota is exhausted",
+            Self::AggregateDataRateLimited => "Aggregate data quota is exhausted",
             Self::Internal => "Request could not be served",
             Self::SourceUnavailable => "Authoritative source is unavailable",
             Self::AuditUnavailable => "Required audit is unavailable",
@@ -98,19 +110,20 @@ impl ProblemCode {
     pub const fn status(self) -> u16 {
         match self {
             Self::ConsultationInvalidRequest
+            | Self::AggregateDataInvalidRequest
             | Self::FieldsInvalid
             | Self::UnknownFilter
             | Self::InvalidFilter
             | Self::CursorInvalid
             | Self::AccessProfileInvalid => 400,
             Self::MissingCredential | Self::InvalidCredential => 401,
-            Self::ConsultationDenied => 403,
+            Self::ConsultationDenied | Self::AggregateDataDenied => 403,
             Self::ResourceNotFound | Self::ConsultationUnresolved => 404,
             Self::UnsupportedFormat => 406,
-            Self::BodyTooLarge => 413,
+            Self::BodyTooLarge | Self::AggregateDataTooLarge => 413,
             Self::UriTooLong => 414,
             Self::UnsupportedMediaType => 415,
-            Self::RateLimited => 429,
+            Self::RateLimited | Self::AggregateDataRateLimited => 429,
             Self::SourceUnavailable | Self::AuditUnavailable => 503,
             Self::ServiceNotReady => 503,
             Self::Timeout => 504,
@@ -156,7 +169,7 @@ impl ProblemCode {
                 HeaderValue::from_static("Bearer realm=\"registry-relay\""),
             );
         }
-        if self == Self::RateLimited {
+        if matches!(self, Self::RateLimited | Self::AggregateDataRateLimited) {
             headers.insert("retry-after", HeaderValue::from_static("60"));
         }
         trace.apply(headers);
@@ -166,6 +179,7 @@ impl ProblemCode {
     const fn detail(self) -> &'static str {
         match self {
             Self::ConsultationInvalidRequest => "the consultation request is invalid",
+            Self::AggregateDataInvalidRequest => "the aggregate data request is invalid",
             Self::FieldsInvalid => "field selection is invalid",
             Self::UnknownFilter => "filter is not declared for this operation",
             Self::InvalidFilter => "filter value is invalid",
@@ -174,13 +188,18 @@ impl ProblemCode {
             Self::MissingCredential => "a bearer access token is required",
             Self::InvalidCredential => "bearer access token validation failed",
             Self::ConsultationDenied => "the consultation is not permitted",
+            Self::AggregateDataDenied => "aggregate data access is not permitted",
             Self::ResourceNotFound => "the requested resource was not found",
             Self::ConsultationUnresolved => "the requested record was not resolved",
             Self::UnsupportedFormat => "the requested format is not supported",
             Self::BodyTooLarge => "request body exceeds the configured limit",
+            Self::AggregateDataTooLarge => {
+                "the aggregate data request exceeds its observation limit"
+            }
             Self::UriTooLong => "request URI exceeds the configured limit",
             Self::UnsupportedMediaType => "request body must use application/json",
             Self::RateLimited => "the consultation quota is exhausted",
+            Self::AggregateDataRateLimited => "the aggregate data quota is exhausted",
             Self::Internal => "the request could not be served",
             Self::SourceUnavailable => "the authoritative source is unavailable",
             Self::AuditUnavailable => "required audit is unavailable",
@@ -325,6 +344,17 @@ mod tests {
             body.type_uri,
             "https://id.registrystack.org/problems/registry-relay/consultation/unresolved"
         );
+    }
+
+    #[test]
+    fn aggregate_data_failures_have_their_own_bounded_problem_family() {
+        assert_eq!(
+            ProblemCode::AggregateDataInvalidRequest.code(),
+            "aggregate-data.invalid_request"
+        );
+        assert_eq!(ProblemCode::AggregateDataDenied.status(), 403);
+        assert_eq!(ProblemCode::AggregateDataTooLarge.status(), 413);
+        assert_eq!(ProblemCode::AggregateDataRateLimited.status(), 429);
     }
 
     #[test]

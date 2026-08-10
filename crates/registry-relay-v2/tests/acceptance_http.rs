@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::body::{to_bytes, Body};
 use bytes::Bytes;
 use futures::stream;
-use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, VARY};
+use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, LINK, VARY};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use jsonschema::{Draft, JSONSchema};
 use oxjsonld::JsonLdParser;
@@ -34,22 +34,28 @@ use registry_relay_v2::compiler::{
     classification_inventory_digest, compile_contract, compile_contract_with_governed_files,
     GovernedFileSet,
 };
-use registry_relay_v2::contract::{RegistryContract, RelayRuntime};
+use registry_relay_v2::contract::{RegistryContract, RelayRuntime, Visibility};
 use registry_relay_v2::fixture_contract::{
-    parse_journey, FixtureAuthorization as AuthorizationFixture, FixtureJourney as Journey,
+    parse_journey, FixtureAuthorization as AuthorizationFixture, FixtureFormatProfile,
+    FixtureGeoJsonRoot, FixtureGeometryType, FixtureJourney as Journey, FixtureJsonScalarType,
     FixtureMethod, FixtureStep as JourneyStep,
+};
+use registry_relay_v2::format_capabilities::{
+    CRS84_URI, JSON_FG_CORE_CONFORMANCE, JSON_FG_PROFILE_URI, JSON_FG_TYPES_CONFORMANCE,
+    RFC7946_PROFILE_URI,
 };
 use registry_relay_v2::identification::{
     parse_classification_review_yaml, render_classification_review_yaml,
 };
 use registry_relay_v2::model::{
-    CompileProfile, ObservedColumn, ObservedSourceSchema, ObservedView,
+    CompileProfile, ObservedColumn, ObservedSourceSchema, ObservedView, OperationKind,
 };
 use registry_relay_v2::server::{
     router, AlignmentMetadata, InstitutionMetadata, QuotaConfig, RelayService, ServiceMetadata,
 };
 use registry_relay_v2::sqlite_runtime::{RuntimeSourceBinding, SqliteRuntime, SqliteRuntimeLimits};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 
@@ -57,7 +63,12 @@ const ACCEPTANCE_ROOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../products/relay-v2/acceptance"
 );
-const PROJECTS: [&str; 3] = ["social-assistance", "business-registry", "civil-event"];
+const PROJECTS: [&str; 4] = [
+    "social-assistance",
+    "business-registry",
+    "civil-event",
+    "labour-statistics",
+];
 
 #[derive(Default)]
 struct ResponseContractCoverage {
@@ -128,8 +139,53 @@ impl AuditSink for ControlledAuditSink {
     }
 }
 
+#[derive(Default)]
+struct SourceAccessTripwireAuditSink {
+    attempts: AtomicUsize,
+    records: Mutex<Vec<Value>>,
+}
+
+impl SourceAccessTripwireAuditSink {
+    fn attempts(&self) -> usize {
+        self.attempts.load(Ordering::SeqCst)
+    }
+
+    fn values(&self) -> Vec<Value> {
+        self.records.lock().expect("audit records lock").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditSink for SourceAccessTripwireAuditSink {
+    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
+        if envelope.record["phase"] == "attempt" {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            return Err(AuditError::Io(std::io::Error::other(
+                "source access tripwire reached",
+            )));
+        }
+        self.records
+            .lock()
+            .expect("audit records lock")
+            .push(envelope.record.clone());
+        Ok(())
+    }
+
+    #[allow(deprecated)]
+    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(None)
+    }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        _hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(None)
+    }
+}
+
 #[tokio::test]
-async fn all_three_registry_http_journeys_use_the_real_router() {
+async fn all_four_registry_http_journeys_use_the_real_router() {
     let selected = std::env::var("RELAY_V2_ACCEPTANCE_PROJECT").ok();
     if let Some(selected) = &selected {
         assert!(
@@ -206,7 +262,7 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
             }
             assert_expectations(project, &step, &headers, &body, &mut equivalence_classes);
             if !body.is_empty() {
-                let document: Value = serde_json::from_slice(&body).expect("response is JSON");
+                let document = decode_fixture_response(&headers, &body);
                 validate_response_contracts(
                     &harness,
                     project,
@@ -220,8 +276,8 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
                         .get(reference)
                         .unwrap_or_else(|| panic!("referenced response {reference} exists"));
                     assert_eq!(
-                        normalized_records(&document),
-                        normalized_records(expected),
+                        normalized_fixture_response(&document),
+                        normalized_fixture_response(expected),
                         "{project}/{} Record values must match {reference}",
                         step.id
                     );
@@ -229,14 +285,16 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
                 response_documents.insert(step.id.clone(), document);
             }
         }
-        assert!(
-            contract_coverage.json_records > 0,
-            "{project} must validate an ordinary JSON Record against its generated schema"
-        );
-        assert!(
-            contract_coverage.json_ld_records > 0,
-            "{project} must validate a JSON-LD Record against its generated schema"
-        );
+        if !harness.service.registry.resources.is_empty() {
+            assert!(
+                contract_coverage.json_records > 0,
+                "{project} must validate an ordinary JSON Record against its generated schema"
+            );
+            assert!(
+                contract_coverage.json_ld_records > 0,
+                "{project} must validate a JSON-LD Record against its generated schema"
+            );
+        }
         shutdown_tx.send(()).expect("loopback server is running");
         tokio::time::timeout(Duration::from_secs(5), server)
             .await
@@ -606,6 +664,390 @@ async fn audit_terminal_failure_discards_held_record_bytes() {
         2,
         "release must stop at failed terminal audit"
     );
+}
+
+#[tokio::test]
+async fn spatial_terminal_audit_failure_discards_held_feature_bytes() {
+    let sink = Arc::new(ControlledAuditSink::new(2));
+    let fixture_sql = fs::read_to_string(project_root("business-registry").join("fixture.sql"))
+        .expect("business fixture reads");
+    let harness = ProjectHarness::open_with_fixture_sql(
+        "business-registry",
+        fixture_sql,
+        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+        true,
+    )
+    .await;
+    let response = harness
+        .app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/resources/registered-premises/records/PREM-SYNTH-0001?formatProfile=jsonfg",
+                )
+                .header("accept", "application/geo+json")
+                .body(Body::empty())
+                .expect("spatial request builds"),
+        )
+        .await
+        .expect("router responds");
+    let body = response_body(response, StatusCode::SERVICE_UNAVAILABLE).await;
+    assert_eq!(body["code"], "audit.unavailable");
+
+    let wire = serde_json::to_string(&body).expect("problem serializes");
+    for held in [
+        "PREM-SYNTH-0001",
+        "Orchard cooperative market",
+        "Feature",
+        "Point",
+        "coordinates",
+        "100.0",
+        "13.0",
+    ] {
+        assert!(
+            !wire.contains(held),
+            "held spatial response bytes must not escape after terminal audit failure"
+        );
+    }
+    assert_eq!(sink.writes(), 2, "release stops at terminal audit failure");
+    let records = sink.values();
+    assert_eq!(records.len(), 1, "only the attempt audit is committed");
+    assert_eq!(records[0]["phase"], "attempt");
+    assert_eq!(records[0]["wireFormat"], "geojson");
+    assert_eq!(records[0]["formatProfile"], "jsonfg");
+}
+
+#[tokio::test]
+async fn bbox_shape_refusals_are_audited_before_any_search_attempt() {
+    let sink = Arc::new(SourceAccessTripwireAuditSink::default());
+    let fixture_sql = fs::read_to_string(project_root("business-registry").join("fixture.sql"))
+        .expect("business fixture reads");
+    let harness = ProjectHarness::open_with_fixture_sql(
+        "business-registry",
+        fixture_sql,
+        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+        true,
+    )
+    .await;
+    let response = harness
+        .app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/resources/registered-premises/searches/within-bbox?bbox=privateLongitude,privateLatitude,canary",
+                )
+                .body(Body::empty())
+                .expect("invalid bbox request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_problem_code(response, StatusCode::BAD_REQUEST, "filter.invalid_value").await;
+
+    assert_eq!(
+        sink.attempts(),
+        0,
+        "invalid bbox must not reach the attempt boundary before source execution"
+    );
+    let records = sink.values();
+    assert_eq!(records.len(), 1, "the refusal is audited exactly once");
+    assert_eq!(records[0]["phase"], "refusal");
+    assert_eq!(records[0]["outcome"], "invalid-request");
+    let audit_wire = serde_json::to_string(&records).expect("audit records serialize");
+    for hidden in ["privateLongitude", "privateLatitude", "canary"] {
+        assert!(
+            !audit_wire.contains(hidden),
+            "rejected bbox values must not enter audit"
+        );
+    }
+}
+
+#[tokio::test]
+async fn spatial_formats_validate_and_keep_distinct_cache_identities() {
+    let fixture_sql = fs::read_to_string(project_root("business-registry").join("fixture.sql"))
+        .expect("business fixture reads");
+    let harness =
+        ProjectHarness::open_with_fixture_sql("business-registry", fixture_sql, None, true).await;
+    let resource = harness
+        .service
+        .registry
+        .resources
+        .iter()
+        .find(|resource| resource.id == "registered-premises")
+        .expect("business Registry compiles the premises resource");
+    let operation = resource
+        .operations
+        .iter()
+        .find(|operation| {
+            matches!(
+                &operation.kind,
+                OperationKind::Search { name } if name == "within-bbox"
+            )
+        })
+        .expect("business Registry compiles the bbox search");
+    let access_profile = operation
+        .access_profiles
+        .iter()
+        .find(|access_profile| access_profile.id == "public-premises")
+        .expect("bbox search carries the public premises access profile");
+    let binding = harness
+        .service
+        .artifacts
+        .operation_bindings
+        .iter()
+        .find(|binding| {
+            binding.operation_identifier == operation.identifier
+                && binding.access_profile_identifier == access_profile.id
+        })
+        .expect("bbox search has one exact public artifact binding");
+
+    let record_schema_artifact = harness
+        .service
+        .artifacts
+        .get(&binding.access_profile_schema_path)
+        .expect("public Record schema exists");
+    assert_eq!(record_schema_artifact.visibility, Visibility::Public);
+    let record_schema: Value = serde_json::from_slice(&record_schema_artifact.content)
+        .expect("public Record schema parses");
+    let record_validator = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(&record_schema)
+        .expect("public Record schema compiles");
+
+    let geojson_schema_id = access_profile
+        .schema_reference
+        .strip_suffix("-schema")
+        .map(|base| format!("{base}-geojson-schema"))
+        .unwrap_or_else(|| format!("{}-geojson", access_profile.schema_reference));
+    let matching_geojson_schemas = harness
+        .service
+        .artifacts
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.media_type == "application/schema+json")
+        .filter_map(|artifact| {
+            let schema: Value = serde_json::from_slice(&artifact.content).ok()?;
+            (schema.get("$id").and_then(Value::as_str) == Some(geojson_schema_id.as_str()))
+                .then_some((artifact, schema))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matching_geojson_schemas.len(),
+        1,
+        "the exact public access profile owns one GeoJSON response schema"
+    );
+    let (geojson_schema_artifact, geojson_schema) = &matching_geojson_schemas[0];
+    assert_eq!(geojson_schema_artifact.visibility, Visibility::Public);
+    let geojson_validator = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .should_validate_formats(true)
+        .compile(geojson_schema)
+        .expect("public GeoJSON response schema compiles");
+
+    let context_artifact = harness
+        .service
+        .artifacts
+        .get(&binding.context_path)
+        .expect("public JSON-LD context exists");
+    assert_eq!(context_artifact.visibility, Visibility::Public);
+    let context_document: Value =
+        serde_json::from_slice(&context_artifact.content).expect("public JSON-LD context parses");
+    assert_eq!(
+        context_document.pointer("/@context/location/@type"),
+        Some(&Value::String("@json".into())),
+        "the public Point property stays an RDF JSON literal"
+    );
+
+    let cases = [
+        ("json", "application/json", None, "application/json", None),
+        (
+            "json-ld",
+            "application/ld+json",
+            None,
+            "application/ld+json",
+            None,
+        ),
+        (
+            "geojson",
+            "application/geo+json",
+            Some("rfc7946"),
+            "application/geo+json",
+            Some(RFC7946_PROFILE_URI),
+        ),
+        (
+            "json-fg",
+            "application/geo+json",
+            Some("jsonfg"),
+            "application/geo+json",
+            Some(JSON_FG_PROFILE_URI),
+        ),
+    ];
+    let mut exact_bodies = BTreeSet::new();
+    let mut exact_etags = BTreeSet::new();
+    for (label, accept, format_profile, media_type, profile_uri) in cases {
+        let mut uri = String::from(
+            "/v2/resources/registered-premises/searches/within-bbox?bbox=100,13,101,14&pageSize=4",
+        );
+        if let Some(format_profile) = format_profile {
+            uri.push_str("&formatProfile=");
+            uri.push_str(format_profile);
+        }
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header("accept", accept)
+                    .body(Body::empty())
+                    .expect("spatial format request builds"),
+            )
+            .await
+            .expect("real router responds");
+        assert_eq!(response.status(), StatusCode::OK, "{label} status");
+        let headers = response.headers().clone();
+        assert_eq!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(media_type),
+            "{label} negotiated media type"
+        );
+        assert_eq!(
+            headers
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("public, no-cache"),
+            "{label} is publicly revalidatable"
+        );
+        assert_eq!(
+            headers.get(VARY).and_then(|value| value.to_str().ok()),
+            Some("Accept, Authorization"),
+            "{label} varies across the negotiation and authorization boundaries"
+        );
+        let expected_link = profile_uri.map(|profile| format!("<{profile}>; rel=\"profile\""));
+        assert_eq!(
+            headers.get(LINK).and_then(|value| value.to_str().ok()),
+            expected_link.as_deref(),
+            "{label} profile link"
+        );
+
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("spatial response body reads")
+            .to_vec();
+        let etag = headers
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .expect("public snapshot response has an ETag")
+            .to_owned();
+        assert_eq!(
+            etag,
+            format!("\"{}\"", hex::encode(Sha256::digest(&body))),
+            "{label} ETag binds the exact released bytes"
+        );
+        let document: Value = serde_json::from_slice(&body).expect("spatial response is JSON");
+
+        if label == "json" || label == "json-ld" {
+            let records = response_records(&document);
+            assert_eq!(records.len(), 3, "{label} returns the bounded journey page");
+            for record in records {
+                assert!(
+                    record_validator.is_valid(record),
+                    "{label} Record validates against the exact public access-profile schema"
+                );
+            }
+        } else {
+            assert!(
+                geojson_validator.is_valid(&document),
+                "{label} validates against the exact public GeoJSON response schema"
+            );
+            assert_eq!(document["type"], "FeatureCollection", "{label} root");
+            let features = document["features"]
+                .as_array()
+                .expect("GeoJSON features are an array");
+            assert_eq!(
+                features.len(),
+                3,
+                "{label} returns the bounded journey page"
+            );
+            for feature in features {
+                assert_eq!(feature["type"], "Feature");
+                assert_eq!(feature["geometry"]["type"], "Point");
+                assert_eq!(
+                    feature["geometry"]["coordinates"].as_array().map(Vec::len),
+                    Some(2)
+                );
+            }
+        }
+
+        if label == "json-ld" {
+            let mut expanded = document.clone();
+            expanded["@context"] = context_document["@context"].clone();
+            let raw = serde_json::to_string(&expanded).expect("JSON-LD response serializes");
+            let parser = JsonLdParser::new()
+                .with_base_iri(&harness.service.registry.base_uri)
+                .expect("Registry base IRI is valid");
+            let quads = parser
+                .for_slice(&raw)
+                .map(|quad| quad.expect("public JSON-LD response expands").to_string())
+                .collect::<Vec<_>>();
+            assert!(!quads.is_empty(), "JSON-LD produces a public RDF graph");
+        } else if label == "geojson" {
+            for member in ["conformsTo", "featureType", "coordRefSys"] {
+                assert!(
+                    document.get(member).is_none(),
+                    "RFC 7946 response omits JSON-FG-only member {member}"
+                );
+            }
+        } else if label == "json-fg" {
+            assert_eq!(document["featureType"], "registered-premises");
+            assert_eq!(document["coordRefSys"], CRS84_URI);
+            let conforms_to = document["conformsTo"]
+                .as_array()
+                .expect("JSON-FG root carries conformsTo")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                conforms_to,
+                BTreeSet::from([JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE])
+            );
+            for feature in document["features"]
+                .as_array()
+                .expect("JSON-FG features are an array")
+            {
+                for member in ["conformsTo", "featureType", "coordRefSys"] {
+                    assert!(
+                        feature.get(member).is_none(),
+                        "JSON-FG collection feature must not repeat root-only member {member}"
+                    );
+                }
+            }
+        }
+
+        let wire = String::from_utf8_lossy(&body);
+        for hidden in [
+            "longitude",
+            "latitude",
+            "business_registration_number",
+            "source_registered_premises",
+            "relay_registered_premises",
+            "BIZ-SYNTH-0001",
+        ] {
+            assert!(
+                !wire.contains(hidden),
+                "{label} leaked source term {hidden}"
+            );
+        }
+        assert!(
+            exact_bodies.insert(body),
+            "{label} exact bytes are distinct"
+        );
+        assert!(exact_etags.insert(etag), "{label} ETag is distinct");
+    }
+    assert_eq!(exact_bodies.len(), 4);
+    assert_eq!(exact_etags.len(), 4);
 }
 
 #[tokio::test]
@@ -1149,6 +1591,179 @@ async fn response_body(response: http::Response<Body>, status: StatusCode) -> Va
     serde_json::from_slice(&bytes).expect("response is JSON")
 }
 
+fn decode_fixture_response(headers: &HeaderMap, body: &[u8]) -> Value {
+    let media_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if media_type.starts_with("application/vnd.sdmx.data+csv") {
+        let mut reader = csv::ReaderBuilder::new().from_reader(body);
+        let headers = reader
+            .headers()
+            .expect("SDMX CSV header parses")
+            .iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let rows = reader
+            .records()
+            .map(|record| {
+                let record = record.expect("SDMX CSV row parses");
+                headers
+                    .iter()
+                    .zip(record.iter())
+                    .skip(3)
+                    .map(|(component, value)| (component.clone(), Value::String(value.to_owned())))
+                    .collect::<serde_json::Map<_, _>>()
+            })
+            .collect::<Vec<_>>();
+        return json!({"__fixtureSdmxRows": rows});
+    }
+    serde_json::from_slice(body).expect("fixture response is JSON")
+}
+
+fn sdmx_observation_rows(document: &Value) -> Option<Vec<BTreeMap<String, Value>>> {
+    if let Some(rows) = document.get("__fixtureSdmxRows").and_then(Value::as_array) {
+        return rows
+            .iter()
+            .map(|row| {
+                row.as_object().map(|row| {
+                    row.iter()
+                        .map(|(component, value)| (component.clone(), value.clone()))
+                        .collect()
+                })
+            })
+            .collect();
+    }
+
+    let data_set = document.pointer("/data/dataSets/0")?;
+    let structure = document.pointer("/data/structures/0")?;
+    let series_dimensions = structure
+        .pointer("/dimensions/series")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let observation_dimensions = structure
+        .pointer("/dimensions/observation")
+        .and_then(Value::as_array)?;
+    let measures = structure
+        .pointer("/measures/observation")
+        .and_then(Value::as_array)?;
+    let attributes = structure
+        .pointer("/attributes/observation")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut rows = Vec::new();
+
+    if let Some(observations) = data_set.get("observations").and_then(Value::as_object) {
+        for (key, values) in observations {
+            let mut row = decode_sdmx_dimensions(observation_dimensions, key)?;
+            decode_sdmx_observation_values(&mut row, measures, attributes, values)?;
+            rows.push(row);
+        }
+    } else {
+        for (series_key, series) in data_set.get("series")?.as_object()? {
+            let series_values = decode_sdmx_dimensions(series_dimensions, series_key)?;
+            for (observation_key, values) in series.get("observations")?.as_object()? {
+                let mut row = series_values.clone();
+                row.extend(decode_sdmx_dimensions(
+                    observation_dimensions,
+                    observation_key,
+                )?);
+                decode_sdmx_observation_values(&mut row, measures, attributes, values)?;
+                rows.push(row);
+            }
+        }
+    }
+    Some(rows)
+}
+
+fn decode_sdmx_dimensions(dimensions: &[Value], key: &str) -> Option<BTreeMap<String, Value>> {
+    let indexes = if dimensions.is_empty() {
+        Vec::new()
+    } else {
+        key.split(':')
+            .map(str::parse::<usize>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?
+    };
+    if indexes.len() != dimensions.len() {
+        return None;
+    }
+    dimensions
+        .iter()
+        .zip(indexes)
+        .map(|(dimension, index)| {
+            let id = dimension.get("id")?.as_str()?.to_owned();
+            let value = sdmx_indexed_value(dimension, index)?;
+            Some((id, value))
+        })
+        .collect()
+}
+
+fn decode_sdmx_observation_values(
+    row: &mut BTreeMap<String, Value>,
+    measures: &[Value],
+    attributes: &[Value],
+    values: &Value,
+) -> Option<()> {
+    let values = values.as_array()?;
+    if values.len() != measures.len().saturating_add(attributes.len()) {
+        return None;
+    }
+    for (index, measure) in measures.iter().enumerate() {
+        row.insert(
+            measure.get("id")?.as_str()?.to_owned(),
+            values[index].clone(),
+        );
+    }
+    for (index, attribute) in attributes.iter().enumerate() {
+        let value = &values[measures.len() + index];
+        let value = if attribute.get("values").is_some() {
+            let code_index = usize::try_from(value.as_u64()?).ok()?;
+            sdmx_indexed_value(attribute, code_index)?
+        } else {
+            value.clone()
+        };
+        row.insert(attribute.get("id")?.as_str()?.to_owned(), value);
+    }
+    Some(())
+}
+
+fn sdmx_indexed_value(component: &Value, index: usize) -> Option<Value> {
+    let value = component.get("values")?.as_array()?.get(index)?;
+    value.get("id").or_else(|| value.get("value")).cloned()
+}
+
+fn normalized_fixture_response(document: &Value) -> Value {
+    let Some(rows) = sdmx_observation_rows(document) else {
+        return Value::Array(normalized_records(document));
+    };
+    let mut rows = rows
+        .into_iter()
+        .map(|row| {
+            Value::Object(
+                row.into_iter()
+                    .map(|(component, value)| {
+                        let value = match value {
+                            Value::String(value) => value,
+                            Value::Number(value) => value.to_string(),
+                            Value::Bool(value) => value.to_string(),
+                            Value::Null => String::new(),
+                            Value::Array(_) | Value::Object(_) => {
+                                serde_json::to_string(&value).expect("SDMX value serializes")
+                            }
+                        };
+                        (component, Value::String(value))
+                    })
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|row| serde_json::to_string(row).expect("normalized SDMX row serializes"));
+    Value::Array(rows)
+}
+
 fn assert_expectations(
     project: &str,
     step: &JourneyStep,
@@ -1161,8 +1776,16 @@ fn assert_expectations(
         assert!(body.is_empty(), "{label} body must be empty");
         return;
     }
-    let document: Value = serde_json::from_slice(body)
-        .unwrap_or_else(|error| panic!("{label} response must be JSON: {error}"));
+    let document = decode_fixture_response(headers, body);
+    if let Some(expected) = &step.expect.media_type {
+        assert_eq!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(expected.as_str()),
+            "{label} media type"
+        );
+    }
     if let Some(code) = &step.expect.code {
         assert_eq!(
             document.get("code").and_then(Value::as_str),
@@ -1210,11 +1833,48 @@ fn assert_expectations(
         assert_eq!(
             document
                 .get("items")
+                .or_else(|| document.get("features"))
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(count as usize),
             "{label} item count"
         );
+    }
+    if let Some(count) = step.expect.observation_count {
+        assert_eq!(
+            sdmx_observation_rows(&document).map(|rows| rows.len()),
+            Some(count as usize),
+            "{label} observation count"
+        );
+    }
+    if let Some(expected) = &step.expect.sdmx_json_types {
+        let rows = sdmx_observation_rows(&document)
+            .unwrap_or_else(|| panic!("{label} must contain SDMX observations"));
+        for (role, components) in [
+            ("dimension", &expected.dimensions),
+            ("measure", &expected.measures),
+            ("attribute", &expected.attributes),
+        ] {
+            for (component, expected_type) in components {
+                for row in &rows {
+                    let value = row.get(component).unwrap_or_else(|| {
+                        panic!(
+                            "{label} {role} {component} must exist in every observation; decoded components: {:?}",
+                            row.keys().collect::<Vec<_>>()
+                        )
+                    });
+                    let matches = match expected_type {
+                        FixtureJsonScalarType::String => value.is_string(),
+                        FixtureJsonScalarType::Number => value.is_number(),
+                        FixtureJsonScalarType::Boolean => value.is_boolean(),
+                    };
+                    assert!(
+                        matches,
+                        "{label} {role} {component} has the authored JSON scalar type"
+                    );
+                }
+            }
+        }
     }
     if let Some(expectation) = &step.expect.next_cursor {
         let cursor = document.pointer("/pageInfo/nextCursor");
@@ -1302,12 +1962,86 @@ fn assert_expectations(
     }
     if let Some(identifier) = &step.expect.record_identifier {
         assert_eq!(
-            document
-                .pointer("/data/recordIdentifier")
+            response_records(&document)
+                .first()
+                .and_then(|record| record.get("recordIdentifier"))
                 .and_then(Value::as_str),
             Some(identifier.as_str()),
             "{label} record identifier"
         );
+    }
+    if let Some(root) = step.expect.geo_json_root {
+        let expected = match root {
+            FixtureGeoJsonRoot::Feature => "Feature",
+            FixtureGeoJsonRoot::FeatureCollection => "FeatureCollection",
+        };
+        assert_eq!(
+            document.get("type").and_then(Value::as_str),
+            Some(expected),
+            "{label} GeoJSON root"
+        );
+    }
+    if let Some(expected) = step.expect.geometry_type {
+        let features = geojson_features(&document);
+        assert!(
+            !features.is_empty(),
+            "{label} must contain a GeoJSON Feature"
+        );
+        for feature in features {
+            let geometry = feature.get("geometry").expect("Feature carries geometry");
+            match expected {
+                FixtureGeometryType::Point => {
+                    assert_eq!(geometry.get("type").and_then(Value::as_str), Some("Point"));
+                    assert_eq!(
+                        geometry
+                            .get("coordinates")
+                            .and_then(Value::as_array)
+                            .map(Vec::len),
+                        Some(2),
+                        "{label} Point has CRS84 longitude-latitude coordinates"
+                    );
+                }
+                FixtureGeometryType::Null => {
+                    assert!(geometry.is_null(), "{label} geometry must be null");
+                }
+            }
+        }
+    }
+    if let Some(profile) = step.expect.format_profile {
+        assert_eq!(
+            headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/geo+json"),
+            "{label} spatial profile media type"
+        );
+        let (profile_uri, json_fg) = match profile {
+            FixtureFormatProfile::Rfc7946 => (RFC7946_PROFILE_URI, false),
+            FixtureFormatProfile::Jsonfg => (JSON_FG_PROFILE_URI, true),
+        };
+        assert_eq!(
+            headers.get(LINK).and_then(|value| value.to_str().ok()),
+            Some(format!("<{profile_uri}>; rel=\"profile\"").as_str()),
+            "{label} spatial profile link"
+        );
+        for member in ["conformsTo", "featureType", "coordRefSys"] {
+            assert_eq!(
+                document.get(member).is_some(),
+                json_fg,
+                "{label} JSON-FG root member {member}"
+            );
+        }
+        if json_fg {
+            assert_eq!(document["coordRefSys"], CRS84_URI, "{label} CRS");
+            for feature in geojson_features(&document) {
+                for member in ["conformsTo", "featureType", "coordRefSys"] {
+                    assert!(
+                        feature.get(member).is_none(),
+                        "{label} collection Feature repeats root-only member {member}"
+                    );
+                }
+            }
+        }
     }
     if let Some(cache) = &step.expect.cache {
         match cache.as_str() {
@@ -1371,6 +2105,12 @@ fn normalized_records(document: &Value) -> Vec<Value> {
             if let Some(object) = record.as_object_mut() {
                 object.remove("@id");
                 object.remove("@type");
+                if let Some(domain) = object.get_mut("domainData").and_then(Value::as_object_mut) {
+                    domain.retain(|_, value| {
+                        value.get("type").and_then(Value::as_str) != Some("Point")
+                            || value.get("coordinates").and_then(Value::as_array).is_none()
+                    });
+                }
             }
             record
         })
@@ -1380,9 +2120,22 @@ fn normalized_records(document: &Value) -> Vec<Value> {
 fn response_records(document: &Value) -> Vec<&Value> {
     if let Some(record) = document.get("data") {
         vec![record]
+    } else if let Some(items) = document.get("items").and_then(Value::as_array) {
+        items.iter().collect()
+    } else {
+        geojson_features(document)
+            .into_iter()
+            .filter_map(|feature| feature.get("properties"))
+            .collect()
+    }
+}
+
+fn geojson_features(document: &Value) -> Vec<&Value> {
+    if document.get("type").and_then(Value::as_str) == Some("Feature") {
+        vec![document]
     } else {
         document
-            .get("items")
+            .get("features")
             .and_then(Value::as_array)
             .map_or_else(Vec::new, |items| items.iter().collect())
     }
@@ -1408,6 +2161,8 @@ fn validate_response_contracts(
     let json_ld = match media_type {
         "application/json" => false,
         "application/ld+json" => true,
+        "application/geo+json" => return,
+        "application/vnd.sdmx.structure+json" | "application/vnd.sdmx.data+json" => return,
         _ => panic!(
             "{project}/{} returned an unsupported Record media type",
             step.id
@@ -1665,7 +2420,17 @@ fn validate_json_ld_graph(
                 .find(|property| property.name == *property_name)
                 .expect("disclosed property is compiled");
             assert!(access_profile.selectable_properties.contains(property_name));
-            let datatype = registry_relay_v2::semantics::datatype_iri(property.data_type);
+            let datatype = property.scalar_binding().map_or(
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON",
+                |binding| registry_relay_v2::semantics::datatype_iri(binding.data_type),
+            );
+            if property.point_binding().is_some() {
+                assert_eq!(
+                    domain_data[property_name]["type"], "Point",
+                    "{project}/{} JSON-LD Point has its governed shape",
+                    step.id
+                );
+            }
             assert_typed_quad(
                 &quads,
                 subject,
@@ -1776,11 +2541,13 @@ impl ProjectHarness {
                 .expect("fixture source resolves")
                 .expected_schema_fingerprint
                 .clone();
-            let governed_yaml =
-                contract_yaml.replacen(&governed_fingerprint, &observed_fingerprint, 1);
-            assert_ne!(governed_yaml, contract_yaml, "source fingerprint rewrites");
-            contract = RegistryContract::parse_yaml(&governed_yaml)
-                .expect("fixture-governed contract parses");
+            if governed_fingerprint != observed_fingerprint {
+                let governed_yaml =
+                    contract_yaml.replacen(&governed_fingerprint, &observed_fingerprint, 1);
+                assert_ne!(governed_yaml, contract_yaml, "source fingerprint rewrites");
+                contract = RegistryContract::parse_yaml(&governed_yaml)
+                    .expect("fixture-governed contract parses");
+            }
         }
         let observed = vec![ObservedSourceSchema {
             source: source_id.clone(),
@@ -1805,11 +2572,11 @@ impl ProjectHarness {
                 .collect(),
         }];
         let mut governed = governed_files(&root, &contract);
+        let inventory = compile_contract(&contract, &observed, CompileProfile::Production)
+            .expect("fixture classification inventory compiles");
+        let current_inventory_digest = classification_inventory_digest(&inventory)
+            .expect("fixture classification inventory digests");
         if accept_fixture_fingerprint {
-            let inventory = compile_contract(&contract, &observed, CompileProfile::Production)
-                .expect("synthetic fixture inventory compiles");
-            let inventory_digest = classification_inventory_digest(&inventory)
-                .expect("synthetic fixture inventory digests");
             let review_path = contract.classifications.provenance_ref.clone();
             let mut review = parse_classification_review_yaml(
                 governed
@@ -1817,7 +2584,7 @@ impl ProjectHarness {
                     .expect("classification review is governed"),
             )
             .expect("classification review parses");
-            review.classification_inventory_digest = inventory_digest;
+            review.classification_inventory_digest = current_inventory_digest.clone();
             governed.insert(
                 review_path,
                 render_classification_review_yaml(&review)
@@ -1833,7 +2600,7 @@ impl ProjectHarness {
             )
             .unwrap_or_else(|report| {
                 panic!(
-                    "{project} compilation failed (observed schema {observed_fingerprint}): {report:?}"
+                    "{project} compilation failed (observed schema {observed_fingerprint}, current classification inventory {current_inventory_digest}): {report:?}"
                 )
             }),
         );
@@ -2189,8 +2956,11 @@ fn governed_files(root: &Path, contract: &RegistryContract) -> GovernedFileSet {
     for resource in &contract.resources {
         paths.insert(resource.record_context.lifecycle_state.codelist.clone());
         for (_, property) in resource.properties.iter() {
-            if let Some(path) = &property.codelist {
-                paths.insert(path.clone());
+            if let Some(path) = property
+                .scalar_binding()
+                .and_then(|binding| binding.codelist.as_ref())
+            {
+                paths.insert(path.to_owned());
             }
         }
         for lookup in &resource.operations.lookups {
@@ -2201,6 +2971,22 @@ fn governed_files(root: &Path, contract: &RegistryContract) -> GovernedFileSet {
             }
         }
         for processing in &resource.processing_descriptions {
+            paths.insert(processing.legal_basis_ref.clone());
+            paths.insert(processing.dpv_profile_ref.clone());
+        }
+    }
+    for dataset in &contract.statistical_datasets {
+        for (_, dimension) in dataset.dimensions.iter() {
+            if let Some(path) = &dimension.vocabulary {
+                paths.insert(path.clone());
+            }
+        }
+        for (_, attribute) in dataset.attributes.iter() {
+            if let Some(path) = &attribute.vocabulary {
+                paths.insert(path.clone());
+            }
+        }
+        for processing in &dataset.processing_descriptions {
             paths.insert(processing.legal_basis_ref.clone());
             paths.insert(processing.dpv_profile_ref.clone());
         }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{Path, State};
-use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, VARY};
+use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LINK, VARY};
 use axum::http::{HeaderMap, HeaderValue, Request, Response, StatusCode, Uri};
 use chrono::{DateTime, NaiveDate};
 use registry_platform_canonical_json::canonicalize_json;
@@ -16,21 +16,28 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::artifacts::GeneratedArtifact;
-use crate::audit::{AuditContext, AuditOutcome, PrincipalKind, RelayAudit, RowBoundaryKind};
+use crate::artifacts::{ArtifactAccessBinding, GeneratedArtifact};
+use crate::audit::{
+    AuditContext, AuditOutcome, OperationSurface, PrincipalKind, RelayAudit, RowBoundaryKind,
+};
 use crate::auth::{bearer_token, Authorization, AuthorizationError, Principal};
 use crate::contract::{DataType, Handling, OrderedMap, Visibility};
 use crate::cursor::{
     decode as decode_cursor, encode as encode_cursor, now_unix_seconds, require_same_request,
     CursorBindings, CursorPayload, CursorValue,
 };
+use crate::format_capabilities::{
+    response_format_capabilities, supports_geojson, CRS84_URI, JSON_FG_CORE_CONFORMANCE,
+    JSON_FG_PROFILE_URI, JSON_FG_TYPES_CONFORMANCE, RFC7946_PROFILE_URI,
+};
 use crate::model::{
-    CompiledAccess, CompiledAccessProfile, CompiledOperation, CompiledResource, OperationKind,
-    RowAuthoritySource,
+    CompiledAccess, CompiledAccessProfile, CompiledOperation, CompiledResource,
+    CompiledStatisticalDataset, OperationKind, RowAuthoritySource, POINT_BBOX_PREDICATE,
 };
 use crate::problem::{ProblemCode, TraceContext};
+use crate::sdmx::{DATA_CSV_MEDIA_TYPE, DATA_JSON_MEDIA_TYPE, STRUCTURE_JSON_MEDIA_TYPE};
 use crate::server::{uri_within_bound, RelayService};
-use crate::sqlite_runtime::{OperationQuery, SourceRevision, SqliteRuntimeError};
+use crate::sqlite_runtime::{OperationQuery, PointBbox, SourceRevision, SqliteRuntimeError};
 use crate::transform;
 
 const PRODUCT_NAME: &str = "Registry Relay";
@@ -45,6 +52,13 @@ const MAXIMUM_SERIALIZED_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 enum ResponseFormat {
     Json,
     JsonLd,
+    GeoJson(GeoJsonProfile),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeoJsonProfile {
+    Rfc7946,
+    JsonFg,
 }
 
 impl ResponseFormat {
@@ -52,6 +66,31 @@ impl ResponseFormat {
         match self {
             Self::Json => "application/json",
             Self::JsonLd => "application/ld+json",
+            Self::GeoJson(_) => "application/geo+json",
+        }
+    }
+
+    const fn cursor_kind(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::JsonLd => "json-ld",
+            Self::GeoJson(_) => "geojson",
+        }
+    }
+
+    const fn cursor_profile(self) -> Option<&'static str> {
+        match self {
+            Self::GeoJson(GeoJsonProfile::Rfc7946) => Some("rfc7946"),
+            Self::GeoJson(GeoJsonProfile::JsonFg) => Some("jsonfg"),
+            Self::Json | Self::JsonLd => None,
+        }
+    }
+
+    const fn profile_link(self) -> Option<&'static str> {
+        match self {
+            Self::GeoJson(GeoJsonProfile::JsonFg) => Some(JSON_FG_PROFILE_URI),
+            Self::GeoJson(GeoJsonProfile::Rfc7946) => Some(RFC7946_PROFILE_URI),
+            Self::Json | Self::JsonLd => None,
         }
     }
 }
@@ -123,6 +162,13 @@ pub async fn service_metadata(
             }));
         }
     }
+    if service.registry.metadata_visibility.statistical_datasets != Some(Visibility::OperatorOnly) {
+        capabilities.extend(
+            visible_statistical_datasets(&service, principal.as_ref())
+                .into_iter()
+                .map(statistical_capability),
+        );
+    }
     let alignment_targets = service
         .metadata
         .alignment_targets
@@ -160,7 +206,9 @@ pub async fn service_metadata(
     });
     json_metadata_response(
         value,
-        service.registry.metadata_visibility.resources == Visibility::Public,
+        service.registry.metadata_visibility.resources == Visibility::Public
+            && service.registry.metadata_visibility.statistical_datasets
+                != Some(Visibility::OperationBound),
         &headers,
         &trace,
     )
@@ -345,31 +393,49 @@ pub async fn artifact(
             let Some(principal) = principal.as_ref() else {
                 return ProblemCode::MissingCredential.response(&trace);
             };
-            let Some(identifier) = artifact.operation_identifier.as_deref() else {
+            let Some(operation_identifier) = artifact.operation_identifier.as_deref() else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
-            let Some(operation) = find_operation_by_id(&service, identifier) else {
-                return ProblemCode::ResourceNotFound.response(&trace);
-            };
-            let Some(access_profile_identifier) = artifact.access_profile_identifier.as_deref()
-            else {
-                return ProblemCode::ResourceNotFound.response(&trace);
-            };
-            let Some(access_profile) = operation
-                .access_profiles
-                .iter()
-                .find(|access_profile| access_profile.id == access_profile_identifier)
-            else {
+            let Some(access_binding) = artifact.access_binding.as_ref() else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
             let Some(authenticator) = &service.authenticator else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
-            if authenticator
-                .authorize(&access_profile.access, Some(principal))
-                .is_err()
-            {
-                return ProblemCode::ResourceNotFound.response(&trace);
+            let (access, denial) = match access_binding {
+                ArtifactAccessBinding::AccessProfile { identifier } => {
+                    let Some(operation) = find_operation_by_id(&service, operation_identifier)
+                    else {
+                        return ProblemCode::ResourceNotFound.response(&trace);
+                    };
+                    let Some(access_profile) = operation
+                        .access_profiles
+                        .iter()
+                        .find(|access_profile| access_profile.id == *identifier)
+                    else {
+                        return ProblemCode::ResourceNotFound.response(&trace);
+                    };
+                    (&access_profile.access, ProblemCode::ConsultationDenied)
+                }
+                ArtifactAccessBinding::FixedOperation => {
+                    let Some(dataset) = service
+                        .registry
+                        .statistical_datasets
+                        .iter()
+                        .find(|dataset| dataset.operation_identifier() == operation_identifier)
+                    else {
+                        return ProblemCode::ResourceNotFound.response(&trace);
+                    };
+                    (&dataset.access, ProblemCode::AggregateDataDenied)
+                }
+            };
+            if let Err(error) = authenticator.authorize(access, Some(principal)) {
+                let code = match error {
+                    AuthorizationError::ScopeDenied
+                    | AuthorizationError::AuthenticationRequired => ProblemCode::ResourceNotFound,
+                    AuthorizationError::PurposeDenied | AuthorizationError::BindingDenied => denial,
+                };
+                return code.response(&trace);
             }
         }
     }
@@ -405,8 +471,48 @@ pub async fn record_list(
         )
         .await;
     };
-    let access = match access_operation(
+    record_collection(&service, resource, operation, principal, headers, uri).await
+}
+
+pub async fn record_search(
+    State(service): State<Arc<RelayService>>,
+    Path((resource_id, search_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response<Body> {
+    let trace = TraceContext::from_headers(&headers);
+    let principal = match authenticate_data_request(&service, &headers, &trace).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let Some((resource, operation)) = find_operation(
         &service,
+        &resource_id,
+        |kind| matches!(kind, OperationKind::Search { name } if name == &search_id),
+    ) else {
+        return unknown_data_route(
+            &service,
+            principal.as_ref(),
+            uri.query(),
+            &trace,
+            OperationClass::Search,
+        )
+        .await;
+    };
+    record_collection(&service, resource, operation, principal, headers, uri).await
+}
+
+async fn record_collection(
+    service: &RelayService,
+    resource: &CompiledResource,
+    operation: &CompiledOperation,
+    principal: Option<Principal>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response<Body> {
+    let trace = TraceContext::from_headers(&headers);
+    let access = match access_operation(
+        service,
         resource,
         operation,
         uri.query(),
@@ -420,7 +526,7 @@ pub async fn record_list(
     };
     if !uri_within_bound(&uri) {
         return refuse_known(
-            &service,
+            service,
             resource,
             operation,
             Some(&access),
@@ -432,7 +538,7 @@ pub async fn record_list(
     }
     if rejects_caller_purpose(&headers) {
         return refuse_known(
-            &service,
+            service,
             resource,
             operation,
             Some(&access),
@@ -442,11 +548,11 @@ pub async fn record_list(
         )
         .await;
     }
-    let response_format = match negotiate(&headers) {
+    let response_format = match negotiate_response(&headers, resource, &access.access_profile) {
         Ok(value) => value,
         Err(code) => {
             return refuse_known(
-                &service,
+                service,
                 resource,
                 operation,
                 Some(&access),
@@ -457,11 +563,18 @@ pub async fn record_list(
             .await
         }
     };
-    let query = match prepare_list(&service, resource, operation, &access, uri.query()) {
+    let query = match prepare_collection(
+        service,
+        resource,
+        operation,
+        &access,
+        response_format,
+        uri.query(),
+    ) {
         Ok(value) => value,
         Err(code) => {
             return refuse_known(
-                &service,
+                service,
                 resource,
                 operation,
                 Some(&access),
@@ -473,7 +586,7 @@ pub async fn record_list(
         }
     };
     if let Some(response) = quota_refusal(
-        &service,
+        service,
         resource,
         operation,
         &access,
@@ -484,14 +597,16 @@ pub async fn record_list(
     {
         return response;
     }
-    let audit = audit_context(
-        &service,
+    let mut audit = audit_context(
+        service,
         resource,
         operation,
         Some(&access),
         query.selected_fields.clone(),
         &trace,
     );
+    audit.wire_format = Some(query.response_format.cursor_kind().into());
+    audit.format_profile = query.response_format.cursor_profile().map(str::to_owned);
     if service.audit.attempt(&audit).await.is_err() {
         return ProblemCode::AuditUnavailable.response(&trace);
     }
@@ -505,6 +620,7 @@ pub async fn record_list(
                 row_authority: access.authorization.row_authority.clone(),
                 after_order: query.after_order.clone(),
                 fetch_limit: Some(query.page_size.saturating_add(1)),
+                bbox: query.bbox,
                 ..OperationQuery::default()
             },
         )
@@ -522,7 +638,7 @@ pub async fn record_list(
             return source_shape_failure(&service.audit, &audit, &trace).await;
         }
         let record = match record_value(
-            &service,
+            service,
             resource,
             &access.access_profile,
             row,
@@ -555,7 +671,7 @@ pub async fn record_list(
             .await;
         };
         match next_cursor(
-            &service,
+            service,
             operation,
             &access,
             &query,
@@ -568,30 +684,36 @@ pub async fn record_list(
     } else {
         None
     };
-    let mut document = json!({
-        "items": items,
-        "pageInfo": {"nextCursor": next_cursor},
-        "meta": record_meta(
-            &service,
-            resource,
-            operation,
-            &access.access_profile,
-            &query.selected_fields,
-            &result.source_revision,
-        ),
-    });
+    let meta = record_meta(
+        service,
+        resource,
+        operation,
+        &access.access_profile,
+        &query.selected_fields,
+        &result.source_revision,
+    );
+    let mut document = match query.response_format {
+        ResponseFormat::GeoJson(profile) => {
+            geojson_collection(service, resource, items, next_cursor, meta, profile)
+        }
+        ResponseFormat::Json | ResponseFormat::JsonLd => json!({
+            "items": items,
+            "pageInfo": {"nextCursor": next_cursor},
+            "meta": meta,
+        }),
+    };
     apply_json_ld(
-        &service,
+        service,
         resource,
         &access.access_profile,
-        response_format,
+        query.response_format,
         &mut document,
     );
     release_document(
-        &service,
+        service,
         &audit,
         document,
-        response_format,
+        query.response_format,
         cacheable(&access.access_profile, &result.source_revision),
         &headers,
         &trace,
@@ -740,25 +862,11 @@ pub async fn record_lookup(
         )
         .await;
     }
-    let response_format = match negotiate(request.headers()) {
-        Ok(value) => value,
-        Err(code) => {
-            return refuse_known(
-                &service,
-                resource,
-                operation,
-                Some(&access),
-                AuditOutcome::InvalidRequest,
-                code,
-                &trace,
-            )
-            .await
-        }
-    };
-    let fields = match selected_fields(
+    let (response_format, fields) = match prepare_single_request(
         resource,
         operation,
         &access.access_profile,
+        request.headers(),
         request.uri().query(),
     ) {
         Ok(value) => value,
@@ -906,25 +1014,11 @@ async fn single_operation(
                 )
                 .await;
             }
-            let representation = match negotiate(headers) {
-                Ok(value) => value,
-                Err(code) => {
-                    return refuse_known(
-                        service,
-                        resource,
-                        operation,
-                        Some(&access),
-                        AuditOutcome::InvalidRequest,
-                        code,
-                        trace,
-                    )
-                    .await
-                }
-            };
-            let fields = match selected_fields(
+            let prepared = match prepare_single_request(
                 resource,
                 operation,
                 &access.access_profile,
+                headers,
                 request.query_text,
             ) {
                 Ok(value) => value,
@@ -941,7 +1035,7 @@ async fn single_operation(
                     .await
                 }
             };
-            (representation, fields)
+            prepared
         }
     };
     if !request.quota_admitted {
@@ -951,7 +1045,7 @@ async fn single_operation(
             return response;
         }
     }
-    let audit = audit_context(
+    let mut audit = audit_context(
         service,
         resource,
         operation,
@@ -959,6 +1053,8 @@ async fn single_operation(
         fields.clone(),
         trace,
     );
+    audit.wire_format = Some(representation.cursor_kind().into());
+    audit.format_profile = representation.cursor_profile().map(str::to_owned);
     if service.audit.attempt(&audit).await.is_err() {
         return ProblemCode::AuditUnavailable.response(trace);
     }
@@ -1001,17 +1097,20 @@ async fn single_operation(
             return source_shape_failure(&service.audit, &audit, trace).await;
         }
     };
-    let mut document = json!({
-        "data": record,
-        "meta": record_meta(
-            service,
-            resource,
-            operation,
-            &access.access_profile,
-            &fields,
-            &result.source_revision,
-        ),
-    });
+    let meta = record_meta(
+        service,
+        resource,
+        operation,
+        &access.access_profile,
+        &fields,
+        &result.source_revision,
+    );
+    let mut document = match representation {
+        ResponseFormat::GeoJson(profile) => {
+            geojson_feature(service, resource, record, Some(meta), profile, true)
+        }
+        ResponseFormat::Json | ResponseFormat::JsonLd => json!({"data": record, "meta": meta}),
+    };
     apply_json_ld(
         service,
         resource,
@@ -1193,6 +1292,7 @@ enum OperationClass {
     List,
     Read,
     Lookup,
+    Search,
 }
 
 async fn unknown_data_route(
@@ -1264,6 +1364,7 @@ fn class_matches(kind: &OperationKind, class: OperationClass) -> bool {
         (OperationKind::List, OperationClass::List)
             | (OperationKind::Read, OperationClass::Read)
             | (OperationKind::Lookup { .. }, OperationClass::Lookup)
+            | (OperationKind::Search { .. }, OperationClass::Search)
     )
 }
 
@@ -1362,6 +1463,8 @@ fn audit_context(
         registry_identifier: service.registry.registry_identifier.clone(),
         resource_identifier: Some(resource.id.clone()),
         operation_identifier: Some(operation.identifier.clone()),
+        operation_surface: operation_surface(&operation.kind),
+        query_shape: None,
         access_rule_revision: access.map(|access| access_revision(&access.access_profile)),
         purpose: access.and_then(|access| access.authorization.purpose.clone()),
         row_boundary_kind: access.map_or(RowBoundaryKind::Unknown, |access| {
@@ -1369,6 +1472,8 @@ fn audit_context(
         }),
         access_profile: access.map(|access| access.access_profile.id.clone()),
         disclosure_profile: access.map(|access| access.access_profile.disclosure_profile.clone()),
+        wire_format: None,
+        format_profile: None,
         processing_description_identifiers: processing_description_identifiers(resource, operation),
         selected_properties,
         processing_handling: access
@@ -1408,11 +1513,15 @@ fn unknown_audit_context(
         registry_identifier: service.registry.registry_identifier.clone(),
         resource_identifier: None,
         operation_identifier: None,
+        operation_surface: OperationSurface::Unknown,
+        query_shape: None,
         access_rule_revision: None,
         purpose: None,
         row_boundary_kind: RowBoundaryKind::Unknown,
         access_profile: None,
         disclosure_profile: None,
+        wire_format: None,
+        format_profile: None,
         processing_description_identifiers: Vec::new(),
         selected_properties: Vec::new(),
         processing_handling: None,
@@ -1424,6 +1533,15 @@ fn unknown_audit_context(
     }
 }
 
+fn operation_surface(kind: &OperationKind) -> OperationSurface {
+    match kind {
+        OperationKind::List => OperationSurface::RecordList,
+        OperationKind::Read => OperationSurface::RecordRead,
+        OperationKind::Lookup { .. } => OperationSurface::RecordLookup,
+        OperationKind::Search { .. } => OperationSurface::RecordSearch,
+    }
+}
+
 fn processing_description_identifiers(
     resource: &CompiledResource,
     operation: &CompiledOperation,
@@ -1432,6 +1550,7 @@ fn processing_description_identifiers(
         OperationKind::List => "list".to_owned(),
         OperationKind::Read => "read".to_owned(),
         OperationKind::Lookup { name } => format!("lookup:{name}"),
+        OperationKind::Search { name } => format!("search:{name}"),
     };
     resource
         .processing_descriptions
@@ -1489,11 +1608,21 @@ fn handling_label(value: Handling) -> &'static str {
     }
 }
 
-struct PreparedList {
+struct PreparedCollection {
     page_size: u32,
     filters: BTreeMap<String, SqlValue>,
     selected_fields: Vec<String>,
     after_order: Option<Vec<SqlValue>>,
+    bbox: Option<PointBbox>,
+    response_format: ResponseFormat,
+}
+
+struct CursorQueryContext<'a> {
+    filters: &'a BTreeMap<String, SqlValue>,
+    selected_fields: &'a [String],
+    source_revision: &'a str,
+    bbox: Option<PointBbox>,
+    response_format: ResponseFormat,
 }
 
 struct SelectedAccessProfile<'a> {
@@ -1595,13 +1724,14 @@ fn valid_access_profile_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-fn prepare_list(
+fn prepare_collection(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
     access: &Access,
+    negotiated: ResponseFormat,
     query: Option<&str>,
-) -> Result<PreparedList, ProblemCode> {
+) -> Result<PreparedCollection, ProblemCode> {
     let parameters = parse_query(query)?;
     let cursors = parameters
         .iter()
@@ -1637,13 +1767,25 @@ fn prepare_list(
             .iter()
             .map(|(name, value)| (name.clone(), cursor_to_sql(value.clone())))
             .collect::<BTreeMap<_, _>>();
-        validate_filter_inventory(operation, &filters)?;
+        let bbox = payload
+            .bbox
+            .as_ref()
+            .map(|values| parse_bbox_values(operation, values))
+            .transpose()
+            .map_err(|_| ProblemCode::CursorInvalid)?;
+        validate_filter_inventory(operation, &filters, bbox.is_some())?;
         validate_selected_inventory(
             resource,
             operation,
             &access.access_profile,
             &payload.selected_fields,
         )?;
+        let response_format =
+            response_format_from_cursor(resource, &access.access_profile, &payload)
+                .map_err(|_| ProblemCode::CursorInvalid)?;
+        if response_format.cursor_kind() != negotiated.cursor_kind() {
+            return Err(ProblemCode::CursorInvalid);
+        }
         let current_source_revision = service
             .sqlite
             .source_revision(&operation.identifier)
@@ -1653,12 +1795,16 @@ fn prepare_list(
             service,
             operation,
             access,
-            &filters,
-            &payload.selected_fields,
-            &current_source_revision,
+            CursorQueryContext {
+                filters: &filters,
+                selected_fields: &payload.selected_fields,
+                source_revision: &current_source_revision,
+                bbox,
+                response_format,
+            },
         )?;
         require_same_request(&payload, &request).map_err(|_| ProblemCode::CursorInvalid)?;
-        return Ok(PreparedList {
+        return Ok(PreparedCollection {
             page_size: payload.page_size,
             filters,
             selected_fields: payload.selected_fields,
@@ -1669,12 +1815,16 @@ fn prepare_list(
                     .map(cursor_to_sql)
                     .collect(),
             ),
+            bbox,
+            response_format,
         });
     }
 
     let mut page_size = pagination.default_page_size;
     let mut page_size_seen = false;
     let mut fields_text = None;
+    let mut format_profile_text = None;
+    let mut bbox_text = None;
     let declared = operation
         .query
         .filters
@@ -1700,6 +1850,19 @@ fn prepare_list(
                     return Err(ProblemCode::FieldsInvalid);
                 }
             }
+            "formatProfile" => {
+                if format_profile_text.replace(value).is_some() {
+                    return Err(ProblemCode::UnsupportedFormat);
+                }
+            }
+            "bbox" => {
+                if operation.query.spatial_bbox.is_none() {
+                    return Err(ProblemCode::UnknownFilter);
+                }
+                if bbox_text.replace(value).is_some() {
+                    return Err(ProblemCode::InvalidFilter);
+                }
+            }
             "accessProfile" => {}
             _ if declared.contains(name.as_str()) => {
                 if raw_filters.insert(name, value).is_some() {
@@ -1709,7 +1872,14 @@ fn prepare_list(
             _ => return Err(ProblemCode::UnknownFilter),
         }
     }
-    if raw_filters.is_empty() && !operation.query.allow_unfiltered {
+    let bbox = bbox_text
+        .as_deref()
+        .map(|value| parse_bbox(operation, value))
+        .transpose()?;
+    if matches!(operation.kind, OperationKind::Search { .. }) && bbox.is_none() {
+        return Err(ProblemCode::InvalidFilter);
+    }
+    if raw_filters.is_empty() && bbox.is_none() && !operation.query.allow_unfiltered {
         return Err(ProblemCode::InvalidFilter);
     }
     let mut filters = BTreeMap::new();
@@ -1725,7 +1895,11 @@ fn prepare_list(
                     .iter()
                     .find(|property| property.name == filter.property)
                     .ok_or(ProblemCode::InvalidFilter)?;
-                if !codelist_accepts(service, property.codelist.as_deref(), value) {
+                let codelist = property
+                    .scalar_binding()
+                    .and_then(|binding| binding.codelist.as_deref())
+                    .ok_or(ProblemCode::InvalidFilter)?;
+                if !codelist_accepts(service, Some(codelist), value) {
                     return Err(ProblemCode::InvalidFilter);
                 }
             }
@@ -1737,29 +1911,44 @@ fn prepare_list(
         &access.access_profile,
         fields_text.as_deref(),
     )?;
-    Ok(PreparedList {
+    let response_format = select_format_profile(
+        resource,
+        &access.access_profile,
+        negotiated,
+        format_profile_text.as_deref(),
+    )?;
+    Ok(PreparedCollection {
         page_size,
         filters,
         selected_fields,
         after_order: None,
+        bbox,
+        response_format,
     })
 }
 
-fn selected_fields(
+fn prepare_single_request(
     resource: &CompiledResource,
     operation: &CompiledOperation,
     access_profile: &CompiledAccessProfile,
+    headers: &HeaderMap,
     query: Option<&str>,
-) -> Result<Vec<String>, ProblemCode> {
+) -> Result<(ResponseFormat, Vec<String>), ProblemCode> {
+    let negotiated = negotiate_response(headers, resource, access_profile)?;
     let parameters = parse_query(query)?;
     if parameters
         .iter()
-        .any(|(name, _)| name != "fields" && name != "accessProfile")
+        .any(|(name, _)| name != "fields" && name != "formatProfile" && name != "accessProfile")
     {
         return Err(ProblemCode::ConsultationInvalidRequest);
     }
     let fields = one_parameter(&parameters, "fields")?;
-    fields_from_text(resource, operation, access_profile, fields)
+    let format_profile =
+        one_parameter(&parameters, "formatProfile").map_err(|_| ProblemCode::UnsupportedFormat)?;
+    Ok((
+        select_format_profile(resource, access_profile, negotiated, format_profile)?,
+        fields_from_text(resource, operation, access_profile, fields)?,
+    ))
 }
 
 fn fields_from_text(
@@ -1824,7 +2013,12 @@ fn validate_selected_inventory(
 fn validate_filter_inventory(
     operation: &CompiledOperation,
     filters: &BTreeMap<String, SqlValue>,
+    bbox_present: bool,
 ) -> Result<(), ProblemCode> {
+    match (&operation.kind, &operation.query.spatial_bbox, bbox_present) {
+        (OperationKind::List, None, false) | (OperationKind::Search { .. }, Some(_), true) => {}
+        _ => return Err(ProblemCode::CursorInvalid),
+    }
     let declared = operation
         .query
         .filters
@@ -1832,11 +2026,108 @@ fn validate_filter_inventory(
         .map(|filter| filter.parameter.as_str())
         .collect::<BTreeSet<_>>();
     if filters.keys().any(|name| !declared.contains(name.as_str()))
-        || (filters.is_empty() && !operation.query.allow_unfiltered)
+        || (filters.is_empty() && !bbox_present && !operation.query.allow_unfiltered)
     {
         return Err(ProblemCode::CursorInvalid);
     }
     Ok(())
+}
+
+fn select_format_profile(
+    resource: &CompiledResource,
+    access_profile: &CompiledAccessProfile,
+    negotiated: ResponseFormat,
+    requested: Option<&str>,
+) -> Result<ResponseFormat, ProblemCode> {
+    match negotiated {
+        ResponseFormat::Json | ResponseFormat::JsonLd => {
+            if requested.is_some() {
+                return Err(ProblemCode::UnsupportedFormat);
+            }
+            Ok(negotiated)
+        }
+        ResponseFormat::GeoJson(_) => {
+            let profile = match requested.unwrap_or("rfc7946") {
+                "rfc7946" => GeoJsonProfile::Rfc7946,
+                "jsonfg" => GeoJsonProfile::JsonFg,
+                _ => return Err(ProblemCode::UnsupportedFormat),
+            };
+            supports_geojson(resource, access_profile)
+                .then_some(ResponseFormat::GeoJson(profile))
+                .ok_or(ProblemCode::UnsupportedFormat)
+        }
+    }
+}
+
+fn response_format_from_cursor(
+    resource: &CompiledResource,
+    access_profile: &CompiledAccessProfile,
+    payload: &CursorPayload,
+) -> Result<ResponseFormat, ProblemCode> {
+    match (
+        payload.response_format.as_str(),
+        payload.format_profile.as_deref(),
+    ) {
+        ("json", None) => Ok(ResponseFormat::Json),
+        ("json-ld", None) => Ok(ResponseFormat::JsonLd),
+        ("geojson", Some(profile)) => select_format_profile(
+            resource,
+            access_profile,
+            ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946),
+            Some(profile),
+        ),
+        _ => Err(ProblemCode::CursorInvalid),
+    }
+}
+
+fn parse_bbox(operation: &CompiledOperation, text: &str) -> Result<PointBbox, ProblemCode> {
+    if text.is_empty() || text.len() > 256 || text.chars().any(char::is_control) {
+        return Err(ProblemCode::InvalidFilter);
+    }
+    let values = text.split(',').map(str::to_owned).collect::<Vec<_>>();
+    let values: [String; 4] = values.try_into().map_err(|_| ProblemCode::InvalidFilter)?;
+    parse_bbox_values(operation, &values)
+}
+
+fn parse_bbox_values(
+    operation: &CompiledOperation,
+    values: &[String; 4],
+) -> Result<PointBbox, ProblemCode> {
+    let spatial = operation
+        .query
+        .spatial_bbox
+        .as_ref()
+        .ok_or(ProblemCode::InvalidFilter)?;
+    let mut coordinates = [0.0; 4];
+    for (target, value) in coordinates.iter_mut().zip(values) {
+        *target = value
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or(ProblemCode::InvalidFilter)?;
+        if *target == 0.0 {
+            *target = 0.0;
+        }
+    }
+    let bbox = PointBbox {
+        west: coordinates[0],
+        south: coordinates[1],
+        east: coordinates[2],
+        north: coordinates[3],
+    };
+    bbox.is_within(spatial)
+        .then_some(bbox)
+        .ok_or(ProblemCode::InvalidFilter)
+}
+
+fn canonical_bbox(bbox: PointBbox) -> [String; 4] {
+    [bbox.west, bbox.south, bbox.east, bbox.north].map(|value| {
+        if value == 0.0 {
+            "0".to_owned()
+        } else {
+            value.to_string()
+        }
+    })
 }
 
 fn parse_query(query: Option<&str>) -> Result<Vec<(String, String)>, ProblemCode> {
@@ -2051,36 +2342,49 @@ fn record_value(
         .collect::<Result<Vec<_>, _>>()?;
     let mut transformed = BTreeMap::new();
     for property in &properties {
-        let source = row
-            .get(&property.source_column)
-            .ok_or(RecordError::InvalidSource)?;
-        if matches!(source, SqlValue::Null) {
-            if property.source_required {
-                return Err(RecordError::InvalidSource);
+        match &property.binding {
+            crate::model::CompiledPropertyBinding::Scalar(binding) => {
+                let source = row
+                    .get(&binding.source_column)
+                    .ok_or(RecordError::InvalidSource)?;
+                if matches!(source, SqlValue::Null) {
+                    if property.source_required {
+                        return Err(RecordError::InvalidSource);
+                    }
+                    continue;
+                }
+                let value = match &binding.transform {
+                    Some(compiled) => transform::apply(compiled, source)
+                        .map_err(|_| RecordError::InvalidSource)?,
+                    None => source.clone(),
+                };
+                if matches!(value, SqlValue::Null) {
+                    if property.source_required {
+                        return Err(RecordError::InvalidSource);
+                    }
+                    continue;
+                }
+                if !valid_property_value(
+                    service,
+                    &value,
+                    binding.data_type,
+                    binding.codelist.as_deref(),
+                ) {
+                    return Err(RecordError::InvalidSource);
+                }
+                transformed.insert(
+                    property.name.as_str(),
+                    sql_to_json(value).ok_or(RecordError::InvalidSource)?,
+                );
             }
-            continue;
-        }
-        let value = match &property.transform {
-            Some(compiled) => {
-                transform::apply(compiled, source).map_err(|_| RecordError::InvalidSource)?
+            crate::model::CompiledPropertyBinding::Point(binding) => {
+                if let Some(value) = validated_point(row, binding, property.source_required)
+                    .ok_or(RecordError::InvalidSource)?
+                {
+                    transformed.insert(property.name.as_str(), value);
+                }
             }
-            None => source.clone(),
-        };
-        if matches!(value, SqlValue::Null) {
-            if property.source_required {
-                return Err(RecordError::InvalidSource);
-            }
-            continue;
         }
-        if !valid_property_value(
-            service,
-            &value,
-            property.data_type,
-            property.codelist.as_deref(),
-        ) {
-            return Err(RecordError::InvalidSource);
-        }
-        transformed.insert(property.name.as_str(), value);
     }
     let mut domain = Map::new();
     for property in properties {
@@ -2088,10 +2392,7 @@ fn record_value(
             continue;
         }
         if let Some(value) = transformed.remove(property.name.as_str()) {
-            domain.insert(
-                property.name.clone(),
-                sql_to_json(value).ok_or(RecordError::InvalidSource)?,
-            );
+            domain.insert(property.name.clone(), value);
         }
     }
     Ok(json!({
@@ -2105,6 +2406,38 @@ fn record_value(
         "recordedAt": recorded_at,
         "domainData": domain,
     }))
+}
+
+fn coordinate(value: &SqlValue) -> Option<f64> {
+    match value {
+        SqlValue::Integer(value) => Some(*value as f64),
+        SqlValue::Number(value) if value.is_finite() => Some(*value),
+        SqlValue::Null | SqlValue::String(_) | SqlValue::Boolean(_) | SqlValue::Number(_) => None,
+    }
+}
+
+fn validated_point(
+    row: &ResultRow,
+    point: &crate::model::CompiledPointPropertyBinding,
+    source_required: bool,
+) -> Option<Option<Value>> {
+    let longitude = row.get(&point.longitude_column)?;
+    let latitude = row.get(&point.latitude_column)?;
+    match (longitude, latitude) {
+        (SqlValue::Null, SqlValue::Null) if !source_required => Some(None),
+        (SqlValue::Null, SqlValue::Null) | (SqlValue::Null, _) | (_, SqlValue::Null) => None,
+        (longitude, latitude) => {
+            let longitude = coordinate(longitude)?;
+            let latitude = coordinate(latitude)?;
+            if !(-180.0..=180.0).contains(&longitude) || !(-90.0..=90.0).contains(&latitude) {
+                return None;
+            }
+            Some(Some(json!({
+                "type": "Point",
+                "coordinates": [longitude, latitude],
+            })))
+        }
+    }
 }
 
 fn valid_property_value(
@@ -2203,6 +2536,86 @@ fn source_revision_value(source: &SourceRevision) -> Value {
     }
 }
 
+fn geojson_collection(
+    service: &RelayService,
+    resource: &CompiledResource,
+    records: Vec<Value>,
+    next_cursor: Option<String>,
+    meta: Value,
+    profile: GeoJsonProfile,
+) -> Value {
+    let features = records
+        .into_iter()
+        .map(|record| geojson_feature(service, resource, record, None, profile, false))
+        .collect::<Vec<_>>();
+    let mut document = json!({
+        "type": "FeatureCollection",
+        "features": features,
+        "pageInfo": {"nextCursor": next_cursor},
+        "meta": meta,
+    });
+    if profile == GeoJsonProfile::JsonFg {
+        add_json_fg_members(&mut document, resource);
+    }
+    document
+}
+
+fn geojson_feature(
+    service: &RelayService,
+    resource: &CompiledResource,
+    mut record: Value,
+    meta: Option<Value>,
+    profile: GeoJsonProfile,
+    root: bool,
+) -> Value {
+    let identifier = record
+        .get("recordIdentifier")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let geometry = resource
+        .primary_geometry
+        .as_ref()
+        .and_then(|name| {
+            record
+                .get_mut("domainData")
+                .and_then(Value::as_object_mut)
+                .and_then(|domain| domain.remove(name))
+        })
+        .unwrap_or(Value::Null);
+    let mut feature = json!({
+        "type": "Feature",
+        "id": absolute(
+            &service.registry.base_uri,
+            &format!("/v2/resources/{}/records/{identifier}", resource.id),
+        ),
+        "geometry": geometry,
+        "properties": record,
+    });
+    if let Some(meta) = meta {
+        feature
+            .as_object_mut()
+            .expect("feature is an object")
+            .insert("meta".into(), meta);
+    }
+    if root && profile == GeoJsonProfile::JsonFg {
+        add_json_fg_members(&mut feature, resource);
+    }
+    feature
+}
+
+fn add_json_fg_members(document: &mut Value, resource: &CompiledResource) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "conformsTo".into(),
+        json!([JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE]),
+    );
+    object.insert("featureType".into(), Value::String(resource.id.clone()));
+    object.insert("coordRefSys".into(), Value::String(CRS84_URI.into()));
+}
+
 fn apply_json_ld(
     service: &RelayService,
     resource: &CompiledResource,
@@ -2285,7 +2698,9 @@ async fn release_document(
         {
             return ProblemCode::AuditUnavailable.response(trace);
         }
-        return not_modified(etag.as_deref().unwrap_or_default(), trace);
+        let mut response = not_modified(etag.as_deref().unwrap_or_default(), trace);
+        apply_profile_link(&mut response, representation);
+        return response;
     }
     if service
         .audit
@@ -2295,13 +2710,24 @@ async fn release_document(
     {
         return ProblemCode::AuditUnavailable.response(trace);
     }
-    bytes_response(
+    let mut response = bytes_response(
         bytes,
         representation.media_type(),
         cacheable,
         etag.as_deref(),
         trace,
-    )
+    );
+    apply_profile_link(&mut response, representation);
+    response
+}
+
+fn apply_profile_link(response: &mut Response<Body>, representation: ResponseFormat) {
+    let Some(uri) = representation.profile_link() else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(&format!("<{uri}>; rel=\"profile\"")) {
+        response.headers_mut().insert(LINK, value);
+    }
 }
 
 struct BoundedWriter {
@@ -2346,7 +2772,9 @@ async fn source_failure(
         SqliteRuntimeError::Source(error) if sqlite_error_is_timeout(error.kind()) => {
             (AuditOutcome::TimedOut, ProblemCode::Timeout)
         }
-        SqliteRuntimeError::UnknownOperation | SqliteRuntimeError::InvalidPlan => {
+        SqliteRuntimeError::UnknownOperation
+        | SqliteRuntimeError::InvalidPlan
+        | SqliteRuntimeError::ResultTooLarge => {
             (AuditOutcome::InternalFailed, ProblemCode::Internal)
         }
         SqliteRuntimeError::MissingSource
@@ -2405,13 +2833,25 @@ fn cacheable(access_profile: &CompiledAccessProfile, source: &SourceRevision) ->
         && matches!(source, SourceRevision::Snapshot(_))
 }
 
-fn negotiate(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
+fn negotiate_response(
+    headers: &HeaderMap,
+    resource: &CompiledResource,
+    access_profile: &CompiledAccessProfile,
+) -> Result<ResponseFormat, ProblemCode> {
+    negotiate_with_geojson(headers, supports_geojson(resource, access_profile))
+}
+
+fn negotiate_with_geojson(
+    headers: &HeaderMap,
+    geojson_supported: bool,
+) -> Result<ResponseFormat, ProblemCode> {
     if !headers.contains_key(ACCEPT) {
         return Ok(ResponseFormat::Json);
     }
 
     let mut json = None;
     let mut json_ld = None;
+    let mut geojson = None;
     for value in headers.get_all(ACCEPT) {
         let value = value.to_str().map_err(|_| ProblemCode::UnsupportedFormat)?;
         for item in value.split(',') {
@@ -2424,23 +2864,42 @@ fn negotiate(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
                 update_preference(&mut json, 2, quality);
             } else if media.eq_ignore_ascii_case("application/ld+json") {
                 update_preference(&mut json_ld, 2, quality);
+            } else if media.eq_ignore_ascii_case("application/geo+json") {
+                update_preference(&mut geojson, 2, quality);
             } else if media.eq_ignore_ascii_case("application/*") {
                 update_preference(&mut json, 1, quality);
                 update_preference(&mut json_ld, 1, quality);
+                update_preference(&mut geojson, 1, quality);
             } else if media == "*/*" {
                 update_preference(&mut json, 0, quality);
                 update_preference(&mut json_ld, 0, quality);
+                update_preference(&mut geojson, 0, quality);
             }
         }
     }
 
     let json = json.map_or(0, |(_, quality)| quality);
     let json_ld = json_ld.map_or(0, |(_, quality)| quality);
-    match (json, json_ld) {
-        (0, 0) => Err(ProblemCode::UnsupportedFormat),
-        (json, json_ld) if json_ld > json => Ok(ResponseFormat::JsonLd),
-        _ => Ok(ResponseFormat::Json),
+    let geojson = if geojson_supported {
+        geojson.map_or(0, |(_, quality)| quality)
+    } else {
+        0
+    };
+    let preferred = json.max(json_ld).max(geojson);
+    if preferred == 0 {
+        Err(ProblemCode::UnsupportedFormat)
+    } else if json == preferred {
+        Ok(ResponseFormat::Json)
+    } else if json_ld == preferred {
+        Ok(ResponseFormat::JsonLd)
+    } else {
+        Ok(ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946))
     }
+}
+
+#[cfg(test)]
+fn negotiate(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
+    negotiate_with_geojson(headers, false)
 }
 
 fn update_preference(preference: &mut Option<(u8, u16)>, specificity: u8, quality: u16) {
@@ -2508,7 +2967,7 @@ fn next_cursor(
     service: &RelayService,
     operation: &CompiledOperation,
     access: &Access,
-    query: &PreparedList,
+    query: &PreparedCollection,
     last: &ResultRow,
     source_revision: &SourceRevision,
 ) -> Result<String, ()> {
@@ -2529,13 +2988,18 @@ fn next_cursor(
         .iter()
         .map(|column| last.get(column).cloned().and_then(sql_to_cursor).ok_or(()))
         .collect::<Result<Vec<_>, _>>()?;
+    let source_revision = source_revision.cursor_value();
     let mut payload = cursor_template(
         service,
         operation,
         access,
-        &query.filters,
-        &query.selected_fields,
-        &source_revision.cursor_value(),
+        CursorQueryContext {
+            filters: &query.filters,
+            selected_fields: &query.selected_fields,
+            source_revision: &source_revision,
+            bbox: query.bbox,
+            response_format: query.response_format,
+        },
     )
     .map_err(|_| ())?;
     payload.expires_at_unix_seconds = now_unix_seconds()
@@ -2564,16 +3028,16 @@ fn cursor_template(
     service: &RelayService,
     operation: &CompiledOperation,
     access: &Access,
-    filters: &BTreeMap<String, SqlValue>,
-    selected_fields: &[String],
-    source_revision: &str,
+    context: CursorQueryContext<'_>,
 ) -> Result<CursorPayload, ProblemCode> {
     let key = service
         .cursor_key
         .as_ref()
         .ok_or(ProblemCode::CursorInvalid)?;
-    let filter_json = serde_json::to_vec(filters).map_err(|_| ProblemCode::CursorInvalid)?;
-    let field_json = serde_json::to_vec(selected_fields).map_err(|_| ProblemCode::CursorInvalid)?;
+    let filter_json =
+        serde_json::to_vec(context.filters).map_err(|_| ProblemCode::CursorInvalid)?;
+    let field_json =
+        serde_json::to_vec(context.selected_fields).map_err(|_| ProblemCode::CursorInvalid)?;
     let order_json =
         serde_json::to_vec(&operation.query.order_by).map_err(|_| ProblemCode::CursorInvalid)?;
     let transform_json = serde_json::to_vec(&access.access_profile.transform_inventory)
@@ -2588,7 +3052,7 @@ fn cursor_template(
     Ok(CursorPayload::new(
         u64::MAX,
         service.registry.contract_revision.clone(),
-        source_revision.to_owned(),
+        context.source_revision.to_owned(),
         operation.identifier.clone(),
         CursorBindings {
             access_profile: access.access_profile.id.clone(),
@@ -2610,6 +3074,11 @@ fn cursor_template(
                 .map_err(|_| ProblemCode::CursorInvalid)?,
             last_record_identifier: String::new(),
         },
+    )
+    .with_response_context(
+        context.bbox.map(canonical_bbox),
+        context.response_format.cursor_kind().to_owned(),
+        context.response_format.cursor_profile().map(str::to_owned),
     ))
 }
 
@@ -2807,6 +3276,81 @@ fn protected_artifact(artifact: &GeneratedArtifact) -> bool {
 
 type VisibleAccessProfile<'a> = (&'a CompiledOperation, &'a CompiledAccessProfile);
 
+fn visible_statistical_datasets<'a>(
+    service: &'a RelayService,
+    principal: Option<&Principal>,
+) -> Vec<&'a CompiledStatisticalDataset> {
+    match service.registry.metadata_visibility.statistical_datasets {
+        None | Some(Visibility::OperatorOnly) => Vec::new(),
+        Some(Visibility::Public) => service
+            .registry
+            .statistical_datasets
+            .iter()
+            .filter(|dataset| matches!(dataset.access, CompiledAccess::Public))
+            .collect(),
+        Some(Visibility::OperationBound) => {
+            let Some(principal) = principal else {
+                return service
+                    .registry
+                    .statistical_datasets
+                    .iter()
+                    .filter(|dataset| matches!(dataset.access, CompiledAccess::Public))
+                    .collect();
+            };
+            service
+                .registry
+                .statistical_datasets
+                .iter()
+                .filter(|dataset| match &dataset.access {
+                    CompiledAccess::Public => true,
+                    CompiledAccess::Protected { .. } => {
+                        service.authenticator.as_ref().is_some_and(|authenticator| {
+                            authenticator
+                                .authorize(&dataset.access, Some(principal))
+                                .is_ok()
+                        })
+                    }
+                })
+                .collect()
+        }
+    }
+}
+
+fn statistical_capability(dataset: &CompiledStatisticalDataset) -> Value {
+    let data = format!(
+        "/sdmx/v2/data/dataflow/{}/{}/{}",
+        dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+    );
+    json!({
+        "family": "aggregate-data",
+        "pattern": "statistical-dataflow",
+        "statisticalDatasetIdentifier": dataset.id,
+        "operationIdentifier": dataset.operation_identifier(),
+        "profile": {
+            "sdmxRestVersion": dataset.sdmx.rest_version,
+            "sdmxDataJsonVersion": dataset.sdmx.data_json_version,
+            "sdmxDataCsvVersion": dataset.sdmx.data_csv_version,
+            "sdmxStructureJsonVersion": dataset.sdmx.structure_json_version,
+        },
+        "wireFormats": [
+            {"id": "sdmx-json", "mediaType": DATA_JSON_MEDIA_TYPE},
+            {"id": "sdmx-csv", "mediaType": DATA_CSV_MEDIA_TYPE},
+            {"id": "sdmx-structure-json", "mediaType": STRUCTURE_JSON_MEDIA_TYPE},
+        ],
+        "href": data,
+        "structureLinks": {
+            "dataflow": format!(
+                "/sdmx/v2/structure/dataflow/{}/{}/{}",
+                dataset.sdmx.agency_id, dataset.sdmx.dataflow_id, dataset.sdmx.version
+            ),
+            "datastructure": format!(
+                "/sdmx/v2/structure/datastructure/{}/{}/{}",
+                dataset.sdmx.agency_id, dataset.sdmx.data_structure_id, dataset.sdmx.version
+            ),
+        },
+    })
+}
+
 fn resource_document(
     service: &RelayService,
     resource: &CompiledResource,
@@ -2857,14 +3401,11 @@ fn capability(
         "schemaReference": access_profile.schema_reference,
         "semanticModelReference": access_profile.semantic_model_reference,
         "contextReference": access_profile.context_reference,
-        "wireFormats": [
-            {"id": "json", "mediaType": "application/json", "formatProfiles": []},
-            {"id": "json-ld", "mediaType": "application/ld+json", "formatProfiles": []},
-        ],
         "href": match &operation.kind {
             OperationKind::List => format!("/v2/resources/{}/records", resource.id),
             OperationKind::Read => format!("/v2/resources/{}/records/{{recordIdentifier}}", resource.id),
             OperationKind::Lookup {name} => format!("/v2/resources/{}/lookups/{name}", resource.id),
+            OperationKind::Search {name} => format!("/v2/resources/{}/searches/{name}", resource.id),
         }
     });
     let stem = format!(
@@ -2875,6 +3416,24 @@ fn capability(
     let object = document
         .as_object_mut()
         .expect("capability document is an object");
+    object.insert(
+        "wireFormats".into(),
+        serde_json::to_value(response_format_capabilities(resource, access_profile))
+            .expect("compiled response format capabilities serialize"),
+    );
+    if let Some(spatial) = &operation.query.spatial_bbox {
+        object.insert(
+            "spatialQuery".into(),
+            json!({
+                "bbox": {
+                    "crs": CRS84_URI,
+                    "predicate": POINT_BBOX_PREDICATE,
+                    "maximumLongitudeSpanDegrees": spatial.maximum_longitude_span_degrees,
+                    "maximumLatitudeSpanDegrees": spatial.maximum_latitude_span_degrees,
+                }
+            }),
+        );
+    }
     if service.registry.metadata_visibility.classifications != Visibility::OperatorOnly {
         object.insert(
             "classificationReference".into(),
@@ -2908,6 +3467,7 @@ fn operation_artifact_stem(resource: &str, kind: &OperationKind) -> String {
         OperationKind::List => format!("{resource}--list"),
         OperationKind::Read => format!("{resource}--read"),
         OperationKind::Lookup { name } => format!("{resource}--lookup-{name}"),
+        OperationKind::Search { name } => format!("{resource}--search-{name}"),
     }
 }
 
@@ -2916,6 +3476,7 @@ fn operation_pattern(kind: &OperationKind) -> &'static str {
         OperationKind::List => "list",
         OperationKind::Read => "retrieve",
         OperationKind::Lookup { .. } => "search",
+        OperationKind::Search { .. } => "search",
     }
 }
 
@@ -2931,6 +3492,9 @@ fn operation_href(
         }
         OperationKind::Lookup { name } => {
             format!("/v2/resources/{}/lookups/{name}", resource.id)
+        }
+        OperationKind::Search { name } => {
+            format!("/v2/resources/{}/searches/{name}", resource.id)
         }
     };
     absolute(&service.registry.base_uri, &path)
@@ -3066,6 +3630,18 @@ fn weak_entity_tag(value: &str) -> Option<&str> {
 mod tests {
     use super::*;
 
+    fn compiled_spatial() -> crate::model::CompiledRegistry {
+        let contract = crate::compiler::tests::spatial_contract();
+        crate::compiler::compile_contract(
+            &contract,
+            &[crate::compiler::tests::point_observed_schema(
+                "INTEGER", "REAL",
+            )],
+            crate::model::CompileProfile::Production,
+        )
+        .expect("spatial contract compiles")
+    }
+
     fn headers(name: http::header::HeaderName, values: &[&str]) -> HeaderMap {
         let mut headers = HeaderMap::new();
         for value in values {
@@ -3119,6 +3695,91 @@ mod tests {
                 Err(ProblemCode::UnsupportedFormat)
             );
         }
+    }
+
+    #[test]
+    fn spatial_formats_validate_and_keep_distinct_cache_identities() {
+        let registry = compiled_spatial();
+        let resource = &registry.resources[0];
+        let operation = &resource.operations[0];
+        let access_profile = &operation.access_profiles[0];
+        assert_eq!(
+            negotiate_response(
+                &headers(ACCEPT, &["application/geo+json"]),
+                resource,
+                access_profile,
+            ),
+            Ok(ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946))
+        );
+        assert_eq!(
+            parse_bbox(operation, "100,-20,101,-19"),
+            Ok(PointBbox {
+                west: 100.0,
+                south: -20.0,
+                east: 101.0,
+                north: -19.0,
+            })
+        );
+        assert_eq!(
+            parse_bbox(operation, "100,-20,103,-19"),
+            Err(ProblemCode::InvalidFilter)
+        );
+
+        let point = resource.properties[1]
+            .point_binding()
+            .expect("Point binding");
+        let row = BTreeMap::from([
+            ("longitude".into(), SqlValue::Integer(101)),
+            ("latitude".into(), SqlValue::Number(-19.5)),
+        ]);
+        assert_eq!(
+            validated_point(&row, point, true),
+            Some(Some(
+                json!({"type": "Point", "coordinates": [101.0, -19.5]})
+            ))
+        );
+        let invalid_pair = BTreeMap::from([
+            ("longitude".into(), SqlValue::Null),
+            ("latitude".into(), SqlValue::Number(-19.5)),
+        ]);
+        assert_eq!(validated_point(&invalid_pair, point, false), None);
+
+        let mut collection = json!({
+            "type": "FeatureCollection",
+            "features": [{"type": "Feature"}],
+            "pageInfo": {"nextCursor": null},
+            "meta": {}
+        });
+        add_json_fg_members(&mut collection, resource);
+        assert_eq!(collection["type"], "FeatureCollection");
+        assert_eq!(collection["coordRefSys"], CRS84_URI);
+        assert!(collection.get("conformsTo").is_some());
+        assert!(collection.get("featureType").is_some());
+        assert!(collection["features"][0].get("conformsTo").is_none());
+
+        let identities = [
+            json!({"items": [], "meta": {}}),
+            json!({"@context": "context", "items": [], "meta": {}}),
+            json!({"type": "FeatureCollection", "features": [], "meta": {}}),
+            collection.clone(),
+        ]
+        .map(|document| exact_etag(&serde_json::to_vec(&document).expect("response serializes")))
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        assert_eq!(identities.len(), 4);
+
+        let mut response = Response::new(Body::empty());
+        apply_profile_link(
+            &mut response,
+            ResponseFormat::GeoJson(GeoJsonProfile::JsonFg),
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(LINK)
+                .and_then(|value| value.to_str().ok()),
+            Some("<http://www.opengis.net/def/profile/OGC/0/jsonfg>; rel=\"profile\"")
+        );
     }
 
     #[test]
