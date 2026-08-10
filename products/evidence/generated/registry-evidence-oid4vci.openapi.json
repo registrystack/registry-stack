@@ -709,6 +709,12 @@
                   "const": "no-cache",
                   "type": "string"
                 }
+              },
+              "WWW-Authenticate": {
+                "schema": {
+                  "const": "Bearer",
+                  "type": "string"
+                }
               }
             }
           },
@@ -1069,6 +1075,12 @@
               "Pragma": {
                 "schema": {
                   "const": "no-cache",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "schema": {
+                  "const": "Bearer",
                   "type": "string"
                 }
               }

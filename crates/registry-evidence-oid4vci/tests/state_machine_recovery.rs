@@ -610,13 +610,15 @@ async fn offer_saturation_fails_closed_without_evicting_a_live_exchange() {
 async fn token_saturation_does_not_spend_the_offer_that_could_not_be_exchanged() {
     let mut config = loaded_config();
     config.store.maximum_offers = 1;
-    config.store.offer_lifetime_seconds = 1;
+    // Store deadlines use whole seconds. This leaves the recovered offer at
+    // least four seconds for the credential exchange even near a boundary.
+    config.store.offer_lifetime_seconds = 5;
     config.store.access_token_lifetime_seconds = 60;
     config.store.nonce_lifetime_seconds = 30;
     let harness = harness(config);
 
     let held_token = access_token(&harness.server).await;
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    tokio::time::sleep(Duration::from_millis(5_100)).await;
 
     let preserved_code = offered_code(&create_offer(&harness.server, false).await);
     let saturated = harness

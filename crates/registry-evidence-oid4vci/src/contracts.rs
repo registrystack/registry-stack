@@ -64,7 +64,7 @@ pub fn openapi_document() -> Value {
                 "responses": {
                     "201": json_response("Credential offer", "OfferResponse"),
                     "400": problem_response("The offer request is outside the published catalog"),
-                    "401": problem_response("The offer bearer token is missing or refused"),
+                    "401": bearer_problem_response("The offer bearer token is missing or refused"),
                     "408": problem_response("The configured request deadline elapsed"),
                     "413": framework_response("The request body exceeds the configured byte limit"),
                     "503": problem_response("Authorization, Evidence discovery, or bounded state is unavailable")
@@ -128,7 +128,7 @@ pub fn openapi_document() -> Value {
                 "responses": {
                     "200": json_response("Evidence credentials, byte-for-byte", "CredentialResponse"),
                     "400": problem_response("The configuration, nonce, or proof was refused after token claim"),
-                    "401": problem_response("The access token is missing, unknown, expired, or already claimed"),
+                    "401": bearer_problem_response("The access token is missing, unknown, expired, or already claimed"),
                     "403": problem_response("Evidence refused the request"),
                     "408": problem_response("The configured request deadline elapsed"),
                     "413": framework_response("The request body exceeds the configured byte limit"),
@@ -200,6 +200,13 @@ fn problem_response(description: &str) -> Value {
         },
         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
     })
+}
+
+fn bearer_problem_response(description: &str) -> Value {
+    let mut response = problem_response(description);
+    response["headers"]["WWW-Authenticate"] =
+        json!({"schema": {"type": "string", "const": "Bearer"}});
+    response
 }
 
 fn framework_response(description: &str) -> Value {
@@ -464,6 +471,14 @@ mod tests {
         assert!(document["paths"][TOKEN_PATH]["post"]["responses"]
             .get("422")
             .is_some());
+        for path in [OFFERS_PATH, CREDENTIAL_PATH] {
+            assert_eq!(
+                document["paths"][path]["post"]["responses"]["401"]["headers"]["WWW-Authenticate"]
+                    ["schema"]["const"],
+                "Bearer",
+                "{path}"
+            );
+        }
     }
 
     #[test]

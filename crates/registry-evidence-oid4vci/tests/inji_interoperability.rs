@@ -847,7 +847,10 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
             .spawn()
             .expect("start the real delivery binary"),
     );
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("build the loopback-only adopter client");
     wait_until_ready(&client, &format!("{ADOPTER_ORIGIN}/ready")).await;
     assert_eq!(
         client
