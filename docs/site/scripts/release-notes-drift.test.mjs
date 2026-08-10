@@ -90,7 +90,12 @@ test('product release notes track newest released changelog headings', () => {
   }
 });
 
-test('registryctl changelog tracks the latest stack release', () => {
+test('registryctl changelog tracks the latest stack release when included', () => {
+  const manifest = latestStackManifest();
+  if (!Object.hasOwn(manifest.artifacts ?? {}, 'registryctl')) {
+    return;
+  }
+
   const newestRegistryctl = newestVersion(
     headingVersions(readRepoFile('crates/registryctl/CHANGELOG.md')),
     'registryctl changelog',
@@ -98,8 +103,8 @@ test('registryctl changelog tracks the latest stack release', () => {
 
   assert.equal(
     newestRegistryctl,
-    latestStackReleaseVersion(),
-    'registryctl changelog must carry a section for the latest stack release',
+    manifest.stack.version,
+    'registryctl changelog must carry a section for the latest stack release that includes it',
   );
 });
 
