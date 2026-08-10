@@ -25,8 +25,9 @@ use crate::contract::{
     DataType, Handling, OrderedMap, Visibility, MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES,
 };
 use crate::cursor::{
-    decode as decode_cursor, encode as encode_cursor, now_unix_seconds, payload_within_bound,
-    require_same_request, CursorBindings, CursorPayload, CursorValue,
+    decode as decode_cursor, encode as encode_cursor, now_unix_seconds, order_value_within_bound,
+    payload_with_order_value_reservation, require_same_request, CursorBindings, CursorPayload,
+    CursorValue, MAXIMUM_CURSOR_ORDER_VALUE_BYTES,
 };
 use crate::format_capabilities::{
     response_format_capabilities, supports_geojson, CRS84_URI, JSON_FG_CORE_CONFORMANCE,
@@ -104,15 +105,17 @@ struct Access {
     access_profile: CompiledAccessProfile,
 }
 
-pub async fn health() -> Response<Body> {
-    minimal_status("ok")
+pub async fn health(headers: HeaderMap) -> Response<Body> {
+    let trace = TraceContext::from_headers(&headers);
+    minimal_status("ok", &trace)
 }
 
-pub async fn ready(State(service): State<Arc<RelayService>>) -> Response<Body> {
+pub async fn ready(State(service): State<Arc<RelayService>>, headers: HeaderMap) -> Response<Body> {
+    let trace = TraceContext::from_headers(&headers);
     if service.is_ready().await {
-        minimal_status("ready")
+        minimal_status("ready", &trace)
     } else {
-        ProblemCode::ServiceNotReady.response(&TraceContext::server_created())
+        ProblemCode::ServiceNotReady.response(&trace)
     }
 }
 
@@ -1828,6 +1831,7 @@ fn prepare_collection(
         if payload.page_size == 0
             || payload.page_size > pagination.maximum_page_size
             || payload.last_order_values.len() != operation.query.order_by.len()
+            || !valid_record_identifier(&payload.last_record_identifier)
         {
             return Err(ProblemCode::CursorInvalid);
         }
@@ -2744,14 +2748,8 @@ async fn release_document(
     let bytes = match bounded_json_bytes(&document, MAXIMUM_SERIALIZED_RESPONSE_BYTES) {
         Ok(value) => value,
         Err(_) => {
-            return terminal_problem(
-                &service.audit,
-                audit,
-                AuditOutcome::InternalFailed,
-                ProblemCode::Internal,
-                trace,
-            )
-            .await
+            let (outcome, code) = response_overflow_failure();
+            return terminal_problem(&service.audit, audit, outcome, code, trace).await;
         }
     };
     let etag = cacheable.then(|| exact_etag(&bytes));
@@ -2828,6 +2826,13 @@ fn bounded_json_bytes(document: &Value, maximum: usize) -> Result<Vec<u8>, ()> {
     };
     serde_json::to_writer(&mut writer, document).map_err(|_| ())?;
     Ok(writer.bytes)
+}
+
+const fn response_overflow_failure() -> (AuditOutcome, ProblemCode) {
+    (
+        AuditOutcome::InvalidRequest,
+        ProblemCode::ConsultationResponseTooLarge,
+    )
 }
 
 async fn source_failure(
@@ -3047,16 +3052,12 @@ fn next_cursor(
         .last()
         .and_then(|column| last.get(column))
         .and_then(|value| match value {
-            SqlValue::String(value) => Some(value.clone()),
+            SqlValue::String(value) if valid_record_identifier(value) => Some(value.clone()),
             _ => None,
         })
         .ok_or(())?;
-    let last_order_values = operation
-        .query
-        .order_by
-        .iter()
-        .map(|column| last.get(column).cloned().and_then(sql_to_cursor).ok_or(()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let last_order_values =
+        cursor_boundary_order_values(&operation.query.order_by, last).ok_or(())?;
     let source_revision = source_revision.cursor_value();
     let mut payload = cursor_template(
         service,
@@ -3093,11 +3094,14 @@ fn cursor_order_values(order_by: &[String], row: &ResultRow) -> Option<Vec<Curso
         .collect()
 }
 
+fn cursor_boundary_order_values(order_by: &[String], row: &ResultRow) -> Option<Vec<CursorValue>> {
+    cursor_order_values(order_by, row).filter(|values| values.iter().all(order_value_within_bound))
+}
+
 /// Verify the exact request-controlled portion of a continuation payload
 /// before starting its audit/source transaction. Fixed binding material is
-/// built through the same path as `next_cursor`; one empty entry per fixed
-/// keyset column reserves the serialized array shape without inventing a
-/// source value.
+/// built through the same path as `next_cursor`; every keyset slot reserves
+/// the maximum text value that source conversion will accept.
 fn cursor_context_within_bound(
     service: &RelayService,
     operation: &CompiledOperation,
@@ -3138,13 +3142,7 @@ fn cursor_context_within_bound(
         .filter_map(|(name, value)| sql_to_cursor(value.clone()).map(|value| (name.clone(), value)))
         .collect();
     payload.selected_fields = query.selected_fields.clone();
-    payload.last_order_values = operation
-        .query
-        .order_by
-        .iter()
-        .map(|_| CursorValue::String(String::new()))
-        .collect();
-    payload_within_bound(&payload)
+    payload_with_order_value_reservation(&payload, operation.query.order_by.len())
 }
 
 fn cursor_template(
@@ -3630,13 +3628,13 @@ fn absolute(base: &str, path: &str) -> String {
 
 fn valid_record_identifier(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 512
+        && value.len() <= MAXIMUM_CURSOR_ORDER_VALUE_BYTES
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
 }
 
-fn minimal_status(status: &'static str) -> Response<Body> {
+fn minimal_status(status: &'static str, trace: &TraceContext) -> Response<Body> {
     let mut response = Response::new(Body::from(format!("{{\"status\":\"{status}\"}}")));
     response
         .headers_mut()
@@ -3644,6 +3642,7 @@ fn minimal_status(status: &'static str) -> Response<Body> {
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    trace.apply(response.headers_mut());
     response
 }
 
@@ -3935,7 +3934,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_order_values_must_be_present_non_null_supported_scalars() {
+    fn cursor_order_values_validate_source_shape_and_bound_only_cursor_boundary() {
         let order = vec!["rank".to_owned(), "record_id".to_owned()];
         let valid = BTreeMap::from([
             ("rank".to_owned(), SqlValue::Integer(7)),
@@ -3953,6 +3952,30 @@ mod tests {
         let mut unsupported = valid;
         unsupported.insert("rank".to_owned(), SqlValue::Number(7.5));
         assert!(cursor_order_values(&order, &unsupported).is_none());
+
+        let boundary = BTreeMap::from([
+            ("rank".to_owned(), SqlValue::Integer(7)),
+            (
+                "record_id".to_owned(),
+                SqlValue::String("x".repeat(MAXIMUM_CURSOR_ORDER_VALUE_BYTES)),
+            ),
+        ]);
+        assert!(cursor_order_values(&order, &boundary).is_some());
+        assert!(cursor_boundary_order_values(&order, &boundary).is_some());
+
+        let mut oversized = boundary;
+        oversized.insert(
+            "record_id".to_owned(),
+            SqlValue::String("x".repeat(MAXIMUM_CURSOR_ORDER_VALUE_BYTES.saturating_add(1))),
+        );
+        assert!(
+            cursor_order_values(&order, &oversized).is_some(),
+            "a terminal page may return a valid source row without carrying it in a cursor"
+        );
+        assert!(
+            cursor_boundary_order_values(&order, &oversized).is_none(),
+            "a non-final page must refuse an order value that cannot fit its cursor reservation"
+        );
     }
 
     #[test]
@@ -3965,6 +3988,18 @@ mod tests {
             expected
         );
         assert!(bounded_json_bytes(&document, expected.len().saturating_sub(1)).is_err());
+    }
+
+    #[test]
+    fn serialized_response_overflow_is_a_bounded_consultation_refusal() {
+        let document = json!({"payload": "x".repeat(32)});
+        assert!(bounded_json_bytes(&document, 1).is_err());
+
+        let (outcome, code) = response_overflow_failure();
+        assert!(matches!(outcome, AuditOutcome::InvalidRequest));
+        assert_eq!(code.status(), 413);
+        assert_eq!(code.code(), "consultation.response_too_large");
+        assert_ne!(code.code(), ProblemCode::Internal.code());
     }
 
     #[test]

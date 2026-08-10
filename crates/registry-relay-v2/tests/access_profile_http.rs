@@ -1177,6 +1177,58 @@ async fn accept_negotiation_uses_quality_and_json_tie_break_without_leaking_valu
 }
 
 #[tokio::test]
+async fn record_response_budget_refuses_oversized_json_and_json_ld_before_serialization() {
+    let oversized_fixture = format!(
+        "{FIXTURE_SQL}\n\
+         DELETE FROM source_records\n\
+         WHERE record_id NOT IN ('record-1', 'record-2', 'record-null', 'record-overlong-secret');\n\
+         UPDATE source_records\n\
+         SET public_name = replace(hex(zeroblob(480000)), '0', 'A'),\n\
+             prederived_mask = replace(hex(zeroblob(480000)), '0', 'A');"
+    );
+    let sink = Arc::new(RecordingSink::default());
+    let harness = Harness::open_with_fixture(None, Arc::clone(&sink), &oversized_fixture).await;
+
+    for accept in [None, Some("application/ld+json")] {
+        let headers = accept
+            .map(|value| vec![(http::header::ACCEPT.as_str(), value)])
+            .unwrap_or_default();
+        let (status, _, body) = harness
+            .send(
+                Method::GET,
+                "/v2/resources/record/records?pageSize=4",
+                None,
+                None,
+                &headers,
+            )
+            .await;
+        assert_problem(
+            status,
+            &body,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "source.unavailable",
+        );
+        assert!(
+            !String::from_utf8_lossy(&body).contains(&"A".repeat(256)),
+            "the bounded response refusal must not carry source values"
+        );
+    }
+
+    let records = sink.values();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|event| event["phase"] == "terminal")
+            .count(),
+        2
+    );
+    assert!(records
+        .iter()
+        .filter(|event| event["phase"] == "terminal")
+        .all(|event| event["outcome"] == "source-failed"));
+}
+
+#[tokio::test]
 async fn duplicate_identifier_fails_read_and_page_boundary_but_lookup_stays_unresolved() {
     let duplicate_fixture = FIXTURE_SQL.replace(
         "FROM source_records;",

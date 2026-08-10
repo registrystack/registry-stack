@@ -460,6 +460,75 @@ async fn send_loopback_request(
 }
 
 #[tokio::test]
+async fn probe_responses_preserve_one_request_trace_context() {
+    const HEALTH_TRACE_ID: &str = "11111111111111111111111111111111";
+    const READY_TRACE_ID: &str = "22222222222222222222222222222222";
+    const UNREADY_TRACE_ID: &str = "33333333333333333333333333333333";
+
+    let harness = ProjectHarness::open("business-registry").await;
+    for (path, trace_id, expected_body) in [
+        ("/health", HEALTH_TRACE_ID, r#"{"status":"ok"}"#),
+        ("/ready", READY_TRACE_ID, r#"{"status":"ready"}"#),
+    ] {
+        let traceparent = format!("00-{trace_id}-0123456789abcdef-01");
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("traceparent", &traceparent)
+                    .body(Body::empty())
+                    .expect("probe request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("traceparent"),
+            Some(&traceparent.parse().expect("traceparent is valid"))
+        );
+        assert_eq!(
+            response.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        let body = to_bytes(response.into_body(), 1024)
+            .await
+            .expect("probe response reads");
+        assert_eq!(body.as_ref(), expected_body.as_bytes());
+    }
+
+    fs::remove_file(&harness.database).expect("source removes");
+    let traceparent = format!("00-{UNREADY_TRACE_ID}-fedcba9876543210-00");
+    let response = harness
+        .app
+        .oneshot(
+            Request::builder()
+                .uri("/ready")
+                .header("traceparent", &traceparent)
+                .body(Body::empty())
+                .expect("readiness request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.headers().get("traceparent"),
+        Some(&traceparent.parse().expect("traceparent is valid"))
+    );
+    assert_eq!(
+        response.headers().get(CACHE_CONTROL),
+        Some(&HeaderValue::from_static("no-store"))
+    );
+    let body = to_bytes(response.into_body(), 1024)
+        .await
+        .expect("readiness problem reads");
+    let document: Value = serde_json::from_slice(&body).expect("readiness problem is JSON");
+    assert_eq!(document["code"], "service.not_ready");
+    assert_eq!(document["traceId"], UNREADY_TRACE_ID);
+}
+
+#[tokio::test]
 async fn readiness_fails_value_free_for_missing_replaced_and_drifted_sources() {
     for project in ["business-registry", "social-assistance"] {
         let harness = ProjectHarness::open(project).await;

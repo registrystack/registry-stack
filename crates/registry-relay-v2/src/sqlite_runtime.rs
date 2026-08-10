@@ -29,6 +29,13 @@ use crate::sdmx::{DataQuery, StatisticalRow, StatisticalValue};
 
 const MAXIMUM_CELL_BYTES: usize = 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+// SQLite accounts for the serialized source rows, while Relay adds its own
+// collection metadata and representation-specific envelope. Keep that
+// envelope outside the row budget so every Record representation remains
+// below the final response serializer ceiling.
+const MAXIMUM_RECORD_RESPONSE_ENVELOPE_BYTES: usize = 1024 * 1024;
+const MAXIMUM_RECORD_RESULT_BYTES: usize =
+    MAXIMUM_RESPONSE_BYTES - MAXIMUM_RECORD_RESPONSE_ENVELOPE_BYTES;
 const MAXIMUM_STATEMENT_STEPS: u64 = 2_000_000;
 const SCHEMA_MAXIMUM_OBJECTS: usize = 10_000;
 const SCHEMA_MAXIMUM_SQL_BYTES: usize = 8 * 1024 * 1024;
@@ -1012,7 +1019,7 @@ fn statement_contract(
             limits: StatementLimits {
                 maximum_rows,
                 maximum_cell_bytes: MAXIMUM_CELL_BYTES,
-                maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+                maximum_response_bytes: MAXIMUM_RECORD_RESULT_BYTES,
                 maximum_statement_steps: MAXIMUM_STATEMENT_STEPS,
                 timeout: limits.request_timeout,
                 // Aggregate process concurrency is owned above. Each fixed
@@ -1759,6 +1766,49 @@ mod tests {
             .await
             .expect_err("implicit maximum probes one additional observation");
         assert!(matches!(error, SqliteRuntimeError::ResultTooLarge));
+    }
+
+    #[test]
+    fn record_statement_reserves_response_envelope_budget() {
+        let operation = list_operation();
+        let prepared = statement_contract(
+            &resource(),
+            &operation,
+            &operation.access_profiles[0],
+            &SqliteRuntimeLimits {
+                request_timeout: Duration::from_secs(2),
+                concurrent_queries: 1,
+            },
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("record statement compiles");
+
+        assert_eq!(
+            prepared.contract.limits.maximum_response_bytes,
+            MAXIMUM_RECORD_RESULT_BYTES
+        );
+        assert_eq!(
+            MAXIMUM_RECORD_RESULT_BYTES + MAXIMUM_RECORD_RESPONSE_ENVELOPE_BYTES,
+            MAXIMUM_RESPONSE_BYTES
+        );
+    }
+
+    #[test]
+    fn statistical_statement_keeps_its_existing_response_budget() {
+        let prepared = statistical_statement_contract(
+            &statistical_dataset(10),
+            &SqliteRuntimeLimits {
+                request_timeout: Duration::from_secs(2),
+                concurrent_queries: 1,
+            },
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        .expect("statistical statement compiles");
+
+        assert_eq!(
+            prepared.contract.limits.maximum_response_bytes,
+            MAXIMUM_RESPONSE_BYTES
+        );
     }
 
     fn statistical_runtime(

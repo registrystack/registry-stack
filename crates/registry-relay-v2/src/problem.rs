@@ -31,6 +31,7 @@ pub enum ProblemCode {
     ConsultationUnresolved,
     UnsupportedFormat,
     BodyTooLarge,
+    ConsultationResponseTooLarge,
     AggregateDataTooLarge,
     UriTooLong,
     UnsupportedMediaType,
@@ -62,6 +63,7 @@ impl ProblemCode {
             Self::ConsultationUnresolved => "consultation.unresolved",
             Self::UnsupportedFormat => "format.unsupported",
             Self::BodyTooLarge => "internal.payload_too_large",
+            Self::ConsultationResponseTooLarge => "consultation.response_too_large",
             Self::AggregateDataTooLarge => "aggregate-data.too_large",
             Self::UriTooLong => "internal.uri_too_long",
             Self::UnsupportedMediaType => "request.media_type_unsupported",
@@ -93,6 +95,7 @@ impl ProblemCode {
             Self::ConsultationUnresolved => "Requested record was not resolved",
             Self::UnsupportedFormat => "Requested format is not supported",
             Self::BodyTooLarge => "Request body is too large",
+            Self::ConsultationResponseTooLarge => "Consultation response is too large",
             Self::AggregateDataTooLarge => "Aggregate data request is too broad",
             Self::UriTooLong => "Request URI is too long",
             Self::UnsupportedMediaType => "Request media type is not supported",
@@ -120,7 +123,9 @@ impl ProblemCode {
             Self::ConsultationDenied | Self::AggregateDataDenied => 403,
             Self::ResourceNotFound | Self::ConsultationUnresolved => 404,
             Self::UnsupportedFormat => 406,
-            Self::BodyTooLarge | Self::AggregateDataTooLarge => 413,
+            Self::BodyTooLarge
+            | Self::ConsultationResponseTooLarge
+            | Self::AggregateDataTooLarge => 413,
             Self::UriTooLong => 414,
             Self::UnsupportedMediaType => 415,
             Self::RateLimited | Self::AggregateDataRateLimited => 429,
@@ -193,6 +198,9 @@ impl ProblemCode {
             Self::ConsultationUnresolved => "the requested record was not resolved",
             Self::UnsupportedFormat => "the requested format is not supported",
             Self::BodyTooLarge => "request body exceeds the configured limit",
+            Self::ConsultationResponseTooLarge => {
+                "the consultation response exceeds the configured limit"
+            }
             Self::AggregateDataTooLarge => {
                 "the aggregate data request exceeds its observation limit"
             }
@@ -355,6 +363,18 @@ mod tests {
         assert_eq!(ProblemCode::AggregateDataDenied.status(), 403);
         assert_eq!(ProblemCode::AggregateDataTooLarge.status(), 413);
         assert_eq!(ProblemCode::AggregateDataRateLimited.status(), 429);
+    }
+
+    #[test]
+    fn consultation_response_bound_has_a_stable_public_problem() {
+        let body = ProblemCode::ConsultationResponseTooLarge
+            .body(TraceId::parse("0123456789abcdef0123456789abcdef").expect("trace parses"));
+        assert_eq!(body.status, 413);
+        assert_eq!(body.code, "consultation.response_too_large");
+        assert_eq!(
+            body.detail,
+            "the consultation response exceeds the configured limit"
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ use crate::contract::{
     RegistryContract, ReviewStatus, SearchQueryDefinition, SourceProfile, StatisticalValueType,
     TransformDefinition, MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES,
 };
+use crate::cursor::MAXIMUM_CURSOR_ORDER_VALUES;
 use crate::model::{
     CapabilityFamily, ColumnAccount, ColumnUse, CompileProfile, CompileReport, CompiledAccess,
     CompiledAccessProfile, CompiledClassificationReview, CompiledCodelist,
@@ -47,7 +48,7 @@ const MAXIMUM_DISCLOSURE_PROFILES_PER_RESOURCE: usize = 64;
 const MAXIMUM_ACCESS_PROFILES_PER_OPERATION: usize = 16;
 const MAXIMUM_ACCESS_PROFILE_EXECUTORS_PER_REGISTRY: usize = 128;
 const MAXIMUM_LIST_FILTERS: usize = 32;
-const MAXIMUM_LIST_ORDER_KEYS: usize = 32;
+const MAXIMUM_LIST_ORDER_KEYS: usize = MAXIMUM_CURSOR_ORDER_VALUES;
 const MAXIMUM_LIST_PAGE_SIZE: u32 = 1_000;
 const MAXIMUM_LOOKUP_REQUEST_BODY_BYTES: u32 = 1024 * 1024;
 const MAXIMUM_LOOKUP_SELECTORS: usize = 32;

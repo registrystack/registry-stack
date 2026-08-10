@@ -17,6 +17,8 @@ use zeroize::Zeroizing;
 
 const CURSOR_VERSION: u8 = 2;
 const MAX_CURSOR_BYTES: usize = 8 * 1024;
+pub(crate) const MAXIMUM_CURSOR_ORDER_VALUE_BYTES: usize = 512;
+pub(crate) const MAXIMUM_CURSOR_ORDER_VALUES: usize = 8;
 const KEY_BYTES: usize = 32;
 const NONCE_BYTES: usize = 24;
 const TAG_BYTES: usize = 16;
@@ -234,6 +236,40 @@ pub fn payload_within_bound(payload: &CursorPayload) -> bool {
         .is_ok_and(|plaintext| !plaintext.is_empty() && plaintext.len() <= MAX_CURSOR_BYTES)
 }
 
+/// Whether a source-backed order scalar fits the capacity reserved before
+/// source access. Text is bounded both as UTF-8 and as its serialized JSON
+/// scalar so escaping cannot consume more plaintext than the reservation.
+#[must_use]
+pub(crate) fn order_value_within_bound(value: &CursorValue) -> bool {
+    match value {
+        CursorValue::String(value) => {
+            value.len() <= MAXIMUM_CURSOR_ORDER_VALUE_BYTES
+                && serde_json::to_vec(value).is_ok_and(|serialized| {
+                    serialized.len() <= MAXIMUM_CURSOR_ORDER_VALUE_BYTES.saturating_add(2)
+                })
+        }
+        CursorValue::Integer(_) | CursorValue::Boolean(_) => true,
+    }
+}
+
+/// Reserve the exact maximum accepted text shape for every keyset slot before
+/// a first-page query reaches audit or source I/O. The record identifier is
+/// duplicated in the payload for binding and as the final order value, so its
+/// separate field is reserved too.
+#[must_use]
+pub(crate) fn payload_with_order_value_reservation(
+    payload: &CursorPayload,
+    order_value_count: usize,
+) -> bool {
+    let maximum = "x".repeat(MAXIMUM_CURSOR_ORDER_VALUE_BYTES);
+    let mut reserved = payload.clone();
+    reserved.last_record_identifier = maximum.clone();
+    reserved.last_order_values = (0..order_value_count)
+        .map(|_| CursorValue::String(maximum.clone()))
+        .collect();
+    payload_within_bound(&reserved)
+}
+
 pub fn decode(
     key: &CursorKey,
     encoded: &str,
@@ -267,7 +303,13 @@ pub fn decode(
         .map_err(|_| CursorError::Integrity)?;
     let payload: CursorPayload =
         serde_json::from_slice(&payload_bytes).map_err(|_| CursorError::Malformed)?;
-    if payload.version != CURSOR_VERSION {
+    if payload.version != CURSOR_VERSION
+        || payload.last_record_identifier.len() > MAXIMUM_CURSOR_ORDER_VALUE_BYTES
+        || payload
+            .last_order_values
+            .iter()
+            .any(|value| !order_value_within_bound(value))
+    {
         return Err(CursorError::Malformed);
     }
     if payload.expires_at_unix_seconds <= now_unix_seconds {
@@ -384,6 +426,53 @@ mod tests {
             CursorValue::String("x".repeat(MAX_CURSOR_BYTES)),
         );
         assert!(!payload_within_bound(&bounded));
+    }
+
+    #[test]
+    fn order_value_capacity_is_reserved_and_enforced_at_the_exact_boundary() {
+        let boundary = CursorValue::String("x".repeat(MAXIMUM_CURSOR_ORDER_VALUE_BYTES));
+        assert!(order_value_within_bound(&boundary));
+
+        let oversized =
+            CursorValue::String("x".repeat(MAXIMUM_CURSOR_ORDER_VALUE_BYTES.saturating_add(1)));
+        assert!(!order_value_within_bound(&oversized));
+
+        let escape_expanded = CursorValue::String("\0".repeat(100));
+        assert!(!order_value_within_bound(&escape_expanded));
+
+        let key = CursorKey::new(vec![7; 32]).expect("key is sufficient");
+        let mut malformed = payload();
+        malformed.last_order_values = vec![oversized];
+        let encoded = encode(&key, &malformed).expect("plaintext remains under the cursor bound");
+        assert_eq!(decode(&key, &encoded, 1), Err(CursorError::Malformed));
+    }
+
+    #[test]
+    fn at_cap_no_filter_cursor_template_reserves_every_order_value() {
+        let request = payload();
+        assert!(request.filters.is_empty());
+        assert!(request.selected_fields.is_empty());
+        assert!(payload_with_order_value_reservation(
+            &request,
+            MAXIMUM_CURSOR_ORDER_VALUES
+        ));
+    }
+
+    #[test]
+    fn request_context_must_leave_capacity_for_source_order_values() {
+        let mut request = payload();
+        let baseline = serde_json::to_vec(&request)
+            .expect("payload serializes")
+            .len();
+        request.filters.insert(
+            "query".into(),
+            CursorValue::String(
+                "x".repeat(MAX_CURSOR_BYTES.saturating_sub(baseline).saturating_sub(16)),
+            ),
+        );
+
+        assert!(payload_within_bound(&request));
+        assert!(!payload_with_order_value_reservation(&request, 2));
     }
 
     #[test]
