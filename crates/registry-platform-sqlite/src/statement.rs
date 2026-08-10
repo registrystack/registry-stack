@@ -211,6 +211,12 @@ impl DatabaseProfile {
             Self::LiveReadOnly(value) => value.confirm_still_bound(),
         }
     }
+    fn verify_execution_binding(&self, deadline: Instant) -> Result<(), SqliteError> {
+        match self {
+            Self::Snapshot(value) => value.verify_unchanged_before(deadline),
+            Self::LiveReadOnly(value) => value.confirm_still_bound(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -320,7 +326,6 @@ impl ReadOnlyStatement {
         &self,
         values: &BTreeMap<String, Value>,
     ) -> Result<ResultSet, SqliteError> {
-        self.profile.confirm()?;
         let bindings = bind_values(&self.plan.parameters, values)?;
         let deadline = deadline(self.plan.limits.timeout)?;
         let async_deadline = tokio::time::Instant::from_std(deadline);
@@ -341,7 +346,8 @@ impl ReadOnlyStatement {
         let pool = Arc::clone(&self.connections);
         let profile = self.profile.clone();
         let execution = tokio::task::spawn_blocking(move || {
-            let execution = execute_on_connection(&connection, &plan, &bindings, deadline);
+            let execution =
+                execute_on_connection(&profile, &connection, &plan, &bindings, deadline);
             if return_or_replace_connection(&pool, &profile, connection, execution.reusable) {
                 drop(permit);
             } else {
@@ -355,7 +361,6 @@ impl ReadOnlyStatement {
             .await
             .map_err(|_| SqliteError::new(ErrorKind::Timeout))?
             .map_err(|_| SqliteError::new(ErrorKind::WorkerUnavailable))??;
-        self.profile.confirm()?;
         Ok(ResultSet {
             rows,
             provenance: self.provenance(schema_fingerprint),
@@ -367,7 +372,6 @@ impl ReadOnlyStatement {
         &self,
         values: &BTreeMap<String, Value>,
     ) -> Result<ResultSet, SqliteError> {
-        self.profile.confirm()?;
         let bindings = bind_values(&self.plan.parameters, values)?;
         let deadline = deadline(self.plan.limits.timeout)?;
         let connection = self
@@ -376,7 +380,8 @@ impl ReadOnlyStatement {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop()
             .ok_or_else(|| SqliteError::new(ErrorKind::WorkerUnavailable))?;
-        let execution = execute_on_connection(&connection, &self.plan, &bindings, deadline);
+        let execution =
+            execute_on_connection(&self.profile, &connection, &self.plan, &bindings, deadline);
         let restored = return_or_replace_connection(
             &self.connections,
             &self.profile,
@@ -386,7 +391,6 @@ impl ReadOnlyStatement {
         if !restored {
             self.concurrency.forget_permits(1);
         }
-        self.profile.confirm()?;
         let (rows, schema_fingerprint) = execution.outcome?;
         Ok(ResultSet {
             rows,
@@ -486,11 +490,36 @@ fn confirm_connection_pool_still_bound(connections: &[Connection]) -> Result<(),
 }
 
 fn execute_on_connection(
+    profile: &DatabaseProfile,
     connection: &Connection,
     plan: &CompiledPlan,
     bindings: &[(usize, Value)],
     deadline: Instant,
 ) -> ConnectionExecution<(Vec<ResultRow>, Option<String>)> {
+    execute_on_connection_with_post_statement_hook(
+        profile,
+        connection,
+        plan,
+        bindings,
+        deadline,
+        || {},
+    )
+}
+
+fn execute_on_connection_with_post_statement_hook(
+    profile: &DatabaseProfile,
+    connection: &Connection,
+    plan: &CompiledPlan,
+    bindings: &[(usize, Value)],
+    deadline: Instant,
+    post_statement: impl FnOnce(),
+) -> ConnectionExecution<(Vec<ResultRow>, Option<String>)> {
+    if let Err(error) = profile.verify_execution_binding(deadline) {
+        return ConnectionExecution {
+            outcome: Err(error),
+            reusable: false,
+        };
+    }
     if let Err(error) = confirm_connection_still_bound(connection) {
         return ConnectionExecution {
             outcome: Err(error),
@@ -498,6 +527,7 @@ fn execute_on_connection(
         };
     }
     let mut execution = run_statement(connection, plan, bindings, deadline);
+    post_statement();
     if execution.reusable {
         if let Err(error) = confirm_connection_still_bound(connection) {
             if execution.outcome.is_ok() {
@@ -505,6 +535,10 @@ fn execute_on_connection(
             }
             execution.reusable = false;
         }
+    }
+    if let Err(error) = profile.verify_execution_binding(deadline) {
+        execution.outcome = Err(error);
+        execution.reusable = false;
     }
     execution
 }
@@ -1320,6 +1354,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_digest_is_rechecked_after_the_statement_finishes() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().expect("temporary root");
+        let path = temporary.path().join("source.sqlite");
+        database(&path, "governed");
+        let profile =
+            DatabaseProfile::Snapshot(CapturedSnapshot::capture(&path).expect("snapshot captures"));
+        let connection = open_replacement_connection(&profile).expect("snapshot connection opens");
+        let execution = execute_on_connection_with_post_statement_hook(
+            &profile,
+            &connection,
+            &test_plan("SELECT id FROM records", 100_000),
+            &[],
+            Instant::now() + Duration::from_secs(1),
+            || {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                    .expect("snapshot becomes writable for the hostile writer");
+                let writer = Connection::open(&path).expect("hostile writer opens");
+                writer
+                    .execute("UPDATE records SET id = 'sensitive-row-value'", [])
+                    .expect("hostile writer mutates the same inode");
+                writer.close().expect("hostile writer closes");
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
+                    .expect("snapshot permissions are restored");
+            },
+        );
+
+        assert_eq!(
+            execution
+                .outcome
+                .expect_err("post-statement mutation must suppress the rows")
+                .kind(),
+            ErrorKind::DatabaseChanged
+        );
+        assert!(!execution.reusable);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::fs::{self, File, Metadata};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use sha2::{Digest as _, Sha256};
 
@@ -43,7 +44,7 @@ impl CapturedSnapshot {
             return Err(SqliteError::new(ErrorKind::DatabaseWritable));
         }
         refuse_sidecars(path)?;
-        let (digest, identity) = digest_stable(path, &scanned, filesystem_read_only)?;
+        let (digest, identity) = digest_stable(path, &scanned, filesystem_read_only, None)?;
         refuse_sidecars(path)?;
         Ok(Self {
             path: path.to_path_buf(),
@@ -80,12 +81,37 @@ impl CapturedSnapshot {
     /// I/O is acceptable and identity checks alone are not a sufficient proof
     /// that an immutable deployment input has not drifted.
     pub fn verify_unchanged(&self) -> Result<(), SqliteError> {
-        self.confirm_still_bound()?;
+        self.verify_unchanged_until(None)
+    }
+
+    pub(crate) fn verify_unchanged_before(&self, deadline: Instant) -> Result<(), SqliteError> {
+        self.verify_unchanged_until(Some(deadline))
+    }
+
+    // Per-read verification closes drift between readiness probes. A process
+    // cannot exclude a privileged writer changing and restoring bytes entirely
+    // between the two hashes, so snapshot deployments still require the
+    // captured file to be immutable outside this process, preferably through a
+    // read-only mount.
+    fn verify_unchanged_until(&self, deadline: Option<Instant>) -> Result<(), SqliteError> {
+        ensure_before_deadline(deadline)?;
+        refuse_sidecars(&self.path)?;
         let scanned = fs::symlink_metadata(&self.path)
             .map_err(|_| SqliteError::new(ErrorKind::DatabaseUnavailable))?;
+        if scanned.file_type().is_symlink()
+            || !scanned.is_file()
+            || !same_live_file(&self.identity.0, &scanned)
+        {
+            return Err(SqliteError::new(ErrorKind::DatabaseReplaced));
+        }
         let filesystem_read_only = filesystem_read_only(&self.path)?;
-        let (digest, identity) = digest_stable(&self.path, &scanned, filesystem_read_only)?;
+        let (digest, identity) =
+            digest_stable(&self.path, &scanned, filesystem_read_only, deadline)?;
         refuse_sidecars(&self.path)?;
+        ensure_before_deadline(deadline)?;
+        if !same_live_file(&self.identity.0, &identity.0) {
+            return Err(SqliteError::new(ErrorKind::DatabaseReplaced));
+        }
         if identity != self.identity || digest != self.digest {
             return Err(SqliteError::new(ErrorKind::DatabaseChanged));
         }
@@ -153,7 +179,9 @@ fn digest_stable(
     path: &Path,
     scanned: &Metadata,
     fs_read_only: bool,
+    deadline: Option<Instant>,
 ) -> Result<(String, FileIdentity), SqliteError> {
+    ensure_before_deadline(deadline)?;
     let mut file = open_no_follow(path)?;
     let opened = file
         .metadata()
@@ -168,6 +196,7 @@ fn digest_stable(
     let mut buffer = [0_u8; DIGEST_CHUNK_BYTES];
     let mut read_total = 0_u64;
     loop {
+        ensure_before_deadline(deadline)?;
         let read = file
             .read(&mut buffer)
             .map_err(|_| SqliteError::new(ErrorKind::DatabaseUnavailable))?;
@@ -181,6 +210,7 @@ fn digest_stable(
             )
             .ok_or_else(|| SqliteError::new(ErrorKind::DatabaseChanged))?;
     }
+    ensure_before_deadline(deadline)?;
     let after = file
         .metadata()
         .map_err(|_| SqliteError::new(ErrorKind::DatabaseUnavailable))?;
@@ -191,6 +221,14 @@ fn digest_stable(
         sha256_label(hasher.finalize().as_slice()),
         FileIdentity(opened),
     ))
+}
+
+fn ensure_before_deadline(deadline: Option<Instant>) -> Result<(), SqliteError> {
+    if deadline.is_some_and(|value| Instant::now() >= value) {
+        Err(SqliteError::new(ErrorKind::TimeBudgetExceeded))
+    } else {
+        Ok(())
+    }
 }
 
 fn sha256_label(bytes: &[u8]) -> String {

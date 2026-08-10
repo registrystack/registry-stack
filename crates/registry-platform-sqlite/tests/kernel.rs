@@ -27,6 +27,25 @@ fn make_writable(path: &std::path::Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
 }
 
+#[cfg(unix)]
+fn mutate_same_inode_and_restore_read_only(path: &std::path::Path) {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let before = fs::metadata(path).unwrap();
+    make_writable(path);
+    let connection = Connection::open(path).unwrap();
+    connection
+        .execute(
+            "UPDATE records SET id = 'sensitive-row-value' WHERE id = 'one'",
+            [],
+        )
+        .unwrap();
+    connection.close().unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
+    let after = fs::metadata(path).unwrap();
+    assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+}
+
 #[cfg(not(unix))]
 fn make_writable(path: &std::path::Path) {
     let mut permissions = fs::metadata(path).unwrap().permissions();
@@ -83,6 +102,70 @@ async fn a_snapshot_is_digest_bound_and_read_immutably() {
         Some(expected_revision.as_str())
     );
     assert!(rows.provenance.statement_digest.starts_with("sha256:"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn async_snapshot_execution_refuses_same_inode_content_drift() {
+    let directory = TempDir::new().unwrap();
+    let path = database(&directory);
+    let snapshot = CapturedSnapshot::capture(&path).unwrap();
+    let expected_revision = snapshot.digest().to_owned();
+    let statement = ReadOnlyStatement::open(
+        DatabaseProfile::Snapshot(snapshot),
+        contract("SELECT id FROM records WHERE active = :active ORDER BY id"),
+    )
+    .unwrap();
+    let initial = statement
+        .execute(&BTreeMap::from([(
+            "active".to_owned(),
+            Value::Boolean(true),
+        )]))
+        .await
+        .unwrap();
+    assert_eq!(
+        initial.provenance.source_revision.as_deref(),
+        Some(expected_revision.as_str())
+    );
+
+    mutate_same_inode_and_restore_read_only(&path);
+    let error = statement
+        .execute(&BTreeMap::from([(
+            "active".to_owned(),
+            Value::Boolean(true),
+        )]))
+        .await
+        .expect_err("changed bytes must never be reported under the startup digest");
+    assert_eq!(error.kind(), ErrorKind::DatabaseChanged);
+    assert!(!error.to_string().contains("sensitive-row-value"));
+    assert!(!error.to_string().contains(&expected_revision));
+    assert!(!error.to_string().contains(path.to_string_lossy().as_ref()));
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_snapshot_execution_refuses_same_inode_content_drift() {
+    let directory = TempDir::new().unwrap();
+    let path = database(&directory);
+    let snapshot = CapturedSnapshot::capture(&path).unwrap();
+    let expected_revision = snapshot.digest().to_owned();
+    let statement = ReadOnlyStatement::open(
+        DatabaseProfile::Snapshot(snapshot),
+        contract("SELECT id FROM records WHERE active = :active ORDER BY id"),
+    )
+    .unwrap();
+
+    mutate_same_inode_and_restore_read_only(&path);
+    let error = statement
+        .execute_at_open(&BTreeMap::from([(
+            "active".to_owned(),
+            Value::Boolean(true),
+        )]))
+        .expect_err("changed bytes must never be reported under the startup digest");
+    assert_eq!(error.kind(), ErrorKind::DatabaseChanged);
+    assert!(!error.to_string().contains("sensitive-row-value"));
+    assert!(!error.to_string().contains(&expected_revision));
+    assert!(!error.to_string().contains(path.to_string_lossy().as_ref()));
 }
 
 #[test]
