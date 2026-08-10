@@ -27,12 +27,13 @@ use crate::model::{
 };
 
 const API_VERSION: &str = "relay.registrystack.org/v2alpha1";
-const RESERVED_PARAMETERS: [&str; 5] = [
+const RESERVED_PARAMETERS: [&str; 6] = [
     "pageSize",
     "cursor",
     "fields",
     "accessProfile",
     "formatProfile",
+    "bbox",
 ];
 const MAXIMUM_RESOURCES: usize = 128;
 const MAXIMUM_PROPERTIES_PER_RESOURCE: usize = 128;
@@ -3807,6 +3808,26 @@ pub(crate) mod tests {
             diagnostic.message,
             "transformed properties cannot be used as fixed order keys"
         );
+    }
+
+    #[test]
+    fn bbox_is_reserved_for_named_spatial_search_not_list_filters() {
+        let yaml = valid_contract().replace(
+            "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+            "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: bbox, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+        );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
+        let report = compile_contract_with_governed_files(
+            &contract,
+            &[observed_schema()],
+            CompileProfile::Production,
+            &governed_files(),
+        )
+        .expect_err("the named-search bbox parameter cannot be a list filter");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "list.filter_name_invalid"
+                && diagnostic.location == "resources[0].operations.list.filters[0].name"
+        }));
     }
 
     #[test]
