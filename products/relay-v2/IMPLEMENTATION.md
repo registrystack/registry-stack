@@ -380,8 +380,10 @@ GET  /v2/artifacts/{artifactIdentifier}
 `GET /v2` returns the closed service document
 `{registryIdentifier, name, authority, operator, authoritativeScope, product,
 apiBinding, alignmentTargets, capabilities, links}`. `product` and `apiBinding`
-each contain `name` and `version`; `capabilities` contains only visible
-`{family, pattern, resourceIdentifier, operationIdentifier, href}` entries.
+each contain `name` and `version`; each visible capability identifies its family, pattern,
+resource identifier, operation, access profile, default posture, disclosure and semantic references, wire
+formats, optional bounded spatial query, and route. Capability, OpenAPI, and explanation surfaces
+use `accessProfileIdentifier` and `isDefault` for the same finite profile identity.
 `operator` is present and nullable when the Registry has not named one.
 
 `GET /v2/resources` returns `{items, pageInfo, meta}` where each item contains

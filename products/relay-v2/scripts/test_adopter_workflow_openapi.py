@@ -20,8 +20,8 @@ SPEC.loader.exec_module(WORKFLOW)
 class PublicOpenApiProjectionTests(unittest.TestCase):
     def test_rejects_a_protected_access_profile_in_public_output(self) -> None:
         public_profile = {
-            "identifier": "public-register",
-            "default": True,
+            "accessProfileIdentifier": "public-register",
+            "isDefault": True,
             "disclosureProfile": "public-register",
             "processingHandling": "public",
             "disclosureHandling": "public",
@@ -32,8 +32,8 @@ class PublicOpenApiProjectionTests(unittest.TestCase):
         }
         protected_profile = {
             **public_profile,
-            "identifier": "registrar",
-            "default": False,
+            "accessProfileIdentifier": "registrar",
+            "isDefault": False,
             "disclosureProfile": "registrar",
             "processingHandling": "confidential",
             "disclosureHandling": "confidential",
@@ -46,7 +46,10 @@ class PublicOpenApiProjectionTests(unittest.TestCase):
             "security": [{}, {"bearerAuth": []}],
             "x-registry-access-profiles": [public_profile, protected_profile],
             "x-registry-required-scopes": [
-                {"accessProfile": "registrar", "scope": "registry:business:read-registrar"}
+                {
+                    "accessProfileIdentifier": "registrar",
+                    "scope": "registry:business:read-registrar",
+                }
             ],
         }
         public = {

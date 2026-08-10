@@ -115,9 +115,11 @@ def access_profile_identifiers(operation: dict[str, Any], label: str) -> set[str
         raise GateFailure(f"{label} has no finite access profiles")
     identifiers: set[str] = set()
     for profile in profiles:
-        if not isinstance(profile, dict) or not isinstance(profile.get("identifier"), str):
+        if not isinstance(profile, dict) or not isinstance(
+            profile.get("accessProfileIdentifier"), str
+        ):
             raise GateFailure(f"{label} has a malformed access profile")
-        identifier = profile["identifier"]
+        identifier = profile["accessProfileIdentifier"]
         if not identifier or identifier in identifiers:
             raise GateFailure(f"{label} has duplicate or empty access-profile identifiers")
         identifiers.add(identifier)
@@ -163,16 +165,17 @@ def validate_public_operation(
     if public.get("security") != [] or "x-registry-required-scopes" in public:
         raise GateFailure("public OpenAPI operation carries protected access or security")
     full_profiles = {
-        profile["identifier"]: profile
+        profile["accessProfileIdentifier"]: profile
         for profile in full["x-registry-access-profiles"]
     }
     protected_ids = {
-        entry.get("accessProfile")
+        entry.get("accessProfileIdentifier")
         for entry in full.get("x-registry-required-scopes", [])
-        if isinstance(entry, dict) and isinstance(entry.get("accessProfile"), str)
+        if isinstance(entry, dict)
+        and isinstance(entry.get("accessProfileIdentifier"), str)
     }
     for profile in public["x-registry-access-profiles"]:
-        identifier = profile["identifier"]
+        identifier = profile["accessProfileIdentifier"]
         if identifier in protected_ids:
             raise GateFailure("public OpenAPI exposes a protected access profile")
         if profile != full_profiles[identifier]:

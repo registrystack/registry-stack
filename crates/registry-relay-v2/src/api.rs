@@ -36,11 +36,10 @@ use crate::problem::{ProblemCode, TraceContext};
 use crate::server::{uri_within_bound, RelayService};
 use crate::sqlite_runtime::{OperationQuery, PointBbox, SourceRevision, SqliteRuntimeError};
 use crate::transform;
+use crate::{API_BINDING_NAME, API_BINDING_VERSION};
 
 const PRODUCT_NAME: &str = "Registry Relay";
 const PRODUCT_VERSION: &str = "2";
-const API_BINDING_NAME: &str = "registry-relay-http";
-const API_BINDING_VERSION: &str = "v2";
 const METADATA_DEFAULT_PAGE_SIZE: usize = 50;
 const METADATA_MAXIMUM_PAGE_SIZE: usize = 100;
 const MAXIMUM_SERIALIZED_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -2736,35 +2735,98 @@ fn negotiate(
     resource: &CompiledResource,
     access_profile: &CompiledAccessProfile,
 ) -> Result<ResponseFormat, ProblemCode> {
-    let Some(value) = headers.get(ACCEPT) else {
-        return Ok(ResponseFormat::Json);
-    };
-    let value = value.to_str().map_err(|_| ProblemCode::UnsupportedFormat)?;
-    let mut json = false;
-    let mut json_ld = false;
-    let mut geojson = false;
-    for item in value.split(',') {
-        let mut parts = item.trim().split(';');
-        let media = parts.next().unwrap_or_default().trim();
-        let refused = parts.any(|parameter| parameter.trim() == "q=0");
-        if refused {
-            continue;
-        }
-        match media {
-            "application/json" | "application/*" | "*/*" => json = true,
-            "application/ld+json" => json_ld = true,
-            "application/geo+json" => geojson = true,
-            _ => {}
+    let mut preferences = [None; 3];
+    let mut supplied = false;
+    for value in headers.get_all(ACCEPT) {
+        supplied = true;
+        let value = value.to_str().map_err(|_| ProblemCode::UnsupportedFormat)?;
+        for item in value.split(',') {
+            let mut parts = item.trim().split(';');
+            let media = parts.next().unwrap_or_default().trim();
+            let (targets, specificity) = if media.eq_ignore_ascii_case("application/json") {
+                (&[0][..], 2)
+            } else if media.eq_ignore_ascii_case("application/ld+json") {
+                (&[1][..], 2)
+            } else if media.eq_ignore_ascii_case("application/geo+json") {
+                (&[2][..], 2)
+            } else if media.eq_ignore_ascii_case("application/*") {
+                (&[0, 1, 2][..], 1)
+            } else if media == "*/*" {
+                (&[0, 1, 2][..], 0)
+            } else {
+                continue;
+            };
+            let quality = accept_quality(parts)?;
+            for target in targets {
+                update_accept_preference(&mut preferences[*target], specificity, quality);
+            }
         }
     }
-    if json_ld {
-        Ok(ResponseFormat::JsonLd)
-    } else if geojson && supports_geojson(resource, access_profile) {
-        Ok(ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946))
-    } else if json {
+    if !supplied {
+        return Ok(ResponseFormat::Json);
+    }
+    let json = preferences[0].map_or(0, |(_, quality)| quality);
+    let json_ld = preferences[1].map_or(0, |(_, quality)| quality);
+    let geojson = preferences[2].map_or(0, |(_, quality)| quality);
+    let geojson = if supports_geojson(resource, access_profile) {
+        geojson
+    } else {
+        0
+    };
+    let preferred = json.max(json_ld).max(geojson);
+    if preferred == 0 {
+        Err(ProblemCode::UnsupportedFormat)
+    } else if json == preferred {
         Ok(ResponseFormat::Json)
+    } else if json_ld == preferred {
+        Ok(ResponseFormat::JsonLd)
+    } else if geojson == preferred {
+        Ok(ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946))
     } else {
         Err(ProblemCode::UnsupportedFormat)
+    }
+}
+
+fn update_accept_preference(preference: &mut Option<(u8, u16)>, specificity: u8, quality: u16) {
+    match preference {
+        Some((current_specificity, _)) if *current_specificity > specificity => {}
+        Some((current_specificity, current_quality)) if *current_specificity == specificity => {
+            *current_quality = (*current_quality).max(quality);
+        }
+        _ => *preference = Some((specificity, quality)),
+    }
+}
+
+fn accept_quality<'a>(parameters: impl Iterator<Item = &'a str>) -> Result<u16, ProblemCode> {
+    let mut quality = None;
+    for parameter in parameters {
+        let Some((name, value)) = parameter.trim().split_once('=') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case("q") {
+            continue;
+        }
+        if quality.is_some() {
+            return Err(ProblemCode::UnsupportedFormat);
+        }
+        quality = Some(parse_quality(value.trim()).ok_or(ProblemCode::UnsupportedFormat)?);
+    }
+    Ok(quality.unwrap_or(1000))
+}
+
+fn parse_quality(value: &str) -> Option<u16> {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    match whole {
+        "0" => {
+            let mut digits = fraction.as_bytes().to_vec();
+            digits.resize(3, b'0');
+            std::str::from_utf8(&digits).ok()?.parse().ok()
+        }
+        "1" if fraction.bytes().all(|byte| byte == b'0') => Some(1000),
+        _ => None,
     }
 }
 
@@ -3135,8 +3197,8 @@ fn capability(
         "pattern": operation_pattern(operation.pattern),
         "resourceIdentifier": resource.id,
         "operationIdentifier": operation.identifier,
-        "accessProfile": access_profile.id,
-        "defaultAccessProfile": operation.default_access_profile == access_profile.id,
+        "accessProfileIdentifier": access_profile.id,
+        "isDefault": operation.default_access_profile == access_profile.id,
         "disclosureProfile": access_profile.disclosure_profile,
         "schemaReference": access_profile.schema_reference,
         "semanticModelReference": access_profile.semantic_model_reference,
@@ -3356,6 +3418,8 @@ fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler::{compile_contract_with_governed_files, tests as compiler_tests};
+    use crate::model::CompileProfile;
 
     #[test]
     fn cursor_order_values_must_be_present_non_null_supported_scalars() {
@@ -3420,6 +3484,83 @@ mod tests {
             access_profile_parameter(Some("representation=legacy"))
                 .expect("legacy selector is not an alias"),
             None
+        );
+    }
+
+    #[test]
+    fn accept_quality_is_strict_and_every_zero_spelling_is_refused() {
+        for value in ["0", "0.", "0.0", "0.00", "0.000"] {
+            assert_eq!(parse_quality(value), Some(0));
+        }
+        assert_eq!(parse_quality("0.125"), Some(125));
+        assert_eq!(parse_quality("1.000"), Some(1000));
+        for value in ["", ".0", "00", "0.0000", "1.001", "2", "NaN"] {
+            assert_eq!(parse_quality(value), None, "{value}");
+        }
+        assert_eq!(
+            accept_quality([" q=0.0"].into_iter()).expect("valid quality"),
+            0
+        );
+        assert_eq!(
+            accept_quality(["q=0.5", "q=0.4"].into_iter()),
+            Err(ProblemCode::UnsupportedFormat)
+        );
+    }
+
+    #[test]
+    fn negotiation_honors_quality_zero_weighting_and_media_type_case() {
+        let contract = compiler_tests::spatial_contract(true);
+        let registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::spatial_observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files_for(&contract),
+        )
+        .expect("spatial contract compiles");
+        let resource = &registry.resources[0];
+        let access_profile = &resource.operations[0].access_profiles[0];
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("Application/Geo+Json;q=0.0, application/json;q=1"),
+        );
+        assert_eq!(
+            negotiate(&headers, resource, access_profile).expect("JSON remains acceptable"),
+            ResponseFormat::Json
+        );
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/json;q=0.5, Application/Geo+Json;q=0.9"),
+        );
+        assert_eq!(
+            negotiate(&headers, resource, access_profile).expect("GeoJSON is preferred"),
+            ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946)
+        );
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/json;q=0, */*;q=1"),
+        );
+        assert_eq!(
+            negotiate(&headers, resource, access_profile)
+                .expect("the exact JSON refusal overrides the wildcard"),
+            ResponseFormat::JsonLd
+        );
+        headers.remove(ACCEPT);
+        headers.append(ACCEPT, HeaderValue::from_static("application/json;q=0.4"));
+        headers.append(
+            ACCEPT,
+            HeaderValue::from_static("Application/Geo+Json;q=0.8"),
+        );
+        assert_eq!(
+            negotiate(&headers, resource, access_profile)
+                .expect("repeated Accept fields form one media range list"),
+            ResponseFormat::GeoJson(GeoJsonProfile::Rfc7946)
+        );
+        headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
+        assert_eq!(
+            negotiate(&headers, resource, access_profile)
+                .expect("the practical wildcard default remains JSON"),
+            ResponseFormat::Json
         );
     }
 }

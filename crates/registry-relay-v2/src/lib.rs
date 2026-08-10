@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Relay V2's shared governed-contract compiler and runtime kernel.
 
+pub(crate) const API_BINDING_NAME: &str = "registry-relay-http";
+pub(crate) const API_BINDING_VERSION: &str = "v2";
+
 pub mod api;
 pub mod artifacts;
 pub mod audit;

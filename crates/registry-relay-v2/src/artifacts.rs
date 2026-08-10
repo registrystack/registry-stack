@@ -175,7 +175,7 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
             Visibility::OperatorOnly,
             None,
             &json!({
-                "resource": resource.id,
+                "resourceIdentifier": resource.id,
                 "properties": resource.properties.iter().map(|property| json!({
                     "property": property.name,
                     "classification": property.classification,
@@ -768,8 +768,8 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 "x-registry-family": "consultation",
                 "x-registry-pattern": consultation_pattern(operation.pattern),
                 "x-registry-access-profiles": visible_access_profiles.iter().map(|access_profile| json!({
-                    "identifier": access_profile.id,
-                    "default": operation.default_access_profile == access_profile.id,
+                    "accessProfileIdentifier": access_profile.id,
+                    "isDefault": operation.default_access_profile == access_profile.id,
                     "disclosureProfile": access_profile.disclosure_profile,
                     "processingHandling": access_profile.processing_handling,
                     "disclosureHandling": access_profile.disclosure_handling,
@@ -800,7 +800,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 .filter_map(|access_profile| match &access_profile.access {
                     CompiledAccess::Public => None,
                     CompiledAccess::Protected { scope, .. } => Some(json!({
-                        "accessProfile": access_profile.id,
+                        "accessProfileIdentifier": access_profile.id,
                         "scope": scope,
                     })),
                 })
@@ -908,7 +908,7 @@ fn operation_response_schema(
         json!({"$ref": access_profiles[0].schema_reference})
     } else {
         json!({
-            "oneOf": access_profiles.iter().map(|access_profile| {
+            "anyOf": access_profiles.iter().map(|access_profile| {
                 json!({"$ref": access_profile.schema_reference})
             }).collect::<Vec<_>>()
         })
@@ -945,12 +945,21 @@ fn operation_response_content(
     access_profiles: &[&crate::model::CompiledAccessProfile],
 ) -> Value {
     let ordinary = operation_response_schema(operation, access_profiles);
+    let json_ld = access_profiles
+        .iter()
+        .map(|access_profile| json_ld_response_schema(operation, access_profile))
+        .collect::<Vec<_>>();
+    let json_ld = if json_ld.len() == 1 {
+        json_ld.into_iter().next().expect("one JSON-LD schema")
+    } else {
+        json!({"anyOf": json_ld})
+    };
     let mut content = Map::from_iter([
         (
             "application/json".into(),
             json!({"schema": ordinary.clone()}),
         ),
-        ("application/ld+json".into(), json!({"schema": ordinary})),
+        ("application/ld+json".into(), json!({"schema": json_ld})),
     ]);
     let spatial = access_profiles
         .iter()
@@ -963,11 +972,55 @@ fn operation_response_content(
         let schema = if spatial.len() == 1 {
             spatial.into_iter().next().expect("one spatial schema")
         } else {
-            json!({"oneOf": spatial})
+            json!({"anyOf": spatial})
         };
         content.insert("application/geo+json".into(), json!({"schema": schema}));
     }
     Value::Object(content)
+}
+
+fn json_ld_response_schema(
+    operation: &CompiledOperation,
+    access_profile: &crate::model::CompiledAccessProfile,
+) -> Value {
+    let record = json_ld_record_schema(access_profile);
+    match &operation.kind {
+        OperationKind::List | OperationKind::Search { .. } => json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["@context", "items", "pageInfo", "meta"],
+            "properties": {
+                "@context": {"type": "string", "enum": [access_profile.context_reference]},
+                "items": {"type": "array", "items": record},
+                "pageInfo": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["nextCursor"],
+                    "properties": {"nextCursor": {"type": ["string", "null"]}}
+                },
+                "meta": {"type": "object"}
+            }
+        }),
+        OperationKind::Read | OperationKind::Lookup { .. } => json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["@context", "data", "meta"],
+            "properties": {
+                "@context": {"type": "string", "enum": [access_profile.context_reference]},
+                "data": record,
+                "meta": {"type": "object"}
+            }
+        }),
+    }
+}
+
+fn json_ld_record_schema(access_profile: &crate::model::CompiledAccessProfile) -> Value {
+    json!({
+        "allOf": [
+            {"$ref": access_profile.schema_reference},
+            {"type": "object", "required": ["@id", "@type"]}
+        ]
+    })
 }
 
 fn geojson_response_schema(
@@ -1218,10 +1271,10 @@ fn capability_inventory(
                         OperationKind::Search { .. } => "search",
                     };
                     Some(json!({
-                        "resource": resource.id,
+                        "resourceIdentifier": resource.id,
                         "operationIdentifier": operation.identifier,
                         "accessProfileIdentifier": access_profile.id,
-                        "defaultAccessProfile": operation.default_access_profile == access_profile.id,
+                        "isDefault": operation.default_access_profile == access_profile.id,
                         "family": "consultation",
                         "pattern": pattern,
                         "queryKind": match &operation.kind {
@@ -1251,7 +1304,7 @@ fn capability_inventory(
         "registryIdentifier": registry.registry_identifier,
         "authorityIdentifier": registry.authority_identifier,
         "contractRevision": registry.contract_revision,
-        "apiBinding": {"name": "registry-relay", "version": "v2alpha1"},
+        "apiBinding": {"name": crate::API_BINDING_NAME, "version": crate::API_BINDING_VERSION},
         "alignmentTargets": registry.alignment_targets,
         "metadataVisibility": registry.metadata_visibility,
         "capabilities": capabilities,
@@ -1428,6 +1481,32 @@ mod tests {
         assert!(full["components"]["securitySchemes"]
             .get("oauth2")
             .is_none());
+        let read_content = &full["paths"]["/v2/resources/record/records/{recordIdentifier}"]["get"]
+            ["responses"]["200"]["content"];
+        let json_schema = &read_content["application/json"]["schema"];
+        let json_ld_schema = &read_content["application/ld+json"]["schema"];
+        assert!(json_schema["properties"].get("@context").is_none());
+        assert_eq!(json_ld_schema["properties"]["@context"]["type"], "string");
+        assert!(json_ld_schema["required"]
+            .as_array()
+            .expect("JSON-LD response required members")
+            .contains(&json!("@context")));
+        let json_ld_record = &json_ld_schema["properties"]["data"];
+        let read_access_profile = registry.resources[0]
+            .operations
+            .iter()
+            .find(|operation| matches!(&operation.kind, OperationKind::Read))
+            .and_then(|operation| operation.access_profiles.first())
+            .expect("compiled read access profile");
+        assert_eq!(
+            json_ld_record["allOf"][0]["$ref"],
+            read_access_profile.schema_reference
+        );
+        let json_ld_required = json_ld_record["allOf"][1]["required"]
+            .as_array()
+            .expect("JSON-LD Record required members");
+        assert!(json_ld_required.contains(&json!("@id")));
+        assert!(json_ld_required.contains(&json!("@type")));
     }
 
     #[test]
@@ -1503,6 +1582,40 @@ mod tests {
                 Visibility::OperatorOnly
             );
         }
+    }
+
+    #[test]
+    fn response_schema_unions_allow_access_profiles_with_the_same_disclosure_shape() {
+        let registry = spatial_registry(CompiledAccess::Public);
+        let resource = &registry.resources[0];
+        let operation = &resource.operations[0];
+        let first = &operation.access_profiles[0];
+        let mut equivalent = first.clone();
+        equivalent.id = "equivalent-profile".into();
+        let content =
+            operation_response_content(&registry, operation, resource, &[first, &equivalent]);
+
+        assert_eq!(
+            content["application/json"]["schema"]["properties"]["items"]["items"]["anyOf"]
+                .as_array()
+                .expect("ordinary response uses an inclusive schema union")
+                .len(),
+            2
+        );
+        assert_eq!(
+            content["application/ld+json"]["schema"]["anyOf"]
+                .as_array()
+                .expect("JSON-LD response uses an inclusive schema union")
+                .len(),
+            2
+        );
+        assert_eq!(
+            content["application/geo+json"]["schema"]["anyOf"]
+                .as_array()
+                .expect("GeoJSON response uses an inclusive schema union")
+                .len(),
+            2
+        );
     }
 
     #[test]

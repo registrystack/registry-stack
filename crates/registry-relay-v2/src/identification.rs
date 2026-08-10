@@ -504,8 +504,8 @@ pub struct SelectionExplanation {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccessProfileExplanation {
-    pub id: String,
-    pub default: bool,
+    pub access_profile_identifier: String,
+    pub is_default: bool,
     pub access: AccessPolicyExplanation,
     pub processing: ProcessingExplanation,
     pub disclosure: DisclosureExplanation,
@@ -610,8 +610,8 @@ pub fn operation_explanation(
                         .access_profiles
                         .iter()
                         .map(|access_profile| AccessProfileExplanation {
-                            id: access_profile.id.clone(),
-                            default: access_profile.id == operation.default_access_profile,
+                            access_profile_identifier: access_profile.id.clone(),
+                            is_default: access_profile.id == operation.default_access_profile,
                             access: access_policy_explanation(&access_profile.access),
                             processing: ProcessingExplanation {
                                 source_columns: processed_columns(operation, access_profile),
@@ -631,7 +631,10 @@ pub fn operation_explanation(
                             },
                         })
                         .collect::<Vec<_>>();
-                    access_profiles.sort_by(|left, right| left.id.cmp(&right.id));
+                    access_profiles.sort_by(|left, right| {
+                        left.access_profile_identifier
+                            .cmp(&right.access_profile_identifier)
+                    });
                     let (method, path) = operation_http_binding(resource, operation);
                     OperationExplanationEntry {
                         resource_identifier: resource.id.clone(),
@@ -781,8 +784,8 @@ pub fn render_operation_explanation_text(report: &OperationExplanation) -> Strin
             let _ = writeln!(
                 output,
                 "    access profile: {}{}",
-                access_profile.id,
-                if access_profile.default {
+                access_profile.access_profile_identifier,
+                if access_profile.is_default {
                     " (default)"
                 } else {
                     ""
@@ -2627,7 +2630,7 @@ mod tests {
         let access_profile = operation
             .access_profiles
             .iter()
-            .find(|profile| profile.id == "public")
+            .find(|profile| profile.access_profile_identifier == "public")
             .expect("public access profile");
         assert_eq!(access_profile.wire_formats.len(), 3);
         assert!(matches!(
@@ -2652,7 +2655,7 @@ mod tests {
         let hidden_geometry = operation
             .access_profiles
             .iter()
-            .find(|profile| profile.id == "hidden-geometry")
+            .find(|profile| profile.access_profile_identifier == "hidden-geometry")
             .expect("hidden-geometry access profile");
         assert!(hidden_geometry
             .processing

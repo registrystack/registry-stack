@@ -103,7 +103,7 @@ struct TestArgs {
     #[arg(value_name = "PROJECT")]
     project: std::path::PathBuf,
 
-    /// Run one exact fixture identifier.
+    /// Run one selected fixture and its declared prerequisites.
     #[arg(long, value_name = "IDENTIFIER")]
     fixture: Option<String>,
 }
