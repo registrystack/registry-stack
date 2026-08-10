@@ -1,0 +1,273 @@
+---
+title: Author a Registry Relay project
+description: Bind one Registry contract to reviewed SQLite views, operations, semantics, classifications, fixtures, and a deployment runtime.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-10"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+  - json-ld
+  - shacl
+  - govstack-digital-registries
+---
+
+A Registry Relay project describes one authoritative Registry and binds its
+governed resources to SQLite views. The contract owns meaning, disclosure,
+operations, access rules, and metadata visibility. The runtime owns local
+paths, the listener, one optional token issuer, audit storage, secrets, and
+process limits. `relayctl check` compiles both without allowing runtime values
+to override Registry policy.
+
+## Use the authoring lifecycle
+
+Relay has one compact lifecycle:
+
+```text
+init -> inspect -> check -> generate -> test -> diff -> package
+```
+
+| Command | Purpose |
+| --- | --- |
+| `relayctl init <project>` | Create a complete neutral project with visibly unreviewed starters. |
+| `relayctl inspect <database>` | Read SQLite structure without sampling row values. |
+| `relayctl check <project>` | Compile and validate the contract, runtime, source schema, and governed files. |
+| `relayctl generate <project>` | Reproduce API, semantic, governance, and validation artifacts. |
+| `relayctl test <project>` | Run synthetic HTTP journeys through the shared Relay kernel. |
+| `relayctl diff <previous> <current>` | Classify meaning, disclosure, access, source, and semantic changes. |
+| `relayctl package <project> --output <dir>` | Create a sealed, deterministic deployment package. |
+
+Use `--json` when CI needs the shared typed report. Exit `1` means the project
+was refused, `2` means the invocation was invalid, and `3` means an operational
+failure prevented the command from completing
+(`crates/registry-relayctl/src/lib.rs`).
+
+## Start from structure, not row values
+
+Inspect the source database before writing public names:
+
+```sh
+relayctl inspect /srv/registry/business.sqlite \
+  --starters ./business-registry/inspection
+```
+
+Inspection reports tables, views, columns, declared SQLite types, nullability,
+key membership, and the schema fingerprint. Inspection never reads row values.
+Generated property, semantic, and classification material remains unreviewed
+until an author accepts or replaces it.
+
+Create narrow views in the source database before binding a resource. A view
+is the source disclosure boundary: exclude internal columns, normalize codes,
+and expose stable record context there. Relay does not accept caller-selected
+tables, joins, expressions, columns, or ordering.
+
+## Describe one Registry
+
+The top of `registry.yaml` identifies the institution-owned Registry:
+
+```yaml
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RegistryContract
+metadata:
+  id: registered-businesses
+  version: 2026-08-01
+  title: Registered businesses
+registry:
+  registryIdentifier: urn:example:registry:registered-businesses
+  name: Registered business Registry
+  authority:
+    identifier: urn:example:institution:company-registrar
+    name: Company Registrar
+  operator:
+    identifier: urn:example:institution:digital-service-operator
+    name: Digital Service Operator
+  authoritativeScope: Legal business registrations in the declared jurisdiction
+  baseUri: https://business.example.invalid/registry/
+  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
+```
+
+One process serves one Registry. Related resources can share that Registry
+when they have the same Authority and authoritative scope. A resource is a
+governed Record type within the Registry, not a SQLite table and not a second
+Registry.
+
+Keep these roles distinct:
+
+- The Registry Authority is accountable for the Registry in its declared
+  scope.
+- The privacy controller determines processing responsibilities.
+- The publisher authorizes publication.
+- The operator runs the technical service.
+- The audit owner controls retained access evidence.
+
+## Bind Registry Core and domain properties
+
+Every resource binds one reviewed source view and four source-backed Registry
+Core values:
+
+```yaml
+resources:
+  - id: registered-business
+    title: Registered business
+    semanticClass: local:RegisteredBusiness
+    source:
+      source: companies
+      view: relay_registered_businesses
+    recordContext:
+      recordIdentifier: {sourceColumn: registration_number}
+      revisionIdentifier: {sourceColumn: record_revision}
+      lifecycleState:
+        sourceColumn: lifecycle_state
+        codelist: codelists/record-lifecycle.yaml
+      recordedAt: {sourceColumn: recorded_at}
+```
+
+Relay adds the Registry identifier, Authority identifier, schema reference,
+and semantic-model reference from the contract. Callers cannot remove this
+context with `fields`. `recordedAt` means the authoritative revision-recorded
+time, not Relay startup, snapshot, or response time.
+
+Declare each public property separately from its source column:
+
+```yaml
+properties:
+  legalName:
+    sourceColumn: legal_name
+    type: string
+    sourceRequired: true
+    semanticTerm: local:legalName
+    label: Legal name
+    description: Registered legal name of the organisation.
+    classification:
+      privacy: potentially-personal
+      institutional: public-by-law
+```
+
+The property name is the stable public key. The source column remains an
+operator detail. `sourceRequired` validates the complete source Record. The
+generated response schema permits an authorized caller to omit selectable
+domain properties while preserving Registry Core.
+
+## Compile only needed operations
+
+A resource can declare identifier read, deterministic list, named exact
+lookup, or an appropriate subset. Operations compile into Consultation
+capabilities:
+
+```yaml
+disclosureProfiles:
+  public-register:
+    properties:
+      - registrationNumber
+      - legalName
+      - registrationStatus
+operations:
+  list:
+    access: public
+    disclosureProfile: public-register
+    filters:
+      - name: status
+        property: registrationStatus
+        type: controlled-code
+    allowUnfiltered: true
+    orderBy: [registrationNumber]
+    pagination:
+      defaultPageSize: 25
+      maximumPageSize: 100
+  read:
+    access: public
+    disclosureProfile: public-register
+```
+
+List filters are typed equality parameters with direct camelCase names. Relay
+reserves `pageSize`, `cursor`, and `fields`. The caller cannot add an operator,
+sort, join, source column, or expression.
+
+Use a named exact lookup for personal or sensitive selectors. The lookup
+declares its complete bounded body, one scope, optional trusted purpose, an
+optional verified-claim row boundary, and a maximum of one result. Lookup-only
+resources compile no collection route and no identifier-read route.
+
+## Classify every reviewed column
+
+Classification belongs to the published property. Record-context, selector,
+row-binding, filter, and ordering columns that are not properties need a
+`sourceColumnClassifications` entry. Resource defaults reduce repetition, and
+the compiler expands them into an effective classification for every reviewed
+column.
+
+The initial handling order is `public`, `internal`, `confidential`, and
+`restricted`. A more restrictive property or hidden column can narrow an
+operation but cannot widen one. `restricted` data cannot appear in a list.
+Production checks refuse unclassified published properties and unclassified
+reviewed columns.
+
+## Make semantics useful from the first contract
+
+Set a stable local vocabulary base and give every resource and property a
+local semantic identifier:
+
+```yaml
+semantics:
+  localVocabulary: https://business.example.invalid/vocabulary/
+```
+
+Relay generates the local vocabulary, JSON-LD context, JSON Schema, SHACL
+shape, and codelist schemas from the compiled contract. External mappings are
+optional governed files. Each mapping pins its profile, version, digest, and
+relation strength. A generated local term never claims automatic equivalence
+with SEMIC, PublicSchema, schema.org, or another vocabulary.
+
+## Describe processing and metadata visibility
+
+Bind processing intent to the operations it governs:
+
+```yaml
+processingDescriptions:
+  - id: statutory-publication
+    operationRefs: [list, read]
+    purpose: statutory-publication
+    recipientClass: public
+    legalBasisRef: governance/legal-basis.yaml
+    dpvProfileRef: governance/legal-basis.yaml
+    safeguards:
+      - property-minimization
+      - deterministic-pagination
+      - change-impact-review
+```
+
+`metadataVisibility` independently classifies service, resource, semantic,
+classification, and processing metadata as `public`, `operation-bound`, or
+`operator-only`. A Record audience must be able to retrieve safe projections
+of the exact schema and semantic model referenced by that Record. A public
+resource cannot make a protected sibling's artifacts public.
+
+## Validate and review a change
+
+Run the focused loop after every contract or source-view change:
+
+```sh
+relayctl check ./business-registry --production
+relayctl generate ./business-registry
+relayctl test ./business-registry
+relayctl diff ./approved-business-registry ./business-registry
+```
+
+Review the diff when it reports a new property, weaker classification, broader
+operation, removed row binding, expanded purpose or scope, changed view, or
+semantic mapping change. Git and CI remain the approval workflow. Relay has no
+administration UI or approval service.
+
+Create the candidate only after the source schema, governed files, generated
+artifacts, and fixtures pass review:
+
+```sh
+relayctl package ./business-registry --output ./candidate-package
+```
+
+Continue with [Operate Registry Relay](../../operate/relay/) for the runtime,
+source profiles, secret bindings, and startup ceremony.

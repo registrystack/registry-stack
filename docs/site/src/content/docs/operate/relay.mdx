@@ -1,0 +1,216 @@
+---
+title: Operate Registry Relay
+description: Bind a sealed Registry package to SQLite, authentication, audit, limits, and a private listener without weakening the governed contract.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-10"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Registry Relay starts from one sealed package and one local runtime file. The
+package owns the Registry contract and every generated artifact. The runtime
+binds deployment paths, a listener, SQLite sources, an optional token issuer,
+audit storage, integrity secrets, quotas, and time limits. Startup verifies the
+complete closure before binding the listener.
+
+## Prepare the deployment layout
+
+Use separate locations for trusted configuration, read-only source data,
+secrets, and writable audit state:
+
+```text
+/etc/relay/business/
+  runtime.yaml
+  package/
+  audit-integrity-key
+  cursor-integrity-key
+/srv/registries/
+  business.sqlite
+/var/lib/relay/business/
+  audit.jsonl
+```
+
+Relay's runtime and package trust checks depend on Unix ownership, modes,
+no-follow opens, and file identity. Non-Unix targets fail closed. Every path
+component must be owned by root or the Relay service identity. Group-writable
+and world-writable ancestors are refused, except for a root-owned sticky
+shared ancestor. Symlinks are refused.
+
+Keep the runtime file, package, and snapshot source non-writable to the Relay
+identity. Keep secret files owner-only and the audit directory writable only
+by the Relay identity. Do not place the source database or audit file inside
+the sealed package.
+
+## Bind one package and its sources
+
+The runtime document is intentionally smaller than the Registry contract:
+
+```yaml
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RelayRuntime
+server:
+  bind: 127.0.0.1:8080
+packagePath: /etc/relay/business/package
+sources:
+  companies:
+    path: /srv/registries/business.sqlite
+authentication:
+  issuer: null
+audit:
+  sink: /var/lib/relay/business/audit.jsonl
+  integrityKeyRef: secret:file/audit-integrity-key
+cursor:
+  integrityKeyRef: secret:file/cursor-integrity-key
+  maximumAgeSeconds: 300
+limits:
+  requestTimeoutMilliseconds: 1500
+  concurrentQueries: 32
+quotas:
+  requestsPerMinute: 10000
+  burst: 1000
+shutdown:
+  gracePeriodMilliseconds: 1000
+```
+
+Relative secret-file references resolve beneath the runtime directory. An
+environment reference has the form `secret:env/NAME`. Relay never accepts a
+secret value in the contract or runtime YAML.
+
+The runtime cannot change Registry identity, resources, source views,
+properties, operations, disclosure profiles, access rules, classifications,
+semantics, or metadata visibility. A runtime source identifier must match the
+compiled package exactly.
+
+## Choose snapshot or live read-only SQLite
+
+Both source profiles open SQLite through the shared read-only executor. The
+profile changes the provenance and consistency promise, not the API's
+read-only boundary.
+
+| Property | Snapshot | Live read-only |
+| --- | --- | --- |
+| Publisher updates during service life | No | Yes, through a separate trusted process |
+| File identity and content digest | Captured and enforced | Current path and handle identity enforced |
+| Sidecars | Unsafe sidecars refused | SQLite-managed live state permitted under the live contract |
+| Per-request consistency | Immutable file | One read transaction |
+| List and cursor | Supported | Not supported in Version 1 |
+| ETag and cache revalidation | Supported for cacheable public responses | Disabled |
+| Source revision | Exact digest | Explicitly unversioned |
+
+Use snapshot for published extracts and reproducible public registries. Use
+live read-only when another trusted process must publish compatible updates
+without replacing the Relay process. Live resources support read and named
+exact lookup only, return `Cache-Control: no-store`, and carry no historical
+reproducibility claim.
+
+Both profiles pin the expected SQLite schema fingerprint. Relay verifies the
+fingerprint inside the same transaction as a live read and refuses drift. A
+source replacement, moved SQLite handle, unsafe snapshot sidecar, write
+attempt, or incompatible schema fails closed
+(`crates/registry-platform-sqlite/`).
+
+## Configure protected operations
+
+Public-only registries can set `authentication.issuer: null`. A package with a
+protected operation requires one issuer in the runtime. Relay fetches the
+issuer's OpenID Connect discovery document and keys during startup, then
+verifies a narrow JWT access-token profile on every protected request.
+
+The verified token must carry one exact audience, an accepted token type and
+algorithm, a trusted key identifier, bounded lifetime, issue and expiry times,
+a token identifier, a principal, and the operation scope. Optional purpose and
+row-binding authority come from verified scalar claims named by the compiled
+access rule. Request headers cannot create that authority.
+
+Registry Mint is one optional issuer for deployments without an existing
+authorization server. Relay has no production dependency on Mint, no client
+registry, and no token-issuance route. The issuer assigns scopes and claims;
+the compiled package still defines the maximum operation set.
+
+## Treat audit as a release gate
+
+Every data operation, including anonymous public access, writes a durable
+attempt before source access and a terminal event before response bytes are
+released. A refusal is recorded before its problem response. An audit failure
+blocks source access or discards held response bytes rather than releasing an
+unaudited result.
+
+Audit events identify the Registry, resource, operation, processing
+description, access-rule revision, purpose when present, row-boundary kind,
+disclosure profile, selected property identifiers or digest, handling level,
+contract revision, and source revision. Events do not contain tokens,
+selectors, source values, response values, or raw subject identifiers
+(`crates/registry-relay-v2/src/audit.rs`).
+
+Protect the integrity key and audit path as one retained trust boundary. Relay
+does not expose the raw audit chain as an Access Transparency API. A shared
+cache hit served before Relay is also outside Relay's audit coverage.
+
+## Start and probe the service
+
+Start one process from the exact runtime path:
+
+```sh
+relay serve --runtime /etc/relay/business/runtime.yaml
+```
+
+Relay performs these steps before listening:
+
+1. Validate the runtime file path, owner, mode, size, and file identity.
+2. Load and verify the sealed package and every governed-file digest.
+3. Re-observe the SQLite schema and source profile.
+4. Open the read-only executor with its limits.
+5. Resolve the issuer, audit sink, cursor key, and other secrets.
+6. Construct the immutable service and pass readiness.
+7. Bind the configured listener.
+
+Probe liveness from the same network boundary:
+
+```sh
+relay healthcheck --url http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/ready
+```
+
+`/health` proves the process can answer. `/ready` is successful only after the
+package, source, issuer when configured, audit sink, and service state are
+ready. Keep the listener on loopback or a private address and terminate TLS in
+an operator-controlled reverse proxy or ingress.
+
+## Use bounded operational logs
+
+Relay writes JSON lifecycle and request-outcome logs to standard error. Request
+outcomes contain only a fixed method, route template, status, latency, and
+trace identifier. They do not contain request paths, identifiers, query
+values, headers, bodies, selectors, or principals.
+
+`RELAY_LOG` accepts only `off`, `error`, `warn`, `info`, `debug`, or `trace` for
+Relay-owned targets. An arbitrary tracing directive is ignored, which prevents
+a deployment value from enabling dependency logs that may carry URLs or
+headers. Derive metrics externally from the fixed value-free dimensions.
+
+## Deploy a new revision
+
+Relay does not hot-reload or merge contracts. Use a complete replacement:
+
+1. Build and review a new project revision with `relayctl check`, `generate`,
+   `test`, and `diff`.
+2. Create a new sealed package path. Packaging refuses an existing output.
+3. Prepare the matching source and runtime bindings without modifying the
+   active package.
+4. Start a candidate process and wait for readiness.
+5. Shift traffic through the operator-controlled proxy.
+6. Drain the previous process and send `SIGTERM`.
+7. Retain the package revision, source revision, audit segment, and change
+   review according to institutional policy.
+
+Rollback means activating a previously reviewed complete package with its
+compatible source and runtime bindings. Relay never falls back to another
+interpretation after startup failure.
+
+Continue with [Author a Registry Relay project](../../configure/relay/) for
+the governed inputs and [understand Relay's product boundary](../../explanation/governed-registry-publication/)
+for the one-Registry trust model.

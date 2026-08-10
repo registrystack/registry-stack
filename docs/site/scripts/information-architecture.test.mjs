@@ -64,7 +64,7 @@ test('publishes one overview route for every task-flow section', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
     ['Answer with Evidence Gateway', "slug: 'start/evidence-quickstart'"],
-    ['Connect an existing registry', "slug: 'configure'"],
+    ['Connect an existing registry', "slug: 'explanation/governed-registry-publication'"],
     ['Operate', "slug: 'operate'"],
     ['Security', "slug: 'security'"],
     ['Reference', "slug: 'reference'"],
@@ -75,36 +75,36 @@ test('publishes one overview route for every task-flow section', () => {
   }
 });
 
-test('groups Relay tutorials under existing registries', () => {
+test('keeps the compact Relay V2 reader journey under existing registries', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.doesNotMatch(
     start,
     /slug: 'tutorials\//,
   );
   const connect = topLevelSection(sidebarSource, 'Connect an existing registry');
-  assert.match(
+  assertOrdered(
     connect,
-    /label: 'Start a spreadsheet registry', slug: 'tutorials\/publish-spreadsheet-secured-registry-api'/,
+    [
+      "slug: 'explanation/governed-registry-publication'",
+      "slug: 'tutorials/publish-governed-sqlite-registry'",
+      "slug: 'configure/relay'",
+      "slug: 'operate/relay'",
+      "slug: 'explanation/relay-semantics-and-disclosure'",
+    ],
+    'Relay V2 reader journey',
   );
-  assert.match(
-    connect,
-    /label: 'Use your own spreadsheet', slug: 'tutorials\/use-your-spreadsheet'/,
-  );
-  assert.match(
-    connect,
-    /label: 'Connect an HTTP registry', slug: 'tutorials\/author-registry-project'/,
-  );
+  assert.doesNotMatch(connect, /registryctl|author-registry-project|publish-spreadsheet/);
   assert.doesNotMatch(connect, /verify-opencrvs-claims/);
   assert.match(
     homepageSource,
-    /\]\(tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
+    /\]\(tutorials\/publish-governed-sqlite-registry\/\)/,
   );
   assert.match(
     quickstartSource,
-    /\]\(\.\.\/\.\.\/tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
+    /\]\(\.\.\/\.\.\/tutorials\/publish-governed-sqlite-registry\/\)/,
   );
-  assert.match(homepageSource, /\]\(tutorials\/author-registry-project\/\)/);
-  assert.match(quickstartSource, /\]\(\.\.\/\.\.\/tutorials\/author-registry-project\/\)/);
+  assert.match(homepageSource, /\]\(configure\/relay\/\)/);
+  assert.match(quickstartSource, /\]\(\.\.\/\.\.\/configure\/relay\/\)/);
   assert.doesNotMatch(homepageSource, /tutorials\/verify-claim-registry-api/);
   assert.doesNotMatch(quickstartSource, /tutorials\/verify-claim-registry-api/);
 });

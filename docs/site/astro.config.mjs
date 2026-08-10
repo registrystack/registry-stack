@@ -360,14 +360,11 @@ export default defineConfig({
         {
           label: 'Connect an existing registry',
           items: [
-            { label: 'Overview', slug: 'configure' },
-            { label: 'Start a spreadsheet registry', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
-            { label: 'Connect an HTTP registry', slug: 'tutorials/author-registry-project' },
-            { label: 'Configure OAuth client credentials', slug: 'configure/oauth-client-credentials' },
-            { label: 'Add OAuth-backed Rhai', slug: 'tutorials/configure-project-script-adapter' },
-            { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
-            { label: 'Configuration fields', slug: 'reference/project-configuration' },
+            { label: 'Overview', slug: 'explanation/governed-registry-publication' },
+            { label: 'Publish a SQLite registry', slug: 'tutorials/publish-governed-sqlite-registry' },
+            { label: 'Author a Relay project', slug: 'configure/relay' },
+            { label: 'Operate Relay', slug: 'operate/relay' },
+            { label: 'Semantics and disclosure', slug: 'explanation/relay-semantics-and-disclosure' },
           ],
         },
         {

@@ -1,0 +1,241 @@
+---
+title: Publish a governed SQLite registry
+description: Build Relay and relayctl, prove one synthetic business Registry, and read a minimized Record through the real HTTP service.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-10"
+doc_type: tutorial
+persona:
+  - data publisher
+  - operator
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+  - json-ld
+  - shacl
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Registry Relay turns a reviewed SQLite view and one Registry contract into a
+read-only API, semantic artifacts, and auditable runtime behavior. In this
+tutorial, you will build the Relay V2 candidate, prove the maintained synthetic
+business Registry, start the real service, and request two selected properties
+without exposing the SQLite table or column names.
+
+<QuickstartMeta
+  outcome="One governed business Registry served from a sealed package, with a filtered and minimized Record response."
+  time="About 20 minutes after the Rust toolchain is installed"
+  level="Local source build with synthetic data"
+  prerequisites={['Rust and Cargo', 'Python 3', 'curl', 'A Unix environment', 'A Registry Stack source checkout']}
+/>
+
+The project contains synthetic organisations and reserved `.invalid` service
+names. Do not substitute production data, identifiers, or keys during this
+first run.
+
+## Build the candidate tools
+
+From the Registry Stack repository root, build `relayctl` and `relay` from the
+same source revision:
+
+```sh
+repo_root="$(pwd -P)"
+cargo build --locked -p registry-relayctl -p registry-relay-v2
+export PATH="$repo_root/target/debug:$PATH"
+relayctl --version
+relay --version
+```
+
+`relayctl` owns the adopter workflow. `relay` owns startup verification and the
+HTTP service. Both use the same compiler and runtime library.
+
+## Copy the maintained Registry
+
+Copy the business acceptance project into a disposable reader directory, then
+materialize its SQLite snapshot from tracked SQL:
+
+```sh
+reader_root="$(mktemp -d "${TMPDIR:-/tmp}/relay-tutorial.XXXXXX")"
+cp -R products/relay-v2/acceptance/business-registry "$reader_root/business-registry"
+cd "$reader_root/business-registry"
+project="$(pwd -P)"
+mkdir -m 700 var
+python3 - "$project" <<'PY'
+import sqlite3
+import sys
+from pathlib import Path
+
+project = Path(sys.argv[1])
+database = project / "fixture.sqlite"
+with sqlite3.connect(database) as connection:
+    connection.executescript((project / "fixture.sql").read_text())
+database.chmod(0o444)
+PY
+```
+
+The authored project has four kinds of input:
+
+```text
+registry.yaml       governed Registry, resources, operations, and disclosure
+runtime.yaml        local package, source, audit, secret, and listener bindings
+fixture.sql         synthetic source construction
+expected-http.yaml  executable HTTP journey
+codelists/          reviewed controlled values
+governance/         legal-basis and identifier-lifecycle material
+semantics/          optional external vocabulary mappings
+```
+
+The SQLite database is an input to the deployment. The database is not copied
+into the sealed package.
+
+## Prove the project
+
+Compile the production profile before generating or serving anything:
+
+```sh
+relayctl check "$project" --production
+```
+
+The report has `"status": "success"`, an empty `diagnostics` array, and a
+contract revision. Production mode refuses unreviewed semantic or
+classification suggestions, missing source bindings, schema drift, and
+inconsistent disclosure or access rules.
+
+Generate the public and operator artifacts, then run the complete synthetic
+journey through the real Relay router:
+
+```sh
+relayctl generate "$project"
+relayctl test "$project"
+```
+
+The generated directory includes OpenAPI 3.1, JSON Schema, SHACL, JSON-LD
+contexts and vocabularies, codelist schemas, classification and processing
+descriptions, and capability discovery. The fixture report covers successful
+reads, pagination, filters, field minimization, JSON-LD equivalence, cache
+revalidation, and safe refusals.
+
+## Seal the deployment package
+
+Package the governed contract and generated artifacts:
+
+```sh
+relayctl package "$project" --output "$project/package"
+```
+
+The package report records the contract revision, package revision, source
+schema fingerprint, governed-file digests, generated artifacts, media types,
+and visibility. `relay` verifies that inventory before opening a source,
+issuer, audit sink, or listener.
+
+## Start Relay
+
+Create disposable local integrity keys without printing their values, then
+start the service:
+
+```sh
+export RELAY_TEST_AUDIT_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export RELAY_TEST_CURSOR_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+relay serve --runtime "$project/runtime.yaml"
+```
+
+Leave this terminal running. Startup logs end with a loopback listener at
+`127.0.0.1:18082`. The business Registry is intentionally public, so this
+synthetic first run has no token issuer. Protected registries use the same
+runtime with one configured issuer.
+
+## Read the Registry metadata
+
+In a second terminal, read the service document:
+
+```sh
+curl -fsS http://127.0.0.1:18082/v2 | python3 -m json.tool
+```
+
+The document identifies one Registry, its Authority and operator, and two
+compiled Consultation capabilities:
+
+```json
+{
+  "registryIdentifier": "urn:example:registry:registered-businesses",
+  "name": "Synthetic registered business Registry",
+  "capabilities": [
+    {"operationIdentifier": "registered-business.list", "pattern": "list"},
+    {"operationIdentifier": "registered-business.read", "pattern": "retrieve"}
+  ]
+}
+```
+
+The displayed document is abridged. Relay derives the capability inventory
+from compiled operations rather than accepting a second authored list.
+
+## Request fewer properties
+
+Request active registrations and narrow `domainData` to two governed
+properties:
+
+```sh
+curl -fsS \
+  'http://127.0.0.1:18082/v2/resources/registered-business/records?status=ACTIVE&fields=registrationNumber,legalName&pageSize=4' \
+  | python3 -m json.tool
+```
+
+Each item retains its Registry Core context while `domainData` contains only
+the requested subset:
+
+```json
+{
+  "items": [
+    {
+      "registryIdentifier": "urn:example:registry:registered-businesses",
+      "recordIdentifier": "BIZ-SYNTH-0001",
+      "revisionIdentifier": "7",
+      "lifecycleState": "ACTIVE",
+      "authorityIdentifier": "urn:example:institution:company-registrar",
+      "recordedAt": "2026-06-01T08:00:00Z",
+      "domainData": {
+        "registrationNumber": "BIZ-SYNTH-0001",
+        "legalName": "Example Orchard Cooperative"
+      }
+    }
+  ],
+  "pageInfo": {"nextCursor": null}
+}
+```
+
+The displayed response is abridged. The real item also carries resolvable
+schema and semantic-model references, and the response metadata records the
+operation, disclosure profile, selected fields, contract revision, and source
+revision. A request for `legal_name`, an unknown field, arbitrary sorting, or
+an undeclared filter receives a bounded problem instead of widening the query.
+
+## Stop the service
+
+Return to the Relay terminal and press `Ctrl+C`. Relay completes a graceful
+shutdown. Remove the disposable reader directory when you no longer need the
+generated package or audit file, then clear the two local environment values.
+
+## What you proved
+
+- SQLite tables and columns did not become routes by convention.
+- One reviewed contract produced the API, semantic artifacts, disclosure
+  rules, and capability inventory.
+- The caller selected fewer properties but could not select more.
+- Registry Core context remained present for every Record.
+- The deployment package was verified before Relay opened its source or
+  listener.
+
+## Next
+
+- [Author a Registry Relay project](../../configure/relay/) to bind an
+  institution-owned SQLite view.
+- [Operate Registry Relay](../../operate/relay/) to choose a source profile,
+  issuer, audit path, limits, and deployment permissions.
+- [Understand Relay's product boundary](../../explanation/governed-registry-publication/)
+  before introducing additional resources.
+- [Review semantics, classification, and disclosure](../../explanation/relay-semantics-and-disclosure/)
+  before publishing real fields.
