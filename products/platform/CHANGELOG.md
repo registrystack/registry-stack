@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.19.0 - 2026-08-11
+
+- The shared SQLite boundary now applies one end-to-end deadline to admission,
+  statement execution, and snapshot verification. Readiness checks coalesce
+  concurrent probes and keep schema and digest work within the same bound.
+- Exact-tag builds add the `relay` and `relayctl` release identities. Source
+  and development builds continue to report the `-dev` suffix.
+
 ## v0.18.0 - 2026-08-09
 
 - Executables report a development version, such as `0.18.0-dev`, unless they

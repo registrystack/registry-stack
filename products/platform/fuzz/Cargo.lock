@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -1483,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "base64",
  "bytes",
@@ -1557,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "base64",
  "jsonwebtoken",
@@ -1572,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sqlite"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "rusqlite",
  "rustix",

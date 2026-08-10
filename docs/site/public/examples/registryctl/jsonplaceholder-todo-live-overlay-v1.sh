@@ -20,7 +20,7 @@ expected = {
   "integrations/person-record/fixtures/no-match.yaml": "415ac27bc7e212e2a92b46e51c9e7282bddd9722aeaf4530557061f10d89b33e",
   "integrations/person-record/integration.yaml": "2b4950e1938e4d8345b7952480daa46e17abfd13ba2a8b42666b34adf7e02412",
   "README.md": "fb9994c4d4859c9d8672ac90b5960edb58eef63a65a4b096068409dc964be63b",
-  "registry-stack.yaml": "b82a9e8f2154a8639a33e21009a481e76747a364401645de204deed91ff7bba5"
+  "registry-stack.yaml": "cb76d3a49093ab2567a68bfc6142cf5b1b2961cf62d6ca295c0ed50044301d98"
 }
 ignored_roots = {".registry-stack-editor", ".vscode", ".zed"}
 transport_files = {"jsonplaceholder-todo-live-overlay-v1.sh", "jsonplaceholder-todo-live-overlay-v1.sh.sha256"}
