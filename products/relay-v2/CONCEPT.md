@@ -427,10 +427,12 @@ the same selected domain values. Responses vary on `Accept`; unsupported wire
 formats receive `406 format.unsupported`. Where caching is allowed, the strong ETag hashes
 the exact response bytes, including the selected access profile, wire format, and field
 subset, and supports `If-None-Match` with `304`. Only a public access profile
-with a public processing floor over a snapshot may be cacheable. Every cacheable public
-response includes `Vary: Accept, Authorization` so an anonymous `200` cannot
-satisfy a request carrying an invalid bearer. Non-public and unversioned-live responses are
-`no-store` and emit no ETag.
+with a public processing floor over a snapshot and `pageInfo.nextCursor` absent
+or null may be cacheable. Every cacheable public response includes
+`Vary: Accept, Authorization` so an anonymous `200` cannot satisfy a request
+carrying an invalid bearer. A response containing a non-null continuation
+cursor, and every non-public or unversioned-live response, is `no-store` and
+emits no ETag.
 
 ### Bounded Point profile
 

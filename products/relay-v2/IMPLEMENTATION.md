@@ -311,7 +311,8 @@ therefore binds the selected access profile, field subset, and JSON or JSON-LD
 wire representation, including the GeoJSON format profile when selected.
 `Vary: Accept, Authorization`, `If-None-Match`, and `304`
 are part of the GET contract.
-Non-public and unversioned-live responses are `no-store` and emit no ETag.
+A response containing a non-null `pageInfo.nextCursor`, and every non-public or
+unversioned-live response, is `no-store` and emits no ETag.
 
 `fields` is a comma-separated, non-empty, duplicate-free list of public
 property keys matching `^[a-z][A-Za-z0-9]*$`. Exactly one `fields` query
@@ -604,10 +605,11 @@ Record identifiers, or principal identifiers. Version one adds no `/metrics`
 route or in-process metrics registry. Operators derive aggregate service
 metrics outside Relay from these value-free logs and the durable audit stream.
 
-Every public snapshot response uses
+Public snapshot responses with an absent or null `pageInfo.nextCursor` use
 `Cache-Control: public, no-cache`, a strong exact-byte ETag, revalidation, and
-`304`. Non-public and live responses are `no-store` and emit no ETag. Live
-sources compile read and lookup only, never paginated list.
+`304`. A response containing a non-null continuation cursor, and every
+non-public or live response, is `no-store` and emits no ETag. Live sources
+compile read and lookup only, never paginated list.
 SQLite path replacement fails closed until restart.
 
 ### Authentication, authorization, and audit
