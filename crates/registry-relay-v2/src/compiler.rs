@@ -59,6 +59,7 @@ const MAXIMUM_SDMX_ATTRIBUTES: usize = 32;
 const MAXIMUM_SDMX_OBSERVATIONS: u32 = 10_000;
 const MAXIMUM_SDMX_OFFSET: u32 = 1_000_000;
 const MAXIMUM_SDMX_COMPONENT_VALUE_BYTES: usize = 1024;
+const MAXIMUM_ROUTE_IDENTIFIER_BYTES: usize = 128;
 const SDMX_REST_VERSION: &str = "2.2.2";
 const SDMX_DATA_JSON_VERSION: &str = "2.1.0";
 const SDMX_DATA_CSV_VERSION: &str = "2.1.0";
@@ -806,11 +807,11 @@ impl<'a> Compiler<'a> {
                     "resource identifiers must be unique",
                 );
             }
-            if !valid_kebab_identifier(&resource.id) {
+            if !valid_route_identifier(&resource.id) {
                 self.error(
                     "resource.id_invalid",
                     &format!("{root}.id"),
-                    "a resource identifier must be URL-safe kebab case",
+                    "a resource identifier must be URL-safe kebab case within the runtime route ceiling",
                 );
             }
             if resource.title.trim().is_empty() || resource.description.trim().is_empty() {
@@ -1300,11 +1301,11 @@ impl<'a> Compiler<'a> {
                         "lookup identifiers must be unique within a resource",
                     );
                 }
-                if !valid_kebab_identifier(&lookup.id) {
+                if !valid_route_identifier(&lookup.id) {
                     self.error(
                         "operation.lookup_id_invalid",
                         &format!("{location}.id"),
-                        "lookup identifiers must be URL-safe kebab case",
+                        "lookup identifiers must be URL-safe kebab case within the runtime route ceiling",
                     );
                 }
                 if lookup.request_body.maximum_bytes == 0
@@ -1445,11 +1446,11 @@ impl<'a> Compiler<'a> {
                         "search identifiers must be unique within a resource",
                     );
                 }
-                if !valid_kebab_identifier(&search.id) {
+                if !valid_route_identifier(&search.id) {
                     self.error(
                         "operation.search_id_invalid",
                         &format!("{location}.id"),
-                        "search identifiers must be URL-safe kebab case",
+                        "search identifiers must be URL-safe kebab case within the runtime route ceiling",
                     );
                 }
                 if source.profile == SourceProfile::LiveReadOnly {
@@ -1567,11 +1568,11 @@ impl<'a> Compiler<'a> {
                     "resource and statistical dataset identifiers must be globally unique",
                 );
             }
-            if !valid_kebab_identifier(&dataset.id) {
+            if !valid_route_identifier(&dataset.id) {
                 self.error(
                     "statistics.dataset_id_invalid",
                     &format!("{root}.id"),
-                    "a statistical dataset identifier must be URL-safe kebab case",
+                    "a statistical dataset identifier must be URL-safe kebab case within the runtime route ceiling",
                 );
             }
             if dataset.title.trim().is_empty() || dataset.description.trim().is_empty() {
@@ -4647,7 +4648,8 @@ fn valid_sdmx_component_id(value: &str) -> bool {
 
 fn valid_sdmx_version(value: &str) -> bool {
     let parts = value.split('.').collect::<Vec<_>>();
-    parts.len() == 3
+    value.len() <= MAXIMUM_ROUTE_IDENTIFIER_BYTES
+        && parts.len() == 3
         && parts.iter().all(|part| {
             !part.is_empty()
                 && part.bytes().all(|byte| byte.is_ascii_digit())
@@ -4997,6 +4999,10 @@ fn valid_access_profile_identifier(value: &str) -> bool {
     value.len() <= MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES && valid_kebab_identifier(value)
 }
 
+fn valid_route_identifier(value: &str) -> bool {
+    value.len() <= MAXIMUM_ROUTE_IDENTIFIER_BYTES && valid_kebab_identifier(value)
+}
+
 fn has_duplicates(values: &[String]) -> bool {
     let mut seen = HashSet::new();
     values.iter().any(|value| !seen.insert(value))
@@ -5072,6 +5078,104 @@ pub(crate) mod tests {
         assert!(!valid_camel_identifier("source.column"));
         assert!(valid_kebab_identifier("registered-business"));
         assert!(!valid_kebab_identifier("RegisteredBusiness"));
+    }
+
+    #[test]
+    fn route_identifiers_cannot_compile_unreachable_paths() {
+        let base = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let boundary = "a".repeat(MAXIMUM_ROUTE_IDENTIFIER_BYTES);
+        let oversized = "a".repeat(MAXIMUM_ROUTE_IDENTIFIER_BYTES + 1);
+        assert!(valid_route_identifier(&boundary));
+        assert!(!valid_route_identifier(&oversized));
+        let version_boundary = format!("1.1.{}", "1".repeat(MAXIMUM_ROUTE_IDENTIFIER_BYTES - 4));
+        let oversized_version = format!("1.1.{}", "1".repeat(MAXIMUM_ROUTE_IDENTIFIER_BYTES - 3));
+        assert_eq!(version_boundary.len(), MAXIMUM_ROUTE_IDENTIFIER_BYTES);
+        assert!(valid_sdmx_version(&version_boundary));
+        assert!(!valid_sdmx_version(&oversized_version));
+
+        let compile_value = |value| {
+            let contract = serde_json::from_value::<RegistryContract>(value)
+                .expect("strict generated contract");
+            compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+        };
+        let reports_code = |report: CompileReport, code: &str| {
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == code),
+                "missing diagnostic {code}: {:?}",
+                report.diagnostics
+            );
+        };
+
+        let mut boundary_resource = serde_json::to_value(&base).expect("contract serializes");
+        *boundary_resource
+            .pointer_mut("/resources/0/id")
+            .expect("resource identifier") = serde_json::json!(boundary);
+        compile_value(boundary_resource).expect("the route identifier ceiling compiles");
+
+        let mut oversized_resource = serde_json::to_value(&base).expect("contract serializes");
+        *oversized_resource
+            .pointer_mut("/resources/0/id")
+            .expect("resource identifier") = serde_json::json!(oversized.clone());
+        reports_code(
+            compile_value(oversized_resource).expect_err("oversized resource route is refused"),
+            "resource.id_invalid",
+        );
+
+        let mut oversized_lookup = serde_json::to_value(&base).expect("contract serializes");
+        oversized_lookup
+            .pointer_mut("/resources/0/operations")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("operations object")
+            .insert(
+                "lookups".into(),
+                serde_json::json!([{
+                    "id": oversized.clone(),
+                    "requestBody": {
+                        "maximumBytes": 128,
+                        "selectors": {
+                            "name": {"sourceColumn": "name", "type": "string", "maximumBytes": 32}
+                        }
+                    },
+                    "defaultAccessProfile": "public",
+                    "accessProfiles": {
+                        "public": {"access": "public", "disclosureProfile": "public"}
+                    }
+                }]),
+            );
+        reports_code(
+            compile_value(oversized_lookup).expect_err("oversized lookup route is refused"),
+            "operation.lookup_id_invalid",
+        );
+
+        let mut oversized_search = serde_json::to_value(&base).expect("contract serializes");
+        oversized_search
+            .pointer_mut("/resources/0/operations")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("operations object")
+            .insert(
+                "searches".into(),
+                serde_json::json!([{
+                    "id": oversized,
+                    "query": {
+                        "kind": "point-bbox",
+                        "maximumLongitudeSpanDegrees": 2,
+                        "maximumLatitudeSpanDegrees": 2
+                    },
+                    "defaultAccessProfile": "public",
+                    "accessProfiles": {
+                        "public": {"access": "public", "disclosureProfile": "public"}
+                    },
+                    "orderBy": ["name"],
+                    "pagination": {"defaultPageSize": 10, "maximumPageSize": 100}
+                }]),
+            );
+        reports_code(
+            compile_value(oversized_search).expect_err("oversized search route is refused"),
+            "operation.search_id_invalid",
+        );
     }
 
     #[test]

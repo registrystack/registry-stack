@@ -144,6 +144,27 @@ async fn async_snapshot_execution_refuses_same_inode_content_drift() {
 
 #[cfg(unix)]
 #[test]
+fn text_budget_snapshot_verifies_digest_while_opening() {
+    let directory = TempDir::new().unwrap();
+    let path = database(&directory);
+    let snapshot = CapturedSnapshot::capture(&path).unwrap();
+    mutate_same_inode_and_restore_read_only(&path);
+
+    let error = match ReadOnlyStatement::open_with_text_value_response_budget(
+        DatabaseProfile::Snapshot(snapshot),
+        contract("SELECT id FROM records WHERE active = :active ORDER BY id"),
+    ) {
+        Ok(_) => panic!("changed bytes must be refused while the statement is bound"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error.kind(),
+        ErrorKind::DatabaseChanged | ErrorKind::DatabaseReplaced
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn startup_snapshot_execution_refuses_same_inode_content_drift() {
     let directory = TempDir::new().unwrap();
     let path = database(&directory);

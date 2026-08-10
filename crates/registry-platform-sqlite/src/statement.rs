@@ -234,6 +234,7 @@ struct CompiledPlan {
     schema: Option<SchemaBinding>,
     statement_digest: String,
     response_budget_accounting: ResponseBudgetAccounting,
+    verify_snapshot_digest_each_execution: bool,
 }
 
 struct ConnectionExecution<T> {
@@ -258,6 +259,7 @@ impl ReadOnlyStatement {
             profile,
             contract,
             ResponseBudgetAccounting::SerializedResult,
+            true,
         )
     }
 
@@ -267,7 +269,11 @@ impl ReadOnlyStatement {
     /// This preserves callers whose established contract applies the
     /// authoritative serialized-response bound after projection. New consumers
     /// should use [`Self::open`], which charges the compact JSON result
-    /// structure as it is collected.
+    /// structure as it is collected. Evidence extracts are immutable deployment
+    /// inputs and may be register-sized, so this compatibility path verifies the
+    /// captured digest once while opening the statement. Each execution then
+    /// retains the cheap snapshot path, metadata, and SQLite handle checks before
+    /// and after the query without rescanning the complete extract.
     pub fn open_with_text_value_response_budget(
         profile: DatabaseProfile,
         contract: StatementContract,
@@ -276,6 +282,7 @@ impl ReadOnlyStatement {
             profile,
             contract,
             ResponseBudgetAccounting::TextValuesOnly,
+            false,
         )
     }
 
@@ -283,6 +290,7 @@ impl ReadOnlyStatement {
         profile: DatabaseProfile,
         contract: StatementContract,
         response_budget_accounting: ResponseBudgetAccounting,
+        verify_snapshot_digest_each_execution: bool,
     ) -> Result<Self, SqliteError> {
         contract.limits.validate()?;
         if let Some(schema) = &contract.schema {
@@ -303,6 +311,9 @@ impl ReadOnlyStatement {
         verify_schema_at_open(first, contract.schema.as_ref(), &contract.limits)?;
         profile.confirm()?;
         confirm_connection_pool_still_bound(&connections)?;
+        if !verify_snapshot_digest_each_execution {
+            profile.verify_execution_binding(deadline(contract.limits.timeout)?)?;
+        }
         let permits = contract.limits.concurrency;
         let statement_digest = statement_digest(&contract.sql);
         Ok(Self {
@@ -315,6 +326,7 @@ impl ReadOnlyStatement {
                 schema: contract.schema,
                 statement_digest,
                 response_budget_accounting,
+                verify_snapshot_digest_each_execution,
             }),
             connections: Arc::new(Mutex::new(connections)),
             concurrency: Arc::new(Semaphore::new(permits)),
@@ -536,7 +548,12 @@ fn execute_on_connection_with_post_statement_hook(
     deadline: Instant,
     post_statement: impl FnOnce(),
 ) -> ConnectionExecution<(Vec<ResultRow>, Option<String>)> {
-    if let Err(error) = profile.verify_execution_binding(deadline) {
+    let initial_binding = if plan.verify_snapshot_digest_each_execution {
+        profile.verify_execution_binding(deadline)
+    } else {
+        profile.confirm()
+    };
+    if let Err(error) = initial_binding {
         return ConnectionExecution {
             outcome: Err(error),
             reusable: false,
@@ -558,7 +575,12 @@ fn execute_on_connection_with_post_statement_hook(
             execution.reusable = false;
         }
     }
-    if let Err(error) = profile.verify_execution_binding(deadline) {
+    let final_binding = if plan.verify_snapshot_digest_each_execution {
+        profile.verify_execution_binding(deadline)
+    } else {
+        profile.confirm()
+    };
+    if let Err(error) = final_binding {
         execution.outcome = Err(error);
         execution.reusable = false;
     }
@@ -1259,6 +1281,7 @@ mod tests {
             schema: None,
             statement_digest: statement_digest(sql),
             response_budget_accounting: ResponseBudgetAccounting::SerializedResult,
+            verify_snapshot_digest_each_execution: true,
         }
     }
 
