@@ -16,6 +16,8 @@ standards_referenced:
   - json-schema
   - json-ld
   - shacl
+  - geojson
+  - json-fg
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
@@ -244,6 +246,32 @@ request, and an unknown representation. The unknown and scope-hidden cases use t
 `404 resource.not_found` response. Relay authorizes the requested representation exactly and never
 falls back to the public default.
 
+## Verify the spatial response boundary
+
+The supplied project also contains a `registered-premises` resource with one reviewed Point and a
+bounded bbox query. Replay its JSON-FG fixture:
+
+```sh
+relayctl test "$project" --fixture premises-feature-collection-jsonfg
+```
+
+The report contains one successful step:
+
+```json
+{
+  "id": "premises-feature-collection-jsonfg",
+  "expectedStatus": 200,
+  "actualStatus": 200,
+  "passed": true
+}
+```
+
+The request uses `Accept: application/geo+json`, `profile=jsonfg`, and a bounded CRS84 `bbox`.
+Those values select a wire format and a fixed query plan. The `public-premises` representation
+still supplies the access rule and maximum disclosure profile. The full journey also proves RFC
+7946 output, JSON and JSON-LD equivalence, field minimization to `geometry: null`, invalid bbox
+refusal, cursor binding, nonspatial negotiation refusal, and value-free coordinate failure.
+
 Starting the packaged service requires the configured token issuer to be reachable because the
 package contains protected representations, even when the request you plan to send is public.
 Continue with [Operate Registry Relay](../../operate/relay/) to bind a real institutional issuer,
@@ -268,6 +296,8 @@ The cleanup commands print nothing when they succeed.
 - Generated identification and classification material remained suggestions
   until the governed review accepted it.
 - The caller selected fewer properties but could not select more.
+- The Point used the same operation access and disclosure boundary in JSON,
+  JSON-LD, RFC 7946 GeoJSON, and JSON-FG.
 - Mandatory Registry and Record context remained present in every result.
 - The shared Relay router verified the public, protected, and refusal behavior against synthetic
   source data.

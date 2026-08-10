@@ -13,6 +13,8 @@ standards_referenced:
   - json-schema
   - json-ld
   - shacl
+  - geojson
+  - json-fg
   - govstack-digital-registries
 ---
 
@@ -136,6 +138,49 @@ properties.
 It cannot add a property, select a source column, change a transform, weaken handling, or bypass
 an access or row boundary.
 Registry Core remains present.
+
+## Add a bounded Point profile
+
+Declare one `primaryGeometry` when a resource publishes a reviewed longitude-latitude Point in
+the Coordinate Reference System 84 (CRS84) order. The geometry is a classified, selectable
+property. Its two source columns remain private carrier bindings.
+
+```yaml
+primaryGeometry:
+  name: location
+  label: Premises location
+  description: Reviewed premises Point in CRS84 longitude-latitude order
+  semanticTerm: local:location
+  sourceRequired: true
+  crs: http://www.opengis.net/def/crs/OGC/0/CRS84
+  source: {longitudeColumn: longitude, latitudeColumn: latitude}
+  classification: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+disclosureProfiles:
+  public-premises: {properties: [premisesName, location]}
+operations:
+  list:
+    defaultRepresentation: public-premises
+    representations:
+      public-premises: {access: public, disclosureProfile: public-premises}
+    allowUnfiltered: false
+    spatialQuery:
+      bbox: {maximumLongitudeSpanDegrees: 2, maximumLatitudeSpanDegrees: 2}
+    orderBy: [premisesIdentifier]
+    pagination: {defaultPageSize: 50, maximumPageSize: 200}
+```
+
+The representation map still owns access and maximum disclosure. JSON and JSON-LD are available
+for every selected representation. GeoJSON becomes available only when that representation's
+profile includes `location`. `Accept: application/geo+json` selects the wire format, while
+`profile=rfc7946` or `profile=jsonfg` selects the GeoJSON profile. Neither grants another access
+right or adds a property.
+
+`spatialQuery.bbox` enables one inclusive, bounded Point-containment query. The complete geometry
+and both carrier columns must have effective `privacy: non-personal` classification. Relay refuses
+non-finite values, coordinates outside CRS84, decreasing bounds, antimeridian crossing, and spans
+larger than the authored limits. It does not expose a spatial expression language, reprojection,
+joins, or dynamic SQLite extensions. The [business acceptance contract](https://github.com/registrystack/registry-stack/blob/d7b96d7d4aa89754c0f2ca6fe3d4d697e9e9e8ad/products/relay-v2/acceptance/business-registry/registry.yaml)
+is the executable configuration example.
 
 ## Account for processing and disclosure
 

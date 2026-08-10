@@ -12,6 +12,8 @@ standards_referenced:
   - json-schema
   - json-ld
   - shacl
+  - geojson
+  - json-fg
   - govstack-digital-registries
   - universal-dpi-safeguards
 ---
@@ -129,6 +131,26 @@ a reviewed pre-derived public value from the SQLite view.
 Transformed properties also cannot be list filters or fixed-order keys. Queryable derived values
 must be separate reviewed pre-derived source properties, so filters and ordering never operate on
 an undisclosed transform input.
+
+## Treat geometry as a classified property
+
+The bounded spatial profile gives one primary Point a public property name, semantic term,
+description, source requiredness, and effective classification. Longitude and latitude remain
+reviewed source-column bindings. Relay validates both coordinates as one complete Point before
+releasing any response, and a malformed selected row fails closed as value-free
+`503 source.unavailable`.
+
+The selected representation controls whether the Point is disclosed. Ordinary JSON and JSON-LD
+place the Point in `domainData`. GeoJSON moves the same selected Point to the Feature `geometry`
+member and leaves Registry Core plus the other selected properties in Feature `properties`.
+If the caller narrows `fields` to omit the Point, GeoJSON uses an explicit `null` geometry rather
+than reintroducing the coordinates elsewhere.
+
+Generated vocabulary, JSON Schema, SHACL, classification, and capability artifacts describe the
+Point only for audiences that can receive the selected representation. The JSON-LD context types
+the bounded GeoJSON value as RDF JSON. Relay does not claim GeoSPARQL inference, geometry
+conversion, or an OGC API Features service. The [generated artifact tests](https://github.com/registrystack/registry-stack/blob/d7b96d7d4aa89754c0f2ca6fe3d4d697e9e9e8ad/crates/registry-relay-v2/src/artifacts.rs)
+pin those limits.
 
 ## Generate semantics without pretending equivalence
 

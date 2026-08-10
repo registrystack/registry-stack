@@ -8,7 +8,9 @@ source_repos:
 last_reviewed: "2026-08-10"
 doc_type: how-to
 locale: en
-standards_referenced: []
+standards_referenced:
+  - geojson
+  - json-fg
 ---
 
 Deploy one reviewed Relay package without allowing deployment configuration to change Registry
@@ -72,8 +74,9 @@ fall back to a less restrictive representation.
 
 Relay authenticates and encrypts the complete cursor payload with a fresh nonce. The payload binds
 the source and contract revisions, operation, representation, disclosure profile, filters, fixed
-order, selected fields, authorization context, and expiry. Treat cursors as opaque continuation
-tokens even though they contain no plaintext filter or order values.
+order, selected fields, authorization context, optional bbox, response format, GeoJSON profile,
+and expiry. Treat cursors as opaque continuation tokens even though they contain no plaintext
+filter, order, or bbox values.
 
 `relay serve --runtime <file>` opens only the sealed package at `packagePath`.
 It rejects unsafe paths, a package inventory mismatch, source-schema drift, missing mandatory audit
@@ -103,6 +106,9 @@ Runtime cannot change it.
 Both profiles pin the SQLite schema fingerprint and deny writes, arbitrary SQL, schema drift, and
 unbounded result behavior.
 Live resources support only identifier read and named exact lookup.
+Bounded bbox consultation is a list operation, so it uses a reviewed snapshot source in this
+profile. GeoJSON and JSON-FG do not change the source, access, audit, or cache rules. Their exact
+response bytes receive distinct cache validators where public snapshot revalidation is eligible.
 
 ## Start and verify the service
 
@@ -163,4 +169,5 @@ Rollback activates a complete prior package only with its compatible source and 
 | Startup refuses a path | A component is a symlink, has the wrong owner, or is writable | Move the deployment to trusted Unix paths and correct ownership and modes. |
 | Startup reports a package or schema error | The package, source, or review revision does not match | Stop deployment and return the change to the authoring workflow. |
 | A protected representation returns `404 resource.not_found` | The issuer or token does not satisfy that representation's exact scope | Correct the issuer or caller authority. Do not expose a weaker representation as fallback. |
+| A spatial request returns `406 representation.unsupported` | The selected representation does not disclose a primary geometry or the `Accept` value is unsupported | Select an entitled geometry-bearing representation or request JSON or JSON-LD. |
 | A response is withheld | The terminal audit write failed | Restore the audit sink and verify its integrity before accepting traffic. |

@@ -18,6 +18,8 @@ standards_referenced:
   - ogc-api-records
   - ogc-api-features
   - ogc-api-edr
+  - geojson
+  - json-fg
   - openapi
   - shacl
   - skos
@@ -58,6 +60,14 @@ CSV, XLSX, and Parquet are source decoders.
 Aggregate output supports JSON, CSV, and SDMX-JSON, with only JSON stable for 1.0.
 
 <RelaySupportRoster />
+
+## Relay V2 spatial representation profile
+
+Relay V2 uses GeoJSON and JSON-FG as optional representations of the same
+governed Registry Record. The initial profile is one classified Point in
+CRS84, with an exact bounded bounding-box query on an existing consultation
+route. This does not claim OGC API Features support and does not inherit the
+separate Relay 1.0 adapter described in the roster.
 
 ## Register
 
