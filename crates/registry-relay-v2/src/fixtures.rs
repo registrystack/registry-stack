@@ -228,10 +228,20 @@ pub fn compile_fixture_plan(
             );
         }
         if let Some(operation) = operation {
-            if matches!(operation.access, CompiledAccess::Protected { .. })
-                && step.expect.status == 200
-                && step.authorization_fixture.is_none()
-            {
+            let representation_identifier = step
+                .request
+                .query
+                .get("representation")
+                .and_then(Value::as_str)
+                .unwrap_or(&operation.default_representation);
+            let protected = operation
+                .representations
+                .iter()
+                .find(|representation| representation.id == representation_identifier)
+                .is_some_and(|representation| {
+                    matches!(representation.access, CompiledAccess::Protected { .. })
+                });
+            if protected && step.expect.status == 200 && step.authorization_fixture.is_none() {
                 diagnostic(
                     &mut diagnostics,
                     "fixture.authorization_missing",

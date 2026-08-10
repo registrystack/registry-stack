@@ -20,7 +20,9 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::auth::RowAuthority;
 use crate::contract::{DataType, SourceProfile};
-use crate::model::{CompiledOperation, CompiledRegistry, CompiledResource, OperationKind};
+use crate::model::{
+    CompiledOperation, CompiledRegistry, CompiledRepresentation, CompiledResource, OperationKind,
+};
 
 const MAXIMUM_CELL_BYTES: usize = 1024 * 1024;
 const MAXIMUM_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -91,7 +93,13 @@ pub enum SqliteRuntimeError {
 struct OperationExecutor {
     statement: Arc<ReadOnlyStatement>,
     operation: CompiledOperation,
+    representation: CompiledRepresentation,
     source_revision: SourceRevision,
+}
+
+struct OperationInventory {
+    source_revision: SourceRevision,
+    representations: BTreeMap<String, OperationExecutor>,
 }
 
 #[derive(Clone)]
@@ -102,7 +110,7 @@ struct ReadinessSource {
 
 /// Fixed operation inventory over one compiled Registry.
 pub struct SqliteRuntime {
-    operations: BTreeMap<String, OperationExecutor>,
+    operations: BTreeMap<String, OperationInventory>,
     readiness_sources: Vec<ReadinessSource>,
     admission: Arc<Semaphore>,
     timeout: Duration,
@@ -168,23 +176,41 @@ impl SqliteRuntime {
                     .iter()
                     .find(|source| source.id == operation.query.source)
                     .ok_or(SqliteRuntimeError::MissingSource)?;
-                let contract = statement_contract(
-                    resource,
-                    operation,
-                    &limits,
-                    &source.expected_schema_fingerprint,
-                )?;
-                let statement = ReadOnlyStatement::open(profile.clone(), contract)?;
-                if operations
-                    .insert(
-                        operation.identifier.clone(),
-                        OperationExecutor {
-                            statement: Arc::new(statement),
-                            operation: operation.clone(),
-                            source_revision: source_revision.clone(),
-                        },
-                    )
-                    .is_some()
+                let mut representations = BTreeMap::new();
+                for representation in &operation.representations {
+                    let contract = statement_contract(
+                        resource,
+                        operation,
+                        representation,
+                        &limits,
+                        &source.expected_schema_fingerprint,
+                    )?;
+                    let statement = ReadOnlyStatement::open(profile.clone(), contract)?;
+                    if representations
+                        .insert(
+                            representation.id.clone(),
+                            OperationExecutor {
+                                statement: Arc::new(statement),
+                                operation: operation.clone(),
+                                representation: representation.clone(),
+                                source_revision: source_revision.clone(),
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(SqliteRuntimeError::InvalidPlan);
+                    }
+                }
+                if representations.is_empty()
+                    || operations
+                        .insert(
+                            operation.identifier.clone(),
+                            OperationInventory {
+                                source_revision: source_revision.clone(),
+                                representations,
+                            },
+                        )
+                        .is_some()
                 {
                     return Err(SqliteRuntimeError::InvalidPlan);
                 }
@@ -238,14 +264,16 @@ impl SqliteRuntime {
     pub async fn execute(
         &self,
         operation: &str,
+        representation: &str,
         query: OperationQuery,
     ) -> Result<OperationResult, SqliteRuntimeError> {
         let executor = self
             .operations
             .get(operation)
+            .and_then(|inventory| inventory.representations.get(representation))
             .ok_or(SqliteRuntimeError::UnknownOperation)?;
         let permit = self.acquire().await?;
-        let values = bind_operation_values(&executor.operation, query)?;
+        let values = bind_operation_values(&executor.operation, &executor.representation, query)?;
         let result = executor.statement.execute(&values).await;
         drop(permit);
         Ok(OperationResult {
@@ -265,10 +293,11 @@ impl SqliteRuntime {
 fn statement_contract(
     resource: &CompiledResource,
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     limits: &SqliteRuntimeLimits,
     expected_schema_fingerprint: &str,
 ) -> Result<StatementContract, SqliteRuntimeError> {
-    let result_columns = result_columns(operation);
+    let result_columns = result_columns(operation, representation);
     let columns = result_columns
         .iter()
         .map(|column| ColumnContract {
@@ -278,9 +307,19 @@ fn statement_contract(
         .collect::<Vec<_>>();
     let mut parameters = Vec::new();
     let sql = match &operation.kind {
-        OperationKind::List => list_sql(operation, &result_columns, &mut parameters),
-        OperationKind::Read => read_sql(resource, operation, &result_columns, &mut parameters),
-        OperationKind::Lookup { .. } => lookup_sql(operation, &result_columns, &mut parameters),
+        OperationKind::List => {
+            list_sql(operation, representation, &result_columns, &mut parameters)
+        }
+        OperationKind::Read => read_sql(
+            resource,
+            operation,
+            representation,
+            &result_columns,
+            &mut parameters,
+        ),
+        OperationKind::Lookup { .. } => {
+            lookup_sql(operation, representation, &result_columns, &mut parameters)
+        }
     };
     let maximum_rows = match &operation.kind {
         OperationKind::List => u64::from(
@@ -304,8 +343,9 @@ fn statement_contract(
             maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
             maximum_statement_steps: MAXIMUM_STATEMENT_STEPS,
             timeout: limits.request_timeout,
-            // Aggregate process concurrency is owned above. One connection per
-            // fixed operation prevents connection count from multiplying again.
+            // Aggregate process concurrency is owned above. Each fixed
+            // representation has one connection, and compilation bounds the
+            // Registry-wide representation executor inventory.
             concurrency: 1,
         },
         schema: Some(SchemaBinding {
@@ -316,8 +356,11 @@ fn statement_contract(
     })
 }
 
-fn result_columns(operation: &CompiledOperation) -> Vec<String> {
-    let mut columns = operation.query.projected_columns.clone();
+fn result_columns(
+    operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
+) -> Vec<String> {
+    let mut columns = representation.projected_columns.clone();
     for column in &operation.query.order_by {
         if !columns.contains(column) {
             columns.push(column.clone());
@@ -339,14 +382,18 @@ fn data_type(value: DataType) -> ColumnType {
     match value {
         DataType::Boolean => ColumnType::Boolean,
         DataType::Integer => ColumnType::Integer,
-        DataType::String | DataType::Date | DataType::DateTime | DataType::ControlledCode => {
-            ColumnType::String
-        }
+        DataType::String
+        | DataType::Date
+        | DataType::DateTime
+        | DataType::Year
+        | DataType::YearMonth
+        | DataType::ControlledCode => ColumnType::String,
     }
 }
 
 fn list_sql(
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     columns: &[String],
     parameters: &mut Vec<ParameterContract>,
 ) -> String {
@@ -361,7 +408,7 @@ fn list_sql(
             quote_identifier(&filter.source_column)
         ));
     }
-    add_row_authority(operation, parameters, &mut predicates);
+    add_row_authority(representation, parameters, &mut predicates);
     parameters.push(parameter("cursor_present"));
     let keyset = keyset_predicate(&operation.query.order_by, parameters);
     predicates.push(format!("(:cursor_present = 0 OR ({keyset}))"));
@@ -384,6 +431,7 @@ fn list_sql(
 fn read_sql(
     resource: &CompiledResource,
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     columns: &[String],
     parameters: &mut Vec<ParameterContract>,
 ) -> String {
@@ -392,7 +440,7 @@ fn read_sql(
         "{} = :record_identifier",
         quote_identifier(&resource.record_context.record_identifier_column)
     )];
-    add_row_authority(operation, parameters, &mut predicates);
+    add_row_authority(representation, parameters, &mut predicates);
     format!(
         "SELECT {} FROM {} WHERE {} LIMIT 2",
         select_list(columns),
@@ -403,6 +451,7 @@ fn read_sql(
 
 fn lookup_sql(
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     columns: &[String],
     parameters: &mut Vec<ParameterContract>,
 ) -> String {
@@ -415,7 +464,7 @@ fn lookup_sql(
             quote_identifier(&selector.source_column)
         ));
     }
-    add_row_authority(operation, parameters, &mut predicates);
+    add_row_authority(representation, parameters, &mut predicates);
     format!(
         "SELECT {} FROM {} WHERE {} LIMIT 2",
         select_list(columns),
@@ -425,14 +474,14 @@ fn lookup_sql(
 }
 
 fn add_row_authority(
-    operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     parameters: &mut Vec<ParameterContract>,
     predicates: &mut Vec<String>,
 ) {
     if let crate::model::CompiledAccess::Protected {
         row_binding: Some(binding),
         ..
-    } = &operation.access
+    } = &representation.access
     {
         parameters.push(parameter("row_authority"));
         predicates.push(format!(
@@ -482,6 +531,7 @@ fn quote_identifier(value: &str) -> String {
 
 fn bind_operation_values(
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     query: OperationQuery,
 ) -> Result<BTreeMap<String, Value>, SqliteRuntimeError> {
     let mut values = BTreeMap::new();
@@ -558,7 +608,7 @@ fn bind_operation_values(
     if let crate::model::CompiledAccess::Protected {
         row_binding: Some(binding),
         ..
-    } = &operation.access
+    } = &representation.access
     {
         let row = query.row_authority.ok_or(SqliteRuntimeError::InvalidPlan)?;
         if row.source_column != binding.source_column {

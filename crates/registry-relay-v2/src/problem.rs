@@ -21,6 +21,8 @@ pub enum ProblemCode {
     UnknownFilter,
     InvalidFilter,
     CursorInvalid,
+    RepresentationInvalid,
+    RepresentationNotFound,
     MissingCredential,
     InvalidCredential,
     ConsultationDenied,
@@ -47,6 +49,8 @@ impl ProblemCode {
             Self::UnknownFilter => "filter.unknown_field",
             Self::InvalidFilter => "filter.invalid_value",
             Self::CursorInvalid => "query.cursor_invalid",
+            Self::RepresentationInvalid => "request.representation_invalid",
+            Self::RepresentationNotFound => "representation.not_found",
             Self::MissingCredential => "auth.missing_credential",
             Self::InvalidCredential => "auth.invalid_credential",
             Self::ConsultationDenied => "consultation.denied",
@@ -73,6 +77,8 @@ impl ProblemCode {
             Self::UnknownFilter => "Filter is not declared",
             Self::InvalidFilter => "Filter value is invalid",
             Self::CursorInvalid => "Cursor is invalid",
+            Self::RepresentationInvalid => "Representation selection is invalid",
+            Self::RepresentationNotFound => "Requested representation was not found",
             Self::MissingCredential => "Bearer access token is required",
             Self::InvalidCredential => "Bearer access token is invalid",
             Self::ConsultationDenied => "Consultation is not permitted",
@@ -98,10 +104,13 @@ impl ProblemCode {
             | Self::FieldsInvalid
             | Self::UnknownFilter
             | Self::InvalidFilter
-            | Self::CursorInvalid => 400,
+            | Self::CursorInvalid
+            | Self::RepresentationInvalid => 400,
             Self::MissingCredential | Self::InvalidCredential => 401,
             Self::ConsultationDenied => 403,
-            Self::ResourceNotFound | Self::ConsultationUnresolved => 404,
+            Self::ResourceNotFound
+            | Self::ConsultationUnresolved
+            | Self::RepresentationNotFound => 404,
             Self::UnsupportedRepresentation => 406,
             Self::BodyTooLarge => 413,
             Self::UriTooLong => 414,
@@ -166,6 +175,8 @@ impl ProblemCode {
             Self::UnknownFilter => "filter is not declared for this operation",
             Self::InvalidFilter => "filter value is invalid",
             Self::CursorInvalid => "cursor is invalid for this query",
+            Self::RepresentationInvalid => "representation selection is invalid",
+            Self::RepresentationNotFound => "the requested representation was not found",
             Self::MissingCredential => "a bearer access token is required",
             Self::InvalidCredential => "bearer access token validation failed",
             Self::ConsultationDenied => "the consultation is not permitted",

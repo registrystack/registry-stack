@@ -46,6 +46,57 @@ invariants:
     tests:
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_three_registry_http_journeys_use_the_real_router}
       - {path: crates/registry-relay-v2/tests/multi_resource_isolation.rs, name: real_router_keeps_related_public_and_protected_resources_isolated}
+  - id: sec-classification-review-binding
+    threat: A generated, stale, tampered, uncertain, or mismatched classification review silently authorizes a changed disclosure contract.
+    enforcementPoint: Governed-file review parsing and compilation against the canonical classification inventory digest.
+    negativeCase: stale_or_unreviewed_classification_review_is_refused
+    expected: Production compilation accepts only reviewed inventory-bound evidence; generated review additionally binds the accepted report and exact rule pack, while manual and imported review do not require a report.
+    evidence: review-binding-compiler-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: stale_review_fails_production_but_remains_an_authoring_finding}
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: starter_never_marks_classification_reviewed}
+  - id: sec-finite-representation-authorization
+    threat: A request selects an undeclared, malformed, or denied representation, crosses profiles with fields, or falls back to a different disclosure.
+    enforcementPoint: Closed compiled representation map, one exact default, pre-source selection, and selected-profile field validation.
+    negativeCase: representation_selection_or_cross_profile_fields_fall_back_or_reach_source
+    expected: An operation has one declared default and finite names; access and disclosure are evaluated only for the exact selection, and fields cannot cross the selected profile.
+    evidence: compiler-and-real-router-representation-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: representation_default_and_transform_parameters_fail_closed}
+      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: representation_selection_authenticates_then_authorizes_the_exact_profile}
+      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_source_access}
+      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: fields_only_minimize_the_selected_representation}
+  - id: sec-public-representation-processing-floor
+    threat: A public masked or minimized representation reads a confidential or restricted raw source column.
+    enforcementPoint: Per-representation processed-column closure and processing-handling compilation before route activation.
+    negativeCase: public_representation_processes_nonpublic_raw_source
+    expected: Anonymous release requires public processing handling, including transform inputs and every selector, filter, order, and Registry Core source column.
+    evidence: compiler-handling-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: public_masked_representation_cannot_process_restricted_source}
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: public_operation_cannot_process_nonpublic_columns}
+  - id: sec-closed-mask-and-date-transforms
+    threat: Caller-directed or malformed transform input releases a raw, complete, noncanonical, wrongly typed, or over-precise value.
+    enforcementPoint: Compiled transform catalog and value-free source failure before response serialization.
+    negativeCase: transform_reveals_or_serializes_incompatible_input
+    expected: Only bounded partial-string with the Relay-owned marker and typed date-precision execute; short strings never reveal complete input and incompatible date input fails closed.
+    evidence: transform-unit-and-compiler-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/transform.rs, name: partial_string_never_reveals_a_complete_short_input}
+      - {path: crates/registry-relay-v2/src/transform.rs, name: partial_string_counts_unicode_scalars}
+      - {path: crates/registry-relay-v2/src/transform.rs, name: date_precision_accepts_only_the_compiled_source_shape}
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: date_precision_is_typed_and_closed}
+      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
+  - id: sec-representation-state-and-metadata-binding
+    threat: A cursor, ETag, metadata route, artifact, or quota crosses a representation boundary or reveals a protected profile.
+    enforcementPoint: Representation-bound cursor and cache identity, exact representation artifact gates, and operation-owned quota state.
+    negativeCase: profile_state_or_metadata_crosses_representation_boundary
+    expected: Cursor and ETag reuse across profiles fails; metadata and artifacts authorize one representation exactly; adding profiles does not multiply the operation quota.
+    evidence: real-router-representation-state-tests
+    tests:
+      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: cursor_and_etag_are_bound_to_selected_representation}
+      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: metadata_and_artifacts_authorize_each_representation_exactly}
+      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: quotas_remain_operation_scoped_across_representations}
   - id: sec-operation-quota
     threat: One named lookup exhausts another resource or operation's request budget.
     enforcementPoint: Runtime quota configuration compiled into an operation-keyed limiter before readiness.

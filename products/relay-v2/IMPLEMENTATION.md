@@ -1,7 +1,7 @@
 # Relay V2 Implementation Plan
 
 Status: Approved implementation plan
-Date: 2026-08-09
+Date: 2026-08-10
 Product direction: [Relay V2 Product Concept](CONCEPT.md)
 Acceptance contract: [Relay V2 Definition of Done](DEFINITION-OF-DONE.md)
 Configuration probes: [Relay V2 Configuration Examples](CONFIGURATION-EXAMPLES.md)
@@ -69,13 +69,15 @@ owns:
 - resources, Registry Core source bindings, URL-safe camelCase property keys,
   published properties, datatypes, source requiredness, codelists, labels,
   descriptions, and local semantic IRIs;
-- compiled list, read, or named exact-lookup operations; list presence and its
-  access rule derive the enumeration posture;
+- compiled list, read, or named exact-lookup operations; query shape remains
+  operation-owned while each operation declares one `defaultRepresentation`
+  and finite ordered `representations` with representation-owned `access` and
+  `disclosureProfile`; list presence derives the enumeration posture;
 - direct typed equality filters, explicit unfiltered permission, fixed ordering,
   page bounds, lookup selectors, and query limits;
-- one disclosure profile per operation whose `properties` list is both maximum
-  and default; all Version one operations permit callers to narrow `domainData`
-  with `fields`;
+- reusable disclosure profiles whose `properties` lists are selected only by a
+  compiled representation; callers may narrow only the selected profile with
+  `fields`, never cross profiles;
 - privacy, institutional, and `public`/`internal`/`confidential`/`restricted`
   technical handling classifications for every published property and reviewed
   source-view column, including status, provenance, and version, with reviewed
@@ -156,6 +158,42 @@ vocabulary fetch.
 Registry Manifest projection is deferred portability tooling. Source columns,
 access rules, scopes, disclosure, classifications, processing constraints, and
 limits remain Relay-owned and never enter Manifest.
+
+### Identification, review, and governed representation increment
+
+The compiler owns the closed representation model and never receives
+caller-authored transforms or policy expressions. It validates exactly one
+`defaultRepresentation` against each finite operation map; compiles access,
+disclosure, processing handling, disclosure handling, transform inventory, and
+artifact identity per representation; and carries operation query shape,
+filters, selectors, order, pagination, and quotas outside that map.
+
+`sourceColumnClassifications` remains resource-owned. The compiler requires an
+explicit complete reviewed classification for a transformed or multiply-bound
+column, accounts for all Registry Core and hidden processing columns, and
+rejects a public representation that processes a non-public column. It accepts
+only `partial-string` and `date-precision`: their pure implementation is
+separate from parsing, SQL, authorization, and serialization. The marker is
+the fixed Relay constant `***`; output types are `string`, `year`, or
+`year-month` as applicable.
+
+Identification is a `relayctl` offline workflow over observed schema and the
+embedded digest-pinned core pack, never source values. `generate` emits the
+four fixed report paths under `generated/reports/` and the starter under
+`generated/governance/`. A `ClassificationReview` sidecar is enforced only by
+the governed compilation path. Generated review binds an accepted copied report
+and rule pack; imported and manual review bind only the inventory and review
+authority. The compiler's artifact and package paths carry every profile for
+operator review while public projection includes only public-visible profile
+artifacts.
+
+The HTTP layer parses `representation` once before source access, authenticates
+any supplied bearer before public default selection, authorizes the exact
+profile, then narrows `fields` within it. Cursor and public ETag construction
+include profile identity and transform inventory. Protected, non-public
+processing, and live responses are `no-store`. Audit adds representation,
+disclosure, selected properties, both handling levels, and transform IDs, but
+no values; terminal audit gates the exact serialized bytes.
 
 ### Shared compiler and tooling boundary
 
@@ -353,8 +391,10 @@ no `pageSize`, `fields`, or filters; the cursor restores the immutable query
 context. Repeating or changing first-page parameters with a cursor is
 `query.cursor_invalid`.
 
-Version 1 quota state is bounded and in-process, so the declared deployment
-profile is one Relay replica per Registry. A multi-replica deployment must put
+Version 1 accepts one deployment quota with `requestsPerMinute` and `burst`.
+Relay maintains one bucket per compiled operation, shared by all of that
+operation's representations. The state is bounded and in-process, so the
+declared deployment profile is one Relay replica per Registry. A multi-replica deployment must put
 a trusted ingress or shared limiter in front that enforces the same ceilings;
 distributed rate-limit state is outside the initial runtime.
 
@@ -425,6 +465,7 @@ error array is emitted.
 |---|---:|---|---|
 | Malformed JSON, query syntax, or lookup body | 400 | `consultation.invalid_request` | `the consultation request is invalid` |
 | Invalid, empty, repeated, unknown, or non-public `fields` selection | 400 | `request.fields_invalid` | `field selection is invalid` |
+| Malformed, empty, or repeated `representation` selection | 400 | `request.representation_invalid` | `representation selection is invalid` |
 | Undeclared filter | 400 | `filter.unknown_field` | `filter is not declared for this operation` |
 | Invalid filter value or combination | 400 | `filter.invalid_value` | `filter value is invalid` |
 | Malformed, expired, stale, or differently bound cursor | 400 | `query.cursor_invalid` | `cursor is invalid for this query` |
@@ -432,6 +473,7 @@ error array is emitted.
 | Invalid credential | 401 | `auth.invalid_credential` | `bearer access token validation failed` |
 | Insufficient scope, purpose, or row authority | 403 | `consultation.denied` | `the consultation is not permitted` |
 | Unknown or visibility-hidden resource or artifact | 404 | `resource.not_found` | `the requested resource was not found` |
+| Unknown or unavailable requested representation | 404 | `representation.not_found` | `the requested representation was not found` |
 | Unknown, hidden, ambiguous, or unsafe Record outcome | 404 | `consultation.unresolved` | `the requested record was not resolved` |
 | Unsupported response `Accept` | 406 | `representation.unsupported` | `the requested representation is not supported` |
 | Request body too large | 413 | `internal.payload_too_large` | `request body exceeds the configured limit` |

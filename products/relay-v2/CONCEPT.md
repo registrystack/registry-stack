@@ -1,7 +1,7 @@
 # Relay V2 Product Concept
 
 Status: Approved product direction
-Date: 2026-08-09
+Date: 2026-08-10
 Basis: Registry Stack `origin/main` at the start of the Relay V2 exploration
 
 Directional inputs: the written GovStack Digital Registries specification and
@@ -222,6 +222,70 @@ for serving a valid Registry or a runtime policy input.
 
 DPV remains a semantic projection, not Relay's policy language. Relay executes its small typed access contract, never arbitrary RDF, DPV rules, ODRL, or remote vocabulary content. DPV 2.3 is a W3C Community Group report rather than a W3C Recommendation, so the profile and vocabulary digest must be pinned and upgraded deliberately.
 
+### Schema-only identification and reviewed representation governance
+
+Relay keeps one classification model. `semanticTerm` describes meaning;
+`privacy`, `institutional`, and `handling` describe the Registry Authority's
+governance context; `status` is `suggested`, `uncertain`, or `reviewed`; and
+`provenanceRef` identifies the review evidence. Identification proposes
+candidates for that model. It neither changes runtime authorization nor creates
+a second generic tag model.
+
+`relayctl inspect` and `relayctl generate` identify only from observed SQLite
+schema, declared types, key metadata, codelist bindings, authored roles, and a
+digest-pinned embedded core rule pack. They do not read source values. A
+candidate records its source and view, source column, suggested property,
+semantic term and technical role, privacy candidates, matched rule identifiers
+and versions, pack identity, categorical confidence (`exact`, `strong`,
+`weak`, or `conflict`), and non-reviewed status. A conflict is `uncertain`; a
+generated result never self-approves.
+
+Generation writes deterministic, value-free review inputs beneath its output
+directory at these fixed paths:
+
+- `generated/reports/identification-report.json`
+- `generated/reports/classification-inventory.json`
+- `generated/reports/representation-report.json`
+- `generated/reports/contextual-review-findings.json`
+- `generated/governance/classification-review-starter.yaml`
+
+After review, a generated project copies the accepted report to
+`reports/identification-report.json`. The governed reviewed input is
+`governance/classification-review.yaml`, named
+by the existing `classifications.provenanceRef`. Its closed sidecar has
+`apiVersion: relay.registrystack.org/classification-review/v1`,
+`kind: ClassificationReview`, `registryIdentifier`,
+`classificationInventoryDigest`, `method` (`generated`, `imported`, or
+`manual`), `reviewer`, `reviewDate`, `status`, and `rationaleRef`. A
+`generated` review also has `generatedIdentification` with `reportRef`,
+`reportDigest`, and `rulePack: {id, version, digest}`. Production compilation
+refuses a missing, non-reviewed, stale, or digest-mismatched sidecar. Manual
+and imported review are first-class and do not require a generated report. A
+relevant contract, schema, source-column, or classification change invalidates
+review; a rule-pack change does so only when that pack informed it.
+
+Every property has its own output classification. Every processed source
+column has its own reviewed source-column classification. The compiler derives
+processing handling from every Registry Core, output, transform input,
+selector, filter, order, and row-binding column, and disclosure handling from
+properties serializable by the representation. Source processing controls,
+authentication, audit, and cache use the processing floor even when a reviewed
+output has lower disclosure handling. Anonymous publication cannot transform a
+non-public source: a public representation must read a reviewed pre-derived
+public SQLite view column.
+
+Only two finite deterministic transforms are in this profile. `partial-string`
+accepts a reviewed string and emits Relay's fixed `***` marker plus a bounded
+Unicode-scalar prefix or suffix; a value no longer than the configured reveal
+length emits only `***`. `date-precision` accepts a reviewed canonical `date`
+or `date-time` and emits `year` or `year-month`. Null, incompatible,
+non-canonical, or oversized required inputs fail closed without values; an
+optional null omits the property. A transformed value has its own property,
+semantic term, datatype, and classification. Hashing, pseudonyms, encryption,
+regular-expression replacement, caller-defined masks or expressions,
+geographic and numeric transforms, codelist remapping, and any dynamic policy
+engine are not part of this release.
+
 ### Registry operations and safe requester minimization
 
 A resource compiles only the operations its publisher declares: collection listing, identifier read, and named exact lookup. A resource may expose any appropriate subset. An exact-lookup-only resource compiles no enumeration or identifier-read operation.
@@ -230,16 +294,16 @@ Collection queries use publisher-defined, typed, camelCase filter parameters
 directly in the query string, for example `status=ACTIVE`. Version one supports
 exact equality. Any non-empty subset of declared filters is valid; the contract
 separately declares whether an unfiltered request is allowed. `pageSize`,
-`cursor`, and `fields` are reserved names. Filters in query strings are
+`cursor`, `fields`, and `representation` are reserved names. Filters in query strings are
 limited to non-personal selectors. Relay binds their values as SQL parameters.
 Callers cannot introduce source columns, joins, operators, expressions,
 arbitrary sorting, or SQL.
 
 Named exact lookups define their complete required inputs, row boundary, result shape, and maximum of one result. Sensitive selectors belong in a bounded request body rather than a URL. Lookup outcomes are deliberately non-enumerating and are subject to tighter limits and audit.
 
-The disclosure profile's `properties` list is both the maximum and the default
-property set in Version one. A caller may request a non-empty subset of those
-published properties, or receive the complete list when no subset is requested.
+The selected representation's disclosure profile supplies the maximum property
+set. A caller may request a non-empty subset of those published properties, or
+receive the complete selected profile when no subset is requested.
 This is a one-way minimization control:
 
 - it can remove top-level data properties but never add a property, select a source column, change a derivation, or bypass a row boundary;
@@ -251,15 +315,16 @@ This is a one-way minimization control:
   never serialized. Physical column-read minimization is an optimization, not
   a Version one correctness contract.
 
-This is not dynamic attribute authorization. Version one has one reviewed
-maximum disclosure profile per operation. Different operations may use
-different profiles, but one operation does not select a different maximum from
-the caller's identity or scopes. Supporting different entitlements for two
-consumers of the same operation is a documented future gap. Within the
-authorized profile, requester-selected fields can only disclose less, so a
-valid subset requires no additional field-level authorization decision. It
-never lowers the operation's compiled handling level, authentication, audit,
-quota, metadata, or cache posture.
+This is not dynamic attribute authorization. An operation has a finite ordered
+map of reviewed representations, exactly one `defaultRepresentation`, and one
+access rule plus one disclosure profile per representation. An absent
+`representation` selects that sole declared default. A supplied representation
+is authorized exactly as requested: denial, an invalid bearer, or an unknown
+identifier never falls back to another profile. Within the selected profile,
+requester-selected `fields` can only disclose less and never lower the
+operation's compiled handling level, authentication, audit, quota, metadata,
+or cache posture. Caller-dependent or tag-derived profiles remain out of
+scope.
 
 ### HTTP contract
 
@@ -272,9 +337,9 @@ GET  /openapi.json
 GET  /v2
 GET  /v2/resources?pageSize=...&cursor=...
 GET  /v2/resources/{resource}
-GET  /v2/resources/{resource}/records?pageSize=...&cursor=...&status=...&fields=...
-GET  /v2/resources/{resource}/records/{recordIdentifier}?fields=...
-POST /v2/resources/{resource}/lookups/{lookup}?fields=...
+GET  /v2/resources/{resource}/records?pageSize=...&cursor=...&status=...&representation=...&fields=...
+GET  /v2/resources/{resource}/records/{recordIdentifier}?representation=...&fields=...
+POST /v2/resources/{resource}/lookups/{lookup}?representation=...&fields=...
 GET  /v2/artifacts/{artifactIdentifier}
 ```
 
@@ -296,8 +361,10 @@ Lists use `pageSize`, `cursor`, and the envelope
 `{items, pageInfo: {nextCursor}, meta}`. `nextCursor` is nullable. Ordering is
 contract-defined with the Record identifier as a unique tie-breaker. The opaque
 authenticated cursor binds the contract and source revisions, operation,
-filters, order, selected fields, authorization context, and expiry. Every page
-is reauthorized. Callers cannot choose an order.
+selected representation and disclosure profile, transform inventory, filters,
+order, selected fields, authorization context, and expiry. Every page is
+reauthorized. Callers cannot choose an order or replay a cursor across
+representations.
 
 Single-record reads and resolved lookups use `{data, meta}`. `data` contains
 the Registry Core context and `domainData`. `fields` is a documented Relay
@@ -305,15 +372,18 @@ extension: a non-empty, duplicate-free comma-separated list of public property
 keys. A property key is the contract's URL-safe camelCase name, not a source
 column or semantic IRI. Exactly one `fields` parameter is accepted; empty
 members, whitespace, repeats, and duplicate keys are invalid. It only narrows
-`domainData`; Registry Core context cannot be removed, and response ordering
-remains contract-defined rather than request-defined.
+the selected representation's `domainData`; Registry Core context cannot be
+removed, and response ordering remains contract-defined rather than
+request-defined. A field outside the selected representation is rejected
+before source access.
 
 Ordinary JSON is the default. `application/ld+json` adds the generated context
 and a derived global `@id` while preserving all Registry Core identifiers and
 the same selected domain values. Responses vary on `Accept`; unsupported
 representations receive `406`. Where caching is allowed, the strong ETag hashes
-the exact representation bytes, including the
-field subset, and supports `If-None-Match` with `304`. Every cacheable public
+the exact representation bytes, including the selected representation and field
+subset, and supports `If-None-Match` with `304`. Only a public representation
+with a public processing floor over a snapshot may be cacheable. Every cacheable public
 response includes `Vary: Accept, Authorization` so an anonymous `200` cannot
 satisfy a request carrying an invalid bearer. Non-public and unversioned-live responses are
 `no-store` and emit no ETag.
@@ -382,7 +452,7 @@ Purpose comes from, or is constrained by, verified authority. A caller header ne
 
 The resource posture and contract define the maximum compiled operation set. Token scopes can only narrow it. Separate scopes for list, read, and named lookup allow an issuer to give a client exact-lookup access without collection or identifier-read access. Conversely, no token can enable an operation the resource did not compile. Relay does not maintain a client registry; the trusted issuer registers clients and assigns scopes.
 
-Each request produces a typed access decision followed by a typed disclosure plan. The plan contains the authorized operation, row constraints, maximum disclosure profile, and any requester-selected property subset. This architectural seam keeps authentication, authorization, row constraints, query construction, and serialization separate. Version one uses static reviewed disclosure plans and does not require a general PDP, CEL, dynamic masking, per-client field permissions, or tag-based ABAC.
+Each request produces a typed access decision followed by a typed disclosure plan. The plan contains the authorized operation and representation, row constraints, selected disclosure profile, and any requester-selected property subset. This architectural seam keeps authentication, authorization, row constraints, query construction, and serialization separate. Version one uses static reviewed disclosure plans and does not require a general PDP, CEL, dynamic masking, per-client field permissions, or tag-based ABAC.
 
 ### Token issuers and optional Registry Mint
 
@@ -655,7 +725,9 @@ shape. The generated schema makes their constraints precise.
 - Registry Core context is mandatory and requester field selection can narrow only `domainData`.
 - Lists use `pageSize`, `cursor`, `items`, and `pageInfo.nextCursor`; predefined filters are direct camelCase equality parameters.
 - Named exact lookup remains a bounded POST action and maps to constrained Consultation Search, not Record Match.
-- One reviewed maximum disclosure profile exists per operation. Caller-dependent entitlement variants are deferred.
+- Each operation has finite reviewed representations, an explicit sole default,
+  and representation-owned access plus disclosure. Dynamic, caller-derived
+  entitlement variants are deferred.
 - Handling levels are `public`, `internal`, `confidential`, and `restricted`; purpose and row binding are separate explicit constraints.
 - Snapshot SQLite is valuable but optional. Unversioned live sources are `no-store` and do not compile paginated lists.
 - A deployment configures at most one issuer in Version one. Responses are unsigned. Registry Mint is optional, never a Relay runtime dependency, and may be paired when it emits the same standard token profile.
@@ -664,7 +736,8 @@ shape. The generated schema makes their constraints precise.
 
 ## Deliberate future gaps
 
-- different maximum disclosure entitlements for two consumers of the same operation;
+- caller-derived maximum disclosure entitlements, tag-based ABAC, external PDP,
+  or per-profile quotas;
 - publisher-owned live revisions, live pagination, and live caching;
 - multi-issuer selection and a frozen `relay`/`relayctl` subprocess protocol;
 - Registry Manifest, DPV, safeguards, and machine-readable GovStack alignment projections;

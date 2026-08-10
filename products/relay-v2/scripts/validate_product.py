@@ -30,6 +30,7 @@ INVALID_SOURCE_ROW_CLASSES = {
     "excessive-size",
 }
 SIMPLE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 RUST_TEST = re.compile(
     r"#\[(?:tokio::)?test(?:\([^\]]*\))?\]"
     r"(?:\s*#\[[^\]]+\])*\s*(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
@@ -96,7 +97,13 @@ def journey_steps(errors: list[str]) -> dict[str, set[str]]:
     result: dict[str, set[str]] = {}
     for project_name in PROJECTS:
         project = PRODUCT_ROOT / "acceptance" / project_name
-        for required in ("registry.yaml", "runtime.yaml", "fixture.sql", "expected-http.yaml"):
+        for required in (
+            "registry.yaml",
+            "runtime.yaml",
+            "fixture.sql",
+            "expected-http.yaml",
+            "governance/classification-review.yaml",
+        ):
             if not (project / required).is_file():
                 errors.append(f"{project_name}: missing required project file {required}")
         journey = mapping(load_yaml(project / "expected-http.yaml"), f"{project_name} journey", errors)
@@ -122,7 +129,142 @@ def journey_steps(errors: list[str]) -> dict[str, set[str]]:
     return result
 
 
+def validate_review_sidecar(
+    project: Path, registry: dict[str, Any], expected_method: str, errors: list[str]
+) -> None:
+    classifications = mapping(registry.get("classifications"), f"{project.name} classifications", errors)
+    reference = classifications.get("provenanceRef")
+    if not isinstance(reference, str) or not reference:
+        errors.append(f"{project.name}: classifications.provenanceRef must name the review sidecar")
+        return
+    sidecar = project / reference
+    if not sidecar.is_file():
+        errors.append(f"{project.name}: classification review sidecar is missing")
+        return
+    review = mapping(load_yaml(sidecar), f"{project.name} classification review", errors)
+    require_exact_keys(
+        review,
+        {
+            "apiVersion",
+            "kind",
+            "registryIdentifier",
+            "classificationInventoryDigest",
+            "method",
+            "reviewer",
+            "reviewDate",
+            "status",
+            "rationaleRef",
+        }
+        | ({"generatedIdentification"} if expected_method == "generated" else set()),
+        f"{project.name} classification review",
+        errors,
+    )
+    if review.get("apiVersion") != "relay.registrystack.org/classification-review/v1":
+        errors.append(f"{project.name}: classification review apiVersion is not frozen")
+    if review.get("kind") != "ClassificationReview":
+        errors.append(f"{project.name}: classification review kind is not frozen")
+    if review.get("registryIdentifier") != registry.get("registry", {}).get("registryIdentifier"):
+        errors.append(f"{project.name}: classification review binds another Registry")
+    if review.get("method") != expected_method or review.get("status") != "reviewed":
+        errors.append(f"{project.name}: classification review does not use the required reviewed method")
+    if not SHA256.fullmatch(str(review.get("classificationInventoryDigest", ""))):
+        errors.append(f"{project.name}: classification review inventory digest is invalid")
+    generated = review.get("generatedIdentification")
+    if expected_method == "generated":
+        generated_binding = mapping(generated, f"{project.name} generated review binding", errors)
+        require_exact_keys(
+            generated_binding,
+            {"reportRef", "reportDigest", "rulePack"},
+            f"{project.name} generated review binding",
+            errors,
+        )
+        report_ref = generated_binding.get("reportRef")
+        if report_ref != "reports/identification-report.json" or not (project / str(report_ref)).is_file():
+            errors.append(f"{project.name}: generated review must bind the accepted identification report")
+        if not SHA256.fullmatch(str(generated_binding.get("reportDigest", ""))):
+            errors.append(f"{project.name}: generated review report digest is invalid")
+        rule_pack = mapping(generated_binding.get("rulePack"), f"{project.name} rule pack", errors)
+        require_exact_keys(rule_pack, {"id", "version", "digest"}, f"{project.name} rule pack", errors)
+        if not SHA256.fullmatch(str(rule_pack.get("digest", ""))):
+            errors.append(f"{project.name}: generated review rule-pack digest is invalid")
+    elif generated is not None:
+        errors.append(f"{project.name}: imported or manual review must not carry generated binding")
+
+
+def validate_acceptance_representation_contracts(errors: list[str]) -> None:
+    expected_methods = {
+        "social-assistance": "generated",
+        "business-registry": "imported",
+        "civil-event": "manual",
+    }
+    expected_representations = {
+        "social-assistance": {"limited", "caseworker"},
+        "business-registry": {"public-register", "registrar"},
+        "civil-event": {"registrar", "supervisory"},
+    }
+    for project_name in PROJECTS:
+        project = PRODUCT_ROOT / "acceptance" / project_name
+        registry = mapping(load_yaml(project / "registry.yaml"), f"{project_name} registry", errors)
+        validate_review_sidecar(project, registry, expected_methods[project_name], errors)
+        resources = sequence(registry.get("resources"), f"{project_name} resources", errors)
+        operations = mapping(resources[0].get("operations") if resources else None, f"{project_name} operations", errors)
+        representations: set[str] = set()
+        operation_definitions = [operations.get("list"), operations.get("read")] + list(
+            operations.get("lookups", []) if isinstance(operations.get("lookups"), list) else []
+        )
+        for index, operation in enumerate(operation_definitions):
+            if operation is None:
+                continue
+            operation = mapping(operation, f"{project_name} operation[{index}]", errors)
+            profiles = mapping(operation.get("representations"), f"{project_name} operation[{index}] representations", errors)
+            default = operation.get("defaultRepresentation")
+            if not isinstance(default, str) or default not in profiles or not profiles:
+                errors.append(f"{project_name}: every declared operation needs one declared default representation")
+            for identifier, representation in profiles.items():
+                representations.add(identifier)
+                representation = mapping(representation, f"{project_name} representation {identifier}", errors)
+                require_exact_keys(
+                    representation,
+                    {"access", "disclosureProfile"},
+                    f"{project_name} representation {identifier}",
+                    errors,
+                )
+        if not expected_representations[project_name].issubset(representations):
+            errors.append(f"{project_name}: required acceptance representations are missing")
+        if project_name == "social-assistance":
+            properties = resources[0].get("properties", {}) if resources else {}
+            transform = mapping(properties.get("maskedEnrolmentReference", {}).get("transform"), "social partial-string transform", errors)
+            if transform != {"kind": "partial-string", "reveal": "suffix", "characters": 4}:
+                errors.append("social-assistance: limited representation must use the frozen partial-string transform")
+            runtime = mapping(
+                load_yaml(project / "runtime.yaml"), "social-assistance runtime", errors
+            )
+            quotas = mapping(runtime.get("quotas"), "social-assistance quotas", errors)
+            if quotas != {"requestsPerMinute": 1, "burst": 12}:
+                errors.append(
+                    "social-assistance: quota fixture must admit exactly the twelve "
+                    "pre-quota lookup executions before the named rate-limit proof"
+                )
+        if project_name == "civil-event":
+            properties = resources[0].get("properties", {}) if resources else {}
+            transform = mapping(properties.get("registrationYear", {}).get("transform"), "civil date-precision transform", errors)
+            if transform != {"kind": "date-precision", "sourceType": "date", "precision": "year"}:
+                errors.append("civil-event: supervisory representation must use the frozen date-precision transform")
+            if operations.get("list") is not None:
+                errors.append("civil-event: collection list remains out of scope")
+            runtime = mapping(
+                load_yaml(project / "runtime.yaml"), "civil-event runtime", errors
+            )
+            quotas = mapping(runtime.get("quotas"), "civil-event quotas", errors)
+            if quotas != {"requestsPerMinute": 1, "burst": 8}:
+                errors.append(
+                    "civil-event: lookup quota fixture must admit exactly the eight "
+                    "pre-quota lookup executions before the named rate-limit proof"
+                )
+
+
 def validate_catalogs(errors: list[str]) -> None:
+    validate_acceptance_representation_contracts(errors)
     layout = mapping(
         load_yaml(PRODUCT_ROOT / "contracts/package-layout.yaml"), "package layout", errors
     )
@@ -193,6 +335,7 @@ def validate_catalogs(errors: list[str]) -> None:
         "openapi-full",
         "openapi-public",
         "representation-schema",
+        "representation-shacl",
         "full-record-schema",
         "full-record-shacl",
         "semantic-model",
@@ -201,6 +344,11 @@ def validate_catalogs(errors: list[str]) -> None:
         "codelists",
         "capability-inventory",
         "audit-event-schema",
+        "identification-report",
+        "classification-inventory",
+        "representation-report",
+        "contextual-review-findings",
+        "classification-review",
     }:
         if required not in artifact_ids:
             errors.append(f"artifact inventory: missing {required}")

@@ -9,6 +9,10 @@ authorizations:
     principal: synthetic-verifier-client
     scopes: [registry:civil-events:lookup]
     claims: {purpose: registration-verification, jurisdiction: EX-A}
+  civil-supervisor-ex-a:
+    principal: synthetic-supervisory-client
+    scopes: [registry:civil-events:supervisory]
+    claims: {purpose: registration-supervision, jurisdiction: EX-A}
   civil-verifier-wrong-purpose:
     principal: synthetic-verifier-client
     scopes: [registry:civil-events:lookup]
@@ -66,12 +70,40 @@ steps:
     request:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
-      query: {fields: "eventType,registrationStatus,certificateAvailable"}
+      query: {fields: "eventType,registrationStatus,registrationDate,certificateAvailable"}
       body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
     expect:
       status: 200
       registryCoreRequired: true
-      domainDataKeys: [eventType, registrationStatus, certificateAvailable]
+      domainDataKeys: [eventType, registrationStatus, registrationDate, certificateAvailable]
+  - id: supervisory-date-precision
+    authorizationFixture: civil-supervisor-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {representation: supervisory, fields: "eventType,registrationYear"}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [eventType, registrationYear]
+      cache: no-store
+  - id: supervisory-representation-denied
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {representation: supervisory}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 403, code: consultation.denied}
+  - id: invalid-representation
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {representation: invalid}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 404, code: representation.not_found}
   - id: no-list
     authorizationFixture: civil-registrar-ex-a
     request: {method: GET, path: /v2/resources/civil-event/records}
@@ -160,6 +192,14 @@ steps:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
       body: {registrationNumber: REG-SYNTH-INVALID1, eventType: BIRTH}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: invalid-transform-input
+    authorizationFixture: civil-supervisor-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {representation: supervisory}
+      body: {registrationNumber: REG-SYNTH-XFORM1, eventType: BIRTH}
     expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
   - id: quota-exhausted
     authorizationFixture: civil-verifier-ex-a

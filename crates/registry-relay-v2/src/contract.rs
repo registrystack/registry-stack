@@ -322,6 +322,8 @@ pub struct PropertyDefinition {
     pub source_required: bool,
     pub semantic_term: String,
     #[serde(default)]
+    pub transform: Option<TransformDefinition>,
+    #[serde(default)]
     pub classification: ClassificationPartial,
 }
 
@@ -333,7 +335,44 @@ pub enum DataType {
     Integer,
     Date,
     DateTime,
+    Year,
+    YearMonth,
     ControlledCode,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum TransformDefinition {
+    PartialString {
+        reveal: PartialStringReveal,
+        characters: u16,
+    },
+    DatePrecision {
+        #[serde(rename = "sourceType")]
+        source_type: DateInputType,
+        precision: DatePrecision,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PartialStringReveal {
+    Prefix,
+    Suffix,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DateInputType {
+    Date,
+    DateTime,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DatePrecision {
+    Year,
+    YearMonth,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -356,8 +395,8 @@ pub struct Operations {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ListOperation {
-    pub access: AccessRule,
-    pub disclosure_profile: String,
+    pub default_representation: String,
+    pub representations: OrderedMap<RepresentationDefinition>,
     #[serde(default)]
     pub filters: Vec<FilterDefinition>,
     pub allow_unfiltered: bool,
@@ -368,17 +407,64 @@ pub struct ListOperation {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecordOperation {
-    pub access: AccessRule,
-    pub disclosure_profile: String,
+    pub default_representation: String,
+    pub representations: OrderedMap<RepresentationDefinition>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LookupOperation {
     pub id: String,
-    pub access: AccessRule,
     pub request_body: LookupRequestBody,
+    pub default_representation: String,
+    pub representations: OrderedMap<RepresentationDefinition>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RepresentationDefinition {
+    pub access: AccessRule,
     pub disclosure_profile: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ClassificationReviewDocument {
+    pub api_version: String,
+    pub kind: String,
+    pub registry_identifier: String,
+    pub classification_inventory_digest: String,
+    pub method: IdentificationMethod,
+    pub reviewer: String,
+    pub review_date: String,
+    pub status: ReviewStatus,
+    pub rationale_ref: String,
+    #[serde(default)]
+    pub generated_identification: Option<GeneratedIdentificationBinding>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum IdentificationMethod {
+    Generated,
+    Imported,
+    Manual,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct GeneratedIdentificationBinding {
+    pub report_ref: String,
+    pub report_digest: String,
+    pub rule_pack: RulePackBinding,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct RulePackBinding {
+    pub id: String,
+    pub version: String,
+    pub digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -788,5 +874,14 @@ disclosureProfiles: {}
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn legacy_single_profile_operation_shape_is_not_accepted() {
+        let yaml = crate::compiler::tests::valid_contract().replace(
+            "        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "        access: public\n        disclosureProfile: public",
+        );
+        assert!(RegistryContract::parse_yaml(&yaml).is_err());
     }
 }

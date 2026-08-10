@@ -21,4 +21,4 @@ limits:
   concurrentQueries: 16
 quotas:
   requestsPerMinute: 1
-  burst: 10
+  burst: 12

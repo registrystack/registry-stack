@@ -30,6 +30,7 @@ use registry_relay_v2::audit::RelayAudit;
 use registry_relay_v2::auth::RelayAuthenticator;
 use registry_relay_v2::compiler::{compile_contract_with_governed_files, GovernedFileSet};
 use registry_relay_v2::contract::{RegistryContract, RelayRuntime};
+use registry_relay_v2::identification::parse_classification_review_yaml;
 use registry_relay_v2::model::{
     CompileProfile, ObservedColumn, ObservedSourceSchema, ObservedView,
 };
@@ -244,9 +245,8 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
             assert_eq!(
                 status,
                 StatusCode::from_u16(step.expect.status).expect("expected status is valid"),
-                "{project}/{} returned the wrong status; body={}",
-                step.id,
-                String::from_utf8_lossy(&body)
+                "{project}/{} returned the wrong status; response body withheld",
+                step.id
             );
             if let Some(reference) = &step.expect.etag_same_as {
                 assert_eq!(
@@ -758,7 +758,7 @@ async fn operation_bound_metadata_is_no_store_and_links_only_visible_artifacts()
             capability["processingReference"]
                 .as_str()
                 .is_some_and(|reference| reference.ends_with(
-                    "/v2/artifacts/assistance-enrolment--lookup-by-case-and-person-processing"
+                    "/v2/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-limited-processing"
                 )),
             "processing metadata link resolves to the mounted artifact identifier"
         );
@@ -1029,23 +1029,34 @@ fn assert_expectations(
         );
     }
     if let Some(cache) = &step.expect.cache {
-        assert_eq!(
-            cache, "public-snapshot-revalidation",
-            "{label} cache expectation"
-        );
-        assert_eq!(
-            headers
-                .get(CACHE_CONTROL)
-                .and_then(|value| value.to_str().ok()),
-            Some("public, no-cache"),
-            "{label} cache-control"
-        );
-        assert!(headers.contains_key(ETAG), "{label} requires an ETag");
-        assert_eq!(
-            headers.get(VARY).and_then(|value| value.to_str().ok()),
-            Some("Accept, Authorization"),
-            "{label} vary"
-        );
+        match cache.as_str() {
+            "public-snapshot-revalidation" => {
+                assert_eq!(
+                    headers
+                        .get(CACHE_CONTROL)
+                        .and_then(|value| value.to_str().ok()),
+                    Some("public, no-cache"),
+                    "{label} cache-control"
+                );
+                assert!(headers.contains_key(ETAG), "{label} requires an ETag");
+                assert_eq!(
+                    headers.get(VARY).and_then(|value| value.to_str().ok()),
+                    Some("Accept, Authorization"),
+                    "{label} vary"
+                );
+            }
+            "no-store" => {
+                assert_eq!(
+                    headers
+                        .get(CACHE_CONTROL)
+                        .and_then(|value| value.to_str().ok()),
+                    Some("no-store"),
+                    "{label} cache-control"
+                );
+                assert!(!headers.contains_key(ETAG), "{label} omits an ETag");
+            }
+            unsupported => panic!("{label} has unsupported cache expectation {unsupported}"),
+        }
     }
     let body_text = String::from_utf8_lossy(body);
     for absent in &step.expect.absent_everywhere {
@@ -1514,6 +1525,14 @@ fn governed_files(root: &Path, contract: &RegistryContract) -> GovernedFileSet {
     let mut paths = BTreeSet::new();
     paths.insert(contract.registry.identifier_lifecycle_policy_ref.clone());
     paths.insert(contract.classifications.provenance_ref.clone());
+    let review_bytes = fs::read(root.join(&contract.classifications.provenance_ref))
+        .expect("classification review reads");
+    let review = parse_classification_review_yaml(&review_bytes)
+        .expect("classification review strictly parses");
+    paths.insert(review.rationale_ref);
+    if let Some(generated) = review.generated_identification {
+        paths.insert(generated.report_ref);
+    }
     for alignment in &contract.semantics.alignments {
         paths.insert(alignment.profile_ref.clone());
     }

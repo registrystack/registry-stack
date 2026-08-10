@@ -117,16 +117,101 @@ def openapi_operations(document: dict[str, Any]) -> dict[tuple[str, str], dict[s
     return result
 
 
-def validate_openapi(package: Path) -> None:
+def representation_identifiers(operation: dict[str, Any], label: str) -> set[str]:
+    profiles = operation.get("x-registry-representations")
+    if not isinstance(profiles, list) or not profiles:
+        raise GateFailure(f"{label} has no finite representations")
+    identifiers: set[str] = set()
+    for profile in profiles:
+        if not isinstance(profile, dict) or not isinstance(profile.get("identifier"), str):
+            raise GateFailure(f"{label} has a malformed representation")
+        identifier = profile["identifier"]
+        if not identifier or identifier in identifiers:
+            raise GateFailure(f"{label} has duplicate or empty representation identifiers")
+        identifiers.add(identifier)
+    return identifiers
+
+
+def public_representation_parameters(operation: dict[str, Any], label: str) -> set[str]:
+    parameters = operation.get("parameters")
+    if not isinstance(parameters, list):
+        raise GateFailure(f"{label} has no parameters")
+    matches = [
+        parameter
+        for parameter in parameters
+        if isinstance(parameter, dict)
+        and parameter.get("name") == "representation"
+        and parameter.get("in") == "query"
+    ]
+    if len(matches) != 1:
+        raise GateFailure(f"{label} has no unique representation parameter")
+    identifiers = matches[0].get("schema", {}).get("enum")
+    if not isinstance(identifiers, list) or not all(isinstance(item, str) for item in identifiers):
+        raise GateFailure(f"{label} has a malformed representation parameter")
+    return set(identifiers)
+
+
+def artifact_identifier(reference: Any) -> str | None:
+    if not isinstance(reference, str) or not reference:
+        return None
+    return reference.rsplit("/", 1)[-1]
+
+
+def validate_public_operation(
+    public: dict[str, Any], full: dict[str, Any], public_artifact_ids: set[str]
+) -> None:
+    if public.get("operationId") != full.get("operationId"):
+        raise GateFailure("public OpenAPI operation identifier does not match full OpenAPI")
+    public_ids = representation_identifiers(public, "public OpenAPI operation")
+    full_ids = representation_identifiers(full, "full OpenAPI operation")
+    if not public_ids.issubset(full_ids):
+        raise GateFailure("public OpenAPI representation is absent from full OpenAPI")
+    if public_representation_parameters(public, "public OpenAPI operation") != public_ids:
+        raise GateFailure("public OpenAPI representation parameter does not match public profiles")
+    if public.get("security") != [] or "x-registry-required-scopes" in public:
+        raise GateFailure("public OpenAPI operation carries protected access or security")
+    full_profiles = {
+        profile["identifier"]: profile
+        for profile in full["x-registry-representations"]
+    }
+    protected_ids = {
+        entry.get("representation")
+        for entry in full.get("x-registry-required-scopes", [])
+        if isinstance(entry, dict) and isinstance(entry.get("representation"), str)
+    }
+    for profile in public["x-registry-representations"]:
+        identifier = profile["identifier"]
+        if identifier in protected_ids:
+            raise GateFailure("public OpenAPI exposes a protected representation")
+        if profile != full_profiles[identifier]:
+            raise GateFailure("public OpenAPI representation differs from its full profile")
+        for reference_key in (
+            "schemaReference",
+            "semanticModelReference",
+            "contextReference",
+        ):
+            if artifact_identifier(profile.get(reference_key)) not in public_artifact_ids:
+                raise GateFailure("public OpenAPI references an artifact absent from public output")
+
+
+def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
     full = yaml.safe_load((package / "generated/openapi.full.yaml").read_text(encoding="utf-8"))
     public = json.loads((package / "generated/openapi.public.json").read_text(encoding="utf-8"))
     full_operations = openapi_operations(full)
     public_operations = openapi_operations(public)
+    public_artifact_ids = {
+        artifact["id"]
+        for artifact in artifacts
+        if artifact.get("visibility") == "public" and isinstance(artifact.get("id"), str)
+    }
     for key, operation in public_operations.items():
-        if full_operations.get(key) != operation:
-            raise GateFailure("public OpenAPI is not an exact path subset of full OpenAPI")
-        if operation.get("security") == [{"bearerAuth": []}]:
-            raise GateFailure("public OpenAPI exposes a protected-only operation")
+        full_operation = full_operations.get(key)
+        if full_operation is None:
+            raise GateFailure("public OpenAPI path is absent from full OpenAPI")
+        if "x-registry-representations" in operation or "x-registry-representations" in full_operation:
+            validate_public_operation(operation, full_operation, public_artifact_ids)
+        elif operation != full_operation:
+            raise GateFailure("public fixed OpenAPI operation differs from full OpenAPI")
 
     capabilities = json.loads(
         (package / "generated/artifacts/capabilities.full.json").read_text(encoding="utf-8")
@@ -210,7 +295,7 @@ def validate_exposure_and_identity(package: Path, generated: Path) -> dict[str, 
         raise GateFailure("full OpenAPI is not package-only")
     if by_id.get("openapi-public", {}).get("visibility") != "public":
         raise GateFailure("public OpenAPI is not explicitly public")
-    validate_openapi(package)
+    validate_openapi(package, artifacts)
     return manifest
 
 

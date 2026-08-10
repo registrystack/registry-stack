@@ -39,7 +39,7 @@ classifications:
   privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
   institutional: {scheme: https://civil-registry.example.invalid/classification, version: "1"}
   handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
-  provenanceRef: governance/legal-basis.yaml
+  provenanceRef: governance/classification-review.yaml
 sources:
   events:
     kind: sqlite
@@ -57,6 +57,7 @@ resources:
     sourceColumnClassifications:
       jurisdiction_code: {privacy: personal-context}
       registration_number: {privacy: identifying}
+      registration_date: {privacy: personal, institutional: restricted, handling: restricted, status: reviewed}
     recordContext:
       recordIdentifier: {sourceColumn: event_reference}
       revisionIdentifier: {sourceColumn: record_revision}
@@ -95,6 +96,15 @@ resources:
         semanticTerm: local:registrationDate
         label: Registration date
         description: Date the synthetic event was registered.
+      registrationYear:
+        sourceColumn: registration_date
+        transform: {kind: date-precision, sourceType: date, precision: year}
+        type: year
+        sourceRequired: true
+        semanticTerm: local:registrationYear
+        label: Registration year
+        description: Reviewed year-precision form of the civil-event registration date.
+        classification: {privacy: derived, institutional: confidential, handling: confidential, status: reviewed}
       registrationArea:
         sourceColumn: registration_area_code
         type: controlled-code
@@ -115,34 +125,40 @@ resources:
       registrar-record:
         properties: [eventReference, eventType, registrationStatus, registrationDate, registrationArea, certificateAvailable]
       verification-result:
-        properties: [eventReference, eventType, registrationStatus, certificateAvailable]
+        properties: [eventReference, eventType, registrationStatus, registrationDate, certificateAvailable]
+      supervisory-verification:
+        properties: [eventReference, eventType, registrationStatus, registrationYear, certificateAvailable]
     operations:
       read:
-        access:
-          scope: registry:civil-events:read
-          purpose:
-            claim: purpose
-            allowed: [civil-registration-administration]
-          authorityRowBinding:
-            claim: jurisdiction
-            sourceColumn: jurisdiction_code
-        disclosureProfile: registrar-record
+        defaultRepresentation: registrar
+        representations:
+          registrar:
+            access:
+              scope: registry:civil-events:read
+              purpose: {claim: purpose, allowed: [civil-registration-administration]}
+              authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+            disclosureProfile: registrar-record
       lookups:
         - id: verify-registration
-          access:
-            scope: registry:civil-events:lookup
-            purpose:
-              claim: purpose
-              allowed: [registration-verification]
-            authorityRowBinding:
-              claim: jurisdiction
-              sourceColumn: jurisdiction_code
           requestBody:
             maximumBytes: 384
             selectors:
               registrationNumber: {sourceColumn: registration_number, type: string, minimumBytes: 12, maximumBytes: 96}
               eventType: {sourceColumn: event_type, type: controlled-code, codelist: codelists/civil-event-types.yaml}
-          disclosureProfile: verification-result
+          defaultRepresentation: registrar-verification
+          representations:
+            registrar-verification:
+              access:
+                scope: registry:civil-events:lookup
+                purpose: {claim: purpose, allowed: [registration-verification]}
+                authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+              disclosureProfile: verification-result
+            supervisory:
+              access:
+                scope: registry:civil-events:supervisory
+                purpose: {claim: purpose, allowed: [registration-supervision]}
+                authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+              disclosureProfile: supervisory-verification
     processingDescriptions:
       - id: registrar-administration
         operationRefs: [read]

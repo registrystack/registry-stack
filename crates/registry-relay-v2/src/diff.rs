@@ -50,10 +50,14 @@ pub enum ChangeClass {
     PropertyAdded,
     PropertyRemoved,
     PropertyMeaningChanged,
+    TransformationChanged,
     HandlingRelaxed,
     HandlingTightened,
     OperationAdded,
     OperationRemoved,
+    RepresentationAdded,
+    RepresentationRemoved,
+    DefaultRepresentationChanged,
     DisclosureExpanded,
     DisclosureNarrowed,
     DisclosureProfileChanged,
@@ -81,6 +85,7 @@ pub enum ChangeClass {
     MetadataVisibilityTightened,
     SemanticAlignmentChanged,
     ClassificationChanged,
+    ClassificationReviewChanged,
     ProcessingChanged,
     GovernedFileChanged,
 }
@@ -164,6 +169,15 @@ pub fn diff_registries(
             ChangeImpact::Informational,
             "semantics.alignments".into(),
             "the pinned external semantic alignment set changed",
+        );
+    }
+    if previous.classification_review != current.classification_review {
+        push(
+            &mut changes,
+            ChangeClass::ClassificationReviewChanged,
+            ChangeImpact::Breaking,
+            "classifications.provenanceRef".into(),
+            "the reviewed classification binding, inventory digest, method, or identification evidence changed",
         );
     }
     let before_governed = previous
@@ -301,6 +315,15 @@ fn diff_resource(
                         "a property binding, meaning, datatype, codelist, or requiredness changed",
                     );
                 }
+                if before.transform != after.transform {
+                    push(
+                        changes,
+                        ChangeClass::TransformationChanged,
+                        ChangeImpact::Breaking,
+                        format!("{location}.transform"),
+                        "the closed transformation kind or parameters changed",
+                    );
+                }
                 let before_handling = before.classification.handling;
                 let after_handling = after.classification.handling;
                 if after_handling < before_handling {
@@ -379,50 +402,54 @@ fn diff_operation(
     location: &str,
     changes: &mut Vec<ContractChange>,
 ) {
-    if previous.disclosure_profile != current.disclosure_profile {
+    if previous.default_representation != current.default_representation {
         push(
             changes,
-            ChangeClass::DisclosureProfileChanged,
+            ChangeClass::DefaultRepresentationChanged,
             ChangeImpact::Breaking,
-            format!("{location}.disclosureProfile"),
-            "the named disclosure profile changed and requires review",
+            format!("{location}.defaultRepresentation"),
+            "the representation selected when the caller omits an explicit choice changed",
         );
     }
-    let previous_properties = previous
-        .selectable_properties
+    let before_representations = previous
+        .representations
         .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let current_properties = current
-        .selectable_properties
+        .map(|representation| (representation.id.as_str(), representation))
+        .collect::<BTreeMap<_, _>>();
+    let after_representations = current
+        .representations
         .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if current_properties
-        .difference(&previous_properties)
-        .next()
-        .is_some()
+        .map(|representation| (representation.id.as_str(), representation))
+        .collect::<BTreeMap<_, _>>();
+    for id in before_representations
+        .keys()
+        .chain(after_representations.keys())
+        .collect::<BTreeSet<_>>()
     {
-        push(
-            changes,
-            ChangeClass::DisclosureExpanded,
-            ChangeImpact::Widening,
-            format!("{location}.disclosureProfile"),
-            "the maximum disclosure property set expanded",
-        );
-    }
-    if previous_properties
-        .difference(&current_properties)
-        .next()
-        .is_some()
-    {
-        push(
-            changes,
-            ChangeClass::DisclosureNarrowed,
-            ChangeImpact::Narrowing,
-            format!("{location}.disclosureProfile"),
-            "the maximum disclosure property set narrowed",
-        );
+        let representation_location = format!("{location}.representations.{id}");
+        match (
+            before_representations.get(*id),
+            after_representations.get(*id),
+        ) {
+            (None, Some(_)) => push(
+                changes,
+                ChangeClass::RepresentationAdded,
+                ChangeImpact::Widening,
+                representation_location,
+                "a callable representation was added to the operation",
+            ),
+            (Some(_), None) => push(
+                changes,
+                ChangeClass::RepresentationRemoved,
+                ChangeImpact::Breaking,
+                representation_location,
+                "a callable representation was removed from the operation",
+            ),
+            (Some(before), Some(after)) => {
+                diff_representation(before, after, &representation_location, changes);
+            }
+            (None, None) => unreachable!(),
+        }
     }
 
     let before_filters = previous
@@ -517,6 +544,79 @@ fn diff_operation(
         location,
         changes,
     );
+}
+
+fn diff_representation(
+    previous: &crate::model::CompiledRepresentation,
+    current: &crate::model::CompiledRepresentation,
+    location: &str,
+    changes: &mut Vec<ContractChange>,
+) {
+    if previous.disclosure_profile != current.disclosure_profile {
+        push(
+            changes,
+            ChangeClass::DisclosureProfileChanged,
+            ChangeImpact::Breaking,
+            format!("{location}.disclosureProfile"),
+            "the named disclosure profile changed and requires review",
+        );
+    }
+    let previous_properties = previous
+        .selectable_properties
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let current_properties = current
+        .selectable_properties
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if current_properties
+        .difference(&previous_properties)
+        .next()
+        .is_some()
+    {
+        push(
+            changes,
+            ChangeClass::DisclosureExpanded,
+            ChangeImpact::Widening,
+            format!("{location}.disclosureProfile"),
+            "the maximum disclosure property set expanded",
+        );
+    }
+    if previous_properties
+        .difference(&current_properties)
+        .next()
+        .is_some()
+    {
+        push(
+            changes,
+            ChangeClass::DisclosureNarrowed,
+            ChangeImpact::Narrowing,
+            format!("{location}.disclosureProfile"),
+            "the maximum disclosure property set narrowed",
+        );
+    }
+    if previous.transform_inventory != current.transform_inventory {
+        push(
+            changes,
+            ChangeClass::TransformationChanged,
+            ChangeImpact::Breaking,
+            format!("{location}.transforms"),
+            "the representation transformation inventory changed",
+        );
+    }
+    if previous.processing_handling != current.processing_handling
+        || previous.disclosure_handling != current.disclosure_handling
+    {
+        push(
+            changes,
+            ChangeClass::ClassificationChanged,
+            ChangeImpact::Breaking,
+            format!("{location}.handling"),
+            "the representation processing or disclosure handling floor changed",
+        );
+    }
     diff_access(&previous.access, &current.access, location, changes);
 }
 
@@ -844,6 +944,44 @@ mod tests {
             .changes
             .iter()
             .any(|change| change.class == ChangeClass::ProcessingChanged));
+    }
+
+    #[test]
+    fn representations_transforms_defaults_and_review_bindings_are_reported() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        let operation = &mut current.resources[0].operations[0];
+        operation.representations[0]
+            .transform_inventory
+            .push("partial-string:suffix:4".into());
+        let mut alternate = operation.representations[0].clone();
+        alternate.id = "alternate".into();
+        operation.representations.push(alternate);
+        operation.default_representation = "alternate".into();
+        current
+            .classification_review
+            .as_mut()
+            .expect("compiled production review")
+            .classification_inventory_digest = format!("sha256:{}", "a".repeat(64));
+
+        let report = diff_registries(&previous, &current);
+        for class in [
+            ChangeClass::TransformationChanged,
+            ChangeClass::RepresentationAdded,
+            ChangeClass::DefaultRepresentationChanged,
+            ChangeClass::ClassificationReviewChanged,
+        ] {
+            assert!(
+                report.changes.iter().any(|change| change.class == class),
+                "missing {class:?}"
+            );
+        }
+
+        let reverse = diff_registries(&current, &previous);
+        assert!(reverse
+            .changes
+            .iter()
+            .any(|change| change.class == ChangeClass::RepresentationRemoved));
     }
 
     #[test]

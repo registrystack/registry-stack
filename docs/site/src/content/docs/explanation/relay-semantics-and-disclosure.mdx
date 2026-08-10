@@ -1,6 +1,6 @@
 ---
 title: Semantics, classification, and disclosure in Relay
-description: Understand how Relay generates a local semantic model, classifies source columns, and limits each response to reviewed properties.
+description: Understand how Relay separates source processing, public meaning, reviewed representations, and bounded disclosure.
 status: draft
 owner: registry-docs
 source_repos:
@@ -16,187 +16,124 @@ standards_referenced:
   - universal-dpi-safeguards
 ---
 
-Registry Relay makes meaning and data handling part of the API contract. An
-institution can start without an existing JSON for Linked Data (JSON-LD)
-context, Shapes Constraint Language (SHACL) shape, or external vocabulary
-mapping. Relay generates a local semantic model from the reviewed Registry
-contract, while external alignments remain optional and explicit.
+Registry Relay makes meaning, processing, and disclosure part of one reviewed Registry contract.
+It generates a local semantic model from that contract, but the contract never promotes a SQLite
+column, identification candidate, or classification suggestion into public truth by itself.
 
-## Separate four layers of meaning
+## Separate source structure from public meaning
 
-One SQLite column can participate in four distinct concerns:
+A source column is a reviewed local binding.
+A published property is a stable API name with a type, semantic term, label, description, source
+requiredness, and output classification.
+One source column can support more than one published property, and a published property can preserve its
+meaning across a reviewed storage migration.
 
-| Layer | Question | Example |
+Relay's schema-only identification reads observed SQLite structure, declared types, key metadata,
+codelist bindings, authored roles, and an embedded digest-pinned core rule pack.
+It does not profile or read row values, make machine-learning inferences, or auto-approve a result.
+Candidates record their evidence and categorical confidence.
+Conflicts remain uncertain and require institutional review.
+
+## Preserve Registry Core in every representation
+
+Every successful Record has mandatory Registry Core context: Registry and Record identifiers,
+revision, lifecycle state, Authority, recorded time, and links to the response schema and semantic
+model.
+`domainData` is the only selectable part of the Record.
+`fields` can remove published properties from `domainData`, but it cannot remove Registry Core.
+
+This split explains why Relay produces two kinds of validation artifact.
+The compiler validates hidden source bindings.
+The complete-record schema and Shape Constraint Language (SHACL) shape retain source requiredness
+for every governed output property.
+Each representation schema validates Registry Core and the domain properties that representation
+permits when they are present.
+
+## Classify output and processing separately
+
+Each published property has an output classification.
+Each column Relay processes has a source-column classification, including unpublished Registry Core,
+filter, order, selector, row-boundary, revision, and transform-input columns.
+The source classification is not a duplicate of the published property's classification: it protects
+the data Relay had to process even when Relay does not serialize it.
+
+The technical handling order is `public`, `internal`, `confidential`, then `restricted`.
+The compiler derives two floors for each representation:
+
+| Floor | Includes | Controls |
 | --- | --- | --- |
-| Source binding | Where does the value come from? | `legal_name` in `relay_registered_businesses`. |
-| Domain meaning | What does the published property mean? | `local:legalName`. |
-| Classification | How sensitive is the property, and how must Relay handle it? | Potentially personal, public by law, and public handling. |
-| Processing description | Why is an operation offered, to which recipient class, and with which safeguards? | Statutory publication to the public. |
+| Processing handling | Every source column used to answer the operation | Compiler validity, source use, audit context, and cache eligibility. |
+| Disclosure handling | Properties serializable by the representation | The sensitivity of the releasable output. |
 
-The public property is the centre of the model. A source column is its local
-binding, not its API name or semantic identity. The same public property can
-therefore keep a stable meaning when an institution changes its storage schema,
-provided the reviewed binding and source fingerprint change together. The
-fingerprint is a digest of the reviewed SQLite structure, not of its row values.
+The processing floor applies even when the output floor is less restrictive.
+For example, a public representation cannot conceal a non-public source column through a transform.
+It must instead read a reviewed pre-derived public column from the SQLite view.
 
-## Generate a local semantic model first
+Classifications may reduce availability, but do not grant access.
+They do not create a scope, purpose, row authority, lawful basis, consent decision, or operation.
 
-Every Registry contract declares a stable local vocabulary base. Every
-resource names a local class, and every property names a local term. Relay then
-generates:
+## Review classification as a complete artifact
 
-- A local JSON-LD vocabulary with classes, properties, labels, descriptions,
-  data types, source requiredness, and codelist references.
-- One JSON-LD context for each visible operation.
-- A JSON Schema for each permitted response representation.
-- A SHACL shape for each operation and a complete operator-only source shape.
-- Codelist schemas and links.
-- Capability, classification, and processing descriptions.
+Resource defaults can make authoring concise, but compilation expands every property and processed
+source column to a complete effective classification.
+`relayctl generate` produces deterministic, value-free identification, classification inventory,
+representation, and contextual-finding reports, plus a classification-review starter.
 
-The local model is usable without an external mapping. Stable local terms make
-Records interpretable and give later mapping work an explicit source
-vocabulary. Relay does not guess that two terms are equivalent.
+The closed `ClassificationReview` sidecar binds the Registry identifier and classification-inventory
+digest to a reviewer, date, rationale, status, and one method: `generated`, `imported`, or `manual`.
+Generated review also binds the accepted copied identification report and rule pack.
+Imported and manual reviews are first-class methods and do not require an identification report.
+Production compilation fails for a missing, unreviewed, stale, or digest-mismatched sidecar.
 
-## Add external alignments deliberately
+## Use finite governed representations
 
-An institution can add a governed mapping file when a suitable public
-vocabulary exists. Each entry records:
+An operation has a finite ordered map of named representations and exactly one default.
+Each representation owns one access rule and one disclosure profile.
+The profile is the largest set of published properties it may disclose.
 
-- The local class or property.
-- The external class or property.
-- Whether the relation is exact, close, broad, narrow, or related.
-- The external profile identifier and reviewed version.
-- A digest of the reviewed external profile material.
+The request parameter `representation` selects a named representation.
+When absent, Relay uses the declared default.
+When present, Relay authorizes that exact representation: an invalid bearer, denied request, or
+unknown name does not fall back to another representation.
+After selection, `fields` may request only a non-empty subset of that representation's properties.
+It cannot select a source column, switch profiles, change a transformation, bypass a row boundary,
+or lower the compiled handling, audit, quota, metadata, or cache controls.
 
-For example, an institution can map `local:RegisteredBusiness` to the SEMIC
-Core Business Vocabulary's `LegalEntity` class with a `close` relation. The
-relation states a reviewed alignment without claiming that the two models are
-identical.
+This is requester minimization, not dynamic per-request masking or attribute authorization.
+Relay has no free-form policy engine or arbitrary expression language.
 
-The European Commission Semantic Interoperability Community (SEMIC),
-PublicSchema, schema.org, and domain vocabularies are possible mapping targets,
-not runtime dependencies. Relay neither fetches nor infers from remote
-vocabulary content when serving a request. The local term remains authoritative
-for the Relay contract.
+## Apply only bounded transforms
 
-## Validate the source and response separately
+The transform set is deliberately finite and deterministic.
+`partial-string` produces the Relay-owned marker `***` with a bounded Unicode-scalar prefix or
+suffix.
+If the input has no more characters than the configured reveal length, the output is `***` alone.
+`date-precision` turns a canonical `date` or `date-time` into a `year` or `year-month` property.
+The transformed property has its own semantic term, output type, and classification.
 
-The complete source Record and a caller-minimized response have different
-requiredness rules.
+Invalid, noncanonical, oversized, or incompatible required input fails without exposing source
+values.
+Optional null input omits the property.
+Relay does not provide hashing, pseudonyms, encryption, regular-expression replacement, geographic
+or numeric transformations, codelist remapping, caller-defined masks, or dynamic masking policy.
 
-The operator-only full JSON Schema and SHACL shape validate every
-`sourceRequired` property and mandatory Record-context binding in the reviewed
-view. Relay does not coerce or partially release an invalid selected row. For a
-sensitive exact lookup, a missing Record, ambiguous result, hidden row, and
-unsafe row can share the same unresolved response so the result does not reveal
-which condition occurred.
+## Generate semantics without pretending equivalence
 
-An operation's response schema always requires the mandatory Registry and
-Record context. Domain properties are constrained when present but can be
-omitted with the `fields` parameter. The schema linked from a returned Record
-therefore validates the representation the caller received, not the complete
-source row.
+Relay generates a local JSON for Linked Data (JSON-LD) vocabulary and context, JSON Schema, SHACL,
+codelist schemas, capability metadata, and representation-specific artifacts.
+An institution can add a reviewed and digest-pinned mapping to an external vocabulary with an
+explicit exact, close, broad, narrow, or related relation.
+Relay does not infer that relation or fetch remote vocabulary content while serving a request.
 
-## Classify properties and hidden columns
-
-Each published property carries three classification dimensions:
-
-- A privacy category describes whether the value is personal, identifying,
-  sensitive, derived, or another reviewed category.
-- An institutional classification uses the Registry Authority's own scheme.
-- A technical handling level selects the controls Relay must apply.
-
-The technical handling order is `public`, `internal`, `confidential`, and
-`restricted`. Relay applies the most restrictive effective handling across all
-properties and source columns used by the operation.
-
-Hidden columns still matter. Record revision, lifecycle, recorded time,
-selectors, row-authority claims, filters, and ordering can affect an access or
-release decision without appearing in `domainData`. Every reviewed hidden
-column needs a technical classification so a non-returned field cannot weaken
-the operation's handling level.
-
-Resource defaults keep authoring compact. The compiler expands those defaults
-and any property or column exceptions into a complete classification. Generated
-classifications remain suggestions until an institution reviews them;
-production checks refuse incomplete classification.
-
-## Allow classification to restrict, never grant
-
-Classification can narrow an operation but cannot create authority:
-
-- `public` data is anonymous only through an explicitly public operation.
-- Non-public handling requires authentication, an operation scope,
-  `Cache-Control: no-store`, and durable audit without Registry values.
-- `confidential` and `restricted` handling prevents public classification and
-  processing metadata.
-- `restricted` data cannot be exposed through collection listing.
-
-A classification label does not invent a purpose, lawful basis, consent, or
-row authority. Those remain explicit reviewed access and processing fields. A
-classification change can reduce availability or trigger review, but cannot
-create a route or grant a token scope.
-
-## Use DPV for governance metadata
-
-The [Data Privacy Vocabulary (DPV) 2.3](https://w3c-cg.github.io/dpv/2.3/dpv/)
-can describe purposes, processing, parties, recipients, legal context, and
-technical or organisational measures. A domain vocabulary describes what a
-Registry fact means; DPV describes why and how an operation processes it.
-
-A processing description can link to a reviewed DPV profile. Relay does not
-use DPV as its runtime policy language. The service executes its smaller typed
-access contract and does not evaluate arbitrary Resource Description Framework
-(RDF), DPV rules, Open Digital Rights Language (ODRL), or remote content. DPV
-2.3 is a W3C Community Group report, so an institution pins and reviews the
-chosen version.
-
-## Treat disclosure as a maximum
-
-Every operation names one reviewed disclosure profile. Its property list is
-both the default and the maximum. A caller can request a non-empty subset with
-`fields`, but cannot add a property, select a source column, change a
-derivation, bypass row authority, or reduce authentication, audit, quota,
-handling, or metadata controls.
-
-This is requester minimization, not per-client field authorization. Two clients
-of the same operation share one maximum property set. Use separate named
-operations when two institutional purposes need different reviewed
-representations. Keep the same Registry and Record identifiers when both
-operations describe the same Record.
-
-## Publish semantics at the Record's visibility
-
-Every Record carries `schemaReference` and `semanticModelReference`. Relay
-refuses a project where the successful audience cannot retrieve safe versions
-of both artifacts. The JSON-LD context is linked separately because a context
-maps terms to Internationalized Resource Identifiers but does not define the
-complete semantic model by itself.
-
-Metadata visibility is part of disclosure:
-
-- `public` artifacts can be retrieved anonymously.
-- `operation-bound` artifacts require the same static access rule as their
-  operation.
-- `operator-only` artifacts remain in the sealed package and are not served
-  over HTTP.
-
-The full source schema, complete SHACL shape, authored mapping files, and
-classification inventory can remain operator-only. Each successful caller
-still receives the operation-specific schema and semantic model needed to
-interpret the returned Record.
-
-These controls provide technical evidence for data minimization,
-transparency, protection during use, and change-impact review. They do not
-create lawful basis, institutional accountability, remedy, independent
-oversight, or certification. Those responsibilities remain with the Registry
-Authority and its governance environment.
+Data Privacy Vocabulary (DPV) metadata can describe processing purpose, parties, recipients, legal
+context, and safeguards.
+DPV is a governance projection, not Relay's runtime policy language.
+Relay does not evaluate arbitrary Resource Description Framework (RDF), DPV, or Open Digital Rights
+Language (ODRL) rules.
 
 ## Next
 
-- [Understand governed Registry publication](../governed-registry-publication/)
-  for the wider Relay product boundary.
-- [Author a Registry Relay project](../../configure/relay/) to apply this model
-  to institution-owned SQLite views.
-- [Operate Registry Relay](../../operate/relay/) to enforce artifact visibility,
-  authentication, audit, and source controls at deployment.
+- [Understand governed Registry publication](../governed-registry-publication/) for the overall
+  contract and runtime boundary.
+- [Author a Registry Relay project](../../configure/relay/) for the review and package workflow.
+- [Operate Registry Relay](../../operate/relay/) for startup, audit, and revision controls.

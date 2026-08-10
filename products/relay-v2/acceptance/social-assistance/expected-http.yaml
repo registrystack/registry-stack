@@ -3,23 +3,31 @@ registry: urn:example:registry:social-assistance-enrolments
 authorizations:
   social-lookup-area-a:
     principal: synthetic-social-client
-    scopes: [registry:social-assistance:lookup]
+    scopes: [registry:social-assistance:limited]
+    claims: {purpose: benefit-delivery, service_area: AREA-A}
+  social-caseworker-area-a:
+    principal: synthetic-social-caseworker
+    scopes: [registry:social-assistance:caseworker]
+    claims: {purpose: benefit-delivery, service_area: AREA-A}
+  social-caseworker-wrong-scope:
+    principal: synthetic-social-client
+    scopes: [registry:social-assistance:limited]
     claims: {purpose: benefit-delivery, service_area: AREA-A}
   social-lookup-wrong-purpose:
     principal: synthetic-social-client
-    scopes: [registry:social-assistance:lookup]
+    scopes: [registry:social-assistance:limited]
     claims: {purpose: unpermitted-purpose, service_area: AREA-A}
   social-lookup-missing-purpose:
     principal: synthetic-social-client
-    scopes: [registry:social-assistance:lookup]
+    scopes: [registry:social-assistance:limited]
     claims: {service_area: AREA-A}
   social-lookup-missing-binding:
     principal: synthetic-social-client
-    scopes: [registry:social-assistance:lookup]
+    scopes: [registry:social-assistance:limited]
     claims: {purpose: benefit-delivery}
   social-lookup-wrong-binding:
     principal: synthetic-social-client
-    scopes: [registry:social-assistance:lookup]
+    scopes: [registry:social-assistance:limited]
     claims: {purpose: benefit-delivery, service_area: AREA-B}
 steps:
   - id: readiness
@@ -46,15 +54,50 @@ steps:
     expect:
       status: 200
       registryCoreRequired: true
-      domainDataKeys: [enrolmentReference, programmeCode, enrolmentStatus, validThrough]
+      domainDataKeys: [maskedEnrolmentReference, enrolmentStatus, validThrough]
+  - id: caseworker-representation
+    authorizationFixture: social-caseworker-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {representation: caseworker, fields: "enrolmentReference,programmeCode"}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [enrolmentReference, programmeCode]
+  - id: unauthorized-representation
+    authorizationFixture: social-caseworker-wrong-scope
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {representation: caseworker}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 403, code: consultation.denied}
+  - id: unknown-representation
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {representation: unknown-profile}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 404, code: representation.not_found}
+  - id: duplicate-representation
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      query: {representation: "limited,caseworker"}
+      body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
+    expect: {status: 400, code: request.representation_invalid}
   - id: lookup-second-subset
     authorizationFixture: social-lookup-area-a
     request:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
-      query: {fields: programmeCode}
+      query: {fields: maskedEnrolmentReference}
       body: {caseReference: CASE-SYNTH-0001, personReference: PERSON-SYNTH-0001}
-    expect: {status: 200, registryCoreRequired: true, domainDataKeys: [programmeCode]}
+    expect: {status: 200, registryCoreRequired: true, domainDataKeys: [maskedEnrolmentReference]}
   - id: lookup-jsonld
     authorizationFixture: social-lookup-area-a
     request:
@@ -166,6 +209,13 @@ steps:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
       body: {caseReference: CASE-SYNTH-BAD2, personReference: PERSON-SYNTH-BAD2}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: invalid-transform-input
+    authorizationFixture: social-lookup-area-a
+    request:
+      method: POST
+      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
+      body: {caseReference: CASE-SYNTH-XFORM, personReference: PERSON-SYNTH-XFORM}
     expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
   - id: quota-exhausted
     authorizationFixture: social-lookup-area-a

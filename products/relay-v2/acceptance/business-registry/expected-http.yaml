@@ -1,6 +1,14 @@
 schemaVersion: relay.registrystack.org/http-journey/v1alpha1
 registry: urn:example:registry:registered-businesses
-authorizations: {}
+authorizations:
+  business-registrar:
+    principal: synthetic-business-registrar
+    scopes: [registry:business:read-registrar]
+    claims: {}
+  business-unentitled:
+    principal: synthetic-business-reader
+    scopes: [registry:business:reader]
+    claims: {}
 steps:
   - id: registry-discovery
     request: {method: GET, path: /v2}
@@ -63,6 +71,30 @@ steps:
       status: 200
       recordIdentifier: BIZ-SYNTH-0001
       cache: public-snapshot-revalidation
+  - id: registrar-read
+    authorizationFixture: business-registrar
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      query: {representation: registrar, fields: "registrarLegalName,registrarNote"}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [registrarLegalName, registrarNote]
+      cache: no-store
+  - id: registrar-representation-denied
+    authorizationFixture: business-unentitled
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      query: {representation: registrar}
+    expect: {status: 403, code: consultation.denied}
+  - id: public-representation-unknown
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      query: {representation: registrar-private}
+    expect: {status: 404, code: representation.not_found}
   - id: identifier-read-jsonld
     request:
       method: GET
@@ -125,4 +157,4 @@ steps:
     expect: {status: 400, code: filter.unknown_field}
   - id: invalid-source-row
     request: {method: GET, path: /v2/resources/registered-business/records/BIZ-SYNTH-BAD1}
-    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+    expect: {status: 503, code: source.unavailable}

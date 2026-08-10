@@ -13,7 +13,9 @@ use thiserror::Error;
 use crate::artifacts::{generate_artifacts, ArtifactSet, GeneratedArtifact};
 use crate::compiler::{compile_contract_with_governed_files, GovernedFileSet};
 use crate::contract::{RegistryContract, Visibility};
-use crate::model::{CompileProfile, CompiledRegistry, ObservedSourceSchema};
+use crate::model::{
+    CompileProfile, CompiledClassificationReview, CompiledRegistry, ObservedSourceSchema,
+};
 
 const PACKAGE_VERSION: &str = "relay.registrystack.org/package/v1alpha1";
 const MAX_AUTHORED_FILES: usize = 256;
@@ -42,6 +44,7 @@ pub struct PackageArtifact {
     pub media_type: String,
     pub visibility: Visibility,
     pub operation_identifier: Option<String>,
+    pub representation_identifier: Option<String>,
     pub sha256: String,
 }
 
@@ -94,7 +97,11 @@ pub fn build_package(
     if output_dir.exists() {
         return Err(PackageError::DestinationExists);
     }
-    let authored = capture_governed_closure(project_root, contract)?;
+    let authored = capture_governed_closure(
+        project_root,
+        contract,
+        compiled.classification_review.as_ref(),
+    )?;
     let mut files = Vec::new();
     let registry_bytes = read_regular(&project_root.join("registry.yaml"))?;
     files.push(file_entry(
@@ -133,6 +140,7 @@ pub fn build_package(
             media_type: artifact.media_type.clone(),
             visibility: artifact.visibility,
             operation_identifier: artifact.operation_identifier.clone(),
+            representation_identifier: artifact.representation_identifier.clone(),
             sha256: artifact.sha256.clone(),
         })
         .collect::<Vec<_>>();
@@ -366,6 +374,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
             media_type: artifact.media_type.clone(),
             visibility: artifact.visibility,
             operation_identifier: artifact.operation_identifier.clone(),
+            representation_identifier: artifact.representation_identifier.clone(),
             sha256: artifact.sha256.clone(),
         })
         .collect::<Vec<_>>();
@@ -406,10 +415,17 @@ struct UnsignedManifest<'a> {
 fn capture_governed_closure(
     project_root: &Path,
     contract: &RegistryContract,
+    review: Option<&CompiledClassificationReview>,
 ) -> Result<BTreeMap<String, Vec<u8>>, PackageError> {
     let mut references = BTreeSet::new();
     references.insert(contract.registry.identifier_lifecycle_policy_ref.as_str());
     references.insert(contract.classifications.provenance_ref.as_str());
+    if let Some(review) = review {
+        references.insert(review.rationale_ref.as_str());
+        if let Some(generated) = &review.generated_identification {
+            references.insert(generated.report_ref.as_str());
+        }
+    }
     for alignment in &contract.semantics.alignments {
         references.insert(alignment.profile_ref.as_str());
     }
@@ -741,7 +757,7 @@ mod tests {
             .expect("strict contract");
 
         assert!(matches!(
-            capture_governed_closure(&project, &contract),
+            capture_governed_closure(&project, &contract, None),
             Err(PackageError::UnsafeClosure)
         ));
     }

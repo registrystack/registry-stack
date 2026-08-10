@@ -86,6 +86,75 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
             VALIDATOR.validate_catalogs(errors)
         self.assertTrue(any("invalid source-row classes must cover" in error for error in errors), errors)
 
+    def test_each_operation_requires_a_declared_default_representation(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_social_lookup_default(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "registry.yaml" and path.parent.name == "social-assistance":
+                value["resources"][0]["operations"]["lookups"][0].pop(
+                    "defaultRepresentation"
+                )
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_social_lookup_default):
+            VALIDATOR.validate_acceptance_representation_contracts(errors)
+        self.assertTrue(
+            any("every declared operation needs one declared default representation" in error for error in errors),
+            errors,
+        )
+
+    def test_generated_review_must_keep_its_required_method(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_manual_social_review(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "classification-review.yaml" and path.parent.name == "governance":
+                if path.parents[1].name == "social-assistance":
+                    value["method"] = "manual"
+                    value.pop("generatedIdentification")
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_manual_social_review):
+            VALIDATOR.validate_acceptance_representation_contracts(errors)
+        self.assertTrue(
+            any("does not use the required reviewed method" in error for error in errors), errors
+        )
+
+    def test_social_quota_fixture_is_bound_to_the_pre_quota_journey(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_social_quota_drift(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "runtime.yaml" and path.parent.name == "social-assistance":
+                value["quotas"]["burst"] = 11
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_social_quota_drift):
+            VALIDATOR.validate_acceptance_representation_contracts(errors)
+        self.assertTrue(
+            any("quota fixture must admit exactly" in error for error in errors), errors
+        )
+
+    def test_civil_lookup_quota_fixture_is_bound_to_the_pre_quota_journey(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_civil_quota_drift(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "runtime.yaml" and path.parent.name == "civil-event":
+                value["quotas"]["burst"] = 7
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_civil_quota_drift):
+            VALIDATOR.validate_acceptance_representation_contracts(errors)
+        self.assertTrue(
+            any("lookup quota fixture must admit exactly" in error for error in errors), errors
+        )
+
     def test_security_test_resolution_rejects_a_similar_prefix(self) -> None:
         errors: list[str] = []
         VALIDATOR.executable_test_resolves(

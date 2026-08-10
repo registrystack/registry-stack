@@ -1,0 +1,9 @@
+apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:civil-events
+classificationInventoryDigest: sha256:e5a24dd38da75c806b8e0f5ecf5fd043f5e5661315fab94ba072c40d13bdc32b
+method: manual
+reviewer: urn:example:institution:civil-registration-authority
+reviewDate: 2026-08-10
+status: reviewed
+rationaleRef: governance/classification-review-rationale.md

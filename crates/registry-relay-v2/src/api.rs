@@ -25,11 +25,13 @@ use crate::cursor::{
     CursorBindings, CursorPayload, CursorValue,
 };
 use crate::model::{
-    CompiledAccess, CompiledOperation, CompiledResource, OperationKind, RowAuthoritySource,
+    CompiledAccess, CompiledOperation, CompiledRepresentation, CompiledResource, OperationKind,
+    RowAuthoritySource,
 };
 use crate::problem::{ProblemCode, TraceContext};
 use crate::server::{uri_within_bound, RelayService};
 use crate::sqlite_runtime::{OperationQuery, SourceRevision, SqliteRuntimeError};
+use crate::transform;
 
 const PRODUCT_NAME: &str = "Registry Relay";
 const PRODUCT_VERSION: &str = "2";
@@ -40,12 +42,12 @@ const METADATA_MAXIMUM_PAGE_SIZE: usize = 100;
 const MAXIMUM_SERIALIZED_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Representation {
+enum ResponseFormat {
     Json,
     JsonLd,
 }
 
-impl Representation {
+impl ResponseFormat {
     const fn media_type(self) -> &'static str {
         match self {
             Self::Json => "application/json",
@@ -58,6 +60,7 @@ impl Representation {
 struct Access {
     principal: Option<Principal>,
     authorization: Authorization,
+    representation: CompiledRepresentation,
 }
 
 pub async fn health() -> Response<Body> {
@@ -109,28 +112,15 @@ pub async fn service_metadata(
     let mut capabilities = Vec::new();
     if service.registry.metadata_visibility.resources != Visibility::OperatorOnly {
         for resource in &service.registry.resources {
-            let operations = match service.registry.metadata_visibility.resources {
-                Visibility::Public => resource
-                    .operations
-                    .iter()
-                    .filter(|operation| matches!(operation.access, CompiledAccess::Public))
-                    .collect::<Vec<_>>(),
-                Visibility::OperationBound => match principal.as_ref() {
-                    Some(principal) => {
-                        match visible_operations(&service, resource, Some(principal)).await {
-                            Ok(value) => value,
-                            Err(code) => return code.response(&trace),
-                        }
-                    }
-                    None => Vec::new(),
-                },
-                Visibility::OperatorOnly => Vec::new(),
+            let operations = match visible_operations(&service, resource, principal.as_ref()).await
+            {
+                Ok(value) => value,
+                Err(ProblemCode::MissingCredential) => Vec::new(),
+                Err(code) => return code.response(&trace),
             };
-            capabilities.extend(
-                operations
-                    .into_iter()
-                    .map(|operation| capability(&service, resource, operation)),
-            );
+            capabilities.extend(operations.into_iter().map(|(operation, representation)| {
+                capability(&service, resource, operation, representation)
+            }));
         }
     }
     let alignment_targets = service
@@ -361,11 +351,22 @@ pub async fn artifact(
             let Some(operation) = find_operation_by_id(&service, identifier) else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
+            let Some(representation_identifier) = artifact.representation_identifier.as_deref()
+            else {
+                return ProblemCode::ResourceNotFound.response(&trace);
+            };
+            let Some(representation) = operation
+                .representations
+                .iter()
+                .find(|representation| representation.id == representation_identifier)
+            else {
+                return ProblemCode::ResourceNotFound.response(&trace);
+            };
             let Some(authenticator) = &service.authenticator else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
             if authenticator
-                .authorize(&operation.access, Some(principal))
+                .authorize(&representation.access, Some(principal))
                 .is_err()
             {
                 return ProblemCode::ResourceNotFound.response(&trace);
@@ -405,7 +406,16 @@ pub async fn record_list(
         )
         .await;
     }
-    let access = match access_operation(&service, resource, operation, &headers, &trace).await {
+    let access = match access_operation(
+        &service,
+        resource,
+        operation,
+        uri.query(),
+        &headers,
+        &trace,
+    )
+    .await
+    {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -421,7 +431,7 @@ pub async fn record_list(
         )
         .await;
     }
-    let representation = match negotiate(&headers) {
+    let response_format = match negotiate(&headers) {
         Ok(value) => value,
         Err(code) => {
             return refuse_known(
@@ -467,7 +477,7 @@ pub async fn record_list(
         &service,
         resource,
         operation,
-        &access,
+        Some(&access),
         query.selected_fields.clone(),
         &trace,
     );
@@ -478,6 +488,7 @@ pub async fn record_list(
         .sqlite
         .execute(
             &operation.identifier,
+            &access.representation.id,
             OperationQuery {
                 filters: query.filters.clone(),
                 row_authority: access.authorization.row_authority.clone(),
@@ -498,19 +509,22 @@ pub async fn record_list(
     }
     let mut items = Vec::with_capacity(rows.len());
     for row in &rows {
-        let record = match record_value(&service, resource, operation, row, &query.selected_fields)
-        {
-            Some(value) => value,
-            None => {
-                if service
-                    .audit
-                    .terminal(&audit, AuditOutcome::InternalFailed, None)
-                    .await
-                    .is_err()
-                {
-                    return ProblemCode::AuditUnavailable.response(&trace);
-                }
-                return ProblemCode::Internal.response(&trace);
+        if !valid_cursor_order_values(&operation.query.order_by, row) {
+            return source_shape_failure(&service.audit, &audit, &trace).await;
+        }
+        let record = match record_value(
+            &service,
+            resource,
+            &access.representation,
+            row,
+            &query.selected_fields,
+        ) {
+            Ok(value) => value,
+            Err(RecordError::InvalidSource) => {
+                return source_shape_failure(&service.audit, &audit, &trace).await
+            }
+            Err(RecordError::InvalidCore) => {
+                return source_shape_failure(&service.audit, &audit, &trace).await
             }
         };
         items.push(record);
@@ -556,17 +570,24 @@ pub async fn record_list(
             &service,
             resource,
             operation,
+            &access.representation,
             &query.selected_fields,
             &result.source_revision,
         ),
     });
-    apply_json_ld(&service, resource, operation, representation, &mut document);
+    apply_json_ld(
+        &service,
+        resource,
+        &access.representation,
+        response_format,
+        &mut document,
+    );
     release_document(
         &service,
         &audit,
         document,
-        representation,
-        cacheable(operation, &result.source_revision),
+        response_format,
+        cacheable(&access.representation, &result.source_revision),
         &headers,
         &trace,
     )
@@ -585,22 +606,31 @@ pub async fn record_read(
     }) else {
         return unknown_data_route(&service, &headers, &trace, OperationClass::Read).await;
     };
-    let access = match access_operation(&service, resource, operation, &headers, &trace).await {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
     if !uri_within_bound(&uri) {
         return refuse_known(
             &service,
             resource,
             operation,
-            Some(&access),
+            None,
             AuditOutcome::InvalidRequest,
             ProblemCode::UriTooLong,
             &trace,
         )
         .await;
     }
+    let access = match access_operation(
+        &service,
+        resource,
+        operation,
+        uri.query(),
+        &headers,
+        &trace,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     if !valid_record_identifier(&record_identifier) {
         return refuse_known(
             &service,
@@ -647,23 +677,31 @@ pub async fn record_lookup(
         return unknown_data_route(&service, request.headers(), &trace, OperationClass::Lookup)
             .await;
     };
-    let access =
-        match access_operation(&service, resource, operation, request.headers(), &trace).await {
-            Ok(value) => value,
-            Err(response) => return response,
-        };
     if !uri_within_bound(request.uri()) {
         return refuse_known(
             &service,
             resource,
             operation,
-            Some(&access),
+            None,
             AuditOutcome::InvalidRequest,
             ProblemCode::UriTooLong,
             &trace,
         )
         .await;
     }
+    let access = match access_operation(
+        &service,
+        resource,
+        operation,
+        request.uri().query(),
+        request.headers(),
+        &trace,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     if rejects_caller_purpose(request.headers()) {
         return refuse_known(
             &service,
@@ -676,7 +714,7 @@ pub async fn record_lookup(
         )
         .await;
     }
-    let representation = match negotiate(request.headers()) {
+    let response_format = match negotiate(request.headers()) {
         Ok(value) => value,
         Err(code) => {
             return refuse_known(
@@ -691,7 +729,12 @@ pub async fn record_lookup(
             .await
         }
     };
-    let fields = match selected_fields(resource, operation, request.uri().query()) {
+    let fields = match selected_fields(
+        resource,
+        operation,
+        &access.representation,
+        request.uri().query(),
+    ) {
         Ok(value) => value,
         Err(code) => {
             return refuse_known(
@@ -785,7 +828,7 @@ pub async fn record_lookup(
                 selectors,
                 ..OperationQuery::default()
             },
-            prevalidated: Some((representation, fields)),
+            prevalidated: Some((response_format, fields)),
             quota_admitted: true,
             trace: &trace,
         },
@@ -808,7 +851,7 @@ struct SingleRequest<'a> {
     headers: &'a HeaderMap,
     query_text: Option<&'a str>,
     query: OperationQuery,
-    prevalidated: Option<(Representation, Vec<String>)>,
+    prevalidated: Option<(ResponseFormat, Vec<String>)>,
     quota_admitted: bool,
     trace: &'a TraceContext,
 }
@@ -852,7 +895,12 @@ async fn single_operation(
                     .await
                 }
             };
-            let fields = match selected_fields(resource, operation, request.query_text) {
+            let fields = match selected_fields(
+                resource,
+                operation,
+                &access.representation,
+                request.query_text,
+            ) {
                 Ok(value) => value,
                 Err(code) => {
                     return refuse_known(
@@ -877,14 +925,25 @@ async fn single_operation(
             return response;
         }
     }
-    let audit = audit_context(service, resource, operation, &access, fields.clone(), trace);
+    let audit = audit_context(
+        service,
+        resource,
+        operation,
+        Some(&access),
+        fields.clone(),
+        trace,
+    );
     if service.audit.attempt(&audit).await.is_err() {
         return ProblemCode::AuditUnavailable.response(trace);
     }
     request.query.row_authority = access.authorization.row_authority.clone();
     let result = service
         .sqlite
-        .execute(&operation.identifier, request.query)
+        .execute(
+            &operation.identifier,
+            &access.representation.id,
+            request.query,
+        )
         .await;
     let result = match result {
         Ok(value) => value,
@@ -901,28 +960,52 @@ async fn single_operation(
         }
         return ProblemCode::ConsultationUnresolved.response(trace);
     }
-    let Some(record) = record_value(service, resource, operation, &result.rows[0], &fields) else {
-        if service
-            .audit
-            .terminal(&audit, AuditOutcome::Unresolved, None)
-            .await
-            .is_err()
-        {
-            return ProblemCode::AuditUnavailable.response(trace);
+    let record = match record_value(
+        service,
+        resource,
+        &access.representation,
+        &result.rows[0],
+        &fields,
+    ) {
+        Ok(value) => value,
+        Err(RecordError::InvalidSource | RecordError::InvalidCore) => {
+            if matches!(operation.kind, OperationKind::Lookup { .. }) {
+                return terminal_problem(
+                    &service.audit,
+                    &audit,
+                    AuditOutcome::Unresolved,
+                    ProblemCode::ConsultationUnresolved,
+                    trace,
+                )
+                .await;
+            }
+            return source_shape_failure(&service.audit, &audit, trace).await;
         }
-        return ProblemCode::ConsultationUnresolved.response(trace);
     };
     let mut document = json!({
         "data": record,
-        "meta": record_meta(service, resource, operation, &fields, &result.source_revision),
+        "meta": record_meta(
+            service,
+            resource,
+            operation,
+            &access.representation,
+            &fields,
+            &result.source_revision,
+        ),
     });
-    apply_json_ld(service, resource, operation, representation, &mut document);
+    apply_json_ld(
+        service,
+        resource,
+        &access.representation,
+        representation,
+        &mut document,
+    );
     release_document(
         service,
         &audit,
         document,
         representation,
-        cacheable(operation, &result.source_revision),
+        cacheable(&access.representation, &result.source_revision),
         headers,
         trace,
     )
@@ -933,27 +1016,49 @@ async fn access_operation(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
+    query: Option<&str>,
     headers: &HeaderMap,
     trace: &TraceContext,
 ) -> Result<Access, Response<Body>> {
     let principal = match optional_principal(service, headers).await {
         Ok(value) => value,
         Err(code) => {
-            return Err(refuse_known(
+            return Err(refuse_before_representation(
                 service,
                 resource,
                 operation,
-                None,
+                PrincipalKind::Unknown,
                 AuditOutcome::InvalidCredential,
                 code,
                 trace,
             )
-            .await)
+            .await);
         }
     };
+    let selected = match select_representation(operation, query) {
+        Ok(value) => value,
+        Err(code) => {
+            let outcome = if code == ProblemCode::RepresentationNotFound {
+                AuditOutcome::NotFound
+            } else {
+                AuditOutcome::InvalidRequest
+            };
+            return Err(refuse_before_representation(
+                service,
+                resource,
+                operation,
+                principal_kind(principal.as_ref()),
+                outcome,
+                code,
+                trace,
+            )
+            .await);
+        }
+    };
+    let representation = selected.representation;
     let authorization = match &service.authenticator {
-        Some(authenticator) => authenticator.authorize(&operation.access, principal.as_ref()),
-        None => match operation.access {
+        Some(authenticator) => authenticator.authorize(&representation.access, principal.as_ref()),
+        None => match representation.access {
             CompiledAccess::Public => Ok(Authorization {
                 row_authority: None,
                 purpose: None,
@@ -965,6 +1070,7 @@ async fn access_operation(
         Ok(authorization) => Ok(Access {
             principal,
             authorization,
+            representation: representation.clone(),
         }),
         Err(error) => {
             let (code, outcome) = match error {
@@ -984,6 +1090,7 @@ async fn access_operation(
                     row_authority: None,
                     purpose: None,
                 },
+                representation: representation.clone(),
             };
             Err(refuse_known(
                 service,
@@ -1064,7 +1171,9 @@ async fn unknown_data_route(
     let protected = service.registry.resources.iter().any(|resource| {
         resource.operations.iter().any(|operation| {
             class_matches(&operation.kind, class)
-                && matches!(operation.access, CompiledAccess::Protected { .. })
+                && operation.representations.iter().any(|representation| {
+                    matches!(representation.access, CompiledAccess::Protected { .. })
+                })
         })
     });
     if protected && principal.is_none() {
@@ -1117,14 +1226,24 @@ async fn refuse_known(
     code: ProblemCode,
     trace: &TraceContext,
 ) -> Response<Body> {
-    let access = access.cloned().unwrap_or(Access {
-        principal: None,
-        authorization: Authorization {
-            row_authority: None,
-            purpose: None,
-        },
-    });
-    let context = audit_context(service, resource, operation, &access, Vec::new(), trace);
+    let context = audit_context(service, resource, operation, access, Vec::new(), trace);
+    if service.audit.refusal(&context, outcome).await.is_err() {
+        return ProblemCode::AuditUnavailable.response(trace);
+    }
+    code.response(trace)
+}
+
+async fn refuse_before_representation(
+    service: &RelayService,
+    resource: &CompiledResource,
+    operation: &CompiledOperation,
+    principal_kind: PrincipalKind,
+    outcome: AuditOutcome,
+    code: ProblemCode,
+    trace: &TraceContext,
+) -> Response<Body> {
+    let mut context = audit_context(service, resource, operation, None, Vec::new(), trace);
+    context.principal_kind = principal_kind;
     if service.audit.refusal(&context, outcome).await.is_err() {
         return ProblemCode::AuditUnavailable.response(trace);
     }
@@ -1146,7 +1265,14 @@ async fn quota_refusal(
     if !denied {
         return None;
     }
-    let context = audit_context(service, resource, operation, access, fields.to_vec(), trace);
+    let context = audit_context(
+        service,
+        resource,
+        operation,
+        Some(access),
+        fields.to_vec(),
+        trace,
+    );
     if service
         .audit
         .refusal(&context, AuditOutcome::RateLimited)
@@ -1162,7 +1288,7 @@ fn audit_context(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    access: &Access,
+    access: Option<&Access>,
     selected_properties: Vec<String>,
     trace: &TraceContext,
 ) -> AuditContext {
@@ -1172,23 +1298,38 @@ fn audit_context(
         registry_identifier: service.registry.registry_identifier.clone(),
         resource_identifier: Some(resource.id.clone()),
         operation_identifier: Some(operation.identifier.clone()),
-        access_rule_revision: access_revision(operation),
-        purpose: access.authorization.purpose.clone(),
-        row_boundary_kind: row_boundary(operation),
-        disclosure_profile: Some(operation.disclosure_profile.clone()),
+        access_rule_revision: access.map(|access| access_revision(&access.representation)),
+        purpose: access.and_then(|access| access.authorization.purpose.clone()),
+        row_boundary_kind: access.map_or(RowBoundaryKind::Unknown, |access| {
+            row_boundary(&access.representation)
+        }),
+        representation: access.map(|access| access.representation.id.clone()),
+        disclosure_profile: access.map(|access| access.representation.disclosure_profile.clone()),
         processing_description_identifiers: processing_description_identifiers(resource, operation),
         selected_properties,
-        maximum_handling: Some(handling_label(operation.maximum_handling).into()),
+        processing_handling: access
+            .map(|access| handling_label(access.representation.processing_handling).into()),
+        disclosure_handling: access
+            .map(|access| handling_label(access.representation.disclosure_handling).into()),
+        transform_identifiers: access.map_or_else(Vec::new, |access| {
+            transform_identifiers(&access.representation)
+        }),
         contract_revision: service.registry.contract_revision.clone(),
         source_revision: service
             .sqlite
             .source_revision(&operation.identifier)
             .cloned(),
-        principal_kind: if access.principal.is_some() {
-            PrincipalKind::Authenticated
-        } else {
-            PrincipalKind::Anonymous
-        },
+        principal_kind: access.map_or(PrincipalKind::Anonymous, |access| {
+            principal_kind(access.principal.as_ref())
+        }),
+    }
+}
+
+fn principal_kind(principal: Option<&Principal>) -> PrincipalKind {
+    if principal.is_some() {
+        PrincipalKind::Authenticated
+    } else {
+        PrincipalKind::Anonymous
     }
 }
 
@@ -1206,10 +1347,13 @@ fn unknown_audit_context(
         access_rule_revision: None,
         purpose: None,
         row_boundary_kind: RowBoundaryKind::Unknown,
+        representation: None,
         disclosure_profile: None,
         processing_description_identifiers: Vec::new(),
         selected_properties: Vec::new(),
-        maximum_handling: None,
+        processing_handling: None,
+        disclosure_handling: None,
+        transform_identifiers: Vec::new(),
         contract_revision: service.registry.contract_revision.clone(),
         source_revision: None,
         principal_kind,
@@ -1235,14 +1379,29 @@ fn processing_description_identifiers(
         .collect()
 }
 
-fn access_revision(operation: &CompiledOperation) -> Option<String> {
-    let value = serde_json::to_value(&operation.access).ok()?;
-    let bytes = canonicalize_json(&value).ok()?;
-    Some(format!("sha256:{}", hex::encode(Sha256::digest(bytes))))
+fn access_revision(representation: &CompiledRepresentation) -> String {
+    let value = serde_json::to_value(&representation.access)
+        .expect("compiled representation access serializes");
+    let bytes = canonicalize_json(&value).expect("compiled representation access canonicalizes");
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
-fn row_boundary(operation: &CompiledOperation) -> RowBoundaryKind {
-    match &operation.access {
+fn transform_identifiers(representation: &CompiledRepresentation) -> Vec<String> {
+    representation
+        .transform_inventory
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .split_once('=')
+                .map(|(_, identifier)| identifier.to_owned())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn row_boundary(representation: &CompiledRepresentation) -> RowBoundaryKind {
+    match &representation.access {
         CompiledAccess::Protected {
             row_binding: Some(binding),
             ..
@@ -1273,6 +1432,40 @@ struct PreparedList {
     after_order: Option<Vec<SqlValue>>,
 }
 
+struct SelectedRepresentation<'a> {
+    representation: &'a CompiledRepresentation,
+}
+
+fn select_representation<'a>(
+    operation: &'a CompiledOperation,
+    query: Option<&str>,
+) -> Result<SelectedRepresentation<'a>, ProblemCode> {
+    let parameters = parse_query(query)?;
+    let requested = one_parameter(&parameters, "representation")
+        .map_err(|_| ProblemCode::RepresentationInvalid)?;
+    let identifier = requested.unwrap_or(&operation.default_representation);
+    if !valid_representation_identifier(identifier) {
+        return Err(ProblemCode::RepresentationInvalid);
+    }
+    operation
+        .representations
+        .iter()
+        .find(|representation| representation.id == identifier)
+        .map(|representation| SelectedRepresentation { representation })
+        .ok_or(ProblemCode::RepresentationNotFound)
+}
+
+fn valid_representation_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("--")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 fn prepare_list(
     service: &RelayService,
     resource: &CompiledResource,
@@ -1291,7 +1484,11 @@ fn prepare_list(
         .as_ref()
         .ok_or(ProblemCode::Internal)?;
     if !cursors.is_empty() {
-        if cursors.len() != 1 || parameters.len() != 1 {
+        if cursors.len() != 1
+            || parameters
+                .iter()
+                .any(|(name, _)| name != "cursor" && name != "representation")
+        {
             return Err(ProblemCode::CursorInvalid);
         }
         let key = service
@@ -1312,7 +1509,12 @@ fn prepare_list(
             .map(|(name, value)| (name.clone(), cursor_to_sql(value.clone())))
             .collect::<BTreeMap<_, _>>();
         validate_filter_inventory(operation, &filters)?;
-        validate_selected_inventory(resource, operation, &payload.selected_fields)?;
+        validate_selected_inventory(
+            resource,
+            operation,
+            &access.representation,
+            &payload.selected_fields,
+        )?;
         let current_source_revision = service
             .sqlite
             .source_revision(&operation.identifier)
@@ -1369,6 +1571,7 @@ fn prepare_list(
                     return Err(ProblemCode::FieldsInvalid);
                 }
             }
+            "representation" => {}
             _ if declared.contains(name.as_str()) => {
                 if raw_filters.insert(name, value).is_some() {
                     return Err(ProblemCode::InvalidFilter);
@@ -1399,7 +1602,12 @@ fn prepare_list(
             }
         }
     }
-    let selected_fields = fields_from_text(resource, operation, fields_text.as_deref())?;
+    let selected_fields = fields_from_text(
+        resource,
+        operation,
+        &access.representation,
+        fields_text.as_deref(),
+    )?;
     Ok(PreparedList {
         page_size,
         filters,
@@ -1411,23 +1619,28 @@ fn prepare_list(
 fn selected_fields(
     resource: &CompiledResource,
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     query: Option<&str>,
 ) -> Result<Vec<String>, ProblemCode> {
     let parameters = parse_query(query)?;
-    if parameters.iter().any(|(name, _)| name != "fields") {
+    if parameters
+        .iter()
+        .any(|(name, _)| name != "fields" && name != "representation")
+    {
         return Err(ProblemCode::ConsultationInvalidRequest);
     }
     let fields = one_parameter(&parameters, "fields")?;
-    fields_from_text(resource, operation, fields)
+    fields_from_text(resource, operation, representation, fields)
 }
 
 fn fields_from_text(
     resource: &CompiledResource,
-    operation: &CompiledOperation,
+    _operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     text: Option<&str>,
 ) -> Result<Vec<String>, ProblemCode> {
     let Some(text) = text else {
-        return Ok(operation.selectable_properties.clone());
+        return Ok(representation.selectable_properties.clone());
     };
     if text.is_empty() || text.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return Err(ProblemCode::FieldsInvalid);
@@ -1439,7 +1652,7 @@ fn fields_from_text(
     {
         return Err(ProblemCode::FieldsInvalid);
     }
-    let allowed = operation
+    let allowed = representation
         .selectable_properties
         .iter()
         .map(String::as_str)
@@ -1453,7 +1666,7 @@ fn fields_from_text(
     }) {
         return Err(ProblemCode::FieldsInvalid);
     }
-    Ok(operation
+    Ok(representation
         .selectable_properties
         .iter()
         .filter(|field| requested.contains(&field.as_str()))
@@ -1464,13 +1677,15 @@ fn fields_from_text(
 fn validate_selected_inventory(
     resource: &CompiledResource,
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     fields: &[String],
 ) -> Result<(), ProblemCode> {
     if fields.is_empty() {
         return Err(ProblemCode::CursorInvalid);
     }
     let text = fields.join(",");
-    let canonical = fields_from_text(resource, operation, Some(&text))?;
+    let canonical = fields_from_text(resource, operation, representation, Some(&text))
+        .map_err(|_| ProblemCode::CursorInvalid)?;
     if canonical != fields {
         return Err(ProblemCode::CursorInvalid);
     }
@@ -1562,6 +1777,9 @@ fn parse_text_value(value: &str, data_type: DataType) -> Option<SqlValue> {
         DataType::DateTime => DateTime::parse_from_rfc3339(value)
             .ok()
             .map(|_| SqlValue::String(value.to_owned())),
+        DataType::Year => (value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| SqlValue::String(value.to_owned())),
+        DataType::YearMonth => valid_year_month(value).then(|| SqlValue::String(value.to_owned())),
     }
 }
 
@@ -1633,25 +1851,52 @@ fn json_scalar_to_sql(value: &Value, data_type: DataType) -> Option<SqlValue> {
                 .ok()
                 .map(|_| SqlValue::String(value.to_owned()))
         }),
+        DataType::Year => value
+            .as_str()
+            .filter(|value| value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .map(|value| SqlValue::String(value.to_owned())),
+        DataType::YearMonth => value
+            .as_str()
+            .filter(|value| valid_year_month(value))
+            .map(|value| SqlValue::String(value.to_owned())),
     }
+}
+
+fn valid_year_month(value: &str) -> bool {
+    value.len() == 7
+        && value.as_bytes().get(4) == Some(&b'-')
+        && value.bytes().take(4).all(|byte| byte.is_ascii_digit())
+        && matches!(
+            &value[5..],
+            "01" | "02" | "03" | "04" | "05" | "06" | "07" | "08" | "09" | "10" | "11" | "12"
+        )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordError {
+    InvalidCore,
+    InvalidSource,
 }
 
 fn record_value(
     service: &RelayService,
     resource: &CompiledResource,
-    _operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     row: &ResultRow,
     selected: &[String],
-) -> Option<Value> {
-    let record_identifier =
-        required_string(row, &resource.record_context.record_identifier_column)?;
+) -> Result<Value, RecordError> {
+    let record_identifier = required_string(row, &resource.record_context.record_identifier_column)
+        .ok_or(RecordError::InvalidCore)?;
     if !valid_record_identifier(record_identifier) {
-        return None;
+        return Err(RecordError::InvalidCore);
     }
-    let revision = required_string(row, &resource.record_context.revision_identifier_column)?;
-    let lifecycle = required_string(row, &resource.record_context.lifecycle_state_column)?;
-    let recorded_at = required_string(row, &resource.record_context.recorded_at_column)?;
-    DateTime::parse_from_rfc3339(recorded_at).ok()?;
+    let revision = required_string(row, &resource.record_context.revision_identifier_column)
+        .ok_or(RecordError::InvalidCore)?;
+    let lifecycle = required_string(row, &resource.record_context.lifecycle_state_column)
+        .ok_or(RecordError::InvalidCore)?;
+    let recorded_at = required_string(row, &resource.record_context.recorded_at_column)
+        .ok_or(RecordError::InvalidCore)?;
+    DateTime::parse_from_rfc3339(recorded_at).map_err(|_| RecordError::InvalidCore)?;
     if revision.is_empty()
         || lifecycle.is_empty()
         || !codelist_accepts(
@@ -1660,43 +1905,73 @@ fn record_value(
             lifecycle,
         )
     {
-        return None;
+        return Err(RecordError::InvalidCore);
     }
-    // Validate the complete reviewed source projection before narrowing.
-    for property in &resource.properties {
-        let value = row.get(&property.source_column)?;
+    // Validate the complete selected representation before requester field
+    // minimization. Narrowing disclosure never lowers its processing floor.
+    let properties = representation
+        .selectable_properties
+        .iter()
+        .map(|name| {
+            resource
+                .properties
+                .iter()
+                .find(|property| property.name == *name)
+                .ok_or(RecordError::InvalidSource)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut transformed = BTreeMap::new();
+    for property in &properties {
+        let source = row
+            .get(&property.source_column)
+            .ok_or(RecordError::InvalidSource)?;
+        if matches!(source, SqlValue::Null) {
+            if property.source_required {
+                return Err(RecordError::InvalidSource);
+            }
+            continue;
+        }
+        let value = match &property.transform {
+            Some(compiled) => {
+                transform::apply(compiled, source).map_err(|_| RecordError::InvalidSource)?
+            }
+            None => source.clone(),
+        };
         if matches!(value, SqlValue::Null) {
             if property.source_required {
-                return None;
+                return Err(RecordError::InvalidSource);
             }
             continue;
         }
         if !valid_property_value(
             service,
-            value,
+            &value,
             property.data_type,
             property.codelist.as_deref(),
         ) {
-            return None;
+            return Err(RecordError::InvalidSource);
         }
+        transformed.insert(property.name.as_str(), value);
     }
     let mut domain = Map::new();
-    for property in &resource.properties {
+    for property in properties {
         if !selected.contains(&property.name) {
             continue;
         }
-        let value = row.get(&property.source_column)?;
-        if !matches!(value, SqlValue::Null) {
-            domain.insert(property.name.clone(), sql_to_json(value.clone())?);
+        if let Some(value) = transformed.remove(property.name.as_str()) {
+            domain.insert(
+                property.name.clone(),
+                sql_to_json(value).ok_or(RecordError::InvalidSource)?,
+            );
         }
     }
-    Some(json!({
+    Ok(json!({
         "registryIdentifier": service.registry.registry_identifier,
         "recordIdentifier": record_identifier,
         "revisionIdentifier": revision,
         "lifecycleState": lifecycle,
-        "schemaReference": _operation.schema_reference,
-        "semanticModelReference": _operation.semantic_model_reference,
+        "schemaReference": representation.schema_reference,
+        "semanticModelReference": representation.semantic_model_reference,
         "authorityIdentifier": service.registry.authority_identifier,
         "recordedAt": recorded_at,
         "domainData": domain,
@@ -1720,6 +1995,10 @@ fn valid_property_value(
         (SqlValue::String(value), DataType::DateTime) => {
             DateTime::parse_from_rfc3339(value).is_ok()
         }
+        (SqlValue::String(value), DataType::Year) => {
+            value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit())
+        }
+        (SqlValue::String(value), DataType::YearMonth) => valid_year_month(value),
         (SqlValue::Boolean(_), DataType::Boolean) | (SqlValue::Integer(_), DataType::Integer) => {
             true
         }
@@ -1761,23 +2040,25 @@ fn record_meta(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
     selected: &[String],
     source_revision: &SourceRevision,
 ) -> Value {
     let pattern = operation_pattern(&operation.kind);
     json!({
         "operationIdentifier": operation.identifier,
+        "representation": representation.id,
         "family": "consultation",
         "pattern": pattern,
-        "disclosureProfile": operation.disclosure_profile,
+        "disclosureProfile": representation.disclosure_profile,
         "contractRevision": service.registry.contract_revision,
         "sourceRevision": source_revision_value(source_revision),
         "selectedFields": selected,
         "links": {
             "self": operation_href(service, resource, operation),
-            "context": operation.context_reference,
-            "schema": operation.schema_reference,
-            "semanticModel": operation.semantic_model_reference,
+            "context": representation.context_reference,
+            "schema": representation.schema_reference,
+            "semanticModel": representation.semantic_model_reference,
         }
     })
 }
@@ -1796,14 +2077,14 @@ fn source_revision_value(source: &SourceRevision) -> Value {
 fn apply_json_ld(
     service: &RelayService,
     resource: &CompiledResource,
-    operation: &CompiledOperation,
-    representation: Representation,
+    selected: &CompiledRepresentation,
+    representation: ResponseFormat,
     document: &mut Value,
 ) {
-    if representation != Representation::JsonLd {
+    if representation != ResponseFormat::JsonLd {
         return;
     }
-    let context = operation.context_reference.clone();
+    let context = selected.context_reference.clone();
     if let Some(object) = document.as_object_mut() {
         object.insert("@context".into(), Value::String(context));
         if let Some(data) = object.get_mut("data") {
@@ -1840,7 +2121,7 @@ async fn release_document(
     service: &RelayService,
     audit: &AuditContext,
     document: Value,
-    representation: Representation,
+    representation: ResponseFormat,
     cacheable: bool,
     headers: &HeaderMap,
     trace: &TraceContext,
@@ -1929,11 +2210,12 @@ async fn source_failure(
 ) -> Response<Body> {
     let (outcome, code) = match error {
         SqliteRuntimeError::AdmissionTimeout => (AuditOutcome::TimedOut, ProblemCode::Timeout),
+        SqliteRuntimeError::UnknownOperation | SqliteRuntimeError::InvalidPlan => {
+            (AuditOutcome::InternalFailed, ProblemCode::Internal)
+        }
         SqliteRuntimeError::MissingSource
-        | SqliteRuntimeError::UnknownOperation
         | SqliteRuntimeError::SchemaMismatch
-        | SqliteRuntimeError::InvalidPlan => (AuditOutcome::InternalFailed, ProblemCode::Internal),
-        SqliteRuntimeError::Source(_) => {
+        | SqliteRuntimeError::Source(_) => {
             (AuditOutcome::SourceFailed, ProblemCode::SourceUnavailable)
         }
     };
@@ -1941,6 +2223,21 @@ async fn source_failure(
         return ProblemCode::AuditUnavailable.response(trace);
     }
     code.response(trace)
+}
+
+async fn source_shape_failure(
+    audit: &RelayAudit,
+    context: &AuditContext,
+    trace: &TraceContext,
+) -> Response<Body> {
+    if audit
+        .terminal(context, AuditOutcome::SourceFailed, None)
+        .await
+        .is_err()
+    {
+        return ProblemCode::AuditUnavailable.response(trace);
+    }
+    ProblemCode::SourceUnavailable.response(trace)
 }
 
 async fn terminal_problem(
@@ -1956,14 +2253,15 @@ async fn terminal_problem(
     code.response(trace)
 }
 
-fn cacheable(operation: &CompiledOperation, source: &SourceRevision) -> bool {
-    matches!(operation.access, CompiledAccess::Public)
+fn cacheable(representation: &CompiledRepresentation, source: &SourceRevision) -> bool {
+    matches!(representation.access, CompiledAccess::Public)
+        && representation.processing_handling == Handling::Public
         && matches!(source, SourceRevision::Snapshot(_))
 }
 
-fn negotiate(headers: &HeaderMap) -> Result<Representation, ProblemCode> {
+fn negotiate(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
     let Some(value) = headers.get(ACCEPT) else {
-        return Ok(Representation::Json);
+        return Ok(ResponseFormat::Json);
     };
     let value = value
         .to_str()
@@ -1984,9 +2282,9 @@ fn negotiate(headers: &HeaderMap) -> Result<Representation, ProblemCode> {
         }
     }
     if json_ld {
-        Ok(Representation::JsonLd)
+        Ok(ResponseFormat::JsonLd)
     } else if json {
-        Ok(Representation::Json)
+        Ok(ResponseFormat::Json)
     } else {
         Err(ProblemCode::UnsupportedRepresentation)
     }
@@ -2053,6 +2351,12 @@ fn next_cursor(
     encode_cursor(key, &payload).map_err(|_| ())
 }
 
+fn valid_cursor_order_values(order_by: &[String], row: &ResultRow) -> bool {
+    order_by
+        .iter()
+        .all(|column| row.get(column).cloned().and_then(sql_to_cursor).is_some())
+}
+
 fn cursor_template(
     service: &RelayService,
     operation: &CompiledOperation,
@@ -2069,10 +2373,14 @@ fn cursor_template(
     let field_json = serde_json::to_vec(selected_fields).map_err(|_| ProblemCode::CursorInvalid)?;
     let order_json =
         serde_json::to_vec(&operation.query.order_by).map_err(|_| ProblemCode::CursorInvalid)?;
+    let transform_json = serde_json::to_vec(&access.representation.transform_inventory)
+        .map_err(|_| ProblemCode::CursorInvalid)?;
     let authorization_material = access
         .principal
         .as_ref()
-        .map(|principal| principal.authorization_material(&operation.access, &access.authorization))
+        .map(|principal| {
+            principal.authorization_material(&access.representation.access, &access.authorization)
+        })
         .unwrap_or_else(|| b"anonymous".to_vec());
     Ok(CursorPayload::new(
         u64::MAX,
@@ -2080,6 +2388,11 @@ fn cursor_template(
         source_revision.to_owned(),
         operation.identifier.clone(),
         CursorBindings {
+            representation: access.representation.id.clone(),
+            disclosure_profile: access.representation.disclosure_profile.clone(),
+            transforms_digest: key
+                .binding_digest(b"transforms", &transform_json)
+                .map_err(|_| ProblemCode::CursorInvalid)?,
             filters_digest: key
                 .binding_digest(b"filters", &filter_json)
                 .map_err(|_| ProblemCode::CursorInvalid)?,
@@ -2099,7 +2412,7 @@ fn cursor_template(
 
 fn metadata_cursor_template(
     service: &RelayService,
-    visible: &[(&CompiledResource, Vec<&CompiledOperation>)],
+    visible: &[(&CompiledResource, Vec<VisibleRepresentation<'_>>)],
 ) -> Result<CursorPayload, ProblemCode> {
     let key = service
         .cursor_key
@@ -2112,7 +2425,9 @@ fn metadata_cursor_template(
                 resource.id.as_str(),
                 operations
                     .iter()
-                    .map(|operation| operation.identifier.as_str())
+                    .map(|(operation, representation)| {
+                        (operation.identifier.as_str(), representation.id.as_str())
+                    })
                     .collect::<Vec<_>>(),
             )
         })
@@ -2125,6 +2440,11 @@ fn metadata_cursor_template(
         format!("metadata:{}", service.registry.contract_revision),
         "registry.resources".to_owned(),
         CursorBindings {
+            representation: "metadata".to_owned(),
+            disclosure_profile: "metadata".to_owned(),
+            transforms_digest: key
+                .binding_digest(b"metadata-transforms", b"none")
+                .map_err(|_| ProblemCode::CursorInvalid)?,
             filters_digest: key
                 .binding_digest(b"metadata-filters", b"none")
                 .map_err(|_| ProblemCode::CursorInvalid)?,
@@ -2144,7 +2464,7 @@ fn metadata_cursor_template(
 
 fn metadata_next_cursor(
     service: &RelayService,
-    visible: &[(&CompiledResource, Vec<&CompiledOperation>)],
+    visible: &[(&CompiledResource, Vec<VisibleRepresentation<'_>>)],
     page_size: usize,
     last_resource_identifier: &str,
 ) -> Result<String, ProblemCode> {
@@ -2210,7 +2530,7 @@ fn find_operation_by_id<'a>(
 async fn visible_resources<'a>(
     service: &'a RelayService,
     principal: Option<&Principal>,
-) -> Result<Vec<(&'a CompiledResource, Vec<&'a CompiledOperation>)>, ProblemCode> {
+) -> Result<Vec<(&'a CompiledResource, Vec<VisibleRepresentation<'a>>)>, ProblemCode> {
     if service.registry.metadata_visibility.resources == Visibility::OperatorOnly {
         return Err(ProblemCode::ResourceNotFound);
     }
@@ -2233,13 +2553,21 @@ async fn visible_operations<'a>(
     service: &'a RelayService,
     resource: &'a CompiledResource,
     principal: Option<&Principal>,
-) -> Result<Vec<&'a CompiledOperation>, ProblemCode> {
+) -> Result<Vec<VisibleRepresentation<'a>>, ProblemCode> {
     match service.registry.metadata_visibility.resources {
         Visibility::OperatorOnly => Ok(Vec::new()),
         Visibility::Public => Ok(resource
             .operations
             .iter()
-            .filter(|operation| matches!(operation.access, CompiledAccess::Public))
+            .flat_map(|operation| {
+                operation
+                    .representations
+                    .iter()
+                    .filter(|representation| {
+                        matches!(representation.access, CompiledAccess::Public)
+                    })
+                    .map(move |representation| (operation, representation))
+            })
             .collect()),
         Visibility::OperationBound => {
             let principal = principal.ok_or(ProblemCode::MissingCredential)?;
@@ -2250,10 +2578,16 @@ async fn visible_operations<'a>(
             Ok(resource
                 .operations
                 .iter()
-                .filter(|operation| {
-                    authenticator
-                        .authorize(&operation.access, Some(principal))
-                        .is_ok()
+                .flat_map(|operation| {
+                    operation
+                        .representations
+                        .iter()
+                        .filter_map(move |representation| {
+                            authenticator
+                                .authorize(&representation.access, Some(principal))
+                                .is_ok()
+                                .then_some((operation, representation))
+                        })
                 })
                 .collect())
         }
@@ -2268,18 +2602,20 @@ fn protected_artifact(artifact: &GeneratedArtifact) -> bool {
     artifact.visibility == Visibility::OperationBound
 }
 
+type VisibleRepresentation<'a> = (&'a CompiledOperation, &'a CompiledRepresentation);
+
 fn resource_document(
     service: &RelayService,
     resource: &CompiledResource,
-    operations: &[&CompiledOperation],
+    operations: &[VisibleRepresentation<'_>],
 ) -> Value {
     let enumeration = if operations
         .iter()
-        .any(|operation| matches!(operation.kind, OperationKind::List))
+        .any(|(operation, _)| matches!(operation.kind, OperationKind::List))
     {
-        if operations.iter().any(|operation| {
+        if operations.iter().any(|(operation, representation)| {
             matches!(operation.kind, OperationKind::List)
-                && matches!(operation.access, CompiledAccess::Public)
+                && matches!(representation.access, CompiledAccess::Public)
         }) {
             "public"
         } else {
@@ -2294,7 +2630,7 @@ fn resource_document(
         "description": resource.description,
         "semanticClass": resource.semantic_class,
         "enumerationPosture": enumeration,
-        "capabilities": operations.iter().map(|operation| capability(service, resource, operation)).collect::<Vec<_>>(),
+        "capabilities": operations.iter().map(|(operation, representation)| capability(service, resource, operation, representation)).collect::<Vec<_>>(),
         "links": {
             "self": absolute(&service.registry.base_uri, &format!("/v2/resources/{}", resource.id)),
         }
@@ -2305,22 +2641,30 @@ fn capability(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
+    representation: &CompiledRepresentation,
 ) -> Value {
     let mut document = json!({
         "family": "consultation",
         "pattern": operation_pattern(&operation.kind),
         "resourceIdentifier": resource.id,
         "operationIdentifier": operation.identifier,
-        "schemaReference": operation.schema_reference,
-        "semanticModelReference": operation.semantic_model_reference,
-        "contextReference": operation.context_reference,
+        "representation": representation.id,
+        "defaultRepresentation": operation.default_representation == representation.id,
+        "disclosureProfile": representation.disclosure_profile,
+        "schemaReference": representation.schema_reference,
+        "semanticModelReference": representation.semantic_model_reference,
+        "contextReference": representation.context_reference,
         "href": match &operation.kind {
             OperationKind::List => format!("/v2/resources/{}/records", resource.id),
             OperationKind::Read => format!("/v2/resources/{}/records/{{recordIdentifier}}", resource.id),
             OperationKind::Lookup {name} => format!("/v2/resources/{}/lookups/{name}", resource.id),
         }
     });
-    let stem = operation_artifact_stem(&resource.id, &operation.kind);
+    let stem = format!(
+        "{}--representation-{}",
+        operation_artifact_stem(&resource.id, &operation.kind),
+        representation.id
+    );
     let object = document
         .as_object_mut()
         .expect("capability document is an object");
@@ -2328,7 +2672,7 @@ fn capability(
         object.insert(
             "classificationReference".into(),
             Value::String(sibling_artifact_reference(
-                &operation.schema_reference,
+                &representation.schema_reference,
                 &format!("{stem}-classifications"),
             )),
         );
@@ -2337,7 +2681,7 @@ fn capability(
         object.insert(
             "processingReference".into(),
             Value::String(sibling_artifact_reference(
-                &operation.schema_reference,
+                &representation.schema_reference,
                 &format!("{stem}-processing"),
             )),
         );
@@ -2502,6 +2846,27 @@ fn if_none_match(headers: &HeaderMap, etag: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_order_values_must_be_present_non_null_supported_scalars() {
+        let order = vec!["rank".to_owned(), "record_id".to_owned()];
+        let valid = BTreeMap::from([
+            ("rank".to_owned(), SqlValue::Integer(7)),
+            (
+                "record_id".to_owned(),
+                SqlValue::String("record-7".to_owned()),
+            ),
+        ]);
+        assert!(valid_cursor_order_values(&order, &valid));
+
+        let mut null = valid.clone();
+        null.insert("rank".to_owned(), SqlValue::Null);
+        assert!(!valid_cursor_order_values(&order, &null));
+
+        let mut unsupported = valid;
+        unsupported.insert("rank".to_owned(), SqlValue::Number(7.5));
+        assert!(!valid_cursor_order_values(&order, &unsupported));
+    }
 
     #[test]
     fn serialized_response_ceiling_counts_exact_json_bytes() {

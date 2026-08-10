@@ -7,7 +7,12 @@ sources:
   companies:
     path: fixture.sqlite
 authentication:
-  issuer: null
+  issuer:
+    id: synthetic-business-issuer
+    discoveryUrl: https://identity.example.invalid/.well-known/openid-configuration
+    audience: relay-business-registry
+    tokenTypes: [at+jwt]
+    algorithms: [ES256]
 audit:
   sink: var/audit.jsonl
   integrityKeyRef: secret:env/RELAY_TEST_AUDIT_KEY

@@ -4,8 +4,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{
-    AlignmentTarget, DataType, Handling, ProcessingDescription, SemanticAlignment, SourceProfile,
-    Visibility,
+    AlignmentTarget, DataType, DateInputType, DatePrecision, Handling, IdentificationMethod,
+    PartialStringReveal, ProcessingDescription, SemanticAlignment, SourceProfile, Visibility,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -91,6 +91,7 @@ pub struct CompiledRegistry {
     pub local_vocabulary: String,
     pub semantic_alignments: Vec<SemanticAlignment>,
     pub governed_files: Vec<CompiledGovernedFile>,
+    pub classification_review: Option<CompiledClassificationReview>,
     pub codelists: Vec<CompiledCodelist>,
     pub sources: Vec<CompiledSource>,
     pub resources: Vec<CompiledResource>,
@@ -159,11 +160,38 @@ pub struct CompiledProperty {
     pub label: String,
     pub description: String,
     pub source_column: String,
+    pub transform: Option<CompiledTransform>,
     pub data_type: DataType,
     pub codelist: Option<String>,
     pub source_required: bool,
     pub semantic_iri: String,
     pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum CompiledTransform {
+    PartialString {
+        identifier: String,
+        reveal: PartialStringReveal,
+        characters: u16,
+    },
+    DatePrecision {
+        identifier: String,
+        source_type: DateInputType,
+        precision: DatePrecision,
+    },
+}
+
+impl CompiledTransform {
+    #[must_use]
+    pub fn identifier(&self) -> &str {
+        match self {
+            Self::PartialString { identifier, .. } | Self::DatePrecision { identifier, .. } => {
+                identifier
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -193,16 +221,50 @@ pub struct CompiledDisclosureProfile {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct CompiledClassificationReview {
+    pub registry_identifier: String,
+    pub classification_inventory_digest: String,
+    pub method: IdentificationMethod,
+    pub reviewer: String,
+    pub review_date: String,
+    pub status: crate::contract::ReviewStatus,
+    pub rationale_ref: String,
+    pub generated_identification: Option<CompiledGeneratedIdentificationBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledGeneratedIdentificationBinding {
+    pub report_ref: String,
+    pub report_digest: String,
+    pub rule_pack_id: String,
+    pub rule_pack_version: String,
+    pub rule_pack_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledOperation {
     pub identifier: String,
     pub family: CapabilityFamily,
     pub pattern: ConsultationPattern,
     pub kind: OperationKind,
+    pub default_representation: String,
+    pub representations: Vec<CompiledRepresentation>,
+    pub query: QueryPlan,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledRepresentation {
+    pub id: String,
     pub access: CompiledAccess,
     pub disclosure_profile: String,
     pub selectable_properties: Vec<String>,
-    pub query: QueryPlan,
-    pub maximum_handling: Handling,
+    pub projected_columns: Vec<String>,
+    pub processing_handling: Handling,
+    pub disclosure_handling: Handling,
+    pub transform_inventory: Vec<String>,
     pub schema_reference: String,
     pub semantic_model_reference: String,
     pub context_reference: String,
@@ -267,7 +329,6 @@ pub enum RowAuthoritySource {
 pub struct QueryPlan {
     pub source: String,
     pub view: String,
-    pub projected_columns: Vec<String>,
     pub filters: Vec<CompiledFilter>,
     pub selectors: Vec<CompiledSelector>,
     pub order_by: Vec<String>,
