@@ -932,6 +932,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             source: SOURCE.into(),
             view: "relay_records".into(),
             filters: Vec::new(),
+            spatial_bbox: None,
             selectors: Vec::new(),
             order_by: vec!["record_id".into()],
             allow_unfiltered: true,
@@ -953,6 +954,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             source: SOURCE.into(),
             view: "relay_records".into(),
             filters: Vec::new(),
+            spatial_bbox: None,
             selectors: Vec::new(),
             order_by: Vec::new(),
             allow_unfiltered: false,
@@ -973,6 +975,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             source: SOURCE.into(),
             view: "relay_records".into(),
             filters: Vec::new(),
+            spatial_bbox: None,
             selectors: vec![CompiledSelector {
                 name: "lookupKey".into(),
                 source_column: "lookup_key".into(),
@@ -1036,6 +1039,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
                     .into(),
             },
             properties: properties(),
+            primary_geometry: None,
             disclosure_profiles: vec![
                 disclosure(
                     "public-disclosure",

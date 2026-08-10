@@ -1,7 +1,7 @@
 apiVersion: relay.registrystack.org/classification-review/v1
 kind: ClassificationReview
 registryIdentifier: urn:example:registry:registered-businesses
-classificationInventoryDigest: sha256:730dc3a3fed72d17efb443fc482533047ad716129126c78a78dcdd3500010c6d
+classificationInventoryDigest: sha256:29522c4490bb26724b21e26bdd8fc8ebea9df0df12d75d23dc0b148eb62c0c40
 method: imported
 reviewer: urn:example:institution:company-registrar
 reviewDate: 2026-08-10

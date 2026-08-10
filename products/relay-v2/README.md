@@ -9,6 +9,8 @@ The initial boundary is intentionally narrow:
 
 - one Relay process serves one governed Registry;
 - SQLite is read-only and is the only source profile;
+- an opted resource may expose one classified CRS84 Point and bounded exact
+  bbox search when that geometry is non-personal;
 - resources are Record types within the Registry;
 - compiled operations map only to Consultation Retrieve, List, and constrained
   Search;

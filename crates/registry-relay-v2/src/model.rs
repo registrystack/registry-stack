@@ -135,6 +135,7 @@ pub struct CompiledResource {
     pub view: String,
     pub record_context: CompiledRecordContext,
     pub properties: Vec<CompiledProperty>,
+    pub primary_geometry: Option<CompiledPrimaryGeometry>,
     pub disclosure_profiles: Vec<CompiledDisclosureProfile>,
     pub operations: Vec<CompiledOperation>,
     pub column_accounting: Vec<ColumnAccount>,
@@ -192,6 +193,20 @@ impl CompiledTransform {
             }
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledPrimaryGeometry {
+    pub name: String,
+    pub label: String,
+    pub description: String,
+    pub semantic_iri: String,
+    pub source_required: bool,
+    pub crs: String,
+    pub longitude_column: String,
+    pub latitude_column: String,
+    pub classification: EffectiveClassification,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -270,6 +285,13 @@ pub struct CompiledRepresentation {
     pub context_reference: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepresentationProfile {
+    Rfc7946,
+    JsonFg,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityFamily {
@@ -330,11 +352,21 @@ pub struct QueryPlan {
     pub source: String,
     pub view: String,
     pub filters: Vec<CompiledFilter>,
+    pub spatial_bbox: Option<CompiledSpatialBboxQuery>,
     pub selectors: Vec<CompiledSelector>,
     pub order_by: Vec<String>,
     pub allow_unfiltered: bool,
     pub pagination: Option<CompiledPagination>,
     pub maximum_request_body_bytes: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledSpatialBboxQuery {
+    pub longitude_column: String,
+    pub latitude_column: String,
+    pub maximum_longitude_span_degrees: u16,
+    pub maximum_latitude_span_degrees: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -380,6 +412,9 @@ pub enum ColumnUse {
     LifecycleState,
     RecordedAt,
     Property(String),
+    GeometryLongitude(String),
+    GeometryLatitude(String),
+    SpatialBbox(String),
     Filter(String),
     Order,
     Selector(String),

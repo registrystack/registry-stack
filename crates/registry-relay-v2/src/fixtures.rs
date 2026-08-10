@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::body::{to_bytes, Body};
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, VARY};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, LINK, VARY};
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -15,8 +15,9 @@ use tower::ServiceExt as _;
 
 use crate::auth::{FixturePrincipal, RelayAuthenticator};
 pub use crate::fixture_contract::{
-    parse_journey, FixtureAuthorization, FixtureError, FixtureExpectation, FixtureJourney,
-    FixtureMethod, FixtureRequest, FixtureStep,
+    parse_journey, FixtureAuthorization, FixtureError, FixtureExpectation, FixtureGeoJsonRoot,
+    FixtureGeometryType, FixtureJourney, FixtureMethod, FixtureRepresentationProfile,
+    FixtureRequest, FixtureStep,
 };
 use crate::model::{CompiledAccess, CompiledRegistry, OperationKind};
 
@@ -428,11 +429,7 @@ fn assert_expectations(
     }
     let records = response.document.map(response_records).unwrap_or_default();
     if let Some(expected) = step.expect.item_count {
-        let actual = response
-            .document
-            .and_then(|value| value.get("items"))
-            .and_then(Value::as_array)
-            .map(Vec::len);
+        let actual = response.document.and_then(response_item_count);
         if actual != usize::try_from(expected).ok() {
             mismatch(
                 diagnostics,
@@ -518,9 +515,9 @@ fn assert_expectations(
         );
     }
     if let Some(expected) = step.expect.record_identifier.as_deref() {
-        let actual = response
-            .document
-            .and_then(|value| value.pointer("/data/recordIdentifier"))
+        let actual = records
+            .first()
+            .and_then(|record| record.get("recordIdentifier"))
             .and_then(Value::as_str);
         if actual != Some(expected) {
             mismatch(
@@ -531,6 +528,7 @@ fn assert_expectations(
             );
         }
     }
+    assert_geojson_expectations(step, response, &location, diagnostics);
     assert_capabilities(step, response.document, &location, diagnostics);
     if step.expect.cache.as_deref() == Some("public-snapshot-revalidation")
         && (response
@@ -625,6 +623,132 @@ fn assert_expectations(
         }
     }
     before == diagnostics.len()
+}
+
+fn assert_geojson_expectations(
+    step: &FixtureStep,
+    response: &ObservedResponse<'_>,
+    location: &str,
+    diagnostics: &mut Vec<FixtureDiagnostic>,
+) {
+    let Some(document) = response.document else {
+        if step.expect.geo_json_root.is_some()
+            || step.expect.geometry_type.is_some()
+            || step.expect.representation_profile.is_some()
+        {
+            mismatch(
+                diagnostics,
+                "fixture.geojson_mismatch",
+                location,
+                "GeoJSON response",
+            );
+        }
+        return;
+    };
+    if let Some(expected) = step.expect.geo_json_root {
+        let expected = match expected {
+            FixtureGeoJsonRoot::Feature => "Feature",
+            FixtureGeoJsonRoot::FeatureCollection => "FeatureCollection",
+        };
+        if document.get("type").and_then(Value::as_str) != Some(expected) {
+            mismatch(
+                diagnostics,
+                "fixture.geojson_root_mismatch",
+                location,
+                "GeoJSON root",
+            );
+        }
+    }
+    if let Some(expected) = step.expect.geometry_type {
+        let features = response_features(document);
+        let mismatch_found = features.is_empty()
+            || features.iter().any(|feature| match expected {
+                FixtureGeometryType::Point => {
+                    feature
+                        .get("geometry")
+                        .and_then(|geometry| geometry.get("type"))
+                        .and_then(Value::as_str)
+                        != Some("Point")
+                }
+                FixtureGeometryType::Null => !feature.get("geometry").is_some_and(Value::is_null),
+            });
+        if mismatch_found {
+            mismatch(
+                diagnostics,
+                "fixture.geometry_mismatch",
+                location,
+                "GeoJSON geometry type",
+            );
+        }
+    }
+    let Some(profile) = step.expect.representation_profile else {
+        return;
+    };
+    if response
+        .headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        != Some("application/geo+json")
+    {
+        mismatch(
+            diagnostics,
+            "fixture.representation_profile_mismatch",
+            location,
+            "GeoJSON content type",
+        );
+    }
+    let (profile_uri, conformance) = match profile {
+        FixtureRepresentationProfile::Rfc7946 => {
+            ("http://www.opengis.net/def/profile/OGC/0/rfc7946", None)
+        }
+        FixtureRepresentationProfile::JsonFg => (
+            "http://www.opengis.net/def/profile/OGC/0/jsonfg",
+            Some([
+                "http://www.opengis.net/spec/json-fg-1/1.0/conf/core",
+                "http://www.opengis.net/spec/json-fg-1/1.0/conf/types-schemas",
+            ]),
+        ),
+    };
+    let expected_link = format!("<{profile_uri}>; rel=\"profile\"");
+    if response
+        .headers
+        .get(LINK)
+        .and_then(|value| value.to_str().ok())
+        != Some(expected_link.as_str())
+    {
+        mismatch(
+            diagnostics,
+            "fixture.representation_profile_mismatch",
+            location,
+            "GeoJSON profile link",
+        );
+    }
+    if let Some(expected) = conformance {
+        let actual = document
+            .get("conformsTo")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<BTreeSet<_>>()
+            });
+        if actual != Some(expected.into_iter().collect()) {
+            mismatch(
+                diagnostics,
+                "fixture.representation_profile_mismatch",
+                location,
+                "JSON-FG conformance",
+            );
+        }
+    } else if document.get("conformsTo").is_some() || document.get("featureType").is_some() {
+        mismatch(
+            diagnostics,
+            "fixture.representation_profile_mismatch",
+            location,
+            "RFC 7946 profile members",
+        );
+    }
 }
 
 fn assert_capabilities(
@@ -745,11 +869,36 @@ fn query_value(
 }
 
 fn normalized_records(document: &Value) -> Value {
+    let geometries = response_geometries(document);
     let mut records = response_records(document)
         .into_iter()
-        .cloned()
+        .enumerate()
+        .map(|(index, record)| {
+            let mut record = record.clone();
+            let mut geometry = geometries
+                .get(index)
+                .and_then(|geometry| *geometry)
+                .cloned()
+                .unwrap_or(Value::Null);
+            if geometry.is_null() {
+                if let Some(domain) = record.get_mut("domainData").and_then(Value::as_object_mut) {
+                    let geometry_name = domain.iter().find_map(|(name, value)| {
+                        (value.get("type").and_then(Value::as_str) == Some("Point")
+                            && value.get("coordinates").is_some())
+                        .then(|| name.clone())
+                    });
+                    if let Some(name) = geometry_name {
+                        geometry = domain.remove(&name).unwrap_or(Value::Null);
+                    }
+                }
+            }
+            json!({"record": record, "geometry": geometry})
+        })
         .collect::<Vec<_>>();
-    for record in &mut records {
+    for normalized in &mut records {
+        let Some(record) = normalized.get_mut("record") else {
+            continue;
+        };
         if let Some(object) = record.as_object_mut() {
             object.remove("@context");
             object.remove("@id");
@@ -770,13 +919,72 @@ fn fixture_token(identifier: &str) -> String {
 }
 
 fn response_records(document: &Value) -> Vec<&Value> {
-    if let Some(record) = document.get("data") {
+    if document.get("type").and_then(Value::as_str) == Some("Feature") {
+        document
+            .get("properties")
+            .map_or_else(Vec::new, |record| vec![record])
+    } else if document.get("type").and_then(Value::as_str) == Some("FeatureCollection") {
+        document
+            .get("features")
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |features| {
+                features
+                    .iter()
+                    .filter_map(|feature| feature.get("properties"))
+                    .collect()
+            })
+    } else if let Some(record) = document.get("data") {
         vec![record]
     } else {
         document
             .get("items")
             .and_then(Value::as_array)
             .map_or_else(Vec::new, |items| items.iter().collect())
+    }
+}
+
+fn response_item_count(document: &Value) -> Option<usize> {
+    document
+        .get("items")
+        .or_else(|| document.get("features"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+}
+
+fn response_geometries(document: &Value) -> Vec<Option<&Value>> {
+    if document.get("type").and_then(Value::as_str) == Some("Feature") {
+        vec![document
+            .get("geometry")
+            .filter(|geometry| !geometry.is_null())]
+    } else if document.get("type").and_then(Value::as_str) == Some("FeatureCollection") {
+        document
+            .get("features")
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |features| {
+                features
+                    .iter()
+                    .map(|feature| {
+                        feature
+                            .get("geometry")
+                            .filter(|geometry| !geometry.is_null())
+                    })
+                    .collect()
+            })
+    } else {
+        Vec::new()
+    }
+}
+
+fn response_features(document: &Value) -> Vec<&Value> {
+    if document.get("type").and_then(Value::as_str) == Some("Feature") {
+        vec![document]
+    } else if document.get("type").and_then(Value::as_str) == Some("FeatureCollection") {
+        document
+            .get("features")
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |features| features.iter().collect())
+    } else {
+        Vec::new()
     }
 }
 
@@ -1002,5 +1210,114 @@ steps:
         let token = fixture_token("fixture-a");
         assert_eq!(token.split('.').count(), 3);
         assert!(!token.contains("principal"));
+    }
+
+    #[test]
+    fn fixture_yaml_accepts_only_the_closed_geojson_expectations() {
+        let yaml = r#"
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry
+authorizations: {}
+steps:
+  - id: feature
+    request: {method: GET, path: /v2/resources/places/records/one}
+    expect:
+      status: 200
+      geoJsonRoot: feature
+      geometryType: Point
+      representationProfile: jsonfg
+"#;
+        let journey = parse_journey(yaml).expect("closed GeoJSON expectations parse");
+        assert_eq!(
+            journey.steps[0].expect.geo_json_root,
+            Some(FixtureGeoJsonRoot::Feature)
+        );
+        assert_eq!(
+            journey.steps[0].expect.geometry_type,
+            Some(FixtureGeometryType::Point)
+        );
+        assert_eq!(
+            journey.steps[0].expect.representation_profile,
+            Some(FixtureRepresentationProfile::JsonFg)
+        );
+
+        assert!(parse_journey(&yaml.replace("jsonfg", "draft-profile")).is_err());
+    }
+
+    #[test]
+    fn rfc7946_fixture_requires_explicit_null_geometry_and_no_json_fg_members() {
+        let journey = parse_journey(
+            r#"
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry
+authorizations: {}
+steps:
+  - id: feature
+    request: {method: GET, path: /v2/resources/places/records/one}
+    expect:
+      status: 200
+      geoJsonRoot: feature
+      geometryType: "null"
+      representationProfile: rfc7946
+"#,
+        )
+        .expect("fixture parses");
+        let step = &journey.steps[0];
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            "application/geo+json".parse().expect("header"),
+        );
+        headers.insert(
+            LINK,
+            "<http://www.opengis.net/def/profile/OGC/0/rfc7946>; rel=\"profile\""
+                .parse()
+                .expect("header"),
+        );
+
+        for document in [
+            json!({"type": "Feature", "properties": {}}),
+            json!({
+                "type": "Feature",
+                "geometry": null,
+                "properties": {},
+                "featureType": "places",
+            }),
+        ] {
+            let bytes = serde_json::to_vec(&document).expect("document serializes");
+            let mut diagnostics = Vec::new();
+            assert!(!assert_expectations(
+                step,
+                &ObservedResponse {
+                    status: StatusCode::OK,
+                    headers: &headers,
+                    body: &bytes,
+                    document: Some(&document),
+                    code: None,
+                },
+                &mut BTreeMap::new(),
+                &BTreeMap::new(),
+                0,
+                &mut diagnostics,
+            ));
+            assert!(!diagnostics.is_empty());
+        }
+
+        let document = json!({"type": "Feature", "geometry": null, "properties": {}});
+        let bytes = serde_json::to_vec(&document).expect("document serializes");
+        assert!(assert_expectations(
+            step,
+            &ObservedResponse {
+                status: StatusCode::OK,
+                headers: &headers,
+                body: &bytes,
+                document: Some(&document),
+                code: None,
+            },
+            &mut BTreeMap::new(),
+            &BTreeMap::new(),
+            0,
+            &mut Vec::new(),
+        ));
     }
 }

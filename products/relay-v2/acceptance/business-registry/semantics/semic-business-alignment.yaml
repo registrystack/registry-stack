@@ -6,3 +6,5 @@ status: illustrative-pinned-input
 mappings:
   - {local: local:RegisteredBusiness, external: https://data.europa.eu/m8g/LegalEntity, relation: close}
   - {local: local:legalName, external: https://data.europa.eu/m8g/legalName, relation: close}
+  - {local: local:RegisteredPremises, external: https://schema.org/Place, relation: related}
+  - {local: local:location, external: https://schema.org/geo, relation: related}

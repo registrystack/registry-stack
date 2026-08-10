@@ -18,11 +18,12 @@ use crate::model::{
     CapabilityFamily, ColumnAccount, ColumnUse, CompileProfile, CompileReport, CompiledAccess,
     CompiledClassificationReview, CompiledCodelist, CompiledDisclosureProfile, CompiledFilter,
     CompiledGeneratedIdentificationBinding, CompiledGovernedFile, CompiledMetadataVisibility,
-    CompiledOperation, CompiledPagination, CompiledProperty, CompiledPurpose,
-    CompiledRecordContext, CompiledRegistry, CompiledRepresentation, CompiledResource,
-    CompiledRowBinding, CompiledSelector, CompiledSource, CompiledTransform, ConsultationPattern,
-    Diagnostic, DiagnosticSeverity, EffectiveClassification, ObservedSourceSchema, OperationKind,
-    QueryPlan, RowAuthoritySource, StarterColumn, StarterContract,
+    CompiledOperation, CompiledPagination, CompiledPrimaryGeometry, CompiledProperty,
+    CompiledPurpose, CompiledRecordContext, CompiledRegistry, CompiledRepresentation,
+    CompiledResource, CompiledRowBinding, CompiledSelector, CompiledSource,
+    CompiledSpatialBboxQuery, CompiledTransform, ConsultationPattern, Diagnostic,
+    DiagnosticSeverity, EffectiveClassification, ObservedSourceSchema, OperationKind, QueryPlan,
+    RowAuthoritySource, StarterColumn, StarterContract,
 };
 
 const API_VERSION: &str = "relay.registrystack.org/v2alpha1";
@@ -39,6 +40,7 @@ const MAXIMUM_LOOKUP_REQUEST_BODY_BYTES: u32 = 1024 * 1024;
 const MAXIMUM_LOOKUP_SELECTORS: usize = 32;
 const MAXIMUM_SELECTOR_BYTES: u32 = 4 * 1024;
 const MAXIMUM_PARTIAL_STRING_CHARACTERS: u16 = 64;
+const CRS84: &str = "http://www.opengis.net/def/crs/OGC/0/CRS84";
 
 pub type GovernedFileSet = BTreeMap<String, Vec<u8>>;
 
@@ -646,11 +648,13 @@ impl<'a> Compiler<'a> {
         let mut compiled = Vec::with_capacity(self.contract.resources.len());
         for (index, resource) in self.contract.resources.iter().enumerate() {
             let root = format!("resources[{index}]");
-            if resource.properties.len() > MAXIMUM_PROPERTIES_PER_RESOURCE {
+            if resource.properties.len() + usize::from(resource.primary_geometry.is_some())
+                > MAXIMUM_PROPERTIES_PER_RESOURCE
+            {
                 self.error(
                     "property.bound_exceeded",
                     &format!("{root}.properties"),
-                    "the governed property count exceeds the per-resource product ceiling",
+                    "the governed scalar and geometry property count exceeds the per-resource product ceiling",
                 );
             }
             if resource.disclosure_profiles.len() > MAXIMUM_DISCLOSURE_PROFILES_PER_RESOURCE {
@@ -861,6 +865,179 @@ impl<'a> Compiler<'a> {
                 });
             }
 
+            let primary_geometry = resource.primary_geometry.as_ref().and_then(|geometry| {
+                let location = format!("{root}.primaryGeometry");
+                if !valid_camel_identifier(&geometry.name) {
+                    self.error(
+                        "geometry.name_invalid",
+                        &format!("{location}.name"),
+                        "the primary geometry name must be URL-safe camelCase",
+                    );
+                }
+                if property_names.contains(geometry.name.as_str()) {
+                    self.error(
+                        "geometry.name_collision",
+                        &format!("{location}.name"),
+                        "the primary geometry name must not collide with a scalar property",
+                    );
+                }
+                if geometry.label.trim().is_empty() || geometry.description.trim().is_empty() {
+                    self.error(
+                        "geometry.documentation_empty",
+                        &location,
+                        "a primary geometry requires a non-empty label and description",
+                    );
+                }
+                if geometry.crs != CRS84 {
+                    self.error(
+                        "geometry.crs_unsupported",
+                        &format!("{location}.crs"),
+                        "the initial spatial profile supports only OGC CRS84",
+                    );
+                }
+                let longitude_column = &geometry.source.longitude_column;
+                let latitude_column = &geometry.source.latitude_column;
+                for (column, field) in [
+                    (longitude_column, "longitudeColumn"),
+                    (latitude_column, "latitudeColumn"),
+                ] {
+                    if !valid_sql_identifier(column) {
+                        self.error(
+                            "geometry.column_invalid",
+                            &format!("{location}.source.{field}"),
+                            "geometry carrier columns must be simple SQLite identifiers",
+                        );
+                    }
+                    if !column_exists(observed_columns.as_ref(), column) {
+                        self.error(
+                            "geometry.column_unknown",
+                            &format!("{location}.source.{field}"),
+                            "a geometry carrier column is absent from the reviewed view",
+                        );
+                    }
+                    if property_columns.contains_key(column.as_str())
+                        || [
+                            &resource.record_context.record_identifier.source_column,
+                            &resource.record_context.revision_identifier.source_column,
+                            &resource.record_context.lifecycle_state.source_column,
+                            &resource.record_context.recorded_at.source_column,
+                        ]
+                        .contains(&column)
+                    {
+                        self.error(
+                            "geometry.column_collision",
+                            &format!("{location}.source.{field}"),
+                            "geometry carriers must not reuse Registry Core or scalar property columns",
+                        );
+                    }
+                    if let Some(observed) = observed_view.and_then(|view| {
+                        view.columns.iter().find(|candidate| candidate.name == **column)
+                    }) {
+                        if !compatible_coordinate_type(&observed.declared_type) {
+                            self.error(
+                                "geometry.declared_type_incompatible",
+                                &format!("{location}.source.{field}"),
+                                "geometry coordinates require numeric SQLite declarations",
+                            );
+                        }
+                    }
+                }
+                if longitude_column == latitude_column {
+                    self.error(
+                        "geometry.column_collision",
+                        &format!("{location}.source"),
+                        "longitude and latitude require distinct carrier columns",
+                    );
+                }
+                let classification = effective_classification(
+                    self.contract,
+                    &resource.classification_defaults,
+                    Some(&geometry.classification),
+                );
+                let Some(classification) = classification else {
+                    self.error(
+                        "classification.geometry_incomplete",
+                        &format!("{location}.classification"),
+                        "the primary geometry classification is incomplete after defaults",
+                    );
+                    return None;
+                };
+                if classification.privacy.trim().is_empty()
+                    || classification.institutional.trim().is_empty()
+                {
+                    self.error(
+                        "classification.geometry_empty",
+                        &format!("{location}.classification"),
+                        "effective privacy and institutional classifications must be non-empty",
+                    );
+                }
+                self.validate_review_status(
+                    &classification,
+                    &format!("{location}.classification"),
+                );
+                for (column, field) in [
+                    (longitude_column, "longitudeColumn"),
+                    (latitude_column, "latitudeColumn"),
+                ] {
+                    if let Some(source_override) =
+                        resource.source_column_classifications.get(column)
+                    {
+                        let carrier_classification = effective_classification(
+                            self.contract,
+                            &classification_to_partial(&classification),
+                            Some(source_override),
+                        );
+                        if carrier_classification
+                            .as_ref()
+                            .is_some_and(|carrier| carrier.privacy != classification.privacy)
+                        {
+                            self.error(
+                                "classification.geometry_carrier_privacy_mismatch",
+                                &format!(
+                                    "{root}.sourceColumnClassifications.{column}.privacy"
+                                ),
+                                &format!(
+                                    "the {field} carrier privacy classification must match the published primary geometry"
+                                ),
+                            );
+                        }
+                    }
+                }
+                let semantic_iri = match expand_local_term(
+                    &self.contract.semantics.local_vocabulary,
+                    &geometry.semantic_term,
+                ) {
+                    Some(term) => term,
+                    None => {
+                        self.error(
+                            "semantics.geometry_term_invalid",
+                            &format!("{location}.semanticTerm"),
+                            "a geometry semantic term must be local:Name or an absolute HTTP or HTTPS IRI",
+                        );
+                        geometry.semantic_term.clone()
+                    }
+                };
+                property_columns
+                    .entry(longitude_column.as_str())
+                    .or_default()
+                    .push((geometry.name.as_str(), classification.clone(), false));
+                property_columns
+                    .entry(latitude_column.as_str())
+                    .or_default()
+                    .push((geometry.name.as_str(), classification.clone(), false));
+                Some(CompiledPrimaryGeometry {
+                    name: geometry.name.clone(),
+                    label: geometry.label.clone(),
+                    description: geometry.description.clone(),
+                    semantic_iri,
+                    source_required: geometry.source_required,
+                    crs: geometry.crs.clone(),
+                    longitude_column: longitude_column.clone(),
+                    latitude_column: latitude_column.clone(),
+                    classification,
+                })
+            });
+
             let mut disclosures = Vec::with_capacity(resource.disclosure_profiles.len());
             let mut disclosure_names = HashSet::new();
             for (name, disclosure) in resource.disclosure_profiles.iter() {
@@ -901,10 +1078,22 @@ impl<'a> Compiler<'a> {
                             maximum_handling =
                                 maximum_handling.max(property.classification.handling);
                         }
+                        None if primary_geometry
+                            .as_ref()
+                            .is_some_and(|geometry| geometry.name == *property_name) =>
+                        {
+                            maximum_handling = maximum_handling.max(
+                                primary_geometry
+                                    .as_ref()
+                                    .expect("checked primary geometry")
+                                    .classification
+                                    .handling,
+                            );
+                        }
                         None => self.error(
                             "disclosure.property_unknown",
                             &location,
-                            "a disclosure profile names no published property",
+                            "a disclosure profile names no published property or primary geometry",
                         ),
                     }
                 }
@@ -989,6 +1178,7 @@ impl<'a> Compiler<'a> {
                 let operation = self.compile_list(
                     resource,
                     &properties,
+                    primary_geometry.as_ref(),
                     &disclosures,
                     observed_view,
                     observed_columns.as_ref(),
@@ -1003,6 +1193,7 @@ impl<'a> Compiler<'a> {
                 if let Some(operation) = self.compile_simple_operation(
                     resource,
                     &properties,
+                    primary_geometry.as_ref(),
                     &disclosures,
                     observed_columns.as_ref(),
                     &root,
@@ -1114,6 +1305,7 @@ impl<'a> Compiler<'a> {
                 if let Some(mut operation) = self.compile_simple_operation(
                     resource,
                     &properties,
+                    primary_geometry.as_ref(),
                     &disclosures,
                     observed_columns.as_ref(),
                     &location,
@@ -1143,6 +1335,7 @@ impl<'a> Compiler<'a> {
             let column_accounting = self.compile_column_accounting(
                 resource,
                 &properties,
+                primary_geometry.as_ref(),
                 &operations,
                 &property_columns,
                 &core,
@@ -1204,6 +1397,7 @@ impl<'a> Compiler<'a> {
                     ),
                 },
                 properties,
+                primary_geometry,
                 disclosure_profiles: disclosures,
                 operations,
                 column_accounting,
@@ -1218,6 +1412,7 @@ impl<'a> Compiler<'a> {
         &mut self,
         resource: &crate::contract::ResourceDefinition,
         properties: &[CompiledProperty],
+        primary_geometry: Option<&CompiledPrimaryGeometry>,
         disclosures: &[CompiledDisclosureProfile],
         observed_columns: Option<&BTreeSet<&str>>,
         root: &str,
@@ -1310,7 +1505,12 @@ impl<'a> Compiler<'a> {
                 access,
                 disclosure_profile: disclosure.id.clone(),
                 selectable_properties: disclosure.properties.clone(),
-                projected_columns: projected_columns(resource, properties, &disclosure.properties),
+                projected_columns: projected_columns(
+                    resource,
+                    properties,
+                    primary_geometry,
+                    &disclosure.properties,
+                ),
                 processing_handling: Handling::Public,
                 disclosure_handling: disclosure.maximum_handling,
                 transform_inventory: disclosure
@@ -1368,6 +1568,7 @@ impl<'a> Compiler<'a> {
                 source: resource.source.source.clone(),
                 view: resource.source.view.clone(),
                 filters: Vec::new(),
+                spatial_bbox: None,
                 selectors: Vec::new(),
                 order_by: Vec::new(),
                 allow_unfiltered: false,
@@ -1382,6 +1583,7 @@ impl<'a> Compiler<'a> {
         &mut self,
         resource: &crate::contract::ResourceDefinition,
         properties: &[CompiledProperty],
+        primary_geometry: Option<&CompiledPrimaryGeometry>,
         disclosures: &[CompiledDisclosureProfile],
         observed_view: Option<&crate::model::ObservedView>,
         observed_columns: Option<&BTreeSet<&str>>,
@@ -1391,6 +1593,7 @@ impl<'a> Compiler<'a> {
         let mut operation = self.compile_simple_operation(
             resource,
             properties,
+            primary_geometry,
             disclosures,
             observed_columns,
             root,
@@ -1414,12 +1617,48 @@ impl<'a> Compiler<'a> {
                 "the governed order-key count exceeds the product ceiling",
             );
         }
-        if list.filters.is_empty() && !list.allow_unfiltered {
+        if list.filters.is_empty() && list.spatial_query.is_none() && !list.allow_unfiltered {
             self.error(
                 "list.no_reachable_query",
                 &location,
                 "a list without filters must allow the empty filter set",
             );
+        }
+        if let Some(spatial_query) = &list.spatial_query {
+            let Some(geometry) = primary_geometry else {
+                self.error(
+                    "list.spatial_query_without_geometry",
+                    &format!("{location}.spatialQuery"),
+                    "a bbox query requires a compiled primary geometry",
+                );
+                return Some(operation);
+            };
+            let bbox = &spatial_query.bbox;
+            if geometry.classification.privacy != "non-personal" {
+                self.error(
+                    "list.bbox_personal_forbidden",
+                    &format!("{location}.spatialQuery.bbox"),
+                    "the initial bbox search profile permits only non-personal geometry",
+                );
+            }
+            if bbox.maximum_longitude_span_degrees == 0
+                || bbox.maximum_longitude_span_degrees > 360
+                || bbox.maximum_latitude_span_degrees == 0
+                || bbox.maximum_latitude_span_degrees > 180
+            {
+                self.error(
+                    "list.bbox_bound_invalid",
+                    &format!("{location}.spatialQuery.bbox"),
+                    "bbox spans must be positive and no larger than the CRS84 world extent",
+                );
+            }
+            operation.pattern = ConsultationPattern::Search;
+            operation.query.spatial_bbox = Some(CompiledSpatialBboxQuery {
+                longitude_column: geometry.longitude_column.clone(),
+                latitude_column: geometry.latitude_column.clone(),
+                maximum_longitude_span_degrees: bbox.maximum_longitude_span_degrees,
+                maximum_latitude_span_degrees: bbox.maximum_latitude_span_degrees,
+            });
         }
         if list.pagination.default_page_size == 0
             || list.pagination.maximum_page_size == 0
@@ -1774,6 +2013,7 @@ impl<'a> Compiler<'a> {
         &mut self,
         resource: &crate::contract::ResourceDefinition,
         properties: &[CompiledProperty],
+        primary_geometry: Option<&CompiledPrimaryGeometry>,
         operations: &[CompiledOperation],
         property_columns: &HashMap<&str, Vec<(&str, EffectiveClassification, bool)>>,
         core: &[(&str, ColumnUse); 4],
@@ -1789,11 +2029,27 @@ impl<'a> Compiler<'a> {
                 .or_default()
                 .insert(ColumnUse::Property(property.name.clone()));
         }
+        if let Some(geometry) = primary_geometry {
+            uses.entry(&geometry.longitude_column)
+                .or_default()
+                .insert(ColumnUse::GeometryLongitude(geometry.name.clone()));
+            uses.entry(&geometry.latitude_column)
+                .or_default()
+                .insert(ColumnUse::GeometryLatitude(geometry.name.clone()));
+        }
         for operation in operations {
             for filter in &operation.query.filters {
                 uses.entry(&filter.source_column)
                     .or_default()
                     .insert(ColumnUse::Filter(filter.parameter.clone()));
+            }
+            if let Some(bbox) = &operation.query.spatial_bbox {
+                uses.entry(&bbox.longitude_column)
+                    .or_default()
+                    .insert(ColumnUse::SpatialBbox(operation.identifier.clone()));
+                uses.entry(&bbox.latitude_column)
+                    .or_default()
+                    .insert(ColumnUse::SpatialBbox(operation.identifier.clone()));
             }
             for column in &operation.query.order_by {
                 uses.entry(column).or_default().insert(ColumnUse::Order);
@@ -1814,6 +2070,26 @@ impl<'a> Compiler<'a> {
                             "{}:{}",
                             operation.identifier, representation.id
                         )),
+                    );
+                }
+            }
+        }
+        if let Some(geometry) = primary_geometry {
+            for column in [&geometry.longitude_column, &geometry.latitude_column] {
+                if uses.get(column.as_str()).is_some_and(|column_uses| {
+                    column_uses.iter().any(|usage| {
+                        !matches!(
+                            usage,
+                            ColumnUse::GeometryLongitude(_)
+                                | ColumnUse::GeometryLatitude(_)
+                                | ColumnUse::SpatialBbox(_)
+                        )
+                    })
+                }) {
+                    self.error(
+                        "geometry.column_collision",
+                        &format!("{root}.primaryGeometry.source"),
+                        "geometry carriers cannot also serve Registry Core, properties, selectors, ordering, filters, or row bindings",
                     );
                 }
             }
@@ -1945,6 +2221,10 @@ impl<'a> Compiler<'a> {
                         .map(|filter| filter.source_column.as_str()),
                 );
                 referenced.extend(operation.query.order_by.iter().map(String::as_str));
+                if let Some(spatial) = &operation.query.spatial_bbox {
+                    referenced.insert(&spatial.longitude_column);
+                    referenced.insert(&spatial.latitude_column);
+                }
                 referenced.extend(
                     operation
                         .query
@@ -2801,6 +3081,7 @@ fn validate_disclosure_access(
 fn projected_columns(
     resource: &crate::contract::ResourceDefinition,
     properties: &[CompiledProperty],
+    primary_geometry: Option<&CompiledPrimaryGeometry>,
     disclosure: &[String],
 ) -> Vec<String> {
     let mut columns = Vec::new();
@@ -2818,6 +3099,9 @@ fn projected_columns(
     for name in disclosure {
         if let Some(property) = properties.iter().find(|property| property.name == *name) {
             push_unique(&mut columns, &property.source_column);
+        } else if let Some(geometry) = primary_geometry.filter(|geometry| geometry.name == *name) {
+            push_unique(&mut columns, &geometry.longitude_column);
+            push_unique(&mut columns, &geometry.latitude_column);
         }
     }
     columns
@@ -2915,6 +3199,16 @@ fn compatible_declared_type(data_type: DataType, declared_type: &str) -> bool {
                 || declared == "DATETIME"
         }
     }
+}
+
+fn compatible_coordinate_type(declared_type: &str) -> bool {
+    let declared = declared_type.trim().to_ascii_uppercase();
+    declared.contains("INT")
+        || declared.contains("REAL")
+        || declared.contains("FLOA")
+        || declared.contains("DOUB")
+        || declared.contains("NUM")
+        || declared.contains("DEC")
 }
 
 fn transform_source_type(transform: Option<&CompiledTransform>, output_type: DataType) -> DataType {
@@ -3960,6 +4254,177 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn absent_spatial_fields_preserve_the_authored_contract_revision() {
+        let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let value = serde_json::to_value(&contract).expect("contract serializes");
+        assert!(value["resources"][0].get("primaryGeometry").is_none());
+        assert!(value["resources"][0]["operations"]["read"]
+            .get("spatialQuery")
+            .is_none());
+        let compiled = compile_contract_with_governed_files(
+            &contract,
+            &[observed_schema()],
+            CompileProfile::Production,
+            &governed_files(),
+        )
+        .expect("legacy contract compiles");
+        assert_eq!(compiled.resources[0].operations[0].representations.len(), 1);
+        assert_eq!(
+            compiled.resources[0].operations[0].representations[0].id,
+            "public"
+        );
+    }
+
+    #[test]
+    fn exact_point_bbox_compiles_as_a_governed_search() {
+        let contract = spatial_contract(true);
+        let governed_files = governed_files_for(&contract);
+        let compiled = compile_contract_with_governed_files(
+            &contract,
+            &[spatial_observed_schema()],
+            CompileProfile::Production,
+            &governed_files,
+        )
+        .expect("spatial contract compiles");
+        let resource = &compiled.resources[0];
+        let geometry = resource.primary_geometry.as_ref().expect("geometry");
+        assert_eq!(geometry.crs, CRS84);
+        assert_eq!(geometry.longitude_column, "longitude");
+        let operation = &resource.operations[0];
+        assert_eq!(operation.pattern, ConsultationPattern::Search);
+        assert!(!operation.query.allow_unfiltered);
+        assert_eq!(
+            operation
+                .query
+                .spatial_bbox
+                .as_ref()
+                .expect("bbox")
+                .maximum_longitude_span_degrees,
+            10
+        );
+        let representation = &operation.representations[0];
+        assert!(representation
+            .projected_columns
+            .iter()
+            .any(|column| column == "longitude"));
+        assert!(representation
+            .selectable_properties
+            .iter()
+            .any(|property| property == "location"));
+        assert!(resource.column_accounting.iter().any(|account| {
+            account.column == "latitude"
+                && account
+                    .uses
+                    .contains(&ColumnUse::GeometryLatitude("location".into()))
+                && account
+                    .uses
+                    .contains(&ColumnUse::SpatialBbox("record.list".into()))
+        }));
+    }
+
+    #[test]
+    fn spatial_contract_rejects_ambiguous_or_unsafe_shapes() {
+        let assert_code = |mut value: serde_json::Value, code: &str| {
+            let contract = serde_json::from_value::<RegistryContract>(value.take())
+                .expect("strict contract value");
+            let report = compile_contract_with_governed_files(
+                &contract,
+                &[spatial_observed_schema()],
+                CompileProfile::Production,
+                &governed_files(),
+            )
+            .expect_err("invalid spatial contract is refused");
+            assert!(
+                report.diagnostics.iter().any(|item| item.code == code),
+                "missing {code} in {:?}",
+                report.diagnostics
+            );
+        };
+
+        let mut collision = spatial_contract_value(true);
+        collision["resources"][0]["primaryGeometry"]["name"] = serde_json::json!("name");
+        assert_code(collision, "geometry.name_collision");
+
+        let mut carrier_collision = spatial_contract_value(true);
+        carrier_collision["resources"][0]["primaryGeometry"]["source"]["longitudeColumn"] =
+            serde_json::json!("name");
+        assert_code(carrier_collision, "geometry.column_collision");
+
+        let mut row_binding_collision = spatial_contract_value(true);
+        row_binding_collision["resources"][0]["operations"]["list"]["representations"]["public"]
+            ["access"] = serde_json::json!({
+            "scope": "registry:records:list",
+            "authorityRowBinding": {"principal": true, "sourceColumn": "longitude"}
+        });
+        assert_code(row_binding_collision, "geometry.column_collision");
+
+        let mut wrong_crs = spatial_contract_value(true);
+        wrong_crs["resources"][0]["primaryGeometry"]["crs"] = serde_json::json!("EPSG:3857");
+        assert_code(wrong_crs, "geometry.crs_unsupported");
+
+        let mut oversized = spatial_contract_value(true);
+        oversized["resources"][0]["operations"]["list"]["spatialQuery"]["bbox"]
+            ["maximumLatitudeSpanDegrees"] = serde_json::json!(181);
+        assert_code(oversized, "list.bbox_bound_invalid");
+
+        let mut personal = spatial_contract_value(true);
+        personal["resources"][0]["primaryGeometry"]["classification"] = serde_json::json!({
+            "privacy": "personal"
+        });
+        assert_code(personal, "list.bbox_personal_forbidden");
+
+        let mut personal_carrier = spatial_contract_value(true);
+        personal_carrier["resources"][0]["sourceColumnClassifications"]["longitude"] =
+            serde_json::json!({"privacy": "personal"});
+        assert_code(
+            personal_carrier,
+            "classification.geometry_carrier_privacy_mismatch",
+        );
+
+        let mut nonpublic = spatial_contract_value(false);
+        nonpublic["resources"][0]["primaryGeometry"]["classification"] = serde_json::json!({
+            "handling": "internal"
+        });
+        assert_code(nonpublic, "access.public_nonpublic_forbidden");
+
+        let mut too_many_properties = spatial_contract_value(true);
+        let properties = too_many_properties["resources"][0]["properties"]
+            .as_object_mut()
+            .expect("properties object");
+        let template = properties.get("name").expect("name property").clone();
+        for index in 1..MAXIMUM_PROPERTIES_PER_RESOURCE {
+            properties.insert(format!("name{index}"), template.clone());
+        }
+        assert_code(too_many_properties, "property.bound_exceeded");
+    }
+
+    #[test]
+    fn geometry_disclosure_is_representation_scoped() {
+        let mut undisclosed = spatial_contract_value(false);
+        undisclosed["resources"][0]["disclosureProfiles"]["public"]["properties"] =
+            serde_json::json!(["name"]);
+        let contract =
+            serde_json::from_value::<RegistryContract>(undisclosed).expect("strict contract value");
+        let governed_files = governed_files_for(&contract);
+        let compiled = compile_contract_with_governed_files(
+            &contract,
+            &[spatial_observed_schema()],
+            CompileProfile::Production,
+            &governed_files,
+        )
+        .expect("geometry may remain outside one governed representation");
+        let representation = &compiled.resources[0].operations[0].representations[0];
+        assert!(!representation
+            .selectable_properties
+            .iter()
+            .any(|property| property == "location"));
+        assert!(!representation
+            .projected_columns
+            .iter()
+            .any(|column| column == "longitude" || column == "latitude"));
+    }
+
+    #[test]
     fn public_record_cannot_reference_operator_only_semantics() {
         let yaml = valid_contract().replace(
             "resources: public, semantics: public",
@@ -3999,13 +4464,84 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn spatial_observed_schema() -> ObservedSourceSchema {
+        let mut schema = observed_schema();
+        let columns = &mut schema.views[0].columns;
+        columns.extend(["longitude", "latitude"].into_iter().map(|name| {
+            crate::model::ObservedColumn {
+                name: name.into(),
+                declared_type: "REAL".into(),
+                nullable: false,
+                primary_key: false,
+            }
+        }));
+        schema
+    }
+
+    pub(crate) fn spatial_contract(list: bool) -> RegistryContract {
+        serde_json::from_value(spatial_contract_value(list)).expect("strict spatial contract")
+    }
+
+    fn spatial_contract_value(list: bool) -> serde_json::Value {
+        let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let mut value = serde_json::to_value(contract).expect("contract serializes");
+        value["resources"][0]["primaryGeometry"] = serde_json::json!({
+            "name": "location",
+            "label": "Location",
+            "description": "Authoritative point location",
+            "semanticTerm": "local:location",
+            "sourceRequired": true,
+            "crs": CRS84,
+            "source": {
+                "longitudeColumn": "longitude",
+                "latitudeColumn": "latitude"
+            },
+            "classification": {}
+        });
+        value["resources"][0]["disclosureProfiles"]["public"]["properties"] =
+            serde_json::json!(["name", "location"]);
+        if list {
+            value["resources"][0]["operations"] = serde_json::json!({
+                "list": {
+                    "defaultRepresentation": "public",
+                    "representations": {
+                        "public": {
+                            "access": "public",
+                            "disclosureProfile": "public"
+                        }
+                    },
+                    "filters": [],
+                    "spatialQuery": {"bbox": {
+                        "maximumLongitudeSpanDegrees": 10,
+                        "maximumLatitudeSpanDegrees": 10
+                    }},
+                    "allowUnfiltered": false,
+                    "orderBy": ["name"],
+                    "pagination": {"defaultPageSize": 2, "maximumPageSize": 10}
+                }
+            });
+            value["resources"][0]["processingDescriptions"][0]["operationRefs"] =
+                serde_json::json!(["list"]);
+        }
+        value
+    }
+
     pub(crate) fn governed_files() -> GovernedFileSet {
         let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
         governed_files_for(&contract)
     }
 
     pub(crate) fn governed_files_for(contract: &RegistryContract) -> GovernedFileSet {
-        let compiled = compile_contract(contract, &[observed_schema()], CompileProfile::Production)
+        let observed = if contract
+            .resources
+            .iter()
+            .any(|resource| resource.primary_geometry.is_some())
+        {
+            spatial_observed_schema()
+        } else {
+            observed_schema()
+        };
+        let compiled = compile_contract(contract, &[observed], CompileProfile::Production)
             .expect("inventory compiles");
         let inventory_digest =
             classification_inventory_digest(&compiled).expect("inventory digest");

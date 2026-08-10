@@ -92,6 +92,34 @@ pub struct FixtureExpectation {
     pub body_empty: Option<bool>,
     #[serde(default)]
     pub etag_same_as: Option<String>,
+    #[serde(default)]
+    pub geo_json_root: Option<FixtureGeoJsonRoot>,
+    #[serde(default)]
+    pub geometry_type: Option<FixtureGeometryType>,
+    #[serde(default)]
+    pub representation_profile: Option<FixtureRepresentationProfile>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum FixtureGeoJsonRoot {
+    Feature,
+    FeatureCollection,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum FixtureGeometryType {
+    #[serde(rename = "Point")]
+    Point,
+    #[serde(rename = "null")]
+    Null,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FixtureRepresentationProfile {
+    Rfc7946,
+    JsonFg,
 }
 
 #[derive(Debug, Error)]

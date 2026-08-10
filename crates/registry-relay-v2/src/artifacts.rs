@@ -10,11 +10,21 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::contract::Visibility;
-use crate::model::{CompiledAccess, CompiledRegistry, OperationKind};
+use crate::model::{
+    CompiledAccess, CompiledOperation, CompiledRegistry, CompiledResource, ConsultationPattern,
+    OperationKind, RepresentationProfile,
+};
 use crate::semantics::{
     full_record_schema, full_record_shacl, json_ld_context, local_vocabulary,
     representation_schema, representation_shacl,
 };
+
+const CRS84_URI: &str = "http://www.opengis.net/def/crs/OGC/0/CRS84";
+const RFC7946_PROFILE_URI: &str = "http://www.opengis.net/def/profile/OGC/0/rfc7946";
+const JSON_FG_PROFILE_URI: &str = "http://www.opengis.net/def/profile/OGC/0/jsonfg";
+const JSON_FG_CORE_CONFORMANCE: &str = "http://www.opengis.net/spec/json-fg-1/1.0/conf/core";
+const JSON_FG_TYPES_CONFORMANCE: &str =
+    "http://www.opengis.net/spec/json-fg-1/1.0/conf/types-schemas";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -123,6 +133,12 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
             .properties
             .iter()
             .map(|property| property.name.clone())
+            .chain(
+                resource
+                    .primary_geometry
+                    .iter()
+                    .map(|geometry| geometry.name.clone()),
+            )
             .collect::<Vec<_>>();
         push_json(
             &mut artifacts,
@@ -166,7 +182,12 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                 "properties": resource.properties.iter().map(|property| json!({
                     "property": property.name,
                     "classification": property.classification,
-                })).collect::<Vec<_>>(),
+                })).chain(resource.primary_geometry.iter().map(|geometry| json!({
+                    "property": geometry.name,
+                    "classification": geometry.classification,
+                    "geometryType": "Point",
+                    "crs": geometry.crs,
+                }))).collect::<Vec<_>>(),
                 "columns": resource.column_accounting,
             }),
         )?;
@@ -256,6 +277,24 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                         &representation.semantic_model_reference,
                     ),
                 )?;
+                if supports_geojson(resource, representation) {
+                    push_representation_json(
+                        &mut artifacts,
+                        &format!("{suffix}-geojson-schema"),
+                        &format!("artifacts/{suffix}.geojson.schema.json"),
+                        "application/schema+json",
+                        semantic_visibility,
+                        &operation.identifier,
+                        &representation.id,
+                        &geojson_response_schema(
+                            registry,
+                            operation,
+                            representation,
+                            resource,
+                            true,
+                        ),
+                    )?;
+                }
                 push_representation_text(
                     &mut artifacts,
                     &format!("{suffix}-shacl"),
@@ -292,7 +331,14 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
                                 "property": property.name,
                                 "classification": property.classification,
                                 "transform": property.transform,
-                            }))
+                            })).chain(resource.primary_geometry.iter()
+                                .filter(|geometry| disclosure.properties.contains(&geometry.name))
+                                .map(|geometry| json!({
+                                    "property": geometry.name,
+                                    "classification": geometry.classification,
+                                    "geometryType": "Point",
+                                    "crs": geometry.crs,
+                                })))
                             .collect::<Vec<_>>(),
                     }),
                 )?;
@@ -578,21 +624,15 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
             if visible_representations.is_empty() {
                 continue;
             }
-            let (method, path, pattern) = match &operation.kind {
-                OperationKind::List => (
-                    "get",
-                    format!("/v2/resources/{}/records", resource.id),
-                    "list",
-                ),
+            let (method, path) = match &operation.kind {
+                OperationKind::List => ("get", format!("/v2/resources/{}/records", resource.id)),
                 OperationKind::Read => (
                     "get",
                     format!("/v2/resources/{}/records/{{recordIdentifier}}", resource.id),
-                    "retrieve",
                 ),
                 OperationKind::Lookup { name } => (
                     "post",
                     format!("/v2/resources/{}/lookups/{name}", resource.id),
-                    "search",
                 ),
             };
             let has_public = visible_representations
@@ -640,6 +680,18 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "description": "Duplicate-free comma-separated subset of the selected representation"
                 }),
             ];
+            let has_geojson = visible_representations
+                .iter()
+                .any(|representation| supports_geojson(resource, representation));
+            if has_geojson {
+                parameters.push(json!({
+                    "name": "profile",
+                    "in": "query",
+                    "required": false,
+                    "schema": {"type": "string", "enum": ["rfc7946", "jsonfg"], "default": "rfc7946"},
+                    "description": "GeoJSON profile. Valid only with Accept: application/geo+json."
+                }));
+            }
             match &operation.kind {
                 OperationKind::List => {
                     let pagination = operation
@@ -658,6 +710,26 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                             "x-registry-exact-equality": true,
                         }));
                     }
+                    if let Some(bbox) = &operation.query.spatial_bbox {
+                        parameters.push(json!({
+                            "name": "bbox",
+                            "in": "query",
+                            "required": false,
+                            "style": "form",
+                            "explode": false,
+                            "schema": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                                "minItems": 4,
+                                "maxItems": 4
+                            },
+                            "description": "Inclusive CRS84 point bounds: west,south,east,north",
+                            "x-registry-spatial-predicate": "exact-point-intersection",
+                            "x-registry-crs": CRS84_URI,
+                            "x-registry-maximum-longitude-span-degrees": bbox.maximum_longitude_span_degrees,
+                            "x-registry-maximum-latitude-span-degrees": bbox.maximum_latitude_span_degrees,
+                        }));
+                    }
                 }
                 OperationKind::Read => parameters.push(json!({
                     "name": "recordIdentifier", "in": "path", "required": true,
@@ -665,10 +737,33 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 })),
                 OperationKind::Lookup { .. } => {}
             }
+            let mut success_response = json!({
+                "description": "A validated minimum-disclosure Registry response",
+                "content": operation_response_content(
+                    registry,
+                    operation,
+                    resource,
+                    &visible_representations,
+                )
+            });
+            if has_geojson {
+                success_response
+                    .as_object_mut()
+                    .expect("response object")
+                    .insert(
+                        "headers".into(),
+                        json!({
+                            "Link": {
+                                "description": "Selected RFC 7946 or JSON-FG profile link for GeoJSON responses",
+                                "schema": {"type": "string"}
+                            }
+                        }),
+                    );
+            }
             let mut operation_value = json!({
                 "operationId": operation.identifier,
                 "x-registry-family": "consultation",
-                "x-registry-pattern": pattern,
+                "x-registry-pattern": consultation_pattern(operation.pattern),
                 "x-registry-representations": visible_representations.iter().map(|representation| json!({
                     "identifier": representation.id,
                     "default": operation.default_representation == representation.id,
@@ -679,17 +774,12 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                     "schemaReference": representation.schema_reference,
                     "semanticModelReference": representation.semantic_model_reference,
                     "contextReference": representation.context_reference,
+                    "formats": response_format_documents(resource, representation),
                 })).collect::<Vec<_>>(),
                 "security": security,
                 "parameters": parameters,
                 "responses": {
-                    "200": {
-                        "description": "A validated minimum-disclosure Registry response",
-                        "content": {
-                            "application/json": {"schema": operation_response_schema(operation, &visible_representations)},
-                            "application/ld+json": {"schema": operation_response_schema(operation, &visible_representations)}
-                        }
-                    },
+                    "200": success_response,
                     "default": {"$ref": "#/components/responses/Problem"}
                 }
             });
@@ -836,6 +926,274 @@ fn operation_response_schema(
     }
 }
 
+fn operation_response_content(
+    registry: &CompiledRegistry,
+    operation: &CompiledOperation,
+    resource: &CompiledResource,
+    representations: &[&crate::model::CompiledRepresentation],
+) -> Value {
+    let ordinary = operation_response_schema(operation, representations);
+    let mut content = Map::from_iter([
+        (
+            "application/json".into(),
+            json!({"schema": ordinary.clone()}),
+        ),
+        ("application/ld+json".into(), json!({"schema": ordinary})),
+    ]);
+    let spatial = representations
+        .iter()
+        .filter(|representation| supports_geojson(resource, representation))
+        .map(|representation| {
+            geojson_response_schema(registry, operation, representation, resource, false)
+        })
+        .collect::<Vec<_>>();
+    if !spatial.is_empty() {
+        let schema = if spatial.len() == 1 {
+            spatial.into_iter().next().expect("one spatial schema")
+        } else {
+            json!({"oneOf": spatial})
+        };
+        content.insert("application/geo+json".into(), json!({"schema": schema}));
+    }
+    Value::Object(content)
+}
+
+fn geojson_response_schema(
+    registry: &CompiledRegistry,
+    operation: &CompiledOperation,
+    representation: &crate::model::CompiledRepresentation,
+    resource: &CompiledResource,
+    include_identity: bool,
+) -> Value {
+    let mut schema = match &operation.kind {
+        OperationKind::List => json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "features", "pageInfo", "meta"],
+            "properties": {
+                "type": {"type": "string", "enum": ["FeatureCollection"]},
+                "features": {
+                    "type": "array",
+                    "items": geojson_feature_schema(registry, representation, resource, false)
+                },
+                "pageInfo": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["nextCursor"],
+                    "properties": {"nextCursor": {"type": ["string", "null"]}}
+                },
+                "meta": {"type": "object"},
+                "conformsTo": json_fg_conforms_to_schema(),
+                "featureType": {"type": "string", "enum": [resource.id]}
+            },
+            "dependentRequired": {
+                "conformsTo": ["featureType"],
+                "featureType": ["conformsTo"]
+            }
+        }),
+        OperationKind::Read | OperationKind::Lookup { .. } => {
+            geojson_feature_schema(registry, representation, resource, true)
+        }
+    };
+    if include_identity {
+        schema
+            .as_object_mut()
+            .expect("GeoJSON schema object")
+            .insert(
+                "$schema".into(),
+                json!("https://json-schema.org/draft/2020-12/schema"),
+            );
+        schema
+            .as_object_mut()
+            .expect("GeoJSON schema object")
+            .insert(
+                "$id".into(),
+                json!(representation
+                    .schema_reference
+                    .strip_suffix("-schema")
+                    .map(|base| format!("{base}-geojson-schema"))
+                    .unwrap_or_else(|| format!("{}-geojson", representation.schema_reference))),
+            );
+    }
+    schema
+}
+
+fn geojson_feature_schema(
+    registry: &CompiledRegistry,
+    representation: &crate::model::CompiledRepresentation,
+    resource: &CompiledResource,
+    require_meta: bool,
+) -> Value {
+    let mut required = vec![
+        json!("type"),
+        json!("id"),
+        json!("geometry"),
+        json!("properties"),
+    ];
+    if require_meta {
+        required.push(json!("meta"));
+    }
+    let mut properties = json!({
+        "type": {"type": "string", "enum": ["Feature"]},
+        "id": {"type": "string", "minLength": 1},
+        "geometry": {
+            "oneOf": [point_geometry_schema(), {"type": "null"}]
+        },
+        "properties": geojson_record_properties_schema(registry, representation, resource)
+    });
+    if require_meta {
+        let properties = properties
+            .as_object_mut()
+            .expect("Feature properties schema is an object");
+        properties.insert("meta".into(), json!({"type": "object"}));
+        properties.insert("conformsTo".into(), json_fg_conforms_to_schema());
+        properties.insert(
+            "featureType".into(),
+            json!({"type": "string", "enum": [resource.id]}),
+        );
+    }
+    let mut schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required,
+        "properties": properties
+    });
+    if require_meta {
+        schema
+            .as_object_mut()
+            .expect("Feature schema is an object")
+            .insert(
+                "dependentRequired".into(),
+                json!({
+                    "conformsTo": ["featureType"],
+                    "featureType": ["conformsTo"]
+                }),
+            );
+    }
+    schema
+}
+
+fn geojson_record_properties_schema(
+    registry: &CompiledRegistry,
+    representation: &crate::model::CompiledRepresentation,
+    resource: &CompiledResource,
+) -> Value {
+    let geometry_name = resource
+        .primary_geometry
+        .as_ref()
+        .map(|geometry| geometry.name.as_str());
+    let selected = representation
+        .selectable_properties
+        .iter()
+        .filter(|property| Some(property.as_str()) != geometry_name)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut schema = representation_schema(
+        registry,
+        resource,
+        &selected,
+        &representation.schema_reference,
+        &representation.semantic_model_reference,
+    );
+    let object = schema
+        .as_object_mut()
+        .expect("Registry Record schema is an object");
+    object.remove("$schema");
+    object.remove("$id");
+    schema
+}
+
+fn point_geometry_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "coordinates"],
+        "properties": {
+            "type": {"type": "string", "enum": ["Point"]},
+            "coordinates": {
+                "type": "array",
+                "prefixItems": [
+                    {"type": "number", "minimum": -180, "maximum": 180},
+                    {"type": "number", "minimum": -90, "maximum": 90}
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+            }
+        }
+    })
+}
+
+fn json_fg_conforms_to_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "string",
+            "enum": [JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE]
+        },
+        "minItems": 2,
+        "maxItems": 2,
+        "uniqueItems": true
+    })
+}
+
+fn consultation_pattern(pattern: ConsultationPattern) -> &'static str {
+    match pattern {
+        ConsultationPattern::List => "list",
+        ConsultationPattern::Retrieve => "retrieve",
+        ConsultationPattern::Search => "search",
+    }
+}
+
+fn supports_geojson(
+    resource: &CompiledResource,
+    representation: &crate::model::CompiledRepresentation,
+) -> bool {
+    resource.primary_geometry.as_ref().is_some_and(|geometry| {
+        representation
+            .selectable_properties
+            .iter()
+            .any(|property| property == &geometry.name)
+    })
+}
+
+fn response_format_documents(
+    resource: &CompiledResource,
+    representation: &crate::model::CompiledRepresentation,
+) -> Vec<Value> {
+    let mut formats = vec![
+        json!({"id": "json", "mediaType": "application/json", "profiles": []}),
+        json!({"id": "json-ld", "mediaType": "application/ld+json", "profiles": []}),
+    ];
+    if supports_geojson(resource, representation) {
+        formats.push(json!({
+            "id": "geojson",
+            "mediaType": "application/geo+json",
+            "profiles": [
+                representation_profile(RepresentationProfile::Rfc7946),
+                representation_profile(RepresentationProfile::JsonFg),
+            ],
+        }));
+    }
+    formats
+}
+
+fn representation_profile(profile: RepresentationProfile) -> Value {
+    match profile {
+        RepresentationProfile::Rfc7946 => json!({
+            "id": "rfc7946",
+            "uri": RFC7946_PROFILE_URI,
+            "crs": CRS84_URI,
+        }),
+        RepresentationProfile::JsonFg => json!({
+            "id": "jsonfg",
+            "uri": JSON_FG_PROFILE_URI,
+            "crs": CRS84_URI,
+            "conformsTo": [JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE],
+        }),
+    }
+}
+
 fn openapi_type(data_type: crate::contract::DataType) -> Value {
     use crate::contract::DataType;
     match data_type {
@@ -906,6 +1264,15 @@ fn capability_inventory(
                         "schemaReference": representation.schema_reference,
                         "semanticModelReference": representation.semantic_model_reference,
                         "contextReference": representation.context_reference,
+                        "formats": response_format_documents(resource, representation),
+                        "spatialQuery": operation.query.spatial_bbox.as_ref().map(|spatial| json!({
+                            "bbox": {
+                                "crs": CRS84_URI,
+                                "predicate": "exact-point-intersection",
+                                "maximumLongitudeSpanDegrees": spatial.maximum_longitude_span_degrees,
+                                "maximumLatitudeSpanDegrees": spatial.maximum_latitude_span_degrees,
+                            }
+                        })),
                     }))
                 })
             })
@@ -979,7 +1346,7 @@ mod tests {
     use super::*;
     use crate::compiler::{compile_contract_with_governed_files, tests as compiler_tests};
     use crate::contract::RegistryContract;
-    use crate::model::CompileProfile;
+    use crate::model::{CompileProfile, CompiledRegistry};
 
     #[test]
     fn generated_inventory_covers_required_v1_artifact_classes_only() {
@@ -1166,5 +1533,183 @@ mod tests {
                 Visibility::OperatorOnly
             );
         }
+    }
+
+    #[test]
+    fn spatial_artifacts_are_deterministic_bounded_and_carrier_free() {
+        let registry = spatial_registry(CompiledAccess::Public);
+        let generated = generate_artifacts(&registry).expect("spatial artifacts generate");
+        assert_eq!(
+            generated,
+            generate_artifacts(&registry).expect("repeat generation")
+        );
+
+        let geojson_schema = generated
+            .get("artifacts/record--list--representation-public.geojson.schema.json")
+            .expect("GeoJSON wrapper schema");
+        let schema: Value = serde_json::from_slice(&geojson_schema.content).expect("schema JSON");
+        assert_eq!(schema["properties"]["type"]["enum"][0], "FeatureCollection");
+        assert_eq!(
+            schema["properties"]["features"]["items"]["properties"]["geometry"]["oneOf"][0]
+                ["properties"]["type"]["enum"][0],
+            "Point"
+        );
+        let coordinates = &schema["properties"]["features"]["items"]["properties"]["geometry"]
+            ["oneOf"][0]["properties"]["coordinates"];
+        assert_eq!(coordinates["prefixItems"][0]["minimum"], -180);
+        assert_eq!(coordinates["prefixItems"][0]["maximum"], 180);
+        assert_eq!(coordinates["prefixItems"][1]["minimum"], -90);
+        assert_eq!(coordinates["prefixItems"][1]["maximum"], 90);
+        assert_eq!(coordinates["items"], false);
+
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .expect("generated GeoJSON schema compiles");
+        let resource = &registry.resources[0];
+        let operation = &resource.operations[0];
+        let representation = &operation.representations[0];
+        let lifecycle = registry.codelists[0].values[0].clone();
+        let point = json!({"type": "Point", "coordinates": [100.0, 13.0]});
+        let record = json!({
+            "registryIdentifier": registry.registry_identifier,
+            "recordIdentifier": "record-1",
+            "revisionIdentifier": "revision-1",
+            "lifecycleState": lifecycle,
+            "schemaReference": representation.schema_reference,
+            "semanticModelReference": representation.semantic_model_reference,
+            "authorityIdentifier": registry.authority_identifier,
+            "recordedAt": "2026-08-10T00:00:00Z",
+            "domainData": {"name": "Example"}
+        });
+        let feature = json!({
+            "type": "Feature",
+            "id": "https://example.invalid/records/record-1",
+            "geometry": point,
+            "properties": record
+        });
+        let rfc_response = json!({
+            "type": "FeatureCollection",
+            "features": [feature],
+            "pageInfo": {"nextCursor": null},
+            "meta": {}
+        });
+        assert!(validator.is_valid(&rfc_response));
+
+        let mut json_fg_response = rfc_response.clone();
+        json_fg_response["conformsTo"] =
+            json!([JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE]);
+        json_fg_response["featureType"] = json!(resource.id);
+        assert!(validator.is_valid(&json_fg_response));
+
+        let mut nested_json_fg_metadata = json_fg_response.clone();
+        nested_json_fg_metadata["features"][0]["conformsTo"] =
+            json!([JSON_FG_CORE_CONFORMANCE, JSON_FG_TYPES_CONFORMANCE]);
+        nested_json_fg_metadata["features"][0]["featureType"] = json!(resource.id);
+        assert!(
+            !validator.is_valid(&nested_json_fg_metadata),
+            "JSON-FG conformance metadata is permitted only on the root object"
+        );
+
+        let mut duplicate_geometry = rfc_response;
+        duplicate_geometry["features"][0]["properties"]["domainData"]["location"] =
+            json!({"type": "Point", "coordinates": [101.0, 14.0]});
+        assert!(
+            !validator.is_valid(&duplicate_geometry),
+            "Feature geometry cannot be repeated or contradicted in properties.domainData"
+        );
+
+        let openapi: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.public.json")
+                .expect("public OpenAPI")
+                .content,
+        )
+        .expect("OpenAPI JSON");
+        serde_json::from_value::<utoipa::openapi::OpenApi>(openapi.clone())
+            .expect("spatial OpenAPI conforms to the maintained OpenAPI model");
+        let operation = &openapi["paths"]["/v2/resources/record/records"]["get"];
+        assert_eq!(operation["x-registry-pattern"], "search");
+        assert!(operation["responses"]["200"]["content"]
+            .get("application/geo+json")
+            .is_some());
+        let bbox = operation["parameters"]
+            .as_array()
+            .expect("parameters")
+            .iter()
+            .find(|parameter| parameter["name"] == "bbox")
+            .expect("bbox parameter");
+        assert_eq!(bbox["schema"]["minItems"], 4);
+        assert_eq!(bbox["explode"], false);
+
+        let capabilities = generated
+            .get("artifacts/capabilities.json")
+            .expect("public capabilities");
+        let encoded = String::from_utf8(capabilities.content.clone()).expect("UTF-8 capability");
+        assert!(encoded.contains("exact-point-intersection"));
+        assert!(encoded.contains(JSON_FG_PROFILE_URI));
+        assert!(!encoded.contains("longitude_col"));
+        assert!(!encoded.contains("latitude_col"));
+        assert!(!encoded.to_ascii_lowercase().contains("spatialite"));
+        assert!(!encoded.to_ascii_lowercase().contains("geopackage"));
+        assert!(!encoded.contains("ogcapi-features"));
+    }
+
+    #[test]
+    fn public_projection_does_not_reveal_protected_spatial_capability() {
+        let registry = spatial_registry(CompiledAccess::Protected {
+            scope: "registry:spatial:read".into(),
+            purpose: None,
+            row_binding: None,
+        });
+        let generated = generate_artifacts(&registry).expect("spatial artifacts generate");
+        let public_openapi = String::from_utf8(
+            generated
+                .get("openapi.public.json")
+                .expect("public OpenAPI")
+                .content
+                .clone(),
+        )
+        .expect("UTF-8 OpenAPI");
+        let public_capabilities = String::from_utf8(
+            generated
+                .get("artifacts/capabilities.json")
+                .expect("public capabilities")
+                .content
+                .clone(),
+        )
+        .expect("UTF-8 capabilities");
+        assert!(!public_openapi.contains("application/geo+json"));
+        assert!(!public_openapi.contains("exact-point-intersection"));
+        assert!(!public_capabilities.contains("application/geo+json"));
+        assert!(!public_capabilities.contains("exact-point-intersection"));
+
+        let operation_capability = generated
+            .get("artifacts/record--list--representation-public.capability.json")
+            .expect("operation-bound capability");
+        assert_eq!(operation_capability.visibility, Visibility::OperationBound);
+        assert_eq!(
+            operation_capability.operation_identifier.as_deref(),
+            Some("record.list")
+        );
+        let encoded = String::from_utf8(operation_capability.content.clone())
+            .expect("UTF-8 operation capability");
+        assert!(encoded.contains("application/geo+json"));
+        assert!(!encoded.contains("longitude_col"));
+        assert!(!encoded.contains("latitude_col"));
+    }
+
+    fn spatial_registry(access: CompiledAccess) -> CompiledRegistry {
+        let contract = compiler_tests::spatial_contract(true);
+        let governed_files = compiler_tests::governed_files_for(&contract);
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::spatial_observed_schema()],
+            CompileProfile::Production,
+            &governed_files,
+        )
+        .expect("contract compiles");
+        registry.resources[0].operations[0].representations[0].access = access;
+        registry
     }
 }

@@ -50,6 +50,9 @@ pub enum ChangeClass {
     PropertyAdded,
     PropertyRemoved,
     PropertyMeaningChanged,
+    GeometryAdded,
+    GeometryRemoved,
+    GeometryChanged,
     TransformationChanged,
     HandlingRelaxed,
     HandlingTightened,
@@ -64,6 +67,11 @@ pub enum ChangeClass {
     FilterAdded,
     FilterRemoved,
     FilterChanged,
+    SpatialQueryAdded,
+    SpatialQueryRemoved,
+    SpatialQueryExpanded,
+    SpatialQueryNarrowed,
+    SpatialQueryChanged,
     UnfilteredEnabled,
     UnfilteredDisabled,
     SelectorChanged,
@@ -250,13 +258,13 @@ fn diff_resource(
             "a Registry Core binding or reference changed",
         );
     }
-    if previous.column_accounting != current.column_accounting {
+    if !same_column_classifications(&previous.column_accounting, &current.column_accounting) {
         push(
             changes,
             ChangeClass::ClassificationChanged,
             ChangeImpact::Breaking,
             format!("{root}.sourceColumnClassifications"),
-            "effective classifications or uses of reviewed source columns changed",
+            "effective classifications of reviewed source columns changed",
         );
     }
     if previous.processing_descriptions != current.processing_descriptions {
@@ -267,6 +275,71 @@ fn diff_resource(
             format!("{root}.processingDescriptions"),
             "the reviewed processing description set changed",
         );
+    }
+    match (&previous.primary_geometry, &current.primary_geometry) {
+        (None, Some(_)) => push(
+            changes,
+            ChangeClass::GeometryAdded,
+            ChangeImpact::Widening,
+            format!("{root}.primaryGeometry"),
+            "a publishable primary geometry was added",
+        ),
+        (Some(_), None) => push(
+            changes,
+            ChangeClass::GeometryRemoved,
+            ChangeImpact::Breaking,
+            format!("{root}.primaryGeometry"),
+            "the primary geometry was removed",
+        ),
+        (Some(before), Some(after)) => {
+            let location = format!("{root}.primaryGeometry");
+            if before.name != after.name
+                || before.label != after.label
+                || before.description != after.description
+                || before.semantic_iri != after.semantic_iri
+                || before.source_required != after.source_required
+                || before.crs != after.crs
+                || before.longitude_column != after.longitude_column
+                || before.latitude_column != after.latitude_column
+            {
+                push(
+                    changes,
+                    ChangeClass::GeometryChanged,
+                    ChangeImpact::Breaking,
+                    location.clone(),
+                    "the primary geometry name, documentation, meaning, source binding, CRS, or requiredness changed",
+                );
+            }
+            if after.classification.handling < before.classification.handling {
+                push(
+                    changes,
+                    ChangeClass::HandlingRelaxed,
+                    ChangeImpact::Widening,
+                    format!("{location}.classification.handling"),
+                    "primary geometry handling became less restrictive",
+                );
+            } else if after.classification.handling > before.classification.handling {
+                push(
+                    changes,
+                    ChangeClass::HandlingTightened,
+                    ChangeImpact::Narrowing,
+                    format!("{location}.classification.handling"),
+                    "primary geometry handling became more restrictive",
+                );
+            }
+            if classification_context(&before.classification)
+                != classification_context(&after.classification)
+            {
+                push(
+                    changes,
+                    ChangeClass::ClassificationChanged,
+                    ChangeImpact::Breaking,
+                    format!("{location}.classification"),
+                    "primary geometry privacy, institutional, review, scheme, version, or provenance classification changed",
+                );
+            }
+        }
+        _ => {}
     }
 
     let before_properties = previous
@@ -494,6 +567,12 @@ fn diff_operation(
             _ => {}
         }
     }
+    diff_spatial_query(
+        previous.query.spatial_bbox.as_ref(),
+        current.query.spatial_bbox.as_ref(),
+        location,
+        changes,
+    );
     match (
         previous.query.allow_unfiltered,
         current.query.allow_unfiltered,
@@ -620,6 +699,72 @@ fn diff_representation(
     diff_access(&previous.access, &current.access, location, changes);
 }
 
+fn diff_spatial_query(
+    previous: Option<&crate::model::CompiledSpatialBboxQuery>,
+    current: Option<&crate::model::CompiledSpatialBboxQuery>,
+    location: &str,
+    changes: &mut Vec<ContractChange>,
+) {
+    match (previous, current) {
+        (None, Some(_)) => push(
+            changes,
+            ChangeClass::SpatialQueryAdded,
+            ChangeImpact::Widening,
+            format!("{location}.spatialQuery.bbox"),
+            "an exact point bbox query was added",
+        ),
+        (Some(_), None) => push(
+            changes,
+            ChangeClass::SpatialQueryRemoved,
+            ChangeImpact::Breaking,
+            format!("{location}.spatialQuery.bbox"),
+            "the exact point bbox query was removed",
+        ),
+        (Some(before), Some(after)) if before != after => {
+            let location = format!("{location}.spatialQuery.bbox");
+            if before.longitude_column != after.longitude_column
+                || before.latitude_column != after.latitude_column
+            {
+                push(
+                    changes,
+                    ChangeClass::SpatialQueryChanged,
+                    ChangeImpact::Breaking,
+                    location,
+                    "the exact point bbox source binding changed",
+                );
+            } else {
+                let expanded = after.maximum_longitude_span_degrees
+                    >= before.maximum_longitude_span_degrees
+                    && after.maximum_latitude_span_degrees >= before.maximum_latitude_span_degrees;
+                let narrowed = after.maximum_longitude_span_degrees
+                    <= before.maximum_longitude_span_degrees
+                    && after.maximum_latitude_span_degrees <= before.maximum_latitude_span_degrees;
+                let (class, impact, description) = if expanded {
+                    (
+                        ChangeClass::SpatialQueryExpanded,
+                        ChangeImpact::Widening,
+                        "the accepted bbox span expanded",
+                    )
+                } else if narrowed {
+                    (
+                        ChangeClass::SpatialQueryNarrowed,
+                        ChangeImpact::Narrowing,
+                        "the accepted bbox span narrowed",
+                    )
+                } else {
+                    (
+                        ChangeClass::SpatialQueryChanged,
+                        ChangeImpact::Breaking,
+                        "the bbox span bounds changed non-monotonically",
+                    )
+                };
+                push(changes, class, impact, location, description);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn classification_context(
     value: &crate::model::EffectiveClassification,
 ) -> (
@@ -642,6 +787,16 @@ fn classification_context(
         value.status,
         &value.provenance_ref,
     )
+}
+
+fn same_column_classifications(
+    previous: &[crate::model::ColumnAccount],
+    current: &[crate::model::ColumnAccount],
+) -> bool {
+    previous.len() == current.len()
+        && previous.iter().zip(current).all(|(before, after)| {
+            before.column == after.column && before.classification == after.classification
+        })
 }
 
 fn diff_pagination(
@@ -1088,5 +1243,136 @@ mod tests {
             .changes
             .iter()
             .any(|change| change.class == ChangeClass::RequestBoundExpanded));
+    }
+
+    #[test]
+    fn spatial_changes_are_explicitly_classified() {
+        let previous = compiled();
+        let mut current = previous.clone();
+        let classification = current.resources[0].properties[0].classification.clone();
+        current.resources[0].primary_geometry = Some(crate::model::CompiledPrimaryGeometry {
+            name: "location".into(),
+            label: "Location".into(),
+            description: "Authoritative point".into(),
+            semantic_iri: "https://example.invalid/location".into(),
+            source_required: true,
+            crs: "http://www.opengis.net/def/crs/OGC/0/CRS84".into(),
+            longitude_column: "longitude".into(),
+            latitude_column: "latitude".into(),
+            classification,
+        });
+        let operation = &mut current.resources[0].operations[0];
+        operation.representations[0]
+            .selectable_properties
+            .push("location".into());
+        operation.representations[0]
+            .projected_columns
+            .extend(["longitude".into(), "latitude".into()]);
+        operation.query.spatial_bbox = Some(crate::model::CompiledSpatialBboxQuery {
+            longitude_column: "longitude".into(),
+            latitude_column: "latitude".into(),
+            maximum_longitude_span_degrees: 10,
+            maximum_latitude_span_degrees: 10,
+        });
+
+        let report = diff_registries(&previous, &current);
+        for class in [
+            ChangeClass::GeometryAdded,
+            ChangeClass::DisclosureExpanded,
+            ChangeClass::SpatialQueryAdded,
+        ] {
+            assert!(
+                report.changes.iter().any(|change| change.class == class),
+                "missing {class:?}"
+            );
+        }
+
+        let mut expanded = current.clone();
+        expanded.resources[0].operations[0]
+            .query
+            .spatial_bbox
+            .as_mut()
+            .expect("bbox")
+            .maximum_longitude_span_degrees = 20;
+        let report = diff_registries(&current, &expanded);
+        assert!(report
+            .changes
+            .iter()
+            .any(|change| change.class == ChangeClass::SpatialQueryExpanded));
+    }
+
+    #[test]
+    fn spatial_query_use_changes_do_not_masquerade_as_classification_changes() {
+        let previous = compiled();
+        let mut added = previous.clone();
+        let operation_identifier = added.resources[0].operations[0].identifier.clone();
+        added.resources[0].operations[0].query.spatial_bbox =
+            Some(crate::model::CompiledSpatialBboxQuery {
+                longitude_column: "name".into(),
+                latitude_column: "name".into(),
+                maximum_longitude_span_degrees: 10,
+                maximum_latitude_span_degrees: 10,
+            });
+        added.resources[0]
+            .column_accounting
+            .iter_mut()
+            .find(|account| account.column == "name")
+            .expect("published property column is accounted")
+            .uses
+            .push(crate::model::ColumnUse::SpatialBbox(operation_identifier));
+
+        let report = diff_registries(&previous, &added);
+        assert_eq!(
+            report
+                .changes
+                .iter()
+                .map(|change| (change.class, change.impact))
+                .collect::<Vec<_>>(),
+            [(ChangeClass::SpatialQueryAdded, ChangeImpact::Widening)]
+        );
+
+        let mut expanded = added.clone();
+        expanded.resources[0].operations[0]
+            .query
+            .spatial_bbox
+            .as_mut()
+            .expect("bbox")
+            .maximum_longitude_span_degrees = 20;
+        let report = diff_registries(&added, &expanded);
+        assert_eq!(
+            report
+                .changes
+                .iter()
+                .map(|change| (change.class, change.impact))
+                .collect::<Vec<_>>(),
+            [(ChangeClass::SpatialQueryExpanded, ChangeImpact::Widening)]
+        );
+
+        let mut narrowed = expanded.clone();
+        narrowed.resources[0].operations[0]
+            .query
+            .spatial_bbox
+            .as_mut()
+            .expect("bbox")
+            .maximum_longitude_span_degrees = 5;
+        let report = diff_registries(&expanded, &narrowed);
+        assert_eq!(
+            report
+                .changes
+                .iter()
+                .map(|change| (change.class, change.impact))
+                .collect::<Vec<_>>(),
+            [(ChangeClass::SpatialQueryNarrowed, ChangeImpact::Narrowing)]
+        );
+
+        let report = diff_registries(&added, &previous);
+        assert_eq!(
+            report
+                .changes
+                .iter()
+                .map(|change| (change.class, change.impact))
+                .collect::<Vec<_>>(),
+            [(ChangeClass::SpatialQueryRemoved, ChangeImpact::Breaking)]
+        );
     }
 }

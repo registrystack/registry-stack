@@ -17,6 +17,7 @@ claim. The obsolete Digital Registries OpenAPI is not an input.
 | Consultation Retrieve | Identifier read is compiled only when the resource declares `read`. |
 | Consultation List | Deterministic list is compiled only when the resource declares `list`; pagination and filters are closed. |
 | Consultation Search | A named exact lookup is the only accepted search-shaped operation. It returns one governed Record or the unresolved outcome. |
+| Bounded spatial consultation | An opted point list with required bounded `bbox` is derived as `consultation.search`; it remains the same fixed consultation route and does not create an OGC API Features service. |
 | Registry semantics | Every resource and property has a stable local semantic identity; JSON-LD, JSON Schema, and SHACL artifacts are compiler outputs. |
 | Governed representations | A compiled operation may expose only its finite reviewed representations, each with its own access, disclosure, semantic, schema, SHACL, JSON-LD, classification, and processing artifact. This is controlled publication, not content negotiation or dynamic ABAC. |
 | Data governance review | Schema-only identification supplies deterministic review evidence. Classification remains Registry Authority review metadata and constrains compilation; it never grants an entitlement or becomes a remote runtime policy. |
@@ -28,6 +29,12 @@ claim. The obsolete Digital Registries OpenAPI is not an input.
 
 - Exact lookup is not Record Match. Relay emits no candidates, confidence, or
   explanation.
+- The point profile is not OGC API Features, CQL2, EDR, tiles, a coordinate
+  transformation service, or a generic spatial database API. It supports only
+  classified CRS84 Points from reviewed longitude and latitude columns and
+  exact inclusive, non-wrapping, bounded `bbox` containment.
+- GeoPackage and SpatiaLite are future source-profile work. Relay neither
+  loads SQLite extensions nor accepts or emits GeoPackage geometry blobs.
 - Version 1 does not negotiate response language. Authored semantic labels
   retain their language metadata.
 - Registry Manifest, machine-readable GovStack alignment, DPV projection, and

@@ -61,6 +61,8 @@ SECURITY_INVARIANT_IDS = {
     "sec-audit-release-gate",
     "sec-audit-correlation-and-minimization",
     "sec-cursor-integrity",
+    "sec-spatial-disclosure-confinement",
+    "sec-spatial-query-confinement",
     "sec-source-truthfulness",
     "sec-value-free-diagnostics",
     "sec-value-free-operational-logs",

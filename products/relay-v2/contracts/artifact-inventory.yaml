@@ -17,6 +17,12 @@ artifacts:
     source: compiled-resource
     generated: true
     invariant: One artifact exists per compiled operation representation and validates mandatory Registry Core with every allowed selected-profile domainData subset.
+  - id: geojson-response-schema
+    mediaType: application/schema+json
+    visibility: operation-compatible
+    source: compiled-operation-representation
+    generated: true
+    invariant: Exists only when a selected governed representation discloses the resource primary Point geometry and validates its RFC 7946 or JSON-FG response shape.
   - id: representation-shacl
     mediaType: text/turtle
     visibility: operation-compatible

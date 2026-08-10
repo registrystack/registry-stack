@@ -66,6 +66,37 @@ pub struct OperationQuery {
     pub row_authority: Option<RowAuthority>,
     pub after_order: Option<Vec<Value>>,
     pub fetch_limit: Option<u32>,
+    pub bbox: Option<PointBbox>,
+}
+
+/// A validated CRS84 point bounding box. Runtime callers construct this only
+/// after applying the operation's compiled range and span limits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointBbox {
+    pub west: f64,
+    pub south: f64,
+    pub east: f64,
+    pub north: f64,
+}
+
+impl PointBbox {
+    fn is_valid(self) -> bool {
+        [self.west, self.south, self.east, self.north]
+            .into_iter()
+            .all(f64::is_finite)
+            && (-180.0..=180.0).contains(&self.west)
+            && (-180.0..=180.0).contains(&self.east)
+            && (-90.0..=90.0).contains(&self.south)
+            && (-90.0..=90.0).contains(&self.north)
+            && self.west <= self.east
+            && self.south <= self.north
+    }
+
+    fn is_within(self, spatial: &crate::model::CompiledSpatialBboxQuery) -> bool {
+        self.is_valid()
+            && self.east - self.west <= f64::from(spatial.maximum_longitude_span_degrees)
+            && self.north - self.south <= f64::from(spatial.maximum_latitude_span_degrees)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -370,6 +401,11 @@ fn result_columns(
 }
 
 fn column_type(resource: &CompiledResource, column: &str) -> ColumnType {
+    if resource.primary_geometry.as_ref().is_some_and(|geometry| {
+        geometry.longitude_column == column || geometry.latitude_column == column
+    }) {
+        return ColumnType::Number;
+    }
     resource
         .properties
         .iter()
@@ -406,6 +442,24 @@ fn list_sql(
         predicates.push(format!(
             "(:{present} = 0 OR {} = :{value})",
             quote_identifier(&filter.source_column)
+        ));
+    }
+    if let Some(spatial) = &operation.query.spatial_bbox {
+        for name in [
+            "bbox_present",
+            "bbox_west",
+            "bbox_south",
+            "bbox_east",
+            "bbox_north",
+        ] {
+            parameters.push(parameter(name));
+        }
+        predicates.push(format!(
+            "(:bbox_present = 0 OR ({} >= :bbox_south AND {} <= :bbox_north AND {} >= :bbox_west AND {} <= :bbox_east))",
+            quote_identifier(&spatial.latitude_column),
+            quote_identifier(&spatial.latitude_column),
+            quote_identifier(&spatial.longitude_column),
+            quote_identifier(&spatial.longitude_column),
         ));
     }
     add_row_authority(representation, parameters, &mut predicates);
@@ -558,6 +612,35 @@ fn bind_operation_values(
                 );
                 values.insert(format!("filter_{index}"), value.unwrap_or(Value::Null));
             }
+            match (&operation.query.spatial_bbox, query.bbox) {
+                (Some(spatial), bbox) => {
+                    if bbox.is_some_and(|value| !value.is_within(spatial)) {
+                        return Err(SqliteRuntimeError::InvalidPlan);
+                    }
+                    values.insert(
+                        "bbox_present".into(),
+                        Value::Integer(i64::from(bbox.is_some())),
+                    );
+                    values.insert(
+                        "bbox_west".into(),
+                        bbox.map_or(Value::Null, |value| Value::Number(value.west)),
+                    );
+                    values.insert(
+                        "bbox_south".into(),
+                        bbox.map_or(Value::Null, |value| Value::Number(value.south)),
+                    );
+                    values.insert(
+                        "bbox_east".into(),
+                        bbox.map_or(Value::Null, |value| Value::Number(value.east)),
+                    );
+                    values.insert(
+                        "bbox_north".into(),
+                        bbox.map_or(Value::Null, |value| Value::Number(value.north)),
+                    );
+                }
+                (None, None) => {}
+                (None, Some(_)) => return Err(SqliteRuntimeError::InvalidPlan),
+            }
             let after = query.after_order.unwrap_or_default();
             if !after.is_empty() && after.len() != operation.query.order_by.len() {
                 return Err(SqliteRuntimeError::InvalidPlan);
@@ -580,6 +663,9 @@ fn bind_operation_values(
             );
         }
         OperationKind::Read => {
+            if query.bbox.is_some() {
+                return Err(SqliteRuntimeError::InvalidPlan);
+            }
             values.insert(
                 "record_identifier".into(),
                 Value::String(
@@ -590,6 +676,9 @@ fn bind_operation_values(
             );
         }
         OperationKind::Lookup { .. } => {
+            if query.bbox.is_some() {
+                return Err(SqliteRuntimeError::InvalidPlan);
+            }
             if query.selectors.len() != operation.query.selectors.len() {
                 return Err(SqliteRuntimeError::InvalidPlan);
             }
@@ -619,4 +708,71 @@ fn bind_operation_values(
         return Err(SqliteRuntimeError::InvalidPlan);
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn point_bbox_validation_is_numeric_and_crs84_bounded() {
+        assert!(PointBbox {
+            west: 100.0,
+            south: -20.0,
+            east: 101.0,
+            north: -16.0,
+        }
+        .is_valid());
+        assert!(!PointBbox {
+            west: f64::NAN,
+            south: 0.0,
+            east: 1.0,
+            north: 1.0,
+        }
+        .is_valid());
+        assert!(!PointBbox {
+            west: -181.0,
+            south: 0.0,
+            east: 1.0,
+            north: 1.0,
+        }
+        .is_valid());
+        assert!(!PointBbox {
+            west: 0.0,
+            south: 2.0,
+            east: 1.0,
+            north: 1.0,
+        }
+        .is_valid());
+    }
+
+    #[test]
+    fn point_bbox_refuses_dateline_crossing() {
+        let bbox = PointBbox {
+            west: 100.0,
+            south: 10.0,
+            east: 101.0,
+            north: 11.0,
+        };
+        assert!(bbox.is_valid());
+        assert!(bbox.is_within(&crate::model::CompiledSpatialBboxQuery {
+            longitude_column: "longitude".into(),
+            latitude_column: "latitude".into(),
+            maximum_longitude_span_degrees: 1,
+            maximum_latitude_span_degrees: 1,
+        }));
+        assert!(!bbox.is_within(&crate::model::CompiledSpatialBboxQuery {
+            longitude_column: "longitude".into(),
+            latitude_column: "latitude".into(),
+            maximum_longitude_span_degrees: 1,
+            maximum_latitude_span_degrees: 0,
+        }));
+        assert!(!PointBbox {
+            west: 177.0,
+            south: -20.0,
+            east: -178.0,
+            north: -16.0,
+        }
+        .is_valid());
+    }
 }

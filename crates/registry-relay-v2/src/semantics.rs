@@ -4,7 +4,7 @@
 use serde_json::{json, Map, Value};
 
 use crate::contract::DataType;
-use crate::model::{CompiledProperty, CompiledRegistry, CompiledResource};
+use crate::model::{CompiledPrimaryGeometry, CompiledProperty, CompiledRegistry, CompiledResource};
 
 pub fn local_vocabulary(
     registry: &CompiledRegistry,
@@ -28,6 +28,21 @@ pub fn local_vocabulary(
             "rdfs:range": {"@id": datatype_iri(property.data_type)},
             "https://id.registrystack.org/vocab/sourceRequired": property.source_required,
             "https://id.registrystack.org/vocab/codelist": property.codelist,
+        }));
+    }
+    if let Some(geometry) = selected_geometry(resource, selected) {
+        graph.push(json!({
+            "@id": geometry.semantic_iri,
+            "@type": "rdf:Property",
+            "rdfs:label": geometry.label,
+            "rdfs:comment": geometry.description,
+            "rdfs:domain": {"@id": resource.semantic_class},
+            // Relay publishes a bounded GeoJSON value. This deliberately does
+            // not claim GeoSPARQL semantics or spatial inference support.
+            "rdfs:range": {"@id": "rdf:JSON"},
+            "https://id.registrystack.org/vocab/geometryType": "Point",
+            "https://id.registrystack.org/vocab/coordinateReferenceSystem": geometry.crs,
+            "https://id.registrystack.org/vocab/sourceRequired": geometry.source_required,
         }));
     }
     json!({
@@ -60,6 +75,16 @@ pub fn json_ld_context(
         context.insert(
             field.into(),
             json!({"@id": format!("{core}{field}"), "@type": "@id"}),
+        );
+    }
+    if let Some(geometry) = selected_geometry(resource, selected) {
+        context.insert(
+            geometry.name.clone(),
+            json!({
+                "@id": geometry.semantic_iri,
+                "@nest": "domainData",
+                "@type": "@json",
+            }),
         );
     }
     for field in ["recordIdentifier", "revisionIdentifier", "lifecycleState"] {
@@ -117,6 +142,12 @@ pub fn full_record_schema(registry: &CompiledRegistry, resource: &CompiledResour
         .properties
         .iter()
         .map(|property| property.name.clone())
+        .chain(
+            resource
+                .primary_geometry
+                .iter()
+                .map(|geometry| geometry.name.clone()),
+        )
         .collect::<Vec<_>>();
     record_schema(
         registry,
@@ -150,6 +181,18 @@ fn record_schema(
         domain_properties.insert(property.name.clone(), schema);
         if full && property.source_required {
             domain_required.push(Value::String(property.name.clone()));
+        }
+    }
+    if let Some(geometry) = selected_geometry(resource, selected) {
+        let mut schema = point_geometry_schema();
+        if let Value::Object(map) = &mut schema {
+            map.insert("title".into(), json!(geometry.label));
+            map.insert("description".into(), json!(geometry.description));
+            map.insert("x-registry-crs".into(), json!(geometry.crs));
+        }
+        domain_properties.insert(geometry.name.clone(), schema);
+        if full && geometry.source_required {
+            domain_required.push(Value::String(geometry.name.clone()));
         }
     }
     let mut domain_data = json!({
@@ -190,6 +233,27 @@ fn record_schema(
     })
 }
 
+fn point_geometry_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "coordinates"],
+        "properties": {
+            "type": {"const": "Point"},
+            "coordinates": {
+                "type": "array",
+                "prefixItems": [
+                    {"type": "number", "minimum": -180, "maximum": 180},
+                    {"type": "number", "minimum": -90, "maximum": 90}
+                ],
+                "items": false,
+                "minItems": 2,
+                "maxItems": 2
+            }
+        }
+    })
+}
+
 pub fn representation_shacl(
     registry: &CompiledRegistry,
     resource: &CompiledResource,
@@ -203,6 +267,12 @@ pub fn full_record_shacl(registry: &CompiledRegistry, resource: &CompiledResourc
         .properties
         .iter()
         .map(|property| property.name.clone())
+        .chain(
+            resource
+                .primary_geometry
+                .iter()
+                .map(|geometry| geometry.name.clone()),
+        )
         .collect::<Vec<_>>();
     shacl(registry, resource, &selected, true)
 }
@@ -270,6 +340,13 @@ fn shacl(
             datatype_iri(property.data_type),
             controlled_values,
             usize::from(full && property.source_required)
+        ));
+    }
+    if let Some(geometry) = selected_geometry(resource, selected) {
+        output.push_str(&format!(
+            " ;\n  sh:property [ sh:path <{}> ; sh:datatype <http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> ; sh:minCount {} ; sh:maxCount 1 ]",
+            geometry.semantic_iri,
+            usize::from(full && geometry.source_required)
         ));
     }
     output.push_str(" .\n");
@@ -361,6 +438,16 @@ fn selected_properties<'a>(
         .collect()
 }
 
+fn selected_geometry<'a>(
+    resource: &'a CompiledResource,
+    selected: &[String],
+) -> Option<&'a CompiledPrimaryGeometry> {
+    resource
+        .primary_geometry
+        .as_ref()
+        .filter(|geometry| selected.contains(&geometry.name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,6 +530,56 @@ mod tests {
         }
     }
 
+    #[test]
+    fn point_geometry_is_bounded_without_geosparql_claims() {
+        let mut registry = registry();
+        registry
+            .codelists
+            .push(codelist("state.yaml", &["ACTIVE", "RETIRED"]));
+        let mut resource = resource();
+        resource.primary_geometry = Some(CompiledPrimaryGeometry {
+            name: "location".into(),
+            label: "Location".into(),
+            description: "Reviewed service location".into(),
+            semantic_iri: "https://example.invalid/vocab/location".into(),
+            source_required: true,
+            crs: "http://www.opengis.net/def/crs/OGC/0/CRS84".into(),
+            longitude_column: "longitude".into(),
+            latitude_column: "latitude".into(),
+            classification: resource.properties[0].classification.clone(),
+        });
+        let selected = vec!["name".into(), "location".into()];
+
+        let schema = representation_schema(
+            &registry,
+            &resource,
+            &selected,
+            "https://example.invalid/location.schema.json",
+            "https://example.invalid/location.vocabulary.jsonld",
+        );
+        assert_eq!(
+            schema["properties"]["domainData"]["properties"]["location"]["properties"]["type"]
+                ["const"],
+            "Point"
+        );
+        assert_eq!(
+            schema["properties"]["domainData"]["properties"]["location"]["properties"]
+                ["coordinates"]["prefixItems"][0]["minimum"],
+            -180
+        );
+        assert_eq!(
+            json_ld_context(&registry, &resource, &selected)["@context"]["location"]["@type"],
+            "@json"
+        );
+        let vocabulary = local_vocabulary(&registry, &resource, &selected);
+        let encoded = serde_json::to_string(&vocabulary).expect("vocabulary serializes");
+        assert!(encoded.contains("rdf:JSON"));
+        assert!(!encoded.to_ascii_lowercase().contains("geosparql"));
+        let shacl = representation_shacl(&registry, &resource, &selected);
+        assert!(shacl.contains("rdf-syntax-ns#JSON"));
+        assert!(!shacl.to_ascii_lowercase().contains("geosparql"));
+    }
+
     fn resource() -> CompiledResource {
         use crate::contract::{Handling, ReviewStatus};
         use crate::model::*;
@@ -487,6 +624,7 @@ mod tests {
                     provenance_ref: "review.yaml".into(),
                 },
             }],
+            primary_geometry: None,
             disclosure_profiles: Vec::new(),
             operations: Vec::new(),
             column_accounting: Vec::new(),

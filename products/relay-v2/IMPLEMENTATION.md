@@ -112,6 +112,21 @@ permitted-representation artifacts. The latter requires Registry Core and
 validates selectable `domainData` properties when present; the former preserves
 source requiredness and full SHACL cardinality.
 
+The spatial profile is deliberately closed. `primaryGeometry` has one name,
+semantic term, classification, requiredness, exact CRS84 identifier, and two
+reviewed SQLite source columns, `longitudeColumn` and `latitudeColumn`. It
+serializes only a validated GeoJSON Point. An opted list's `spatialQuery.bbox`
+sets maximum longitude and latitude spans in whole degrees. The existing
+operation `representations` map continues to own access and disclosure. JSON
+and JSON-LD are response formats for every selected governed representation;
+GeoJSON is derived only when that representation discloses the primary
+geometry, with `profile=rfc7946` or `profile=jsonfg` selecting its profile.
+Because bbox is a collection-query selector, its primary geometry must have
+effective `privacy: non-personal` classification.
+There is no storage abstraction, dynamic SQLite extension, GeoPackage parser,
+SpatiaLite dependency, generic geometry, or reprojection hidden behind these
+fields.
+
 `RelayRuntime` is a separate strict deployment file. It binds listener,
 `packagePath`, SQLite paths, at most one issuer and audience, secrets, cursor
 key, audit sink, timeouts, concurrency, quotas, and
@@ -281,7 +296,8 @@ is deterministic for validators, but member order is not a client contract:
 ```
 
 `family` is always `consultation`; `pattern` is `retrieve`, `list`, or
-`search`. `sourceRevision.status` is `versioned` or `unversioned`; `value` is
+`search`. A list constrained by declared point bbox is `search`.
+`sourceRevision.status` is `versioned` or `unversioned`; `value` is
 null only for unversioned live data. `selectedFields` is always present in
 contract order, including when the caller omitted `fields`. No other member is
 nullable. `semanticModelReference` points to the local vocabulary/model while
@@ -324,6 +340,15 @@ Registry Core and domain values to the same IRI or XML Schema datatypes used by
 the bound SHACL shape, and maps transport-only `meta` and `pageInfo` to null so
 they do not become domain triples. Ordinary JSON retains the shapes above
 without `@context`, `@id`, or `@type`.
+
+When the selected governed representation discloses the resource's primary
+geometry, `application/geo+json` returns an RFC 7946
+Feature for a single Record and FeatureCollection for a list. Feature
+`properties` carries Registry Core and selected non-spatial domain fields;
+`geometry` is the selected Point or `null` when the requester omitted it.
+Together they preserve the ordinary governed disclosure. The default
+`profile=rfc7946` has no JSON-FG additions. `profile=jsonfg` adds only bounded
+JSON-FG conformance and feature-type metadata from the same compiled operation.
 
 ### HTTP binding and capabilities
 
@@ -388,8 +413,11 @@ Registry service identity remains public. Capability visibility derives from
 the operations included in resource metadata; it is not configured separately.
 
 List filters are direct declared camelCase query parameters, exact-equality
-only, non-personal, unique, and cannot be named `pageSize`, `cursor`, or
-`fields`. Any non-empty subset of declared filters is valid. The operation
+only, non-personal, unique, and cannot be named `pageSize`, `cursor`,
+`fields`, `bbox`, or `profile`. Any non-empty subset of declared filters is
+valid. An opted point list may accept exactly one
+`bbox=minLon,minLat,maxLon,maxLat` predicate. It is finite, CRS84-range-checked,
+inclusive, non-wrapping, and bounded by compiled spans before source access. The operation
 explicitly declares whether the empty subset is allowed with `allowUnfiltered`.
 Transformed properties are response-only and fail compilation when named as a
 filter or fixed-order key. A queryable derived value must be a separately
@@ -402,6 +430,12 @@ authorization-relevant context, and expiry. Every page
 is reauthorized. Authenticated encryption prevents filters and keyset-order
 values from bypassing field minimization. A caller cannot sort, name a source
 column, add an operator, or traverse an uncompiled page.
+
+Spatial context is issued in cursor version 2. During the bounded upgrade
+window, Relay also accepts an integrity-valid version 1 cursor only as its
+original nonspatial JSON query with no bbox or response-format profile. New
+cursors are always version 2, and the ordinary expiry, contract, source,
+operation, filter, field, order, and authorization bindings still apply.
 
 The first page accepts `pageSize`, `fields`, and declared filters. A
 continuation request supplies exactly one `cursor` parameter and
@@ -757,7 +791,8 @@ future compatibility profiles do not block focused implementation milestones.
 - Registry Manifest, DPV, safeguards, and machine-readable GovStack alignment
   projections;
 - Registry multi-tenancy, generic storage traits, PostgreSQL, SpatiaLite,
-  GeoJSON, relationships, nested properties, arrays, decimals, search language,
+  GeoPackage decoding, generic geometry, relationships, nested properties,
+  arrays, decimals, search language,
   fuzzy matching, and Record Match;
 - dynamic masking, general PDP, consent workflow, writes, notification,
   aggregate computation, principal-facing access history, response signing,

@@ -244,6 +244,8 @@ pub struct ResourceDefinition {
     #[serde(default)]
     pub source_column_classifications: OrderedMap<ClassificationPartial>,
     pub properties: OrderedMap<PropertyDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_geometry: Option<PrimaryGeometryDefinition>,
     pub disclosure_profiles: OrderedMap<DisclosureProfile>,
     pub operations: Operations,
     #[serde(default)]
@@ -327,6 +329,27 @@ pub struct PropertyDefinition {
     pub classification: ClassificationPartial,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PrimaryGeometryDefinition {
+    pub name: String,
+    pub label: String,
+    pub description: String,
+    pub semantic_term: String,
+    pub source_required: bool,
+    pub crs: String,
+    pub source: PointColumns,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PointColumns {
+    pub longitude_column: String,
+    pub latitude_column: String,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DataType {
@@ -399,6 +422,8 @@ pub struct ListOperation {
     pub representations: OrderedMap<RepresentationDefinition>,
     #[serde(default)]
     pub filters: Vec<FilterDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_query: Option<SpatialQuery>,
     pub allow_unfiltered: bool,
     pub order_by: Vec<String>,
     pub pagination: Pagination,
@@ -425,6 +450,19 @@ pub struct LookupOperation {
 pub struct RepresentationDefinition {
     pub access: AccessRule,
     pub disclosure_profile: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SpatialQuery {
+    pub bbox: BboxQuery,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct BboxQuery {
+    pub maximum_longitude_span_degrees: u16,
+    pub maximum_latitude_span_degrees: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

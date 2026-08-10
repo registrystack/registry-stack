@@ -35,7 +35,7 @@ An adopter supplies:
 Relay produces:
 
 - a read-only registry API over explicitly declared resources;
-- ordinary JSON and equivalent JSON-LD representations;
+- ordinary JSON, equivalent JSON-LD, and opt-in GeoJSON point representations;
 - OpenAPI, JSON Schema, SHACL shapes, contexts, codelists, and discovery metadata;
 - derived Consultation capabilities and a concise standards-alignment note;
 - generated local semantics when the adopter has no existing vocabulary work;
@@ -376,7 +376,7 @@ token and cannot choose an order or replay a cursor across representations.
 
 Single-record reads and resolved lookups use `{data, meta}`. `data` contains
 the Registry Core context and `domainData`. `fields` is a documented Relay
-extension: a non-empty, duplicate-free comma-separated list of public property
+extension: a non-empty, duplicate-free comma-separated list of published property
 keys. A property key is the contract's URL-safe camelCase name, not a source
 column or semantic IRI. Exactly one `fields` parameter is accepted; empty
 members, whitespace, repeats, and duplicate keys are invalid. It only narrows
@@ -395,6 +395,40 @@ with a public processing floor over a snapshot may be cacheable. Every cacheable
 response includes `Vary: Accept, Authorization` so an anonymous `200` cannot
 satisfy a request carrying an invalid bearer. Non-public and unversioned-live responses are
 `no-store` and emit no ETag.
+
+### Bounded spatial point profile
+
+An operation may opt in to a single classified `primaryGeometry`: a validated
+GeoJSON Point assembled from reviewed SQLite longitude and latitude columns in
+WGS 84 longitude-latitude order (`CRS84`). The geometry is a governed,
+selectable domain field, subject to the same disclosure profile,
+source-required validation, requester minimization, access, audit, and cache
+posture as every other published field. Requesting GeoJSON never grants a
+different right or a wider property set.
+
+An opted list may declare bounded exact point `bbox` search. All four CRS84
+coordinates must be finite and in range, use increasing bounds, avoid
+antimeridian crossing, and remain within publisher-declared longitude and
+latitude spans. Relay executes inclusive point containment against the reviewed
+coordinate columns. Because `bbox` is a collection-query selector, its primary
+geometry must be classified `privacy: non-personal`; personal locations require
+a different bounded consultation design. A cursor binds bbox, the selected
+governed representation, response format, and GeoJSON profile as well as the
+ordinary list context.
+
+`application/geo+json` is available only when the resource declares a primary
+geometry and the exact selected governed representation discloses it. It
+returns an RFC 7946 `Feature` or `FeatureCollection`. Feature `properties`
+carry Registry Core and the selected non-spatial domain fields, while
+`geometry` carries the selected primary geometry; together they preserve the
+same governed disclosure as ordinary JSON. `profile=rfc7946` is the default;
+`profile=jsonfg` adds JSON-FG profile metadata while retaining valid GeoJSON
+core. A caller may select fewer fields, including the geometry, in which case
+the GeoJSON feature geometry is `null`. `representation=` still selects the
+finite access and disclosure contract; `Accept` and `profile` select only its
+wire format. This profile intentionally excludes
+generic geometry ingestion, OGC API Features routes, CQL2, EDR, tiles,
+reprojection, and spatial joins.
 
 The packaged deployment contains the full generated OpenAPI 3.1 contract. The
 unauthenticated `/openapi.json` endpoint serves a deterministic safe public
@@ -604,7 +638,11 @@ Relay V2 is not:
 - a multi-source analytics or interoperability-protocol suite;
 - an extension, mode, or command group of the existing `registryctl`.
 
-PostgreSQL and other source adapters, GeoJSON and SpatiaLite, richer semantic profiles, and additional registry protocols are later profiles. The initial architecture should leave room for source adapters, but version one should not introduce a generic storage trait before a second adapter proves the abstraction.
+PostgreSQL and other source adapters, SpatiaLite, GeoPackage decoding, richer
+semantic profiles, and additional registry protocols are later profiles. The
+initial architecture keeps the point-source binding closed and explicit rather
+than introducing a generic storage trait before a second adapter proves the
+abstraction.
 
 ## Reuse from `registry-platform-*`
 
@@ -717,7 +755,7 @@ The first coherent Relay V2 release should contain:
 13. tamper-evident attempt, refusal, and pre-release audit gates;
 14. fixture, schema-drift, contract-drift, change-impact, and security-safeguard checks.
 
-This is enough to establish Relay as a governed semantic registry publisher rather than a database API. Additional storage engines, spatial data, richer policy, and protocol profiles can then be judged against that identity.
+This is enough to establish Relay as a governed semantic registry publisher rather than a database API. Additional storage engines, richer spatial data, policy, and protocol profiles can then be judged against that identity.
 
 ## Definition of Done and coequal acceptance registries
 
@@ -729,7 +767,7 @@ instantiated one-Registry services over real loopback HTTP, plus one packaged
 real-process start, request, stop, and restart smoke:
 
 - a sensitive social assistance registry proves exact-lookup-only consultation, trusted purpose, row binding, protected classification, and live SQLite;
-- a public business registry proves deterministic list and identifier read, predefined filters, public semantic alignment, snapshot reproducibility, and caching;
+- a public business registry proves deterministic list and identifier read, predefined filters, bounded public premises-point search, public semantic alignment, snapshot reproducibility, and caching;
 - a protected civil-event registry proves separate read and lookup scopes,
   operation-specific disclosures, optional conforming Mint tokens,
   unversioned-live truthfulness, and the ordinary protected-source boundary a
@@ -752,7 +790,7 @@ shape. The generated schema makes their constraints precise.
 - Relay owns a strict registry contract. A Registry Manifest projection is a later portability artifact, not the Relay execution contract.
 - One contract and process serves one Registry, which may contain several resources.
 - Registry Core context is mandatory and requester field selection can narrow only `domainData`.
-- Lists use `pageSize`, `cursor`, `items`, and `pageInfo.nextCursor`; predefined filters are direct camelCase equality parameters.
+- Lists use `pageSize`, `cursor`, `items`, and `pageInfo.nextCursor`; predefined filters are direct camelCase equality parameters, and an opted point resource may accept bounded exact `bbox`.
 - Named exact lookup remains a bounded POST action and maps to constrained Consultation Search, not Record Match.
 - Each operation has finite reviewed representations, an explicit sole default,
   and representation-owned access plus disclosure. Dynamic, caller-derived
@@ -772,5 +810,5 @@ shape. The generated schema makes their constraints precise.
 - Registry Manifest, DPV, safeguards, and machine-readable GovStack alignment projections;
 - formal GovStack conformance or a compatibility flag translating wire conventions;
 - a Digital Registries family beyond Consultation;
-- additional sources, GeoJSON, and SpatiaLite;
+- additional sources, generic geometry, GeoPackage decoding, and SpatiaLite;
 - dynamic masking, a general PDP, write operations, notification, access-history publication, and response signing.

@@ -472,6 +472,83 @@ What this example must prove:
 - the captured snapshot digest and schema fingerprint make responses reproducible and strongly cacheable by revision;
 - capability discovery derives `consultation.list` and `consultation.retrieve` and no other family pattern.
 
+### Point location variant: governed premises search
+
+The following second resource can sit beside the business resource above. It is
+not a generic map service or a spatial database API. The reviewed source view
+owns the two numeric carrier columns; Relay validates and reconstructs one
+CRS84 GeoJSON Point only after its complete Record is safe to disclose. The
+geometry has a normal classification and enters the maximum disclosure profile,
+so `fields` can remove it but cannot add it. `bbox` is a fixed publisher-owned
+query shape, not an expression language. A bbox-enabled primary geometry must
+be classified `privacy: non-personal`, even for a protected list. Its maximum
+spans keep an anonymous public search local and bounded.
+
+```yaml
+  - id: registered-premises
+    title: Registered premises
+    description: Public point locations of reviewed registered business premises
+    semanticClass: local:RegisteredPremises
+    source: {source: companies, view: relay_registered_premises}
+    classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    recordContext:
+      recordIdentifier: {sourceColumn: premises_identifier}
+      revisionIdentifier: {sourceColumn: record_revision}
+      lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
+      recordedAt: {sourceColumn: recorded_at}
+    primaryGeometry:
+      name: location
+      label: Premises location
+      description: Reviewed premises point in CRS84 longitude-latitude order
+      semanticTerm: local:location
+      sourceRequired: true
+      crs: http://www.opengis.net/def/crs/OGC/0/CRS84
+      source: {longitudeColumn: longitude, latitudeColumn: latitude}
+      classification: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    properties:
+      premisesIdentifier:
+        sourceColumn: premises_identifier
+        type: string
+        sourceRequired: true
+        semanticTerm: local:premisesIdentifier
+        label: Premises identifier
+        description: Stable public identifier for one premises Record
+      businessRegistrationNumber:
+        sourceColumn: business_registration_number
+        type: string
+        sourceRequired: true
+        semanticTerm: local:businessRegistrationNumber
+        label: Business registration number
+        description: Registered business associated with the premises
+    disclosureProfiles:
+      public-premises: {properties: [premisesIdentifier, businessRegistrationNumber, location]}
+    operations:
+      list:
+        defaultRepresentation: public-premises
+        representations:
+          public-premises: {access: public, disclosureProfile: public-premises}
+        allowUnfiltered: false
+        spatialQuery:
+          bbox: {maximumLongitudeSpanDegrees: 2, maximumLatitudeSpanDegrees: 2}
+        orderBy: [premisesIdentifier]
+        pagination: {defaultPageSize: 50, maximumPageSize: 200}
+      read:
+        defaultRepresentation: public-premises
+        representations:
+          public-premises: {access: public, disclosureProfile: public-premises}
+```
+
+The `public-premises` governed representation is the access and maximum
+disclosure decision. JSON and JSON-LD are always available for it; because its
+disclosure profile includes `location`, `Accept: application/geo+json` is also
+available and returns RFC 7946 by default. A client may ask for
+`profile=jsonfg` to receive JSON-FG conformance metadata. In both forms,
+Feature `properties` plus the separately selected `geometry` carry the same
+governed disclosure as ordinary JSON. A query such as
+`bbox=100,13,101,14` includes only points within that closed inclusive extent;
+antimeridian-crossing boxes, arbitrary CRS requests, CQL2, tiles, EDR, spatial
+joins, and dynamic SpatiaLite functions are not part of this profile.
+
 ## Example 3: civil-event registry
 
 This registry is CRVS-shaped but the runtime remains event-domain neutral. It has no collection-list operation. Authorized registrars may read a known opaque event identifier under one scope and disclosure profile. A verification client may perform only a named exact lookup under a different scope and smaller disclosure profile. It uses an ordinary external issuer for the core journey. Registry Mint may replace that issuer later when it emits the same standard token profile.
@@ -780,6 +857,9 @@ resources[].operations.list.pagination
 resources[].operations.list.pagination.defaultPageSize
 resources[].operations.list.pagination.maximumPageSize
 resources[].operations.list.representations
+resources[].operations.list.representations.public-premises
+resources[].operations.list.representations.public-premises.access
+resources[].operations.list.representations.public-premises.disclosureProfile
 resources[].operations.list.representations.public-register
 resources[].operations.list.representations.public-register.access
 resources[].operations.list.representations.public-register.disclosureProfile
@@ -789,6 +869,10 @@ resources[].operations.list.representations.registrar.access.authorityRowBinding
 resources[].operations.list.representations.registrar.access.purpose
 resources[].operations.list.representations.registrar.access.scope
 resources[].operations.list.representations.registrar.disclosureProfile
+resources[].operations.list.spatialQuery
+resources[].operations.list.spatialQuery.bbox
+resources[].operations.list.spatialQuery.bbox.maximumLatitudeSpanDegrees
+resources[].operations.list.spatialQuery.bbox.maximumLongitudeSpanDegrees
 resources[].operations.lookups
 resources[].operations.lookups[]
 resources[].operations.lookups[].defaultRepresentation
@@ -850,6 +934,9 @@ resources[].operations.lookups[].requestBody.selectors.*.type
 resources[].operations.read
 resources[].operations.read.defaultRepresentation
 resources[].operations.read.representations
+resources[].operations.read.representations.public-premises
+resources[].operations.read.representations.public-premises.access
+resources[].operations.read.representations.public-premises.disclosureProfile
 resources[].operations.read.representations.public-register
 resources[].operations.read.representations.public-register.access
 resources[].operations.read.representations.public-register.disclosureProfile
@@ -864,6 +951,21 @@ resources[].operations.read.representations.registrar.access.purpose.allowed[]
 resources[].operations.read.representations.registrar.access.purpose.claim
 resources[].operations.read.representations.registrar.access.scope
 resources[].operations.read.representations.registrar.disclosureProfile
+resources[].primaryGeometry
+resources[].primaryGeometry.classification
+resources[].primaryGeometry.classification.handling
+resources[].primaryGeometry.classification.institutional
+resources[].primaryGeometry.classification.privacy
+resources[].primaryGeometry.classification.status
+resources[].primaryGeometry.crs
+resources[].primaryGeometry.description
+resources[].primaryGeometry.label
+resources[].primaryGeometry.name
+resources[].primaryGeometry.semanticTerm
+resources[].primaryGeometry.source
+resources[].primaryGeometry.source.latitudeColumn
+resources[].primaryGeometry.source.longitudeColumn
+resources[].primaryGeometry.sourceRequired
 resources[].processingDescriptions
 resources[].processingDescriptions[]
 resources[].processingDescriptions[].dpvProfileRef

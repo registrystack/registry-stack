@@ -16,7 +16,7 @@ Relay V2 is done only when every required row below passes on the same revision.
 
 The social, business, and civil-event registries are coequal acceptance definitions. None is the architectural seed, a privileged demo, or a later generality check. Production code, public schemas, routes, and CLI behavior remain registry-domain neutral.
 
-No required behavior may remain as a stub, TODO, undocumented manual step, disabled test, or follow-up issue. Additional storage engines, SpatiaLite, GeoJSON, general policy evaluation, response signing, dynamic masking, and other future profiles are outside this Definition of Done.
+No required behavior may remain as a stub, TODO, undocumented manual step, disabled test, or follow-up issue. Additional storage engines, SpatiaLite, GeoPackage decoding, generic geometry, general policy evaluation, response signing, dynamic masking, and other future profiles are outside this Definition of Done.
 
 ## Coequal acceptance definitions
 
@@ -69,7 +69,7 @@ prove in-process resource isolation without adding a fourth deployment project.
 | Change impact and safeguards | A contract diff identifies new properties, wider operations or filters, relaxed classification, changed disclosure profiles, removed row bindings, expanded scopes or purposes, changed metadata visibility, source-view changes, and semantic mapping changes. Each applicable DPI safeguard is linked to a concrete mechanism, enforcement point, negative test, evidence artifact, and named institutional responsibility. No certification claim is generated. |
 | Operability | Unauthenticated `/health` reports only liveness and `/ready` reports only ability to serve the compiled Registry, each as minimal `application/json` on `200`, `no-store`, and safe Registry Stack Problem `503` on failure. Neither exposes Registry or source details. Startup, shutdown, bounded concurrency, audit durability, issuer-key refresh, source unavailability, schema drift, and live publisher replacement have documented and tested behavior. Relay emits structured value-free lifecycle logs and bounded request outcomes using only a fixed method class, route template, status, latency, and trace identifier. Version one has no `/metrics` route or in-process metrics registry; operators derive aggregate metrics outside Relay from these logs and durable audit without protected values or high-cardinality subject labels. |
 | Verification evidence | Focused positive, negative, boundary, and non-disclosure tests pass for every security-sensitive behavior. Formatting, package check, Clippy with warnings denied, package tests, workspace tests, dependency policy, contract drift, exposure inventory, source neutrality, config-key-path, and reproducible-generation gates pass on one revision. CI path selection is itself tested for every new owning path. |
-| Stop boundary | Version 1 contains no generic storage trait before a second adapter, SpatiaLite or GeoJSON path, general search language, fuzzy or Record Match behavior, dynamic masking, caller-dependent maximum entitlement profile, PDP, consent workflow, response signing, credential lifecycle, multi-source analytics, runtime vocabulary fetch, RDF store, SPARQL, hot reload, write API, registry administration, formal GovStack compatibility mode, or compatibility work in `registryctl`. |
+| Stop boundary | Version 1 contains no generic storage trait before a second adapter, SpatiaLite, GeoPackage decoding, generic or non-point geometry path, OGC API Features routes, CQL2, EDR, tiles, reprojection, spatial joins, general search language, fuzzy or Record Match behavior, dynamic masking, caller-dependent maximum entitlement profile, PDP, consent workflow, response signing, credential lifecycle, multi-source analytics, runtime vocabulary fetch, RDF store, SPARQL, hot reload, write API, registry administration, formal GovStack compatibility mode, or compatibility work in `registryctl`. |
 
 ## Required acceptance coverage
 
@@ -125,6 +125,17 @@ value-free operational log dimensions.
 ### Business registry cases
 
 - anonymous paginated list and identifier read over a captured snapshot;
+- a separate public registered-premises resource with a classified, selectable
+  CRS84 Point assembled from reviewed longitude and latitude columns;
+- exact inclusive bounded `bbox` search, boundary inclusion, malformed,
+  out-of-range, oversize, and antimeridian refusal, deterministic pagination,
+  and cursor rejection when bbox, governed representation, response format, or
+  GeoJSON profile changes;
+- equivalent governed JSON, JSON-LD, RFC 7946 GeoJSON, and JSON-FG responses,
+  including a requested field subset that omits geometry;
+- no GeoJSON negotiation on a nonspatial operation or a governed representation
+  that omits geometry, and no disclosure of an invalid coordinate row or its
+  values;
 - `pageSize`, first page, cursor page, and nullable `pageInfo.nextCursor` behavior;
 - no filter when allowed, each declared direct camelCase exact filter, a subset of declared filters, unknown filter, unsupported operator, and attempted arbitrary sort;
 - deterministic ordering and pagination with no duplicate or missing record across the unchanged snapshot;
@@ -132,7 +143,8 @@ value-free operational log dimensions.
 - public default list/read can request only public representations; protected registrar representation metadata, schema, SHACL, JSON-LD, processing, and OpenAPI are absent from public discovery;
 - a public representation reads only the reviewed pre-derived public view, never a non-public raw column, and a profile-bound cursor or ETag cannot cross into another representation;
 - snapshot digest, path replacement, unsafe sidecar, write attempt, and schema mismatch failures.
-- `consultation.list` and `consultation.retrieve` discovery with no unsupported family claim.
+- `consultation.list`, `consultation.retrieve`, and the bounded point
+  `consultation.search` discovery with no unsupported family claim.
 
 ### Civil-event registry cases
 

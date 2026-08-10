@@ -49,6 +49,24 @@ scenarios:
   - {id: business-sort-rejection, project: business-registry, journeyStep: arbitrary-sort, assertion: Callers cannot choose source ordering.}
   - {id: business-operator-rejection, project: business-registry, journeyStep: unsupported-filter-operator, assertion: Callers cannot add an operator to a declared direct filter.}
   - {id: business-invalid, project: business-registry, journeyStep: invalid-source-row, invalidSourceRowClass: wrong-type, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid source row fails closed and is not released.}
+  - {id: business-premises-first-page, project: business-registry, journeyStep: premises-first-page, assertion: A bounded public Point search is paginated and exposes only its governed geometry and properties.}
+  - {id: business-premises-second-page, project: business-registry, journeyStep: premises-second-page, assertion: A Point-search cursor retrieves the remaining exact-bbox result page.}
+  - {id: business-premises-boundary, project: business-registry, journeyStep: premises-boundary-point, assertion: Exact Point bbox containment includes a point on every bounding edge.}
+  - {id: business-premises-minimization, project: business-registry, journeyStep: premises-fields-omit-location, assertion: A requester can omit the classified geometry without changing the governed representation.}
+  - {id: business-premises-read, project: business-registry, journeyStep: premises-read, assertion: Identifier read returns the same governed Point field in the ordinary Registry Record.}
+  - {id: business-premises-jsonld, project: business-registry, journeyStep: premises-read-jsonld, assertion: JSON-LD preserves the same governed Point data and Registry Core while applying the generated context.}
+  - {id: business-premises-geojson, project: business-registry, journeyStep: premises-feature-collection, assertion: The selected governed representation serializes as RFC 7946 GeoJSON.}
+  - {id: business-premises-jsonfg, project: business-registry, journeyStep: premises-feature-collection-jsonfg, assertion: JSON-FG is an explicit response profile over the same governed Point data.}
+  - {id: business-premises-feature-read, project: business-registry, journeyStep: premises-feature-read, assertion: Identifier read serializes one governed Record as a GeoJSON Feature.}
+  - {id: business-premises-feature-minimization, project: business-registry, journeyStep: premises-feature-fields-omit-location, assertion: GeoJSON field minimization emits an explicit null geometry and does not reintroduce the omitted Point through Feature properties.}
+  - {id: business-premises-invalid-bbox, project: business-registry, journeyStep: premises-invalid-bbox, assertion: Malformed Point bbox input fails before source access.}
+  - {id: business-premises-out-of-range-bbox, project: business-registry, journeyStep: premises-out-of-range-bbox, assertion: A CRS84 coordinate outside the world range is refused without echoing its value.}
+  - {id: business-premises-oversize-bbox, project: business-registry, journeyStep: premises-oversize-bbox, assertion: A bbox outside the publisher span ceiling is refused.}
+  - {id: business-premises-antimeridian, project: business-registry, journeyStep: premises-antimeridian-bbox, assertion: The initial Point profile refuses antimeridian-crossing bbox input.}
+  - {id: business-premises-cursor-bbox, project: business-registry, journeyStep: premises-cursor-bbox-binding, assertion: A cursor cannot be combined with a first-page bbox parameter.}
+  - {id: business-premises-cursor-profile, project: business-registry, journeyStep: premises-cursor-profile-binding, assertion: A cursor cannot cross its negotiated response format or GeoJSON profile.}
+  - {id: business-nonspatial-geojson, project: business-registry, journeyStep: nonspatial-geojson-refused, assertion: GeoJSON is unavailable when the selected governed representation does not disclose a primary geometry.}
+  - {id: business-premises-invalid-coordinate, project: business-registry, journeyStep: invalid-coordinate-row, invalidSourceRowClass: wrong-type, expectedStatus: 503, expectedCode: source.unavailable, assertion: An unsafe coordinate row fails closed without a value-bearing diagnostic.}
   - {id: civil-discovery, project: civil-event, journeyStep: registry-discovery, assertion: Discovery derives retrieve and constrained search only.}
   - {id: civil-read, project: civil-event, journeyStep: registrar-read, assertion: The registrar scope receives its narrower requested representation.}
   - {id: civil-read-default, project: civil-event, journeyStep: registrar-read-default, assertion: The default representation contains exactly the compiled disclosure profile.}

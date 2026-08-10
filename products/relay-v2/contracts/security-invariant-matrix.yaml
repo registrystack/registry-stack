@@ -207,6 +207,27 @@ invariants:
       - {path: crates/registry-relay-v2/src/cursor.rs, name: cursor_conceals_order_values_and_refuses_tampering}
       - {path: crates/registry-relay-v2/src/cursor.rs, name: encrypting_the_same_cursor_twice_uses_distinct_nonces}
       - {path: crates/registry-relay-v2/src/cursor.rs, name: cursor_refuses_every_mismatched_request_binding_and_expiry}
+      - {path: crates/registry-relay-v2/src/cursor.rs, name: cursor_cannot_cross_spatial_or_representation_contexts}
+  - id: sec-spatial-disclosure-confinement
+    threat: GeoJSON negotiation, an unsafe coordinate row, or an unreviewed coordinate carrier widens disclosure beyond the selected governed representation.
+    enforcementPoint: Primary-geometry compilation, representation-scoped disclosure, complete Point validation before release, and one shared authorization and disclosure decision across JSON, JSON-LD, and GeoJSON.
+    negativeTest: geometry_disclosure_is_representation_scoped
+    expected: GeoJSON is available only when the exact selected representation discloses its classified Point; invalid coordinates fail closed before release and carrier columns never serialize.
+    evidence: compiler-runtime-and-artifact-spatial-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: geometry_disclosure_is_representation_scoped}
+      - {path: crates/registry-relay-v2/src/artifacts.rs, name: spatial_artifacts_are_deterministic_bounded_and_carrier_free}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: spatial_terminal_audit_failure_discards_held_feature_bytes}
+  - id: sec-spatial-query-confinement
+    threat: A caller turns a Point search into a broad geographic scan, antimeridian traversal, source expression, or alternate spatial service.
+    enforcementPoint: Closed compiled bbox plan with finite CRS84 range, inclusive bounds, no antimeridian crossing, publisher span limits, and bound SQLite coordinates.
+    negativeTest: spatial_representations_validate_and_keep_distinct_cache_identities
+    expected: Only one declared Point bbox parameter can narrow an opted list; all other spatial query languages, CRS choices, geometry inputs, and crossing boxes are unavailable.
+    evidence: spatial-bbox-parser-and-sqlite-plan-tests
+    tests:
+      - {path: crates/registry-relay-v2/src/sqlite_runtime.rs, name: point_bbox_validation_is_numeric_and_crs84_bounded}
+      - {path: crates/registry-relay-v2/src/sqlite_runtime.rs, name: point_bbox_refuses_dateline_crossing}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: spatial_representations_validate_and_keep_distinct_cache_identities}
   - id: sec-source-truthfulness
     threat: Relay serves incompatible schema, mixed live state, or false revision and cache claims.
     enforcementPoint: Schema fingerprint, one transaction per request, source-profile revisions, path identity checks, and per-execution snapshot digest verification before and after query execution.

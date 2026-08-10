@@ -11,7 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::body::{to_bytes, Body};
 use bytes::Bytes;
 use futures::stream;
-use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, VARY};
+use http::header::{
+    ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LINK, VARY,
+};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use jsonschema::{Draft, JSONSchema};
 use oxjsonld::JsonLdParser;
@@ -27,7 +29,7 @@ use registry_platform_sqlite::{
 use registry_platform_testing::{
     fixtures, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
 };
-use registry_relay_v2::artifacts::generate_artifacts;
+use registry_relay_v2::artifacts::{generate_artifacts, ArtifactSet};
 use registry_relay_v2::audit::RelayAudit;
 use registry_relay_v2::auth::RelayAuthenticator;
 use registry_relay_v2::compiler::{
@@ -36,8 +38,10 @@ use registry_relay_v2::compiler::{
 };
 use registry_relay_v2::contract::{RegistryContract, RelayRuntime};
 use registry_relay_v2::fixture_contract::{
-    parse_journey, FixtureAuthorization as AuthorizationFixture, FixtureJourney as Journey,
-    FixtureMethod, FixtureStep as JourneyStep,
+    parse_journey, FixtureAuthorization as AuthorizationFixture,
+    FixtureExpectation as JourneyExpectation, FixtureGeoJsonRoot as JourneyGeoJsonRoot,
+    FixtureGeometryType as JourneyGeometryType, FixtureJourney as Journey, FixtureMethod,
+    FixtureRepresentationProfile as JourneyRepresentationProfile, FixtureStep as JourneyStep,
 };
 use registry_relay_v2::identification::{
     parse_classification_review_yaml, render_classification_review_yaml,
@@ -68,6 +72,7 @@ struct ResponseContractCoverage {
 struct ProjectHarness {
     app: axum::Router,
     service: Arc<RelayService>,
+    artifacts: Arc<ArtifactSet>,
     contract: RegistryContract,
     runtime: RelayRuntime,
     database: PathBuf,
@@ -609,6 +614,177 @@ async fn audit_terminal_failure_discards_held_record_bytes() {
 }
 
 #[tokio::test]
+async fn spatial_representations_validate_and_keep_distinct_cache_identities() {
+    let harness = ProjectHarness::open("business-registry").await;
+    let path = "/v2/resources/registered-premises/records/PREM-SYNTH-0001";
+    let (json_headers, json) = successful_get(&harness, path, None, None).await;
+    let (json_ld_headers, json_ld) =
+        successful_get(&harness, path, Some("application/ld+json"), None).await;
+    let (rfc_headers, rfc) = successful_get(
+        &harness,
+        &format!("{path}?profile=rfc7946"),
+        Some("application/geo+json"),
+        None,
+    )
+    .await;
+    let (json_fg_headers, json_fg) = successful_get(
+        &harness,
+        &format!("{path}?profile=jsonfg"),
+        Some("application/geo+json"),
+        None,
+    )
+    .await;
+
+    assert_eq!(normalized_records(&json), normalized_records(&json_ld));
+    let context: Value = serde_json::from_slice(
+        &harness
+            .artifacts
+            .get(
+                "artifacts/registered-premises--read--representation-public-premises.context.jsonld",
+            )
+            .expect("generated spatial JSON-LD context")
+            .content,
+    )
+    .expect("context parses");
+    assert_eq!(
+        json_ld.get("@context").and_then(Value::as_str),
+        Some(
+            "https://business.example.invalid/v2/artifacts/registered-premises--read--representation-public-premises-context",
+        )
+    );
+    assert_eq!(
+        context.pointer("/@context/location/@type"),
+        Some(&json!("@json"))
+    );
+    assert_eq!(
+        context.pointer("/@context/location/@nest"),
+        Some(&json!("domainData"))
+    );
+
+    let schema: Value = serde_json::from_slice(
+        &harness
+            .artifacts
+            .get(
+                "artifacts/registered-premises--read--representation-public-premises.geojson.schema.json",
+            )
+            .expect("generated spatial response schema")
+            .content,
+    )
+    .expect("schema parses");
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("generated spatial response schema compiles");
+    assert!(
+        validator.is_valid(&rfc),
+        "RFC 7946 response matches its schema"
+    );
+    assert!(
+        validator.is_valid(&json_fg),
+        "JSON-FG response matches the governed GeoJSON schema"
+    );
+    assert_eq!(
+        json_fg
+            .get("conformsTo")
+            .and_then(Value::as_array)
+            .map(|values| values.iter().filter_map(Value::as_str).collect()),
+        Some(BTreeSet::from([
+            "http://www.opengis.net/spec/json-fg-1/1.0/conf/core",
+            "http://www.opengis.net/spec/json-fg-1/1.0/conf/types-schemas",
+        ]))
+    );
+    assert_eq!(
+        json_fg.get("featureType"),
+        Some(&json!("registered-premises"))
+    );
+
+    let etags = [
+        &json_headers,
+        &json_ld_headers,
+        &rfc_headers,
+        &json_fg_headers,
+    ]
+    .into_iter()
+    .map(|headers| {
+        headers
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .expect("snapshot representation has an ETag")
+    })
+    .collect::<BTreeSet<_>>();
+    assert_eq!(etags.len(), 4, "each exact representation has its own ETag");
+
+    let json_fg_etag = json_fg_headers
+        .get(ETAG)
+        .and_then(|value| value.to_str().ok())
+        .expect("JSON-FG ETag");
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_request(
+            &format!("{path}?profile=jsonfg"),
+            Some("application/geo+json"),
+            Some(json_fg_etag),
+        ))
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok()),
+        Some(json_fg_etag)
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(LINK)
+            .and_then(|value| value.to_str().ok()),
+        Some("<http://www.opengis.net/def/profile/OGC/0/jsonfg>; rel=\"profile\"")
+    );
+    assert!(to_bytes(response.into_body(), 1024)
+        .await
+        .expect("304 body reads")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn spatial_terminal_audit_failure_discards_held_feature_bytes() {
+    let sink = Arc::new(ControlledAuditSink::new(2));
+    let harness = ProjectHarness::open_with_audit(
+        "business-registry",
+        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+    )
+    .await;
+    let response = harness
+        .app
+        .oneshot(get_request(
+            "/v2/resources/registered-premises/records/PREM-SYNTH-0001?profile=jsonfg",
+            Some("application/geo+json"),
+            None,
+        ))
+        .await
+        .expect("router responds");
+    let body = response_body(response, StatusCode::SERVICE_UNAVAILABLE).await;
+    assert_eq!(
+        body.get("code").and_then(Value::as_str),
+        Some("audit.unavailable")
+    );
+    let wire = serde_json::to_string(&body).expect("problem serializes");
+    for protected in [
+        "PREM-SYNTH-0001",
+        "Orchard cooperative market",
+        "100.0",
+        "13.0",
+        "Feature",
+    ] {
+        assert!(!wire.contains(protected));
+    }
+    assert_eq!(sink.writes(), 2);
+}
+
+#[tokio::test]
 async fn real_jwt_path_rejects_malformed_audience_time_and_expired_tokens() {
     let harness = ProjectHarness::open("social-assistance").await;
     let journey = project_journey("social-assistance");
@@ -1136,6 +1312,47 @@ fn request_with_bearer(
     request
 }
 
+fn get_request(uri: &str, accept: Option<&str>, if_none_match: Option<&str>) -> Request<Body> {
+    let mut request = Request::builder()
+        .uri(uri)
+        .body(Body::empty())
+        .expect("request builds");
+    if let Some(accept) = accept {
+        request.headers_mut().insert(
+            ACCEPT,
+            HeaderValue::from_str(accept).expect("Accept header is valid"),
+        );
+    }
+    if let Some(etag) = if_none_match {
+        request.headers_mut().insert(
+            IF_NONE_MATCH,
+            HeaderValue::from_str(etag).expect("If-None-Match header is valid"),
+        );
+    }
+    request
+}
+
+async fn successful_get(
+    harness: &ProjectHarness,
+    uri: &str,
+    accept: Option<&str>,
+    if_none_match: Option<&str>,
+) -> (HeaderMap, Value) {
+    let response = harness
+        .app
+        .clone()
+        .oneshot(get_request(uri, accept, if_none_match))
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers().clone();
+    let body = to_bytes(response.into_body(), 8 * 1024 * 1024)
+        .await
+        .expect("bounded response reads");
+    let document = serde_json::from_slice(&body).expect("response is JSON");
+    (headers, document)
+}
+
 async fn assert_problem_code(response: http::Response<Body>, status: StatusCode, code: &str) {
     let body = response_body(response, status).await;
     assert_eq!(body.get("code").and_then(Value::as_str), Some(code));
@@ -1210,6 +1427,7 @@ fn assert_expectations(
         assert_eq!(
             document
                 .get("items")
+                .or_else(|| document.get("features"))
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(count as usize),
@@ -1302,13 +1520,15 @@ fn assert_expectations(
     }
     if let Some(identifier) = &step.expect.record_identifier {
         assert_eq!(
-            document
-                .pointer("/data/recordIdentifier")
+            records
+                .first()
+                .and_then(|record| record.get("recordIdentifier"))
                 .and_then(Value::as_str),
             Some(identifier.as_str()),
             "{label} record identifier"
         );
     }
+    assert_geojson_expectations(&label, &step.expect, headers, &document);
     if let Some(cache) = &step.expect.cache {
         match cache.as_str() {
             "public-snapshot-revalidation" => {
@@ -1363,22 +1583,162 @@ fn assert_expectations(
     }
 }
 
+fn response_geometries(document: &Value) -> Vec<Option<&Value>> {
+    if document.get("type").and_then(Value::as_str) == Some("Feature") {
+        vec![document.get("geometry")]
+    } else if document.get("type").and_then(Value::as_str) == Some("FeatureCollection") {
+        document
+            .get("features")
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |features| {
+                features
+                    .iter()
+                    .map(|feature| feature.get("geometry"))
+                    .collect()
+            })
+    } else {
+        Vec::new()
+    }
+}
+
+fn assert_geojson_expectations(
+    label: &str,
+    expectation: &JourneyExpectation,
+    headers: &HeaderMap,
+    document: &Value,
+) {
+    if let Some(expected) = expectation.geo_json_root {
+        let expected = match expected {
+            JourneyGeoJsonRoot::Feature => "Feature",
+            JourneyGeoJsonRoot::FeatureCollection => "FeatureCollection",
+        };
+        assert_eq!(
+            document.get("type").and_then(Value::as_str),
+            Some(expected),
+            "{label} GeoJSON root"
+        );
+    }
+    if let Some(expected) = expectation.geometry_type {
+        let geometries = response_geometries(document);
+        assert!(
+            !geometries.is_empty(),
+            "{label} must contain geometry members"
+        );
+        for geometry in geometries {
+            match expected {
+                JourneyGeometryType::Point => assert_eq!(
+                    geometry
+                        .and_then(|value| value.get("type"))
+                        .and_then(Value::as_str),
+                    Some("Point"),
+                    "{label} geometry type"
+                ),
+                JourneyGeometryType::Null => assert!(
+                    geometry.is_some_and(Value::is_null),
+                    "{label} geometry must be explicit null"
+                ),
+            }
+        }
+    }
+    let Some(profile) = expectation.representation_profile else {
+        return;
+    };
+    assert_eq!(
+        headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/geo+json"),
+        "{label} GeoJSON content type"
+    );
+    let (uri, conforms_to) = match profile {
+        JourneyRepresentationProfile::Rfc7946 => {
+            ("http://www.opengis.net/def/profile/OGC/0/rfc7946", None)
+        }
+        JourneyRepresentationProfile::JsonFg => (
+            "http://www.opengis.net/def/profile/OGC/0/jsonfg",
+            Some(BTreeSet::from([
+                "http://www.opengis.net/spec/json-fg-1/1.0/conf/core",
+                "http://www.opengis.net/spec/json-fg-1/1.0/conf/types-schemas",
+            ])),
+        ),
+    };
+    let link = format!("<{uri}>; rel=\"profile\"");
+    assert_eq!(
+        headers.get(LINK).and_then(|value| value.to_str().ok()),
+        Some(link.as_str()),
+        "{label} GeoJSON profile link"
+    );
+    match conforms_to {
+        Some(expected) => assert_eq!(
+            document
+                .get("conformsTo")
+                .and_then(Value::as_array)
+                .map(|values| values.iter().filter_map(Value::as_str).collect()),
+            Some(expected),
+            "{label} JSON-FG conformance"
+        ),
+        None => {
+            assert!(
+                document.get("conformsTo").is_none(),
+                "{label} RFC 7946 response must not claim JSON-FG conformance"
+            );
+            assert!(
+                document.get("featureType").is_none(),
+                "{label} RFC 7946 response must not contain JSON-FG feature type"
+            );
+        }
+    }
+}
+
 fn normalized_records(document: &Value) -> Vec<Value> {
+    let geometries = response_geometries(document);
     response_records(document)
         .into_iter()
-        .map(|record| {
+        .enumerate()
+        .map(|(index, record)| {
             let mut record = record.clone();
+            let mut geometry = geometries
+                .get(index)
+                .and_then(|geometry| *geometry)
+                .cloned()
+                .unwrap_or(Value::Null);
+            if geometry.is_null() {
+                if let Some(domain) = record.get_mut("domainData").and_then(Value::as_object_mut) {
+                    let geometry_name = domain.iter().find_map(|(name, value)| {
+                        (value.get("type").and_then(Value::as_str) == Some("Point")
+                            && value.get("coordinates").is_some())
+                        .then(|| name.clone())
+                    });
+                    if let Some(name) = geometry_name {
+                        geometry = domain.remove(&name).unwrap_or(Value::Null);
+                    }
+                }
+            }
             if let Some(object) = record.as_object_mut() {
                 object.remove("@id");
                 object.remove("@type");
             }
-            record
+            serde_json::json!({"record": record, "geometry": geometry})
         })
         .collect()
 }
 
 fn response_records(document: &Value) -> Vec<&Value> {
-    if let Some(record) = document.get("data") {
+    if document.get("type").and_then(Value::as_str) == Some("Feature") {
+        document
+            .get("properties")
+            .map_or_else(Vec::new, |record| vec![record])
+    } else if document.get("type").and_then(Value::as_str) == Some("FeatureCollection") {
+        document
+            .get("features")
+            .and_then(Value::as_array)
+            .map_or_else(Vec::new, |features| {
+                features
+                    .iter()
+                    .filter_map(|feature| feature.get("properties"))
+                    .collect()
+            })
+    } else if let Some(record) = document.get("data") {
         vec![record]
     } else {
         document
@@ -1406,7 +1766,7 @@ fn validate_response_contracts(
         .and_then(|value| value.split(';').next())
         .expect("Record response has a content type");
     let json_ld = match media_type {
-        "application/json" => false,
+        "application/json" | "application/geo+json" => false,
         "application/ld+json" => true,
         _ => panic!(
             "{project}/{} returned an unsupported Record media type",
@@ -1659,6 +2019,27 @@ fn validate_json_ld_graph(
             .as_object()
             .expect("Record domainData is an object");
         for property_name in domain_data.keys() {
+            if let Some(geometry) = resource
+                .primary_geometry
+                .as_ref()
+                .filter(|geometry| geometry.name == *property_name)
+            {
+                assert!(representation.selectable_properties.contains(property_name));
+                let datatype = "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON";
+                assert_typed_quad(
+                    &quads,
+                    subject,
+                    &geometry.semantic_iri,
+                    datatype,
+                    project,
+                    &step.id,
+                );
+                assert!(shacl.contains(&format!(
+                    "sh:path <{}> ; sh:datatype <{datatype}>",
+                    geometry.semantic_iri
+                )));
+                continue;
+            }
             let property = resource
                 .properties
                 .iter()
@@ -1916,7 +2297,7 @@ impl ProjectHarness {
         };
         let service = Arc::new(RelayService::new(
             compiled,
-            artifacts,
+            Arc::clone(&artifacts),
             sqlite,
             authenticator,
             audit,
@@ -1942,6 +2323,7 @@ impl ProjectHarness {
         Self {
             app: router(Arc::clone(&service)),
             service,
+            artifacts,
             contract,
             runtime,
             database,

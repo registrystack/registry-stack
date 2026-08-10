@@ -41,6 +41,17 @@ pub struct CursorPayload {
     pub selected_fields_digest: String,
     pub authorization_digest: String,
     pub order_digest: String,
+    /// Canonical CRS84 bbox values, retained so a continuation can execute
+    /// the exact same spatial predicate without accepting fresh query input.
+    #[serde(default)]
+    pub bbox: Option<[String; 4]>,
+    /// The negotiated response kind and profile are part of the page chain.
+    /// They contain no caller or registry data and are integrity protected by
+    /// the cursor envelope.
+    #[serde(default = "default_response_format")]
+    pub response_format: String,
+    #[serde(default)]
+    pub response_profile: Option<String>,
     pub last_record_identifier: String,
     #[serde(default)]
     pub page_size: u32,
@@ -97,6 +108,9 @@ impl CursorPayload {
             selected_fields_digest: bindings.selected_fields_digest,
             authorization_digest: bindings.authorization_digest,
             order_digest: bindings.order_digest,
+            bbox: None,
+            response_format: default_response_format(),
+            response_profile: None,
             last_record_identifier: bindings.last_record_identifier,
             page_size: 0,
             filters: BTreeMap::new(),
@@ -117,6 +131,19 @@ impl CursorPayload {
         self.filters = filters;
         self.selected_fields = selected_fields;
         self.last_order_values = last_order_values;
+        self
+    }
+
+    #[must_use]
+    pub fn with_response_context(
+        mut self,
+        bbox: Option<[String; 4]>,
+        response_format: String,
+        response_profile: Option<String>,
+    ) -> Self {
+        self.bbox = bbox;
+        self.response_format = response_format;
+        self.response_profile = response_profile;
         self
     }
 }
@@ -256,10 +283,17 @@ pub fn require_same_request(
         || cursor.selected_fields_digest != request.selected_fields_digest
         || cursor.authorization_digest != request.authorization_digest
         || cursor.order_digest != request.order_digest
+        || cursor.bbox != request.bbox
+        || cursor.response_format != request.response_format
+        || cursor.response_profile != request.response_profile
     {
         return Err(CursorError::Mismatch);
     }
     Ok(())
+}
+
+fn default_response_format() -> String {
+    "json".to_owned()
 }
 
 #[must_use]
@@ -399,5 +433,39 @@ mod tests {
                 Err(CursorError::Mismatch)
             );
         }
+    }
+
+    #[test]
+    fn cursor_cannot_cross_spatial_or_representation_contexts() {
+        let spatial = payload().with_response_context(
+            Some([
+                "100".to_owned(),
+                "10".to_owned(),
+                "101".to_owned(),
+                "11".to_owned(),
+            ]),
+            "geojson".to_owned(),
+            Some("json-fg".to_owned()),
+        );
+        let mut changed_bbox = spatial.clone();
+        changed_bbox.bbox.as_mut().expect("bbox")[2] = "102".to_owned();
+        assert_eq!(
+            require_same_request(&spatial, &changed_bbox),
+            Err(CursorError::Mismatch)
+        );
+
+        let mut changed_profile = spatial.clone();
+        changed_profile.response_profile = Some("rfc7946".to_owned());
+        assert_eq!(
+            require_same_request(&spatial, &changed_profile),
+            Err(CursorError::Mismatch)
+        );
+
+        let key = CursorKey::new(vec![7; 32]).expect("key is sufficient");
+        let encoded = encode(&key, &spatial).expect("spatial cursor encodes");
+        assert_eq!(
+            decode(&key, &encoded, 1).expect("spatial cursor decodes"),
+            spatial
+        );
     }
 }
