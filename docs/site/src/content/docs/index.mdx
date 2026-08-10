@@ -1,19 +1,21 @@
 ---
 title: Registry Stack documentation
-description: Answer a bounded question with Evidence Gateway or publish a governed read-only Registry from SQLite with Registry Relay.
+description: Answer a bounded question with Evidence Gateway, start a registry from a spreadsheet, or connect an existing registry.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-10"
+  - registry-relay
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registry Stack gives an institution two distinct ways to use data it already
-holds. Evidence Gateway signs the answer to one bounded question. Registry
-Relay publishes governed Registry resources through a controlled read-only API.
+Registry Stack helps an institution answer questions about data it already
+holds without giving callers direct access to the source. Two doors: Evidence Gateway
+signs the answer to one bounded question, and Registry Relay exposes selected
+records through a protected read-only API.
 
 ## Answer a bounded question with Evidence Gateway
 
@@ -32,32 +34,49 @@ boundary in one verified request. When local authoring is complete,
 reviewed candidate without promoting local development state. Registry Mint remains an optional
 token issuer for deployments without a suitable identity provider.
 
-## Publish a governed Registry
+## Start a registry from a spreadsheet
 
-Use Registry Relay when an authorized caller needs selected Records rather
-than a signed answer. Relay binds one institution-owned Registry contract to
-reviewed SQLite views, then compiles the API, disclosure rules, semantic
-artifacts, access decisions, source provenance, and audit behavior together.
+Use the maintained spreadsheet path when the institution has a workbook or
+can prepare a reviewed workbook derivative.
+The first run starts Registry Relay over the shipped synthetic workbook. It
+records a live authorization denial and a selected-field response; the offline
+derived fixture supplies the zero-source-access evidence that a local file
+cannot count itself.
 
-[Publish a governed SQLite registry](tutorials/publish-governed-sqlite-registry/)
-runs one synthetic business Registry from source through a sealed deployment
-package and a real HTTP request. Continue with
-[Relay project authoring](configure/relay/) for an institution-owned source and
-[Relay operations](operate/relay/) for authentication, audit, and source-profile
-choices.
+[Start a registry from a spreadsheet](tutorials/publish-spreadsheet-secured-registry-api/)
+takes about 20 minutes and uses released artifacts without a source checkout.
+After it works, [use your own spreadsheet](tutorials/use-your-spreadsheet/).
+
+## Connect an existing registry
+
+Use the HTTP path when the institution already operates a registry API.
+Start with a fixed bounded request and synthetic observations, then bind the
+reviewed source endpoint and its credentials.
+
+[Connect an existing HTTP registry](tutorials/author-registry-project/) covers
+the base integration.
+Continue with [OAuth client credentials](configure/oauth-client-credentials/)
+and a [reviewed Rhai adapter](tutorials/configure-project-script-adapter/) when
+the source requires authentication or response normalization.
 
 ## Keep the product boundaries clear
 
-Registry Relay owns governed read-only Registry resources.
+Registry Relay owns source access and protected record surfaces.
 Evidence Gateway owns bounded question answering, signing, and minimum disclosure, and
-runs independently against its own configured authoritative source. Registry
-Mint remains an optional token issuer, not a Relay runtime dependency. A future
-Evidence deployment can use a fixed Relay lookup as an ordinary HTTP source
-without moving signing into Relay.
+runs independently of Relay against its own configured authoritative HTTP sources.
+The caller receives only the output authorized for that service.
+
+Both registryctl paths, spreadsheet and HTTP, use the same authoring, offline
+test, disposable development, and build commands. The 1.0 project-local
+workbook path stops there. A governed deployment starts after an
+operator-managed HTTP source is bound, then continues through independent
+approval and package generation. Evidence Gateway is not one of those paths: Evidence Gateway
+has its own toolset and deployment project shape, covered by the
+[Evidence Gateway overview](start/evidence-quickstart/).
 
 ## Move beyond the first run
 
-- [Understand Registry Relay](explanation/governed-registry-publication/)
+- [Choose a source path](configure/)
 - [Prepare an operator handoff](operate/)
 - [Review the architecture](explanation/architecture/)
 - [Review security boundaries](security/)

@@ -1,20 +1,22 @@
 ---
-title: Start with Registry Stack
-description: Answer a bounded question with Evidence Gateway or publish governed Registry resources from SQLite with Registry Relay.
+title: Start with Registry Stack 1.0
+description: Answer a bounded question with Evidence Gateway, or publish protected records with Registry Relay, then adapt the source or the definition.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-10"
+  - registry-relay
+last_reviewed: "2026-08-03"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Pick the door that matches what the caller needs. To learn only a fact about
-one subject, start with Evidence Gateway. To read selected Registry Records,
-start with Registry Relay over the maintained SQLite business Registry. Both
-first runs use synthetic data and stay on the local machine.
+Pick the door that matches what your caller needs. To learn only a fact about
+one subject, start with Evidence Gateway. To read specific records or fields, start
+with Registry Relay over the maintained spreadsheet registry. Both first runs
+use one terminal and synthetic data. Neither needs a source checkout,
+production keys, or a deployment package.
 
 ## Answer a bounded question with Evidence Gateway
 
@@ -26,25 +28,39 @@ verification, and audit boundaries.
 then connects a visible Python registry, sends a real request, and verifies the
 minimum answer before reading the answer.
 
-## Publish a governed Registry
+## Start from a spreadsheet
 
-[Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/)
-builds `relay` and `relayctl`, compiles one synthetic business Registry,
-generates its semantic and API artifacts, runs its fixtures, seals a package,
-and reads selected properties through the real HTTP service.
+[Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
+creates the released `spreadsheet` project, checks its source behavior offline,
+and runs Relay locally over maintained synthetic records.
 
-Continue with [Relay project authoring](../../configure/relay/) when the sample
-works. The guide covers reviewed SQLite views, Registry Core bindings,
-Consultation operations, classification, semantics, disclosure, fixtures, and
-change review.
+Take this path when the institution has a workbook, or can prepare a reviewed
+workbook derivative.
+Continue with [your own spreadsheet](../../tutorials/use-your-spreadsheet/)
+after the sample works.
+
+## Connect an existing registry
+
+[Connect an existing HTTP registry](../../tutorials/author-registry-project/)
+creates the released `http` project and tests one bounded source request before
+an institution-owned endpoint is introduced.
+
+Continue with:
+
+- [OAuth client credentials](../../configure/oauth-client-credentials/) when
+  the source requires a bearer token
+- [OAuth-backed Rhai](../../tutorials/configure-project-script-adapter/) when a
+  reviewed mapping needs several bounded same-origin requests or response
+  normalization
+- [The OpenCRVS Events API case study](../../tutorials/verify-opencrvs-claims/)
+  for a synthetic example of that generic integration path
 
 ## Keep the two doors separate
 
 An institution can operate Registry Relay and Evidence Gateway, but they are
 independent products with separate sources, authorization, configuration, and
-audit boundaries. Registry Mint can issue Relay access tokens when no suitable
-authorization server exists, but Relay does not depend on Mint at runtime.
+audit boundaries. Evidence Gateway does not use Relay as its source path.
 
 Choose the tutorial for the result you need. Start with the Evidence Gateway
-tutorial for a signed, minimum-disclosure answer, or use the Relay tutorial for
-a governed read-only Registry API.
+tutorial for a signed, minimum-disclosure answer, or use the spreadsheet and
+HTTP tutorials for a protected record API.

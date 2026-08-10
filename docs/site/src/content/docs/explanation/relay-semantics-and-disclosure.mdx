@@ -96,26 +96,23 @@ When absent, Relay uses the declared default.
 When present, Relay authorizes that exact representation: an invalid bearer, denied request, or
 unknown name does not fall back to another representation.
 After selection, `fields` may request only a non-empty subset of that representation's properties.
-It cannot select a source column, switch profiles, change a transformation, bypass a row boundary,
+It cannot select a source column, switch profiles, bypass a row boundary,
 or lower the compiled handling, audit, quota, metadata, or cache controls.
 
 This is requester minimization, not dynamic per-request masking or attribute authorization.
 Relay has no free-form policy engine or arbitrary expression language.
 
-## Apply only bounded transforms
+The operator-only full JSON Schema and SHACL shape validate every
+`sourceRequired` property and mandatory Record-context binding in the reviewed
+view. Relay does not coerce or partially release an invalid selected row. For a
+sensitive exact lookup, a missing Record, ambiguous result, and hidden row share
+the same unresolved response so the result does not reveal which condition
+occurred. An invalid selected source Record fails closed as
+`503 source.unavailable` without releasing any part of the Record.
 
-The transform set is deliberately finite and deterministic.
-`partial-string` produces the Relay-owned marker `***` with a bounded Unicode-scalar prefix or
-suffix.
-If the input has no more characters than the configured reveal length, the output is `***` alone.
-`date-precision` turns a canonical `date` or `date-time` into a `year` or `year-month` property.
-The transformed property has its own semantic term, output type, and classification.
-
-Invalid, noncanonical, oversized, or incompatible required input fails without exposing source
-values.
-Optional null input omits the property.
-Relay does not provide hashing, pseudonyms, encryption, regular-expression replacement, geographic
-or numeric transformations, codelist remapping, caller-defined masks, or dynamic masking policy.
+Relay performs no runtime masking or value transformation. When a Registry
+needs a masked, generalized, or precision-reduced value, its reviewed source
+view must expose that pre-derived value as a separately classified property.
 
 ## Generate semantics without pretending equivalence
 
