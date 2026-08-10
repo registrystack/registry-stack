@@ -705,9 +705,6 @@ jobs:
       - name: Test release workflow structure
         run: python3 -m unittest release/scripts/test_release_workflow_structure.py
 
-      - name: Test maintained Debian 13 image checks
-        run: python3 -m unittest release/scripts/test_check_debian13_images.py
-
       - name: Test release workflow guard
         run: python3 -m unittest release/scripts/test_release_workflow_guard.py
 

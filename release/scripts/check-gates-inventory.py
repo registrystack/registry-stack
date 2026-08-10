@@ -170,6 +170,15 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Relay OpenAPI contract", "name: Relay OpenAPI contract"),
     ("Relay OpenAPI command", "run: just openapi-contract"),
     ("Relay exposure check", "name: Relay exposure check"),
+    ("Relay V2 product contract gate", "relay-v2-contracts:"),
+    (
+        "Relay V2 contract consistency",
+        "run: products/relay-v2/scripts/check-contracts.sh",
+    ),
+    (
+        "Relay V2 coequal HTTP journeys",
+        "run: products/relay-v2/scripts/test-http.sh",
+    ),
     (
         "Release helper tests",
         "run: python3 -m unittest release/scripts/test_registry_release.py",
