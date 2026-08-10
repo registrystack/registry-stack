@@ -1,0 +1,74 @@
+[package]
+name = "registry-relay-v2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Compiled read-only Registry Relay runtime."
+repository.workspace = true
+publish = false
+readme = "README.md"
+
+[[bin]]
+name = "relay"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+tooling = ["dep:tempfile", "registry-platform-sqlite/fixture"]
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chacha20poly1305.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+clap.workspace = true
+csv.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+hmac.workspace = true
+http.workspace = true
+jsonwebtoken.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-platform-httpsec.workspace = true
+registry-platform-oidc.workspace = true
+registry-platform-sqlite.workspace = true
+reqwest.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tempfile = { workspace = true, optional = true }
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+ulid.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+futures.workspace = true
+jsonschema.workspace = true
+oxjsonld = "0.2.5"
+registry-platform-httputil.workspace = true
+registry-platform-sqlite = { workspace = true, features = ["fixture"] }
+registry-platform-testing.workspace = true
+tempfile.workspace = true
+utoipa.workspace = true
+
+[[test]]
+name = "process_http"
+required-features = ["tooling"]

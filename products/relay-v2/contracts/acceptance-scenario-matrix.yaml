@@ -1,0 +1,121 @@
+schemaVersion: relay.registrystack.org/acceptance-scenarios/v1alpha1
+product: relay-v2
+execution: products/relay-v2/scripts/test-http.sh
+scenarios:
+  - {id: social-ready, project: social-assistance, journeyStep: readiness, assertion: One local protected Registry becomes ready from a generated package.}
+  - {id: social-lookup, project: social-assistance, journeyStep: lookup-success, assertion: A bounded protected lookup returns only its selected governed properties.}
+  - {id: social-lookup-default, project: social-assistance, journeyStep: lookup-default, assertion: The default access profile contains exactly the compiled disclosure profile and the exact safe partial-string result rather than the source identifier.}
+  - {id: social-caseworker-access-profile, project: social-assistance, journeyStep: caseworker-access-profile, assertion: An entitled caseworker explicitly selects its full access profile then narrows fields within it.}
+  - {id: social-unauthorized-access-profile, project: social-assistance, journeyStep: unauthorized-access-profile, assertion: A caller without the selected access profile scope receives the same concealed resource outcome without fallback to limited.}
+  - {id: social-unknown-access-profile, project: social-assistance, journeyStep: unknown-access-profile, assertion: An unknown access profile receives the same concealed resource outcome as a scope-hidden access profile.}
+  - {id: social-duplicate-access-profile, project: social-assistance, journeyStep: duplicate-access-profile, assertion: A malformed access-profile selection is rejected before source access.}
+  - {id: social-lookup-second-subset, project: social-assistance, journeyStep: lookup-second-subset, assertion: A second valid field subset remains governed independently.}
+  - {id: social-lookup-jsonld, project: social-assistance, journeyStep: lookup-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
+  - {id: social-route, project: social-assistance, journeyStep: route-confinement, assertion: An undeclared collection route is absent.}
+  - {id: social-purpose, project: social-assistance, journeyStep: wrong-purpose, assertion: An authenticated caller with the wrong trusted purpose is denied.}
+  - {id: social-missing-purpose, project: social-assistance, journeyStep: missing-purpose, assertion: A caller cannot omit the trusted purpose claim.}
+  - {id: social-missing-binding, project: social-assistance, journeyStep: missing-binding, assertion: A caller cannot omit its trusted row-binding claim.}
+  - {id: social-wrong-binding, project: social-assistance, journeyStep: wrong-binding, assertion: A caller bound to another authority lane cannot reveal the row.}
+  - {id: social-unknown-field, project: social-assistance, journeyStep: unknown-field, assertion: An unknown public property is rejected before source access.}
+  - {id: social-duplicate-field, project: social-assistance, journeyStep: duplicate-field, assertion: A duplicate public property selection is rejected.}
+  - {id: social-source-field, project: social-assistance, journeyStep: source-column-field, assertion: A source-column name cannot be selected as a public property.}
+  - {id: social-malformed-field, project: social-assistance, journeyStep: malformed-field, assertion: A malformed property selection is rejected.}
+  - {id: social-no-match, project: social-assistance, journeyStep: no-match, assertion: A missing lookup has the unresolved outcome.}
+  - {id: social-ambiguous, project: social-assistance, journeyStep: ambiguous, assertion: An ambiguous lookup has the unresolved outcome.}
+  - {id: social-hidden, project: social-assistance, journeyStep: row-hidden, assertion: A row outside the caller binding has the unresolved outcome.}
+  - {id: social-invalid, project: social-assistance, journeyStep: invalid-row, invalidSourceRowClass: missing-required, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid selected row fails closed as a source failure.}
+  - {id: social-excessive, project: social-assistance, journeyStep: excessive-row, invalidSourceRowClass: excessive-size, expectedStatus: 503, expectedCode: source.unavailable, assertion: An excessively large source value fails closed as a source failure.}
+  - {id: social-invalid-transform, project: social-assistance, journeyStep: invalid-transform-input, invalidSourceRowClass: excessive-size, expectedStatus: 503, expectedCode: source.unavailable, assertion: An oversized partial-string source fails atomically as a value-free source failure.}
+  - {id: social-quota, project: social-assistance, journeyStep: quota-exhausted, assertion: The named lookup fails closed after its compiled-operation quota is exhausted.}
+  - {id: business-discovery, project: business-registry, journeyStep: registry-discovery, assertion: Discovery derives only the public Consultation capabilities.}
+  - {id: business-first-page, project: business-registry, journeyStep: first-page, assertion: The snapshot list is paginated and has a cursor.}
+  - {id: business-second-page, project: business-registry, journeyStep: second-page, assertion: The emitted cursor retrieves a distinct second page.}
+  - {id: business-terminal-page, project: business-registry, journeyStep: terminal-page, assertion: A terminal page carries an explicit null next cursor.}
+  - {id: business-status-filter, project: business-registry, journeyStep: status-filter, assertion: The declared status equality filter is executable by itself.}
+  - {id: business-jurisdiction-filter, project: business-registry, journeyStep: jurisdiction-filter, assertion: The declared jurisdiction equality filter is executable by itself.}
+  - {id: business-filter, project: business-registry, journeyStep: filtered-page, assertion: Declared exact filters and a selected field subset remain governed.}
+  - {id: business-second-subset, project: business-registry, journeyStep: second-field-subset, assertion: A second valid field subset remains governed independently.}
+  - {id: business-read, project: business-registry, journeyStep: identifier-read, assertion: An identifier read is cacheable under the snapshot posture.}
+  - {id: business-registrar-read, project: business-registry, journeyStep: registrar-read, assertion: The protected registrar access profile is selected explicitly and remains no-store.}
+  - {id: business-registrar-denied, project: business-registry, journeyStep: registrar-access-profile-denied, assertion: A caller without the registrar access profile scope receives the concealed resource outcome.}
+  - {id: business-public-unknown-access-profile, project: business-registry, journeyStep: public-access-profile-unknown, assertion: Public discovery cannot enumerate an unknown access profile or turn it into a fallback.}
+  - {id: business-read-jsonld, project: business-registry, journeyStep: identifier-read-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
+  - {id: business-revalidation, project: business-registry, journeyStep: identifier-read-revalidated, assertion: A matching ETag produces an empty 304 response with the same validator.}
+  - {id: business-unknown-field, project: business-registry, journeyStep: unknown-field, assertion: An unknown public property is rejected before source access.}
+  - {id: business-duplicate-field, project: business-registry, journeyStep: duplicate-field, assertion: A duplicate public property selection is rejected.}
+  - {id: business-source-field, project: business-registry, journeyStep: source-column-field, assertion: A source-column name cannot be selected as a public property.}
+  - {id: business-malformed-field, project: business-registry, journeyStep: malformed-field, assertion: A malformed property selection is rejected.}
+  - {id: business-filter-rejection, project: business-registry, journeyStep: unknown-filter, assertion: An undeclared filter fails before source access.}
+  - {id: business-sort-rejection, project: business-registry, journeyStep: arbitrary-sort, assertion: Callers cannot choose source ordering.}
+  - {id: business-operator-rejection, project: business-registry, journeyStep: unsupported-filter-operator, assertion: Callers cannot add an operator to a declared direct filter.}
+  - {id: business-invalid, project: business-registry, journeyStep: invalid-source-row, invalidSourceRowClass: wrong-type, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid source row fails closed and is not released.}
+  - {id: business-premises-first-page, project: business-registry, journeyStep: premises-first-page, assertion: A bounded public Point search is paginated and exposes only its governed geometry and properties.}
+  - {id: business-premises-registrar-search, project: business-registry, journeyStep: premises-registrar-search, assertion: The protected search access profile releases its additional business reference only to its exact scope.}
+  - {id: business-premises-search-access-denied, project: business-registry, journeyStep: premises-search-access-profile-denied, assertion: A caller without the selected search access-profile scope receives the concealed resource outcome.}
+  - {id: business-premises-search-access-unknown, project: business-registry, journeyStep: premises-search-access-profile-unknown, assertion: An unknown search access profile is indistinguishable from a scope-hidden profile.}
+  - {id: business-premises-list-authorized, project: business-registry, journeyStep: premises-list-authorized, assertion: A separately scoped registrar list remains a distinct compiled operation.}
+  - {id: business-premises-search-cannot-list, project: business-registry, journeyStep: premises-search-scope-cannot-list, assertion: A protected search scope cannot synthesize the separately governed list operation.}
+  - {id: business-premises-list-cannot-search, project: business-registry, journeyStep: premises-list-scope-cannot-search, assertion: A list scope cannot select the protected access profile of the named search.}
+  - {id: business-premises-second-page, project: business-registry, journeyStep: premises-second-page, assertion: A Point-search cursor retrieves the remaining exact-bbox result page.}
+  - {id: business-premises-boundary, project: business-registry, journeyStep: premises-boundary-point, assertion: Exact Point bbox containment includes a point on every bounding edge.}
+  - {id: business-premises-minimization, project: business-registry, journeyStep: premises-fields-omit-location, assertion: A requester can omit the classified geometry without changing the access profile.}
+  - {id: business-premises-read, project: business-registry, journeyStep: premises-read, assertion: Identifier read returns the same governed Point field in the ordinary Registry Record.}
+  - {id: business-premises-jsonld, project: business-registry, journeyStep: premises-read-jsonld, assertion: JSON-LD preserves the same governed Point data and Registry Core while applying the generated context.}
+  - {id: business-premises-geojson, project: business-registry, journeyStep: premises-feature-collection, assertion: The selected access profile serializes as RFC 7946 GeoJSON.}
+  - {id: business-premises-search-jsonld, project: business-registry, journeyStep: premises-search-jsonld, assertion: The named search serializes equivalent Records as JSON-LD without changing its access profile or query result.}
+  - {id: business-premises-jsonfg, project: business-registry, journeyStep: premises-feature-collection-jsonfg, assertion: JSON-FG is an explicit response profile over the same governed Point data.}
+  - {id: business-premises-feature-read, project: business-registry, journeyStep: premises-feature-read, assertion: Identifier read serializes one governed Record as a GeoJSON Feature.}
+  - {id: business-premises-feature-minimization, project: business-registry, journeyStep: premises-feature-fields-omit-location, assertion: GeoJSON field minimization emits an explicit null geometry and does not reintroduce the omitted Point through Feature properties.}
+  - {id: business-premises-invalid-bbox, project: business-registry, journeyStep: premises-invalid-bbox, assertion: Malformed Point bbox input fails before source access.}
+  - {id: business-premises-missing-bbox, project: business-registry, journeyStep: premises-missing-bbox, assertion: The named point-bbox search requires its complete query shape before source access.}
+  - {id: business-premises-out-of-range-bbox, project: business-registry, journeyStep: premises-out-of-range-bbox, assertion: A CRS84 coordinate outside the world range is refused without echoing its value.}
+  - {id: business-premises-oversize-bbox, project: business-registry, journeyStep: premises-oversize-bbox, assertion: A bbox outside the publisher span ceiling is refused.}
+  - {id: business-premises-antimeridian, project: business-registry, journeyStep: premises-antimeridian-bbox, assertion: The initial Point profile refuses antimeridian-crossing bbox input.}
+  - {id: business-premises-cursor-bbox, project: business-registry, journeyStep: premises-cursor-bbox-binding, assertion: A cursor cannot be combined with a first-page bbox parameter.}
+  - {id: business-premises-cursor-format, project: business-registry, journeyStep: premises-cursor-format-binding, assertion: A cursor cannot cross its negotiated wire format or GeoJSON format profile.}
+  - {id: business-premises-cursor-access-profile, project: business-registry, journeyStep: premises-cursor-access-profile-binding, assertion: A cursor cannot cross its selected access profile even when the caller is entitled to both profiles.}
+  - {id: business-premises-cursor-operation, project: business-registry, journeyStep: premises-cursor-operation-binding, assertion: A named-search cursor cannot be replayed against the separately governed list operation.}
+  - {id: business-nonspatial-geojson, project: business-registry, journeyStep: nonspatial-geojson-refused, assertion: GeoJSON is unavailable when the selected access profile does not disclose a primary geometry.}
+  - {id: business-premises-invalid-coordinate, project: business-registry, journeyStep: invalid-coordinate-row, invalidSourceRowClass: wrong-type, expectedStatus: 503, expectedCode: source.unavailable, assertion: An unsafe coordinate row fails closed without a value-bearing diagnostic.}
+  - {id: civil-discovery, project: civil-event, journeyStep: registry-discovery, assertion: Discovery derives retrieve and constrained search only.}
+  - {id: civil-read, project: civil-event, journeyStep: registrar-read, assertion: The registrar scope receives its narrower requested access profile.}
+  - {id: civil-read-default, project: civil-event, journeyStep: registrar-read-default, assertion: The default access profile contains exactly the compiled disclosure profile.}
+  - {id: civil-read-second-subset, project: civil-event, journeyStep: registrar-read-second-subset, assertion: A second valid field subset remains governed independently.}
+  - {id: civil-read-jsonld, project: civil-event, journeyStep: registrar-read-jsonld, assertion: JSON and JSON-LD encodings carry equivalent Registry records.}
+  - {id: civil-lookup, project: civil-event, journeyStep: lookup-success, assertion: The verification scope receives its distinct disclosure profile.}
+  - {id: civil-supervisory-date-precision, project: civil-event, journeyStep: supervisory-date-precision, assertion: The supervisory access profile returns exact reviewed year and year-month outputs with distinct public types and semantic terms over the same exact lookup.}
+  - {id: civil-supervisory-denied, project: civil-event, journeyStep: supervisory-access-profile-denied, assertion: A registrar-verification grant receives the concealed resource outcome and cannot fall back from a supervisory access profile.}
+  - {id: civil-invalid-access-profile, project: civil-event, journeyStep: invalid-access-profile, assertion: An unknown civil access profile receives the concealed resource outcome before lookup execution.}
+  - {id: civil-route, project: civil-event, journeyStep: no-list, assertion: A non-enumerable Registry has no collection route.}
+  - {id: civil-scope, project: civil-event, journeyStep: scope-separation, assertion: A lookup scope cannot synthesize identifier read.}
+  - {id: civil-reverse-scope, project: civil-event, journeyStep: reverse-scope-separation, assertion: A registrar read scope cannot synthesize verification lookup.}
+  - {id: civil-purpose, project: civil-event, journeyStep: wrong-purpose, assertion: A verification lookup refuses the wrong trusted purpose.}
+  - {id: civil-binding, project: civil-event, journeyStep: wrong-binding, assertion: A verification lookup hides a row outside the trusted jurisdiction binding.}
+  - {id: civil-unknown-field, project: civil-event, journeyStep: unknown-field, assertion: An unknown public property is rejected before source access.}
+  - {id: civil-duplicate-field, project: civil-event, journeyStep: duplicate-field, assertion: A duplicate public property selection is rejected.}
+  - {id: civil-source-field, project: civil-event, journeyStep: source-column-field, assertion: A source-column name cannot be selected as a public property.}
+  - {id: civil-malformed-field, project: civil-event, journeyStep: malformed-field, assertion: A malformed property selection is rejected.}
+  - {id: civil-hidden, project: civil-event, journeyStep: jurisdiction-hidden, assertion: A row outside the jurisdiction binding has the unresolved outcome.}
+  - {id: civil-no-match, project: civil-event, journeyStep: no-match, assertion: A missing civil-event lookup has the unresolved outcome.}
+  - {id: civil-ambiguous, project: civil-event, journeyStep: ambiguous, assertion: An ambiguous lookup has the unresolved outcome.}
+  - {id: civil-invalid, project: civil-event, journeyStep: invalid-row, invalidSourceRowClass: unexpected-value, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid source row fails closed as a source failure.}
+  - {id: civil-invalid-transform, project: civil-event, journeyStep: invalid-transform-input, invalidSourceRowClass: unexpected-value, expectedStatus: 503, expectedCode: source.unavailable, assertion: A noncanonical date transform input fails atomically as a value-free source failure.}
+  - {id: civil-quota, project: civil-event, journeyStep: quota-exhausted, assertion: A distinct named lookup has its own bounded quota and value-free refusal.}
+  - {id: labour-discovery, project: labour-statistics, journeyStep: registry-discovery, assertion: Discovery derives only the explicitly bound Aggregate Data statistical-dataflow capability.}
+  - {id: labour-dataflow-structure, project: labour-statistics, journeyStep: dataflow-structure, assertion: The exact generated dataflow package artifact is served as SDMX structure JSON 2.1.0.}
+  - {id: labour-dsd-structure, project: labour-statistics, journeyStep: dsd-structure, assertion: The exact generated DSD package artifact is served as SDMX structure JSON 2.1.0.}
+  - {id: labour-keyed-json, project: labour-statistics, journeyStep: public-keyed-json, assertion: The keyed SDMX REST 2.2.2 subset applies exact typed SQLite predicates and emits typed SDMX-JSON 2.1.0 values.}
+  - {id: labour-omitted-key, project: labour-statistics, journeyStep: public-omitted-key-alias, assertion: The omitted-key data alias reaches the same governed operation using named component constraints.}
+  - {id: labour-csv, project: labour-statistics, journeyStep: public-csv, assertion: SDMX-CSV 2.1.0 carries the same governed observations as SDMX-JSON without changing access.}
+  - {id: labour-preferred-json, project: labour-statistics, journeyStep: preferred-json, assertion: Accept quality selects one supported wire format without changing the statistical operation.}
+  - {id: labour-unsupported-format, project: labour-statistics, journeyStep: unsupported-format, assertion: An unacceptable data format receives the fixed format refusal.}
+  - {id: labour-overlap, project: labour-statistics, journeyStep: overlapping-dimension-constraint, assertion: A keyed dimension cannot also be constrained through the query lane.}
+  - {id: labour-too-broad, project: labour-statistics, journeyStep: too-broad, assertion: The compiled observation ceiling refuses a broad request before release.}
+  - {id: labour-invalid-source-code, project: labour-statistics, journeyStep: invalid-source-code, invalidSourceRowClass: unexpected-value, expectedStatus: 503, expectedCode: source.unavailable, assertion: An unreviewed source code fails atomically without entering output or diagnostics.}
+  - {id: labour-missing-credential, project: labour-statistics, journeyStep: protected-missing-credential, assertion: A known protected dataflow requires credentials under the fixed denial mapping.}
+  - {id: labour-scope-denied, project: labour-statistics, journeyStep: protected-scope-denied, assertion: A verified principal without the fixed dataset scope receives the concealed resource outcome.}
+  - {id: labour-purpose-denied, project: labour-statistics, journeyStep: protected-purpose-denied, assertion: The fixed dataset access rule rejects an untrusted purpose as aggregate-data.denied without fallback.}
+  - {id: labour-binding-denied, project: labour-statistics, journeyStep: protected-binding-denied, assertion: The fixed dataset access rule rejects a missing authority binding as aggregate-data.denied without source access.}
+  - {id: labour-authority, project: labour-statistics, journeyStep: protected-authority, assertion: A verified authority-row binding confines observations and never serializes the hidden binding column.}
+  - {id: labour-structure-concealed, project: labour-statistics, journeyStep: protected-structure-concealed, assertion: Protected structure existence is concealed from a principal lacking the dataset scope.}
+  - {id: labour-unknown-concealed, project: labour-statistics, journeyStep: unknown-dataflow-concealed, assertion: An unknown dataflow uses the same value-free concealed resource outcome.}

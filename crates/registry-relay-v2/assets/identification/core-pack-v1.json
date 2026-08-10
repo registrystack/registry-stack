@@ -1,0 +1,186 @@
+{
+  "packId": "registrystack.relay.identification.core",
+  "packVersion": "1",
+  "privacyCandidateVocabulary": {
+    "scheme": "urn:registrystack:relay:privacy-candidate",
+    "version": "1"
+  },
+  "rules": [
+    {
+      "id": "core.role.record-identifier",
+      "version": "1",
+      "family": "identifiers",
+      "confidence": "exact",
+      "when": [{"kind": "authored-role", "value": "record-identifier"}],
+      "suggestion": {"role": "record-identifier", "privacy": []}
+    },
+    {
+      "id": "core.role.revision-identifier",
+      "version": "1",
+      "family": "revisions",
+      "confidence": "exact",
+      "when": [{"kind": "authored-role", "value": "revision-identifier"}],
+      "suggestion": {"role": "revision-identifier", "privacy": []}
+    },
+    {
+      "id": "core.role.lifecycle-state",
+      "version": "1",
+      "family": "lifecycle",
+      "confidence": "exact",
+      "when": [{"kind": "authored-role", "value": "lifecycle-state"}],
+      "suggestion": {"role": "lifecycle-state", "privacy": []}
+    },
+    {
+      "id": "core.role.recorded-at",
+      "version": "1",
+      "family": "times",
+      "confidence": "exact",
+      "when": [{"kind": "authored-role", "value": "recorded-at"}],
+      "suggestion": {"role": "recorded-time", "privacy": []}
+    },
+    {
+      "id": "core.role.codelist",
+      "version": "1",
+      "family": "codelists",
+      "confidence": "exact",
+      "when": [{"kind": "codelist-present"}],
+      "suggestion": {"role": "codelist", "privacy": []}
+    },
+    {
+      "id": "core.role.row-binding",
+      "version": "1",
+      "family": "identifiers",
+      "confidence": "strong",
+      "when": [{"kind": "authored-role", "value": "row-binding"}],
+      "suggestion": {"role": "identifier", "privacy": ["potentially-personal"]}
+    },
+    {
+      "id": "core.key.primary",
+      "version": "1",
+      "family": "identifiers",
+      "confidence": "strong",
+      "when": [{"kind": "primary-key"}],
+      "suggestion": {"role": "identifier", "privacy": []}
+    },
+    {
+      "id": "core.name.record-identifier",
+      "version": "1",
+      "family": "identifiers",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["id", "record_id", "record_identifier"]}],
+      "suggestion": {"role": "record-identifier", "privacy": []}
+    },
+    {
+      "id": "core.name.identifier-suffix",
+      "version": "1",
+      "family": "identifiers",
+      "confidence": "weak",
+      "when": [{"kind": "name-suffix", "values": ["_id", "_identifier"]}],
+      "suggestion": {"role": "identifier", "privacy": []}
+    },
+    {
+      "id": "core.name.revision",
+      "version": "1",
+      "family": "revisions",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["rev", "revision", "revision_id", "revision_identifier", "version"]}],
+      "suggestion": {"role": "revision-identifier", "privacy": []}
+    },
+    {
+      "id": "core.name.lifecycle",
+      "version": "1",
+      "family": "lifecycle",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["lifecycle", "lifecycle_state", "record_state", "state", "status"]}],
+      "suggestion": {"role": "lifecycle-state", "privacy": []}
+    },
+    {
+      "id": "core.name.recorded-time",
+      "version": "1",
+      "family": "times",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["created_at", "recorded_at", "timestamp", "updated_at"]}],
+      "suggestion": {"role": "recorded-time", "privacy": []}
+    },
+    {
+      "id": "core.name.time-suffix",
+      "version": "1",
+      "family": "times",
+      "confidence": "weak",
+      "when": [{"kind": "name-suffix", "values": ["_at", "_date", "_datetime", "_time", "_timestamp"]}],
+      "suggestion": {"role": "recorded-time", "privacy": []}
+    },
+    {
+      "id": "core.type.temporal",
+      "version": "1",
+      "family": "times",
+      "confidence": "weak",
+      "when": [{"kind": "declared-type", "values": ["date", "datetime", "timestamp"]}],
+      "suggestion": {"role": "recorded-time", "privacy": []}
+    },
+    {
+      "id": "core.name.geographic-code",
+      "version": "1",
+      "family": "geographic-codes",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["country_code", "geo_code", "geographic_code", "location_code", "region_code"]}],
+      "suggestion": {"role": "geographic-code", "privacy": ["potentially-personal"]}
+    },
+    {
+      "id": "core.name.administrative-code",
+      "version": "1",
+      "family": "administrative-codes",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["admin_code", "administrative_code", "district_code", "municipality_code", "province_code"]}],
+      "suggestion": {"role": "administrative-code", "privacy": ["potentially-personal"]}
+    },
+    {
+      "id": "core.name.email",
+      "version": "1",
+      "family": "contact",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["e_mail", "email", "email_address"]}],
+      "suggestion": {"role": "email-address", "privacy": ["identifying"]}
+    },
+    {
+      "id": "core.name.email-token",
+      "version": "1",
+      "family": "contact",
+      "confidence": "weak",
+      "when": [{"kind": "name-token-any", "values": ["email"]}],
+      "suggestion": {"role": "email-address", "privacy": ["identifying"]}
+    },
+    {
+      "id": "core.name.telephone",
+      "version": "1",
+      "family": "contact",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["mobile", "mobile_number", "phone", "phone_number", "telephone", "telephone_number"]}],
+      "suggestion": {"role": "telephone-number", "privacy": ["identifying"]}
+    },
+    {
+      "id": "core.name.telephone-token",
+      "version": "1",
+      "family": "contact",
+      "confidence": "weak",
+      "when": [{"kind": "name-token-any", "values": ["mobile", "phone", "telephone"]}],
+      "suggestion": {"role": "telephone-number", "privacy": ["identifying"]}
+    },
+    {
+      "id": "core.name.person-reference",
+      "version": "1",
+      "family": "person-references",
+      "confidence": "strong",
+      "when": [{"kind": "name-equals", "values": ["individual_id", "individual_reference", "person_id", "person_ref", "person_reference", "subject_id", "subject_reference"]}],
+      "suggestion": {"role": "person-reference", "privacy": ["identifying"]}
+    },
+    {
+      "id": "core.column.fallback",
+      "version": "1",
+      "family": "columns",
+      "confidence": "weak",
+      "when": [{"kind": "any"}],
+      "suggestion": {"role": "property", "privacy": []}
+    }
+  ]
+}

@@ -75,7 +75,7 @@ test('publishes one overview route for every task-flow section', () => {
   }
 });
 
-test('groups Relay tutorials under existing registries', () => {
+test('keeps maintained Relay routes and adds the Relay V2 preview', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.doesNotMatch(
     start,
@@ -94,6 +94,18 @@ test('groups Relay tutorials under existing registries', () => {
     connect,
     /label: 'Connect an HTTP registry', slug: 'tutorials\/author-registry-project'/,
   );
+  assertOrdered(
+    connect,
+    [
+      "slug: 'explanation/governed-registry-publication'",
+      "slug: 'tutorials/publish-governed-sqlite-registry'",
+      "slug: 'explanation/relay-semantics-and-disclosure'",
+      "slug: 'configure/relay'",
+      "slug: 'operate/relay'",
+    ],
+    'Relay V2 reader journey',
+  );
+  assert.match(connect, /label: 'Relay V2 preview'/);
   assert.doesNotMatch(connect, /verify-opencrvs-claims/);
   assert.match(
     homepageSource,

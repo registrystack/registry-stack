@@ -1,0 +1,16 @@
+apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:social-assistance-enrolments
+classificationInventoryDigest: sha256:4a379a3691a36d143eeeeeb72eb4aa94846022812149feb9fdab0509e4a00165
+method: generated
+reviewer: urn:example:institution:social-protection-authority
+reviewDate: 2026-08-10
+status: reviewed
+rationaleRef: governance/classification-review-rationale.md
+generatedIdentification:
+  reportRef: reports/identification-report.json
+  reportDigest: sha256:4570e2e7b4de293f8ef33ca2661c8b3a524c671558324ca7923f306c35bcd9b3
+  rulePack:
+    id: registrystack.relay.identification.core
+    version: '1'
+    digest: sha256:5ad3abd1615c409741c190ff17c4ad8cf31db88dfe49c9bbddf47a2e12896fa2

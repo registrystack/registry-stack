@@ -91,7 +91,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Relay all-features shard",
-        '"all_features": shard_name == "relay"',
+        '"all_features": shard_name in {"relay", "relay-v2"}',
     ),
     ("Disk-bounded Rust cache", "cache-targets: false"),
     ("Rust disk telemetry", "du -sh target 2>/dev/null || true"),
@@ -170,6 +170,15 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Relay OpenAPI contract", "name: Relay OpenAPI contract"),
     ("Relay OpenAPI command", "run: just openapi-contract"),
     ("Relay exposure check", "name: Relay exposure check"),
+    ("Relay V2 product contract gate", "relay-v2-contracts:"),
+    (
+        "Relay V2 contract consistency",
+        "run: products/relay-v2/scripts/check-contracts.sh",
+    ),
+    (
+        "Relay V2 coequal HTTP journeys",
+        "run: products/relay-v2/scripts/test-http.sh",
+    ),
     (
         "Release helper tests",
         "run: python3 -m unittest release/scripts/test_registry_release.py",

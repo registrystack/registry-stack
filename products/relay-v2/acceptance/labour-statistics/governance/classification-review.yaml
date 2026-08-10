@@ -1,0 +1,9 @@
+apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:labour-statistics
+classificationInventoryDigest: sha256:15cd8d0bdd0465cc20e9b23ae4e36ac46c0d02a10f9b1882653b97eead4d6bbb
+method: manual
+reviewer: urn:example:institution:statistics-office
+reviewDate: 2026-08-10
+status: reviewed
+rationaleRef: governance/classification-review-rationale.md

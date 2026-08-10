@@ -17,6 +17,7 @@ registry-platform-authcommon = { path = "../../../crates/registry-platform-authc
 registry-platform-crypto = { path = "../../../crates/registry-platform-crypto" }
 registry-platform-oidc = { path = "../../../crates/registry-platform-oidc" }
 registry-platform-sdjwt = { path = "../../../crates/registry-platform-sdjwt" }
+registry-platform-sqlite = { path = "../../../crates/registry-platform-sqlite" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_urlencoded = "0.7"
@@ -40,6 +41,13 @@ bench = false
 [[bin]]
 name = "sdjwt_issuance"
 path = "fuzz_targets/sdjwt_issuance.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sqlite_statement"
+path = "fuzz_targets/sqlite_statement.rs"
 test = false
 doc = false
 bench = false

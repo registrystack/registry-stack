@@ -1,0 +1,4 @@
+id: synthetic-units
+version: "1.0.0"
+status: reviewed
+values: [PERCENT]

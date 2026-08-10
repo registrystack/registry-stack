@@ -1,0 +1,4 @@
+id: synthetic-reference-areas
+version: "1.0.0"
+status: reviewed
+values: [EX-A, EX-B]

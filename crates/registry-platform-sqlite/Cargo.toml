@@ -1,0 +1,31 @@
+[package]
+name = "registry-platform-sqlite"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Bounded read-only SQLite security primitives for Registry Platform runtimes."
+repository.workspace = true
+publish = false
+readme = "README.md"
+
+[lints.rust]
+# SQLite exposes actual-open-handle identity only through file-control. Keep
+# unsafe denied throughout the crate, with one documented scoped exception at
+# that FFI boundary; the workspace-wide forbid cannot express such a scope.
+unsafe_code = "deny"
+
+[features]
+default = []
+fixture = []
+
+[dependencies]
+rusqlite.workspace = true
+rustix.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

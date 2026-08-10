@@ -1,0 +1,211 @@
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry:civil-events
+authorizations:
+  civil-registrar-ex-a:
+    principal: synthetic-registrar-client
+    scopes: [registry:civil-events:read]
+    claims: {purpose: civil-registration-administration, jurisdiction: EX-A}
+  civil-verifier-ex-a:
+    principal: synthetic-verifier-client
+    scopes: [registry:civil-events:lookup]
+    claims: {purpose: registration-verification, jurisdiction: EX-A}
+  civil-supervisor-ex-a:
+    principal: synthetic-supervisory-client
+    scopes: [registry:civil-events:supervisory]
+    claims: {purpose: registration-supervision, jurisdiction: EX-A}
+  civil-verifier-wrong-purpose:
+    principal: synthetic-verifier-client
+    scopes: [registry:civil-events:lookup]
+    claims: {purpose: civil-registration-administration, jurisdiction: EX-A}
+  civil-verifier-wrong-binding:
+    principal: synthetic-verifier-client
+    scopes: [registry:civil-events:lookup]
+    claims: {purpose: registration-verification, jurisdiction: EX-B}
+steps:
+  - id: registry-discovery
+    authorizationFixture: civil-registrar-ex-a
+    request: {method: GET, path: /v2}
+    expect:
+      status: 200
+      capabilityPatterns: [consultation.retrieve]
+      absentCapabilityPatterns: [consultation.search, consultation.list, consultation.record-match, evidence]
+  - id: registrar-read
+    authorizationFixture: civil-registrar-ex-a
+    request:
+      method: GET
+      path: /v2/resources/civil-event/records/EVENT-SYNTH-0001
+      query: {fields: "eventType,registrationStatus,registrationDate"}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [eventType, registrationStatus, registrationDate]
+  - id: registrar-read-default
+    authorizationFixture: civil-registrar-ex-a
+    request: {method: GET, path: /v2/resources/civil-event/records/EVENT-SYNTH-0001}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [eventReference, eventType, registrationStatus, registrationDate, registrationArea, certificateAvailable]
+  - id: registrar-read-second-subset
+    authorizationFixture: civil-registrar-ex-a
+    request:
+      method: GET
+      path: /v2/resources/civil-event/records/EVENT-SYNTH-0001
+      query: {fields: "eventReference,certificateAvailable"}
+    expect: {status: 200, registryCoreRequired: true, domainDataKeys: [eventReference, certificateAvailable]}
+  - id: registrar-read-jsonld
+    authorizationFixture: civil-registrar-ex-a
+    request:
+      method: GET
+      path: /v2/resources/civil-event/records/EVENT-SYNTH-0001
+      headers: {accept: application/ld+json}
+      query: {fields: "eventType,registrationStatus,registrationDate"}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [eventType, registrationStatus, registrationDate]
+      recordsEquivalentTo: registrar-read
+  - id: lookup-success
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {fields: "eventType,registrationStatus,registrationDate,certificateAvailable"}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [eventType, registrationStatus, registrationDate, certificateAvailable]
+  - id: supervisory-date-precision
+    authorizationFixture: civil-supervisor-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {accessProfile: supervisory, fields: "eventType,registrationYear,registrationYearMonth"}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [eventType, registrationYear, registrationYearMonth]
+      domainDataValues: {registrationYear: "2026", registrationYearMonth: "2026-04"}
+      cache: no-store
+  - id: supervisory-access-profile-denied
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {accessProfile: supervisory}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 404, code: resource.not_found}
+  - id: invalid-access-profile
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {accessProfile: invalid}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 404, code: resource.not_found}
+  - id: no-list
+    authorizationFixture: civil-registrar-ex-a
+    request: {method: GET, path: /v2/resources/civil-event/records}
+    expect: {status: 404, routeAbsent: true}
+  - id: scope-separation
+    authorizationFixture: civil-verifier-ex-a
+    request: {method: GET, path: /v2/resources/civil-event/records/EVENT-SYNTH-0001}
+    expect: {status: 404, code: resource.not_found}
+  - id: reverse-scope-separation
+    authorizationFixture: civil-registrar-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 404, code: resource.not_found}
+  - id: wrong-purpose
+    authorizationFixture: civil-verifier-wrong-purpose
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 403, code: consultation.denied}
+  - id: wrong-binding
+    authorizationFixture: civil-verifier-wrong-binding
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: unknown-field
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {fields: notGoverned}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: duplicate-field
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {fields: "eventType,eventType"}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: source-column-field
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {fields: event_type}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: malformed-field
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {fields: ",eventType"}
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: jurisdiction-hidden
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      body: {registrationNumber: REG-SYNTH-000002, eventType: DEATH}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: no-match
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      body: {registrationNumber: REG-SYNTH-NONE01, eventType: BIRTH}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: ambiguous
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      body: {registrationNumber: REG-SYNTH-AMBIG01, eventType: BIRTH}
+    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+  - id: invalid-row
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      body: {registrationNumber: REG-SYNTH-INVALID1, eventType: BIRTH}
+    expect: {status: 503, code: source.unavailable}
+  - id: invalid-transform-input
+    authorizationFixture: civil-supervisor-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      query: {accessProfile: supervisory}
+      body: {registrationNumber: REG-SYNTH-XFORM1, eventType: BIRTH}
+    expect: {status: 503, code: source.unavailable}
+  - id: quota-exhausted
+    authorizationFixture: civil-verifier-ex-a
+    request:
+      method: POST
+      path: /v2/resources/civil-event/lookups/verify-registration
+      body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
+    expect: {status: 429, code: consultation.rate_limited}

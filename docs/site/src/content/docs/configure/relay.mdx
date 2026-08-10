@@ -1,0 +1,341 @@
+---
+title: Author a Registry Relay project
+description: Turn reviewed SQLite views into a checked Registry contract, governed access profiles, and a sealed Relay package.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-10"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - openapi
+  - json-schema
+  - json-ld
+  - shacl
+  - geojson
+  - json-fg
+  - sdmx
+  - govstack-digital-registries
+---
+
+Use `relayctl` to author one institution-owned Registry from reviewed SQLite views.
+The governed contract names the Registry, its mandatory Registry Core context, published properties,
+finite access profiles, wire formats, query capabilities, and disclosure.
+The database remains a source binding, not an API model.
+
+## When to use this
+
+Use this guide after the [synthetic Relay tutorial](../../tutorials/publish-governed-sqlite-registry/)
+works and the Registry Authority has selected an authoritative SQLite source.
+The result is a deployment candidate for institutional and operator review, not a running service.
+
+Relay serves one Registry per process.
+A resource is a governed Record type in that Registry, not a SQLite table and not a second Registry.
+
+## Before you start
+
+Prepare a non-writable SQLite inspection copy, narrow reviewed views, a stable Registry identifier,
+the Authority and operational roles, and synthetic fixtures.
+Also agree which callers, purposes, row boundaries, fields, and query capabilities each operation
+may use. Choose wire formats separately from those access decisions.
+Keep production Records, identifiers, credentials, and database files out of the project.
+
+## Inspect structure before assigning meaning
+
+Initialize the project, then inspect the source copy:
+
+```sh
+relayctl init ./business-registry
+relayctl inspect ./business-inspection.sqlite --starters ./business-registry/inspection
+```
+
+`inspect` records only SQLite structure: objects, columns, declared types, nullability, key
+membership, and a schema fingerprint.
+It does not read row values.
+The starter and the generated identification candidates use that structure, authored roles,
+codelist bindings, and the embedded digest-pinned core rule pack.
+They are suggestions, never approved classification or publication truth.
+
+Copy only accepted view bindings and the schema fingerprint into `registry.yaml`.
+Unconfigured tables, columns, joins, expressions, and sort order remain unavailable to callers.
+
+## Keep Registry Core and published properties separate
+
+Every successful Record always carries the Registry Core context:
+
+- `registryIdentifier` and `recordIdentifier`.
+- `revisionIdentifier`, `lifecycleState`, and source-owned `recordedAt`.
+- `authorityIdentifier`, `schemaReference`, and `semanticModelReference`.
+- `domainData`, containing only serializable published properties.
+
+Bind the Record identifier, revision, lifecycle, and recorded time to reviewed view columns.
+`recordedAt` is when the Authority recorded the revision, not Relay startup, snapshot, or response
+time.
+Declare a published property separately from its source column, even for a one-to-one binding.
+Its public name, type, semantic term, source requiredness, and output classification are part of
+the contract.
+
+## Review classification as one governed input
+
+Every published property has an output classification.
+Every source-view column Relay processes also has a source-column classification, including hidden
+Registry Core, selector, filter, order, row-binding, and transform-input columns.
+Resource defaults reduce repetition, but compilation expands them to a complete effective
+classification.
+
+Generate the deterministic, value-free review inputs beneath `generated/`:
+
+```sh
+relayctl generate ./business-registry
+```
+
+The command writes:
+
+- `reports/identification-report.json`
+- `reports/classification-inventory.json`
+- `reports/access-profile-report.json`
+- `reports/contextual-review-findings.json`
+- `governance/classification-review-starter.yaml`
+
+The `classification-review.yaml` sidecar is strict and names the inventory it approves.
+Use `generated` when the review accepts an identification report, `imported` for reviewed material
+from another process, or `manual` for an institutional review without generated identification.
+Only generated review binds an accepted copied report and its rule-pack identity.
+
+```yaml
+apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:registered-businesses
+classificationInventoryDigest: sha256:<inventory-digest>
+method: manual
+reviewer: urn:example:institution:company-registrar
+reviewDate: 2026-08-10
+status: reviewed
+rationaleRef: governance/classification-review-rationale.md
+```
+
+Production compilation refuses a missing, non-reviewed, stale, or digest-mismatched sidecar.
+A relevant contract, schema, source-column, or classification change invalidates review.
+A rule-pack change matters only where that pack informed the review.
+
+## Define reviewed access profiles
+
+Each list, read, named exact-lookup, or named search operation has a finite ordered map of named
+access profiles and exactly one `defaultAccessProfile`.
+If an operation has any public access profile, its default must also be public. This keeps omission
+truthful for anonymous callers and the generated public OpenAPI.
+Each access profile selects one access rule and one disclosure profile. The disclosure profile
+defines the maximum property set that can reach `domainData`.
+
+Callers may omit `accessProfile` to select the declared default, or supply one named access
+profile. Relay authorizes the supplied access profile exactly as requested.
+A syntactically valid unknown name and a scope-hidden name receive the same
+`404 resource.not_found` response. An invalid bearer is `401`. Relay never falls back to the
+default or another access profile.
+The `fields` parameter can only select a non-empty subset of the selected profile's disclosed
+properties.
+It cannot add a property, select a source column, change a transform, weaken handling, or bypass
+an access or row boundary.
+Registry Core remains present.
+
+The `Accept` header selects JSON, JSON for Linked Data (JSON-LD), or GeoJSON serialization after
+access and disclosure are decided. `formatProfile` refines GeoJSON where Relay exposes a finite
+profile choice. A wire format is never an access right.
+
+## Add a bounded Point profile
+
+Declare one Point property when a resource publishes reviewed longitude and latitude columns in
+Coordinate Reference System 84 (CRS84) order. Keep existing scalar properties unchanged and name
+the Point as the resource's `primaryGeometry`.
+
+```yaml
+properties:
+  location:
+    label: Premises location
+    description: Reviewed premises Point in CRS84 longitude-latitude order
+    type: point
+    crs: http://www.opengis.net/def/crs/OGC/0/CRS84
+    source: {longitudeColumn: longitude, latitudeColumn: latitude}
+    sourceRequired: true
+    semanticTerm: local:location
+    classification: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+primaryGeometry: location
+disclosureProfiles:
+  public-premises: {properties: [premisesName, location]}
+  registrar-premises: {properties: [businessRegistrationNumber, premisesName, location]}
+operations:
+  list:
+    defaultAccessProfile: registrar-premises
+    accessProfiles:
+      registrar-premises:
+        access: {scope: registry:business:premises-list}
+        disclosureProfile: registrar-premises
+    orderBy: [premisesIdentifier]
+    pagination: {defaultPageSize: 50, maximumPageSize: 200}
+  searches:
+    - id: within-bbox
+      query:
+        kind: point-bbox
+        maximumLongitudeSpanDegrees: 2
+        maximumLatitudeSpanDegrees: 2
+      defaultAccessProfile: public-premises
+      accessProfiles:
+        public-premises: {access: public, disclosureProfile: public-premises}
+        registrar-premises:
+          access: {scope: registry:business:premises-search-registrar}
+          disclosureProfile: registrar-premises
+      orderBy: [premisesIdentifier]
+      pagination: {defaultPageSize: 50, maximumPageSize: 200}
+```
+
+The named search makes the query shape and its authorization independently reviewable. A client
+with only the list scope cannot search, and a client with only the protected search scope cannot
+list. The request is explicit:
+
+```http
+GET /v2/resources/registered-premises/searches/within-bbox?bbox=100,13,101,14
+Accept: application/geo+json
+```
+
+JSON and JSON-LD are available for every selected access profile. GeoJSON is available only when
+the selected operation has a primary geometry and the access profile discloses `location`.
+`Accept: application/geo+json` selects the wire format. Omit `formatProfile`, or use
+`formatProfile=rfc7946`, for the RFC 7946 profile. Use `formatProfile=jsonfg` for the bounded JSON-FG
+profile. Neither parameter grants another access right or adds a property.
+
+The `point-bbox` query enables one inclusive, bounded Point-containment search. Relay refuses
+non-finite values, coordinates outside CRS84, decreasing bounds, antimeridian crossing, and spans
+larger than the authored limits. Relay does not expose a spatial expression language, reprojection,
+joins, dynamic SQLite extensions, or an Open Geospatial Consortium API Features service. The
+[synthetic Relay tutorial](../../tutorials/publish-governed-sqlite-registry/) executes the tracked
+business-registry example.
+
+## Publish a bounded statistical dataset
+
+Use `statisticalDatasets` for a reviewed, pre-aggregated statistical view. Do not model the view as
+a Record resource or an operation with access profiles. Each statistical dataset has one fixed
+access rule, one explicit time granularity, bounded query behavior, and an explicit SDMX binding.
+Version 1 accepts only a snapshot source for this profile.
+
+The following excerpt assumes that the source, codelists, classifications, and governance paths are
+declared elsewhere in the same project:
+
+```yaml
+statisticalDatasets:
+  - id: labour-force-participation
+    title: Labour force participation rate
+    description: Reviewed quarterly participation rates from a pre-aggregated view.
+    publication: {releaseAt: 2026-08-10T00:00:00Z}
+    source: {source: labour-statistics, view: relay_labour_force_rates}
+    classificationDefaults:
+      {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    dimensions:
+      refArea:
+        label: Reference area
+        description: Reviewed statistical reference area.
+        column: ref_area
+        type: code
+        vocabulary: codelists/areas.yaml
+        concept: local:referenceArea
+    time:
+      label: Time period
+      description: Quarterly observation period.
+      column: time_period
+      granularity: quarterly
+      concept: local:timePeriod
+    measure:
+      id: participationRate
+      label: Participation rate
+      description: Labour force participation rate.
+      column: obs_value
+      type: decimal
+      concept: local:participationRate
+    access: public
+    query: {allowUnfiltered: true, maximumObservations: 1000, maximumOffset: 10000}
+    bindings: {sdmx: {}}
+    processingDescriptions:
+      - id: official-statistics-publication
+        operationRefs: [statistics:read]
+        purpose: official-statistics-publication
+        recipientClass: public
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [pre-aggregated-view, bounded-query]
+```
+
+Choose `annual`, `quarterly`, `monthly`, or `daily` once for each dataset. Source values, exact
+selectors, and time bounds must use that grammar. Relay does not infer granularity from rows or
+allow a dataset to mix time-period shapes.
+
+The empty `sdmx: {}` object selects the binding while leaving REST and message-format versions to
+the compiler. Institutions that already govern SDMX identities may supply the supported identity
+overrides. Those overrides do not move SDMX terms into the format-neutral dimensions, measure,
+access, or query model.
+
+The resulting profile exposes dataflow data, dataflow structure, and data structure definition
+(DSD) structure reads. Data uses SDMX-JSON 2.1.0 or SDMX-CSV 2.1.0. Structure uses SDMX-JSON 2.1.0.
+The profile does not expose schema or availability placeholders and does not claim SDMX
+conformance or certification.
+
+Start an institutional statistical project from
+`products/relay-v2/acceptance/labour-statistics`. The tracked acceptance project owns the complete
+configuration, synthetic snapshot, codelists, expected HTTP exchanges, and generated baselines.
+
+## Account for processing and disclosure
+
+Technical handling is ordered from `public` through `internal` and `confidential` to `restricted`.
+Processing handling is the most restrictive level across every column used to answer the request.
+Disclosure handling is the most restrictive level among the properties an access profile can
+serialize.
+Compiler validity, audit context, cache eligibility, and source processing account for the
+processing level, even where the released response is less restrictive.
+
+A public access profile cannot transform a non-public source column.
+Instead, bind it to a reviewed pre-derived public SQLite view column.
+Classifications can restrict an operation, but cannot create a route, scope, purpose, consent,
+lawful basis, or row authority.
+
+Relay supports only two compiled, deterministic transforms:
+
+- `partial-string` emits the fixed Relay marker `***` and a configured bounded prefix or suffix.
+  A value no longer than the reveal length emits only `***`.
+- `date-precision` accepts a canonical `date` or `date-time` and emits a `year` or `year-month`
+  output property with its own type, semantic term, and classification.
+
+Transforms are response-only. A transformed property cannot be a list filter or fixed-order key,
+because the SQLite query would otherwise compare its undisclosed raw input. Expose a separately
+reviewed pre-derived view column when the derived value must be queryable.
+
+Invalid, noncanonical, oversized, or required missing transform input fails the complete selected
+Record as value-free `503 source.unavailable` without releasing a value.
+Hashing, pseudonyms, encryption, regular-expression replacement, caller-defined masks or
+expressions, dynamic per-request masking, and a free-form policy engine are not supported.
+
+## Check, test, and package the complete revision
+
+Run the production gate, generate reviewable artifacts, and replay synthetic HTTP fixtures before
+handoff:
+
+```sh
+relayctl check ./business-registry --production
+relayctl generate ./business-registry
+relayctl test ./business-registry
+relayctl diff ./approved-business-registry ./business-registry
+relayctl package ./business-registry --output ./business-registry-package
+```
+
+`check --production` and `package` refuse incomplete governance and unsafe package inputs.
+The package contains the contract's governed file closure and generated artifacts, but not SQLite
+data or fixtures.
+Relay loads one complete package at startup and does not merge, reload, overlay, or fall back to a
+different interpretation.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `inspect` refuses the source | The inspection database is unsafe or writable | Create a non-writable physical-path copy and retry. |
+| Production checking reports a review error | The sidecar is missing, not reviewed, stale, or does not match the inventory | Complete the institutional review and regenerate the affected report. |
+| A field is rejected | It is not in the selected access profile's disclosure profile | Review and change the governed access profile, then repeat the full workflow. |
+| Packaging refuses the destination | The output directory exists or its closure is unsafe | Select a new empty revisioned directory. |

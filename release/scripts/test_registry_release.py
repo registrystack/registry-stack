@@ -464,6 +464,7 @@ class RegistryReleaseTest(TestCase):
                 "rust-tests",
                 "evidence-contracts",
                 "relay-contracts",
+                "relay-v2-contracts",
             },
             set(rust_result["needs"]),
         )

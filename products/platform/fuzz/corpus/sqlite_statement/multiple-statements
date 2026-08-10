@@ -1,0 +1,1 @@
+SELECT 'first' AS result; ATTACH ':memory:' AS extra;

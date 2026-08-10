@@ -1,0 +1,9 @@
+apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:registered-businesses
+classificationInventoryDigest: sha256:056ebb32534cf73e44bee9b2958197d19cb3ded3dd1c91d39330606b8e0b2177
+method: imported
+reviewer: urn:example:institution:company-registrar
+reviewDate: 2026-08-10
+status: reviewed
+rationaleRef: governance/classification-review-rationale.md

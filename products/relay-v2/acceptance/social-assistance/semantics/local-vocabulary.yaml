@@ -1,0 +1,14 @@
+schemaVersion: relay.registrystack.org/local-vocabulary/v1alpha1
+baseIri: https://social-registry.example.invalid/vocabulary/
+origin: generated-local
+reviewStatus: reviewed
+externalMappings: []
+classes:
+  - id: AssistanceEnrolment
+    label: Assistance enrolment
+    description: Synthetic current enrolment maintained by the example Registry.
+properties:
+  - {id: enrolmentReference, label: Enrolment reference, datatype: string, cardinality: one}
+  - {id: programme, label: Programme, datatype: controlled-code, cardinality: one}
+  - {id: enrolmentStatus, label: Enrolment status, datatype: controlled-code, cardinality: one}
+  - {id: validThrough, label: Valid through, datatype: date, cardinality: zero-or-one}

@@ -1,0 +1,180 @@
+---
+title: Semantics, classification, and disclosure in Relay
+description: Understand how Relay separates source processing, public meaning, access profiles, and bounded disclosure.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-10"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - json-schema
+  - json-ld
+  - shacl
+  - geojson
+  - json-fg
+  - govstack-digital-registries
+  - universal-dpi-safeguards
+---
+
+Registry Relay makes meaning, processing, and disclosure part of one reviewed Registry contract.
+It generates a local semantic model from that contract, but the contract never promotes a SQLite
+column, identification candidate, or classification suggestion into public truth by itself.
+
+## Separate source structure from public meaning
+
+A source column is a reviewed local binding.
+A published property is a stable API name with a type, semantic term, label, description, source
+requiredness, and output classification.
+One source column can support more than one published property, and a published property can preserve its
+meaning across a reviewed storage migration.
+
+Relay's schema-only identification reads observed SQLite structure, declared types, key metadata,
+codelist bindings, authored roles, and an embedded digest-pinned core rule pack.
+It does not profile or read row values, make machine-learning inferences, or auto-approve a result.
+Candidates record their evidence and categorical confidence.
+Conflicts remain uncertain and require institutional review.
+
+## Preserve Registry Core in every wire format
+
+Every successful Record has mandatory Registry Core context: Registry and Record identifiers,
+revision, lifecycle state, Authority, recorded time, and links to the response schema and semantic
+model.
+`domainData` is the only selectable part of the Record.
+`fields` can remove published properties from `domainData`, but it cannot remove Registry Core.
+
+This split explains why Relay produces two kinds of validation artifact.
+The compiler validates hidden source bindings.
+The complete-record schema and Shape Constraint Language (SHACL) shape retain source requiredness
+for every governed output property.
+Each operation response schema validates Registry Core and the domain properties that its access
+profile permits when they are present.
+
+## Classify output and processing separately
+
+Each published property has an output classification.
+Each column Relay processes has a source-column classification, including unpublished Registry Core,
+filter, order, selector, row-boundary, revision, and transform-input columns.
+The source classification is not a duplicate of the published property's classification: it protects
+the data Relay had to process even when Relay does not serialize it.
+
+The technical handling order is `public`, `internal`, `confidential`, then `restricted`.
+The compiler derives two floors for each access profile:
+
+| Floor | Includes | Controls |
+| --- | --- | --- |
+| Processing handling | Every source column used to answer the operation | Compiler validity, source use, audit context, and cache eligibility. |
+| Disclosure handling | Properties serializable by the access profile | The sensitivity of the releasable output. |
+
+The processing floor applies even when the output floor is less restrictive.
+For example, a public access profile cannot conceal a non-public source column through a transform.
+It must instead read a reviewed pre-derived public column from the SQLite view.
+
+Classifications may reduce availability, but do not grant access.
+They do not create a scope, purpose, row authority, lawful basis, consent decision, or operation.
+
+## Review classification as a complete artifact
+
+Resource defaults can make authoring concise, but compilation expands every property and processed
+source column to a complete effective classification.
+`relayctl generate` produces deterministic, value-free identification, classification inventory,
+access-profile, and contextual-finding reports, plus a classification-review starter.
+
+The closed `ClassificationReview` sidecar binds the Registry identifier and classification-inventory
+digest to a reviewer, date, rationale, status, and one method: `generated`, `imported`, or `manual`.
+Generated review also binds the accepted copied identification report and rule pack.
+Imported and manual reviews are first-class methods and do not require an identification report.
+Production compilation fails for a missing, unreviewed, stale, or digest-mismatched sidecar.
+
+## Use finite governed access profiles
+
+An operation has a finite ordered map of named access profiles and exactly one default.
+Each access profile owns one access rule and one disclosure profile.
+The profile is the largest set of published properties it may disclose.
+
+The request parameter `accessProfile` selects a named access profile.
+When absent, Relay uses the declared default.
+When present, Relay authorizes that exact access profile: an invalid bearer, denied request, or
+unknown name does not fall back to another access profile.
+A syntactically valid unknown name and a scope-hidden name share the generic
+`404 resource.not_found` response, so the finite access-profile map is not enumerable.
+After selection, `fields` may request only a non-empty subset of that profile's properties.
+It cannot select a source column, switch profiles, change a transform, bypass a row boundary,
+or lower the compiled handling, audit, quota, metadata, or cache controls.
+
+The `Accept` header and optional `formatProfile` select serialization only after access and
+disclosure are fixed. They cannot grant a scope, widen fields, or select a different query.
+
+This is requester minimization, not dynamic per-request masking or attribute authorization.
+Relay has no free-form policy engine or arbitrary expression language.
+
+## Apply only bounded transforms
+
+The transform set is deliberately finite and deterministic.
+`partial-string` produces the Relay-owned marker `***` with a bounded Unicode-scalar prefix or
+suffix.
+If the input has no more characters than the configured reveal length, the output is `***` alone.
+`date-precision` turns a canonical `date` or `date-time` into a `year` or `year-month` property.
+The transformed property has its own semantic term, output type, and classification.
+
+The operator-only full JSON Schema and SHACL shape validate every `sourceRequired` property and
+mandatory Record-context binding in the reviewed view.
+Relay does not coerce or partially release an invalid selected row.
+For a sensitive exact lookup, a missing Record, ambiguous result, and hidden row share the same
+unresolved response so the result does not reveal which condition occurred.
+Invalid, noncanonical, oversized, incompatible, or required missing transform input fails the
+complete selected Record as value-free `503 source.unavailable` without releasing source values.
+Optional null input omits the transformed property.
+
+Relay does not provide hashing, pseudonyms, encryption, regular-expression replacement, geographic
+or numeric transformations, codelist remapping, caller-defined masks, or dynamic masking policy.
+A public access profile cannot use a transform to conceal a non-public source column. It must read
+a reviewed pre-derived public value from the SQLite view.
+Transformed properties also cannot be list filters or fixed-order keys. Queryable derived values
+must be separate reviewed pre-derived source properties, so filters and ordering never operate on
+an undisclosed transform input.
+
+## Treat geometry as a classified property
+
+The bounded spatial profile gives one primary Point a public property name, semantic term,
+description, source requiredness, and effective classification. Longitude and latitude remain
+reviewed source-column bindings. Relay validates both coordinates as one complete Point before
+releasing a selected Record. A malformed selected row fails closed as value-free
+`503 source.unavailable`.
+
+The selected access profile controls whether the Point is disclosed. Ordinary JSON and JSON-LD
+place the Point in `domainData`. GeoJSON moves the same selected Point to the Feature `geometry`
+member and leaves Registry Core plus the other selected properties in Feature `properties`.
+If the caller narrows `fields` to omit the Point, GeoJSON uses an explicit `null` geometry rather
+than reintroducing the coordinates elsewhere.
+
+Generated vocabulary, JSON Schema, Shape Constraint Language (SHACL), classification, and
+capability artifacts describe the Point only for audiences that can receive the selected access
+profile. The JSON-LD context types the bounded GeoJSON value as Resource Description Framework
+JSON. Relay does not claim GeoSPARQL inference, geometry conversion, or an Open Geospatial
+Consortium API Features service.
+
+## Generate semantics without pretending equivalence
+
+Relay generates a local JSON-LD vocabulary and context, JSON Schema, SHACL, codelist schemas,
+capability metadata, and operation-specific response artifacts.
+The context expands response `data` and `items` as RDF graph containers, aliases `domainData` to
+JSON-LD `@nest`, emits the resource semantic class as `@type`, and applies the same IRI and XML
+Schema datatypes required by the operation-bound SHACL shape.
+An institution can add a reviewed and digest-pinned mapping to an external vocabulary with an
+explicit exact, close, broad, narrow, or related relation.
+Relay does not infer that relation or fetch remote vocabulary content while serving a request.
+
+Data Privacy Vocabulary (DPV) metadata can describe processing purpose, parties, recipients, legal
+context, and safeguards.
+DPV is a governance projection, not Relay's runtime policy language.
+Relay does not evaluate arbitrary Resource Description Framework (RDF), DPV, or Open Digital Rights
+Language (ODRL) rules.
+
+## Next
+
+- [Understand governed Registry publication](../governed-registry-publication/) for the overall
+  contract and runtime boundary.
+- [Author a Registry Relay project](../../configure/relay/) for the review and package workflow.
+- [Operate Registry Relay](../../operate/relay/) for startup, audit, and revision controls.

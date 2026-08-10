@@ -1,0 +1,184 @@
+---
+title: Operate Registry Relay
+description: Deploy one sealed Registry package with read-only SQLite, authentication, auditing, limits, and a private listener.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-10"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - geojson
+  - json-fg
+  - sdmx
+---
+
+Deploy one reviewed Relay package without allowing deployment configuration to change Registry
+identity, Registry Core, source bindings, access profiles, wire formats, classifications, or disclosure.
+This guide is for the operator who owns service paths, sources, secrets, issuers, audit retention,
+limits, readiness, and replacement of complete revisions.
+
+## When to use this
+
+Use this guide after a data publisher supplies a package produced by `relayctl package`, the
+matching SQLite source, and an approved change report.
+Return to [Relay project authoring](../../configure/relay/) if any of those inputs changes.
+
+Relay runs one Registry per process.
+Deploy another Registry under a separate service when it has a different Authority or
+administrative trust boundary.
+
+## Before you start
+
+Prepare a dedicated Unix service identity, a private listener behind Transport Layer Security
+(TLS) termination, a sealed package, the matching snapshot or live read-only source, an audit
+location, independent audit-integrity and cursor-encryption keys, and a token issuer for protected
+access profiles.
+Do not place the package, source, secret, or audit path in a shared writable directory.
+For snapshot mode, make the SQLite file immutable outside Relay, preferably with a read-only mount.
+Relay verifies its captured digest before and after every statement, but a process cannot exclude a
+privileged writer that changes and restores bytes entirely between both checks.
+
+Relay validates trusted path components before use.
+They must not be symbolic links or writable by group or world, and must be owned by root or the
+service identity.
+The service fails closed on non-Unix platforms where it cannot enforce those ownership and mode
+checks.
+
+## Bind deployment inputs without editing the package
+
+The runtime file names local deployment bindings and must not restate or override governed policy:
+
+```yaml
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RelayRuntime
+server: {bind: "127.0.0.1:8080"}
+packagePath: /etc/relay/business/package
+sources: {companies: {path: /srv/registries/business.sqlite}}
+authentication: {issuer: null}
+audit:
+  sink: /var/lib/relay/business/audit.jsonl
+  integrityKeyRef: secret:file/secrets/audit-integrity-key
+cursor: {integrityKeyRef: secret:file/secrets/cursor-integrity-key, maximumAgeSeconds: 300}
+limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 32}
+quotas: {requestsPerMinute: 120, burst: 20}
+```
+
+`authentication.issuer: null` is valid only when every compiled access rule is public, including
+Record access profiles and fixed statistical-dataset access rules. A package with either kind of
+protected access needs the configured issuer at startup.
+The issuer's verified claims may establish scopes, purpose, and row authority, but cannot enable an
+operation or access profile the package did not compile.
+A syntactically valid unknown access profile and a valid principal without its scope receive the
+same concealed `404 resource.not_found` response. Relay does not fall back to a less restrictive
+access profile.
+
+Relay authenticates and encrypts the complete cursor payload with a fresh nonce. The payload binds
+the source and contract revisions, operation, access profile, disclosure profile, filters, fixed
+order, selected fields, authorization context, optional bbox, wire format, format profile, and
+expiry. Treat cursors as opaque continuation tokens even though they contain no plaintext filter,
+order, or bbox values.
+
+`relay serve --runtime <file>` opens only the sealed package at `packagePath`.
+It rejects unsafe paths, a package inventory mismatch, source-schema drift, missing mandatory audit
+inputs, and incompatible runtime bindings before listening.
+There is no deployment switch that disables fail-closed audit behavior.
+
+Quota configuration has two values for the whole Relay deployment. `requestsPerMinute` sets the
+refill rate and `burst` sets the short-term capacity. Relay keeps a separate bucket for each
+compiled operation, so one busy operation cannot exhaust another. Every access profile of an
+operation shares that operation's bucket. Version 1 does not add per-profile, per-client,
+or distributed quota modes. Put those controls at the trusted gateway when the deployment needs
+them.
+The data, dataflow-structure, and data structure definition (DSD) routes for one statistical
+dataset share its one compiled statistical-read operation and quota bucket.
+
+## Choose the source profile already reviewed
+
+The package selects the source profile.
+Runtime cannot change it.
+
+| Property | Snapshot | Live read-only |
+| --- | --- | --- |
+| Publisher updates while Relay runs | No | Yes, through a separate trusted publisher. |
+| Source revision | Captured content digest | Explicitly unversioned. |
+| List and cursor pagination | Supported | Not supported. |
+| Cache revalidation | Available only for eligible public access profiles | Disabled. |
+| Request consistency | Immutable file | One read transaction. |
+
+Both profiles pin the SQLite schema fingerprint and deny writes, arbitrary SQL, schema drift, and
+unbounded result behavior.
+Live resources support only identifier read and named exact lookup.
+Bounded bbox consultation is a named collection search, so it uses a reviewed snapshot source in
+this profile. GeoJSON and JSON-FG do not change the source, access, audit, or cache rules. Their exact
+response bytes receive distinct cache validators where public snapshot revalidation is eligible.
+
+A compiled statistical dataset is also snapshot-only in Version 1. Its prepared dataflow and DSD
+structure bytes belong to the sealed package, while bounded data responses are produced from the
+matching immutable snapshot. Runtime configuration cannot switch that dataset to live read-only,
+change its time granularity, or add another statistical format or query.
+
+## Start and verify the service
+
+Start the process using the exact runtime file:
+
+```sh
+sudo -u <relay-user> /usr/local/bin/relay serve --runtime /etc/relay/business/runtime.yaml
+```
+
+Relay reports its listener only after it verifies the package, source, issuer when configured,
+audit sink, secrets, limits, and readiness.
+Check the private endpoint from the proxy network boundary:
+
+```sh
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/ready
+```
+
+Both return a successful response only after startup completed.
+Publish the API through the operator-controlled TLS proxy or ingress, not by exposing the private
+listener directly.
+
+## Retain value-free audit evidence
+
+For every data operation, including anonymous public access, Relay persists an attempt event before
+SQLite access and a terminal release, unresolved, or source-failed event before returning.
+The release event covers the exact response bytes.
+An audit failure blocks source access or withholds the response.
+
+For Record operations, audit binds the Registry, resource, operation, access profile, disclosure
+profile, selected property identifiers or digest, processing handling, disclosure handling,
+transform identifiers, contract revision, and source revision. Statistical audit uses the same
+fail-closed attempt and terminal gates, but records the dataset's fixed access rule, exact data or
+structure surface, and selected SDMX wire format rather than inventing an access profile.
+It excludes tokens, selectors, raw principals, source values, response values, and raw Record
+identifiers.
+Keep the audit file and integrity key under one retention and access-control policy.
+
+Operational logs are also value-free.
+Use them for route template, status, latency, and trace correlation, not to recover request or
+Registry data.
+
+## Replace complete revisions
+
+Relay does not hot-reload, merge, overlay, or fall back across packages.
+
+1. Receive a newly reviewed package, compatible source, and change report.
+2. Install them at new trusted revisioned paths without altering the active revision.
+3. Start a candidate on a private listener and wait for readiness.
+4. Send a smoke request through the production proxy policy.
+5. Shift traffic, drain the previous process, and terminate it.
+6. Retain the package, source revision, audit segment, and change review under institutional policy.
+
+Rollback activates a complete prior package only with its compatible source and runtime bindings.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Startup refuses a path | A component is a symlink, has the wrong owner, or is writable | Move the deployment to trusted Unix paths and correct ownership and modes. |
+| Startup reports a package or schema error | The package, source, or review revision does not match | Stop deployment and return the change to the authoring workflow. |
+| A protected access profile returns `404 resource.not_found` | The issuer or token does not satisfy that profile's exact scope | Correct the issuer or caller authority. Do not expose a weaker profile as fallback. |
+| A spatial request returns `406 format.unsupported` | The selected access profile does not disclose a primary geometry or the format request is unsupported | Select an entitled geometry-bearing profile or request JSON or JSON-LD. |
+| A response is withheld | The terminal audit write failed | Restore the audit sink and verify its integrity before accepting traffic. |

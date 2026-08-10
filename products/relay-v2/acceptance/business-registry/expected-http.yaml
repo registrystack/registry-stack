@@ -1,0 +1,415 @@
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry:registered-businesses
+authorizations:
+  business-registrar:
+    principal: synthetic-business-registrar
+    scopes: [registry:business:read-registrar]
+    claims: {}
+  business-unentitled:
+    principal: synthetic-business-reader
+    scopes: [registry:business:reader]
+    claims: {}
+  premises-list:
+    principal: synthetic-premises-list-client
+    scopes: [registry:business:premises-list]
+    claims: {}
+  premises-search-registrar:
+    principal: synthetic-premises-search-client
+    scopes: [registry:business:premises-search-registrar]
+    claims: {}
+steps:
+  - id: registry-discovery
+    request: {method: GET, path: /v2}
+    expect:
+      status: 200
+      capabilityPatterns: [consultation.list, consultation.retrieve, consultation.search]
+      absentCapabilityPatterns: [evidence, write, notification]
+  - id: first-page
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {jurisdiction: EX-A, pageSize: 1}
+    expect:
+      status: 200
+      itemCount: 1
+      nextCursor: non-null
+      registryCoreRequired: true
+  - id: second-page
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {cursor: "$nextCursor:first-page"}
+    expect: {status: 200, itemCount: 1, registryCoreRequired: true}
+  - id: terminal-page
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {jurisdiction: EX-A, pageSize: 4}
+    expect: {status: 200, itemCount: 2, nextCursor: "null", registryCoreRequired: true}
+  - id: status-filter
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {status: SUSPENDED}
+    expect: {status: 200, itemCount: 1, registryCoreRequired: true}
+  - id: jurisdiction-filter
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {jurisdiction: EX-A}
+    expect: {status: 200, itemCount: 2, registryCoreRequired: true}
+  - id: filtered-page
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {status: ACTIVE, jurisdiction: EX-A, fields: "registrationNumber,legalName"}
+    expect:
+      status: 200
+      domainDataKeys: [registrationNumber, legalName]
+      registryCoreRequired: true
+  - id: second-field-subset
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: registrationStatus, pageSize: 2}
+    expect: {status: 200, itemCount: 2, registryCoreRequired: true, domainDataKeys: [registrationStatus]}
+  - id: identifier-read
+    request: {method: GET, path: /v2/resources/registered-business/records/BIZ-SYNTH-0001}
+    expect:
+      status: 200
+      recordIdentifier: BIZ-SYNTH-0001
+      cache: public-snapshot-revalidation
+  - id: registrar-read
+    authorizationFixture: business-registrar
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      query: {accessProfile: registrar, fields: "registrarLegalName,registrarNote"}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [registrarLegalName, registrarNote]
+      cache: no-store
+  - id: registrar-access-profile-denied
+    authorizationFixture: business-unentitled
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      query: {accessProfile: registrar}
+    expect: {status: 404, code: resource.not_found}
+  - id: public-access-profile-unknown
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      query: {accessProfile: registrar-private}
+    expect: {status: 404, code: resource.not_found}
+  - id: identifier-read-jsonld
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      headers: {accept: application/ld+json}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      recordsEquivalentTo: identifier-read
+  - id: identifier-read-revalidated
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      headers: {if-none-match: "$etag:identifier-read"}
+    expect:
+      status: 304
+      bodyEmpty: true
+      etagSameAs: identifier-read
+  - id: premises-first-page
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "100,13,101,14", pageSize: 2}
+    expect:
+      status: 200
+      itemCount: 2
+      nextCursor: non-null
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName, location]
+  - id: premises-registrar-search
+    authorizationFixture: premises-search-registrar
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "100,13,101,14", accessProfile: registrar-premises, fields: "premisesIdentifier,businessRegistrationNumber"}
+    expect:
+      status: 200
+      itemCount: 2
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, businessRegistrationNumber]
+      cache: no-store
+  - id: premises-search-access-profile-denied
+    authorizationFixture: business-unentitled
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "100,13,101,14", accessProfile: registrar-premises}
+    expect: {status: 404, code: resource.not_found}
+  - id: premises-search-access-profile-unknown
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "100,13,101,14", accessProfile: unknown-profile}
+    expect: {status: 404, code: resource.not_found}
+  - id: premises-list-authorized
+    authorizationFixture: premises-list
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/records
+      query: {pageSize: 2, fields: "premisesIdentifier,businessRegistrationNumber"}
+    expect:
+      status: 200
+      itemCount: 2
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, businessRegistrationNumber]
+      cache: no-store
+  - id: premises-search-scope-cannot-list
+    authorizationFixture: premises-search-registrar
+    request: {method: GET, path: /v2/resources/registered-premises/records}
+    expect: {status: 404, code: resource.not_found}
+  - id: premises-list-scope-cannot-search
+    authorizationFixture: premises-list
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "100,13,101,14", accessProfile: registrar-premises}
+    expect: {status: 404, code: resource.not_found}
+  - id: premises-second-page
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {cursor: "$nextCursor:premises-first-page"}
+    expect:
+      status: 200
+      itemCount: 1
+      nextCursor: "null"
+      registryCoreRequired: true
+  - id: premises-boundary-point
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "101,14,101,14"}
+    expect: {status: 200, itemCount: 1, registryCoreRequired: true}
+  - id: premises-fields-omit-location
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "100,13,101,14", pageSize: 4, fields: "premisesIdentifier,premisesName"}
+    expect:
+      status: 200
+      itemCount: 3
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName]
+  - id: premises-read
+    request: {method: GET, path: /v2/resources/registered-premises/records/PREM-SYNTH-0001}
+    expect:
+      status: 200
+      recordIdentifier: PREM-SYNTH-0001
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName, location]
+  - id: premises-read-jsonld
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/records/PREM-SYNTH-0001
+      headers: {accept: application/ld+json}
+    expect:
+      status: 200
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName, location]
+      recordsEquivalentTo: premises-read
+  - id: premises-feature-collection
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      headers: {accept: application/geo+json}
+      query: {bbox: "100,13,101,14", formatProfile: rfc7946}
+    expect:
+      status: 200
+      itemCount: 2
+      nextCursor: non-null
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName]
+      geoJsonRoot: feature-collection
+      geometryType: Point
+      formatProfile: rfc7946
+      recordsEquivalentTo: premises-first-page
+  - id: premises-search-jsonld
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      headers: {accept: application/ld+json}
+      query: {bbox: "100,13,101,14", pageSize: 2}
+    expect:
+      status: 200
+      itemCount: 2
+      nextCursor: non-null
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName, location]
+      recordsEquivalentTo: premises-first-page
+  - id: premises-feature-collection-jsonfg
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      headers: {accept: application/geo+json}
+      query: {bbox: "100,13,101,14", formatProfile: jsonfg}
+    expect:
+      status: 200
+      itemCount: 2
+      nextCursor: non-null
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName]
+      geoJsonRoot: feature-collection
+      geometryType: Point
+      formatProfile: jsonfg
+      recordsEquivalentTo: premises-first-page
+  - id: premises-feature-read
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/records/PREM-SYNTH-0001
+      headers: {accept: application/geo+json}
+      query: {formatProfile: rfc7946}
+    expect:
+      status: 200
+      recordIdentifier: PREM-SYNTH-0001
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName]
+      geoJsonRoot: feature
+      geometryType: Point
+      formatProfile: rfc7946
+      recordsEquivalentTo: premises-read
+  - id: premises-feature-fields-omit-location
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      headers: {accept: application/geo+json}
+      query: {bbox: "100,13,101,14", pageSize: 4, fields: "premisesIdentifier,premisesName", formatProfile: rfc7946}
+    expect:
+      status: 200
+      itemCount: 3
+      nextCursor: "null"
+      registryCoreRequired: true
+      domainDataKeys: [premisesIdentifier, premisesName]
+      geoJsonRoot: feature-collection
+      geometryType: "null"
+      formatProfile: rfc7946
+      recordsEquivalentTo: premises-fields-omit-location
+  - id: premises-invalid-bbox
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "not,a,bbox"}
+    expect: {status: 400, code: filter.invalid_value}
+  - id: premises-missing-bbox
+    request: {method: GET, path: /v2/resources/registered-premises/searches/within-bbox}
+    expect: {status: 400, code: filter.invalid_value}
+  - id: premises-out-of-range-bbox
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "-181,13,101,14"}
+    expect:
+      status: 400
+      code: filter.invalid_value
+      absentEverywhere: ["-181"]
+  - id: premises-oversize-bbox
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "100,13,103,14"}
+    expect: {status: 400, code: filter.invalid_value}
+  - id: premises-antimeridian-bbox
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {bbox: "101,13,100,14"}
+    expect: {status: 400, code: filter.invalid_value}
+  - id: premises-cursor-bbox-binding
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {cursor: "$nextCursor:premises-first-page", bbox: "100,13,101,14"}
+    expect: {status: 400, code: query.cursor_invalid}
+  - id: premises-cursor-format-binding
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      headers: {accept: application/geo+json}
+      query: {cursor: "$nextCursor:premises-first-page"}
+    expect: {status: 400, code: query.cursor_invalid}
+  - id: premises-cursor-access-profile-binding
+    authorizationFixture: premises-search-registrar
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/searches/within-bbox
+      query: {cursor: "$nextCursor:premises-first-page", accessProfile: registrar-premises}
+    expect: {status: 400, code: query.cursor_invalid}
+  - id: premises-cursor-operation-binding
+    authorizationFixture: premises-list
+    request:
+      method: GET
+      path: /v2/resources/registered-premises/records
+      query: {cursor: "$nextCursor:premises-first-page"}
+    expect: {status: 400, code: query.cursor_invalid}
+  - id: nonspatial-geojson-refused
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
+      headers: {accept: application/geo+json}
+    expect: {status: 406, code: format.unsupported}
+  - id: invalid-coordinate-row
+    request: {method: GET, path: /v2/resources/registered-premises/records/PREM-SYNTH-BAD1}
+    expect:
+      status: 503
+      code: source.unavailable
+      absentEverywhere: ["95.0", "Unsafe coordinate fixture"]
+  - id: unknown-field
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: notGoverned}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: duplicate-field
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: "legalName,legalName"}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: source-column-field
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: legal_name}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: malformed-field
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {fields: ",legalName"}
+    expect: {status: 400, code: request.fields_invalid}
+  - id: unknown-filter
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {legalName: Example}
+    expect: {status: 400, code: filter.unknown_field}
+  - id: arbitrary-sort
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {sort: legalName}
+    expect: {status: 400, code: filter.unknown_field}
+  - id: unsupported-filter-operator
+    request:
+      method: GET
+      path: /v2/resources/registered-business/records
+      query: {"status[eq]": ACTIVE}
+    expect: {status: 400, code: filter.unknown_field}
+  - id: invalid-source-row
+    request: {method: GET, path: /v2/resources/registered-business/records/BIZ-SYNTH-BAD1}
+    expect: {status: 503, code: source.unavailable}

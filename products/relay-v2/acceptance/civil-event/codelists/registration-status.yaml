@@ -1,0 +1,4 @@
+id: civil-event-registration-status
+version: 1
+status: reviewed
+values: [REGISTERED, CORRECTED, SEALED]

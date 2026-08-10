@@ -1,0 +1,191 @@
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RegistryContract
+metadata:
+  id: civil-events
+  version: 2026-08-01
+  title: Synthetic civil-event registrations
+registry:
+  registryIdentifier: urn:example:registry:civil-events
+  name: Synthetic civil-event Registry
+  authority:
+    identifier: urn:example:institution:civil-registration-authority
+    name: Example Civil Registration Authority
+  operator:
+    identifier: urn:example:institution:digital-service-operator
+    name: Example Digital Service Operator
+  authoritativeScope: Synthetic civil-event registrations for Relay acceptance testing
+  baseUri: https://civil-registry.example.invalid/registry/
+  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
+  alignmentTargets:
+    - name: govstack-digital-registries
+      version: 3.0.0-alpha.2
+      status: directional
+    - name: govstack-api-design-guide
+      version: 0.1.0-draft
+      status: directional
+governance:
+  controller: urn:example:institution:civil-registration-authority
+  publisher: urn:example:institution:civil-registration-authority
+  auditOwner: urn:example:institution:civil-registration-inspectorate
+semantics:
+  localVocabulary: https://civil-registry.example.invalid/vocabulary/
+  alignments:
+    - id: publicschema-event-alignment
+      profileRef: semantics/publicschema-event-alignment.yaml
+      digest: sha256:c89af1aae44c66ce3ef8e6a1e6e6d9b063c50559d288b7ed290dff74422ea9d9
+      version: "1"
+      relationRequired: true
+classifications:
+  privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
+  institutional: {scheme: https://civil-registry.example.invalid/classification, version: "1"}
+  handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
+  provenanceRef: governance/classification-review.yaml
+sources:
+  events:
+    kind: sqlite
+    profile: live-read-only
+    expectedSchemaFingerprint: sha256:7f770d64cb19ec54caca2aa56378b13a43cd5edc206ff44b5fecc99ee9e63759
+resources:
+  - id: civil-event
+    title: Civil-event registration
+    description: Current synthetic civil-event registration.
+    semanticClass: local:CivilEventRegistration
+    source:
+      source: events
+      view: relay_civil_events
+    classificationDefaults: {privacy: personal, institutional: restricted, handling: restricted, status: reviewed}
+    sourceColumnClassifications:
+      jurisdiction_code: {privacy: personal-context}
+      registration_number: {privacy: identifying}
+      registration_date: {privacy: personal, institutional: restricted, handling: restricted, status: reviewed}
+    recordContext:
+      recordIdentifier: {sourceColumn: event_reference}
+      revisionIdentifier: {sourceColumn: record_revision}
+      lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
+      recordedAt: {sourceColumn: recorded_at}
+    properties:
+      eventReference:
+        sourceColumn: event_reference
+        type: string
+        sourceRequired: true
+        semanticTerm: local:eventReference
+        label: Event reference
+        description: Stable synthetic event Record identifier.
+        classification: {privacy: identifying}
+      eventType:
+        sourceColumn: event_type
+        type: controlled-code
+        codelist: codelists/civil-event-types.yaml
+        sourceRequired: true
+        semanticTerm: local:eventType
+        label: Event type
+        description: Type of synthetic civil event.
+        classification: {privacy: sensitive-personal}
+      registrationStatus:
+        sourceColumn: registration_status
+        type: controlled-code
+        codelist: codelists/registration-status.yaml
+        sourceRequired: true
+        semanticTerm: local:registrationStatus
+        label: Registration status
+        description: Current synthetic registration status.
+      registrationDate:
+        sourceColumn: registration_date
+        type: date
+        sourceRequired: true
+        semanticTerm: local:registrationDate
+        label: Registration date
+        description: Date the synthetic event was registered.
+      registrationYear:
+        sourceColumn: registration_date
+        transform: {kind: date-precision, sourceType: date, precision: year}
+        type: year
+        sourceRequired: true
+        semanticTerm: local:registrationYear
+        label: Registration year
+        description: Reviewed year-precision form of the civil-event registration date.
+        classification: {privacy: derived, institutional: confidential, handling: confidential, status: reviewed}
+      registrationYearMonth:
+        sourceColumn: registration_date
+        transform: {kind: date-precision, sourceType: date, precision: year-month}
+        type: year-month
+        sourceRequired: true
+        semanticTerm: local:registrationYearMonth
+        label: Registration year and month
+        description: Reviewed year-month-precision form of the civil-event registration date.
+        classification: {privacy: derived, institutional: confidential, handling: confidential, status: reviewed}
+      registrationArea:
+        sourceColumn: registration_area_code
+        type: controlled-code
+        codelist: codelists/registration-areas.yaml
+        sourceRequired: true
+        semanticTerm: local:registrationArea
+        label: Registration area
+        description: Administrative area maintaining the synthetic Record.
+        classification: {privacy: personal-context}
+      certificateAvailable:
+        sourceColumn: certificate_available
+        type: boolean
+        sourceRequired: true
+        semanticTerm: local:certificateAvailable
+        label: Certificate available
+        description: Whether a certificate can be requested for the synthetic event.
+    disclosureProfiles:
+      registrar-record:
+        properties: [eventReference, eventType, registrationStatus, registrationDate, registrationArea, certificateAvailable]
+      verification-result:
+        properties: [eventReference, eventType, registrationStatus, registrationDate, certificateAvailable]
+      supervisory-verification:
+        properties: [eventReference, eventType, registrationStatus, registrationYear, registrationYearMonth, certificateAvailable]
+    operations:
+      read:
+        defaultAccessProfile: registrar
+        accessProfiles:
+          registrar:
+            access:
+              scope: registry:civil-events:read
+              purpose: {claim: purpose, allowed: [civil-registration-administration]}
+              authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+            disclosureProfile: registrar-record
+      lookups:
+        - id: verify-registration
+          requestBody:
+            maximumBytes: 384
+            selectors:
+              registrationNumber: {sourceColumn: registration_number, type: string, minimumBytes: 12, maximumBytes: 96}
+              eventType: {sourceColumn: event_type, type: controlled-code, codelist: codelists/civil-event-selector-types.yaml}
+          defaultAccessProfile: registrar-verification
+          accessProfiles:
+            registrar-verification:
+              access:
+                scope: registry:civil-events:lookup
+                purpose: {claim: purpose, allowed: [registration-verification]}
+                authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+              disclosureProfile: verification-result
+            supervisory:
+              access:
+                scope: registry:civil-events:supervisory
+                purpose: {claim: purpose, allowed: [registration-supervision]}
+                authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+              disclosureProfile: supervisory-verification
+    processingDescriptions:
+      - id: registrar-administration
+        operationRefs: [read]
+        purpose: civil-registration-administration
+        recipientClass: authorized-registrar
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [no-collection-list, operation-scopes, principal-row-binding, property-minimization, value-free-audit]
+      - id: registration-verification
+        operationRefs: [lookup:verify-registration]
+        purpose: registration-verification
+        recipientClass: authorized-verifier
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [no-collection-list, operation-scopes, principal-row-binding, minimum-disclosure-profile, value-free-audit]
+metadataVisibility:
+  service: public
+  resources: operation-bound
+  semantics: operation-bound
+  classifications: operator-only
+  processing: operation-bound

@@ -1,0 +1,4 @@
+schemaVersion: relay.registrystack.org/legal-basis-reference/v1alpha1
+status: synthetic-example-only
+identifier: urn:example:legal-basis:official-statistics-publication
+statement: Fictional official-statistics publication authority used only for the Relay SDMX acceptance definition.

@@ -21,11 +21,14 @@ members = [
     "crates/registry-platform-ops",
     "crates/registry-platform-pdp",
     "crates/registry-platform-sdjwt",
+    "crates/registry-platform-sqlite",
     "crates/registry-platform-testing",
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
     "crates/registry-mint",
     "crates/registry-relay",
+    "crates/registry-relay-v2",
+    "crates/registry-relayctl",
     "crates/registry-language-server",
     "crates/registryctl",
 ]
@@ -58,6 +61,8 @@ registry-language-server = { path = "crates/registry-language-server", version =
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.18.0" }
 registry-mint = { path = "crates/registry-mint", version = "0.18.0" }
 registry-relay = { path = "crates/registry-relay", version = "0.18.0" }
+registry-relay-v2 = { path = "crates/registry-relay-v2", version = "0.18.0" }
+registry-relayctl = { path = "crates/registry-relayctl", version = "0.18.0" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.18.0" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.18.0" }
 registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.18.0" }
@@ -70,6 +75,7 @@ registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.
 registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.18.0" }
 registry-platform-pdp = { path = "crates/registry-platform-pdp", version = "0.18.0" }
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.18.0" }
+registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.18.0" }
 registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.18.0" }
 
 crosswalk-core = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }
@@ -86,6 +92,7 @@ base64 = { version = "0.22" }
 bytes = { version = "1" }
 calamine = { version = "0.36" }
 cel = { version = "0.13" }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
 chrono = { version = "0.4" }
 chrono-tz = { version = "0.10.4" }
 clap = { version = "4", features = ["derive", "env"] }

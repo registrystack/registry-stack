@@ -25,6 +25,7 @@ SHARDS = {
         "registry-platform-ops",
         "registry-platform-pdp",
         "registry-platform-sdjwt",
+        "registry-platform-sqlite",
         "registry-platform-testing",
     ),
     "manifest": (
@@ -32,6 +33,7 @@ SHARDS = {
         "registry-manifest-core",
     ),
     "relay": ("registry-relay",),
+    "relay-v2": ("registry-relay-v2", "registry-relayctl"),
     "evidence": (
         "registry-evidence",
         "registry-evidence-authoring",
@@ -53,6 +55,7 @@ SHARDS = {
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
+RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 TUTORIAL_PACKAGES = frozenset(
     package
     for shard in ("platform", "manifest", "relay", "registryctl")
@@ -398,6 +401,8 @@ def classify(
                 seeds.update(MANIFEST_PACKAGES)
             elif path.startswith("products/platform/"):
                 seeds.update(PLATFORM_PACKAGES)
+            elif path.startswith("products/relay-v2/"):
+                seeds.update(RELAY_V2_PACKAGES)
             elif path in {
                 "docs/site/src/data/generated/relay-support.json",
                 "docs/site/src/data/relay-support.yaml",
@@ -615,7 +620,7 @@ def classify(
                 {
                     "name": shard_name,
                     "packages": selected,
-                    "all_features": shard_name == "relay",
+                    "all_features": shard_name in {"relay", "relay-v2"},
                 }
             )
 
@@ -626,6 +631,7 @@ def classify(
         "platform": platform,
         "platform_hygiene": platform_hygiene,
         "relay_contracts": "registry-relay" in affected,
+        "relay_v2_contracts": bool(affected & RELAY_V2_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "project_authoring": "registryctl" in affected,
         "release_tool": release_tool,

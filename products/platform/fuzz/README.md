@@ -12,6 +12,8 @@ crates. These live outside the main workspace (see the root `Cargo.toml`
 - `sdjwt_holder_proof` — SD-JWT holder-proof JWT verification
   (`registry-platform-sdjwt`).
 - `sdjwt_issuance` — SD-JWT issuance input parsing (`registry-platform-sdjwt`).
+- `sqlite_statement` — bounded reviewed-statement parsing and offline
+  authorization (`registry-platform-sqlite`).
 
 Each target fuzzes the crate's real exported deserializer or entry point
 directly, never a locally re-declared mirror struct that could drift from the

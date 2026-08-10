@@ -1,0 +1,4 @@
+id: business-legal-forms
+version: 1
+status: reviewed
+values: [COOPERATIVE, LIMITED_COMPANY, ASSOCIATION]

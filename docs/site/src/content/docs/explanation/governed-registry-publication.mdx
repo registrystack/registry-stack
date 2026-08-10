@@ -1,0 +1,173 @@
+---
+title: How Relay publishes a governed Registry
+description: Understand how one reviewed Registry contract governs SQLite reads, access profiles, wire formats, audit, and startup behavior.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-10"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - openapi
+  - geojson
+  - json-fg
+  - sdmx
+  - govstack-digital-registries
+  - universal-dpi-safeguards
+---
+
+Registry Relay exposes selected, read-only Registry Records without making the source database a
+general API.
+One reviewed contract connects Registry identity, SQLite views, mandatory Registry Core context,
+operations, access profiles, wire formats, processing, disclosure, generated artifacts, and audit.
+
+## Start with one Registry
+
+One Relay process serves one Registry and one administrative trust domain.
+The Registry has a stable identifier, Authority, scope, and base URI.
+A resource is a Record type within that Registry, not a table or a second Registry.
+Unbound database objects remain invisible.
+
+Each successful Record preserves Registry Core: Registry and Record identifiers, revision,
+lifecycle state, Authority, recorded time, response-schema reference, and semantic-model reference.
+Only `domainData` varies by access profile and requester field subset.
+The pair `(registryIdentifier, recordIdentifier)` remains authoritative when JSON for Linked Data
+(JSON-LD) adds a derived `@id` and the resource semantic class as `@type`.
+
+## Compile a complete reviewed agreement
+
+The compiler validates the source schema, binds fixed parameterized queries, expands
+classifications, validates Registry Core and complete source rows, derives access and disclosure
+plans, and generates OpenAPI and semantic artifacts.
+`relayctl package` seals the governed input closure and generated inventory into one revision.
+
+Runtime configuration supplies deployment-local paths, listener, issuer, audit sink, limits, and
+secrets.
+It cannot add or weaken a resource, operation, access profile, access rule, classification,
+semantic mapping, or disclosure decision.
+The service loads one complete checked package at startup.
+It has no hot reload, overlay, partial activation, fallback interpretation, or mutable authoring
+project input.
+
+## Publish access profiles, not database columns
+
+Each compiled list, identifier-read, named exact-lookup, or named search operation has a finite map
+of named access profiles and one default.
+The access profile binds one access rule to one disclosure profile.
+The profile is the maximum published-property set for that response.
+
+Callers choose the default by omitting `accessProfile`, or request a supplied access profile by
+name.
+Relay authorizes the exact choice and never falls back when it is unknown or denied.
+A syntactically valid unknown name and a scope-hidden name share the generic
+`404 resource.not_found` response, so callers cannot enumerate the finite access-profile map.
+`fields` runs after access-profile selection and can only narrow `domainData` within that profile.
+It cannot introduce SQL, source columns, joins, filters, ordering, expressions, transformations, or
+new authorization.
+Registry Core cannot be removed.
+
+The compiler keeps source processing and disclosure distinct.
+Processing handling covers all columns Relay uses, including hidden identifiers, filters, and row
+boundaries.
+Disclosure handling covers the serializable properties of the access profile.
+The processing floor drives compiler validity, source projection, cache eligibility, and audit
+context. Authorization remains the access profile's explicit access rule.
+
+## Keep spatial output inside the same boundary
+
+A resource can declare one classified Point property assembled from reviewed CRS84 longitude and
+latitude columns, then name that property as `primaryGeometry`. The Point enters an ordinary
+disclosure profile by its published property name. An access profile that omits the Point cannot
+negotiate GeoJSON. A profile that includes the Point can serialize the same governed Record as
+JSON, JSON-LD, RFC 7946 GeoJSON, or the bounded JSON-FG profile. `Accept` and `formatProfile` change
+serialization, not authorization.
+
+A separately named search can declare one publisher-bounded `point-bbox` query over that Point.
+Relay classifies the search as constrained `consultation.search`, binds the predicate to the
+reviewed columns, and binds the bbox, selected access profile, selected fields, wire format, and
+format profile into the cursor context. List and search can require different scopes.
+
+The initial profile has no alternate coordinate reference system, antimeridian traversal, generic
+geometry, spatial join, or Open Geospatial Consortium API Features route. The synthetic tutorial
+exercises the same authorization, disclosure, audit, and cache boundary through the Relay router.
+
+## Keep statistical publication separate from Records
+
+A statistical dataset describes a reviewed pre-aggregated snapshot in format-neutral terms:
+dimensions, one time dimension and granularity, one measure, optional attributes, publication
+facts, classification, one fixed access rule, and bounded queries. An explicit `sdmx: {}` binding
+adds stable SDMX identities and wire contracts without turning the dataset definition into a data
+structure definition (DSD).
+
+Record access profiles do not apply to this surface. A statistical request cannot select an
+`accessProfile`, switch disclosure profiles, or widen the dataset's one access rule. SDMX-JSON and
+SDMX-CSV are two serializations of the same governed observations, not two authorization choices.
+
+The initial binding is a profiled SDMX REST 2.2.2 read subset. It exposes keyed data and the
+equivalent omitted-key request, plus dataflow and DSD structure reads. Data and structure messages
+use version 2.1.0 of their JSON or CSV formats. Schema, availability, other structure types,
+maintenance, history, and caller-directed aggregation are outside the profile. Relay does not
+claim full SDMX conformance or certification.
+
+## Offer only declared read capabilities
+
+Relay compiles only the operations the publisher declares:
+
+| Operation | Consultation capability | Result |
+| --- | --- | --- |
+| Identifier read | `consultation.retrieve` | One Record by stable identifier. |
+| Deterministic list | `consultation.list` | A bounded collection with declared equality filters and order. |
+| Named exact lookup | `consultation.search` | One resolved Record or an indistinguishable unresolved outcome. |
+| Bounded Point search | `consultation.search` | A deterministic collection search constrained by one declared CRS84 bbox. |
+| Statistical dataflow | `aggregate-data.statistical-dataflow` | Bounded observations from one pre-aggregated snapshot. |
+
+Exact lookup is not record matching: Relay returns no candidates, scores, rankings, or matching
+explanations.
+The API does not provide row-value profiling, machine-learning inference, arbitrary expression
+evaluation, dynamic per-request masking, a free-form policy engine, consent or workflow, write
+operations, or response signing.
+
+Relay supports two fixed transforms under the contract: partial strings use the `***` marker, and
+date precision produces typed `year` or `year-month` output.
+It does not offer caller-defined masks, hashes, pseudonyms, encryption, or transform expressions.
+An invalid selected source row or transform input fails the complete response as value-free
+`503 source.unavailable`; Relay never treats invalid source data as a normal unresolved lookup.
+
+## Make records and artifacts visible together
+
+Registry identity is public.
+Resource, schema, semantic, classification, and processing artifacts can be public,
+operation-bound, or operator-only.
+Relay refuses a contract unless an audience that can receive a Record can retrieve safe projections
+of its referenced schema and semantic model.
+
+The public OpenAPI endpoint is a deterministic safe projection.
+The sealed package retains the complete generated OpenAPI document.
+Relay does not create caller-specific OpenAPI documents at request time.
+Generated semantics express local reviewed terms; optional external mappings state a reviewed
+relation and do not claim certification or conformance.
+
+## Audit the released boundary
+
+Relay records a durable attempt before source access and a terminal event before the exact response
+bytes leave the service.
+Failure of either audit gate refuses source access or withholds the response.
+Record events bind the Registry, resource, operation, access profile, disclosure profile, selected
+properties, processing and disclosure handling, transform identifiers, contract revision, and
+source revision. Statistical events bind the fixed statistical access rule, route surface, and wire
+format instead of an access profile. Both event shapes exclude tokens, selectors, raw principals,
+source values, and response values.
+
+Deployment TLS protects transport and OAuth 2.0 access tokens control protected operations.
+Relay responses are not signed.
+Evidence Gateway remains the separate product for signed, minimum-disclosure assertions, and
+Registry Mint is an optional token issuer rather than a Relay runtime dependency.
+
+## Next
+
+- [Review semantics, classification, and disclosure](../relay-semantics-and-disclosure/) for the
+  access-profile and governance model.
+- [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/) for a
+  synthetic end-to-end run.
+- [Operate Registry Relay](../../operate/relay/) for deployment controls.

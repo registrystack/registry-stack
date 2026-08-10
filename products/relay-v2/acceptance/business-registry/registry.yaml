@@ -1,0 +1,253 @@
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RegistryContract
+metadata:
+  id: registered-businesses
+  version: 2026-08-01
+  title: Synthetic registered businesses
+registry:
+  registryIdentifier: urn:example:registry:registered-businesses
+  name: Synthetic registered business Registry
+  authority:
+    identifier: urn:example:institution:company-registrar
+    name: Example Company Registrar
+  operator:
+    identifier: urn:example:institution:digital-service-operator
+    name: Example Digital Service Operator
+  authoritativeScope: Synthetic legal business registrations for Relay acceptance testing
+  baseUri: https://business.example.invalid/registry/
+  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
+  alignmentTargets:
+    - name: govstack-digital-registries
+      version: 3.0.0-alpha.2
+      status: directional
+    - name: govstack-api-design-guide
+      version: 0.1.0-draft
+      status: directional
+governance:
+  controller: urn:example:institution:company-registrar
+  publisher: urn:example:institution:company-registrar
+  auditOwner: urn:example:institution:company-registrar-audit
+semantics:
+  localVocabulary: https://business.example.invalid/vocabulary/
+  alignments:
+    - id: semic-business-alignment
+      profileRef: semantics/semic-business-alignment.yaml
+      digest: sha256:6a46a9be0a3d5b4a5650934c7e8ef73ad1803cb479981f7d235a1c17a335af52
+      version: "1"
+      relationRequired: true
+classifications:
+  privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
+  institutional: {scheme: https://business.example.invalid/classification, version: "1"}
+  handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
+  provenanceRef: governance/classification-review.yaml
+sources:
+  companies:
+    kind: sqlite
+    profile: snapshot
+    expectedSchemaFingerprint: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
+resources:
+  - id: registered-business
+    title: Registered business
+    description: Current synthetic public business registration.
+    semanticClass: local:RegisteredBusiness
+    source:
+      source: companies
+      view: relay_registered_businesses
+    classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    recordContext:
+      recordIdentifier: {sourceColumn: registration_number}
+      revisionIdentifier: {sourceColumn: record_revision}
+      lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
+      recordedAt: {sourceColumn: recorded_at}
+    sourceColumnClassifications:
+      public_legal_name: {privacy: potentially-personal, institutional: public-by-law, handling: public, status: reviewed}
+      registrar_legal_name: {privacy: potentially-personal, institutional: public-by-law, handling: confidential, status: reviewed}
+      registrar_note: {privacy: non-personal, institutional: internal, handling: confidential, status: reviewed}
+    properties:
+      registrationNumber:
+        sourceColumn: registration_number
+        type: string
+        sourceRequired: true
+        semanticTerm: local:registrationNumber
+        label: Registration number
+        description: Stable synthetic business registration number.
+      legalName:
+        sourceColumn: public_legal_name
+        type: string
+        sourceRequired: true
+        semanticTerm: local:legalName
+        label: Legal name
+        description: Registered legal name of the synthetic organisation.
+        classification: {privacy: potentially-personal, institutional: public-by-law}
+      registrarLegalName:
+        sourceColumn: registrar_legal_name
+        type: string
+        sourceRequired: true
+        semanticTerm: local:registrarLegalName
+        label: Registrar legal name
+        description: Protected authoritative legal name for registrar work.
+        classification: {privacy: potentially-personal, institutional: public-by-law, handling: confidential, status: reviewed}
+      registrarNote:
+        sourceColumn: registrar_note
+        type: string
+        sourceRequired: true
+        semanticTerm: local:registrarNote
+        label: Registrar note
+        description: Protected synthetic registrar-only note.
+        classification: {privacy: non-personal, institutional: internal, handling: confidential, status: reviewed}
+      registrationStatus:
+        sourceColumn: registration_status
+        type: controlled-code
+        codelist: codelists/business-status.yaml
+        sourceRequired: true
+        semanticTerm: local:registrationStatus
+        label: Registration status
+        description: Current registration lifecycle status.
+      legalForm:
+        sourceColumn: legal_form
+        type: controlled-code
+        codelist: codelists/legal-forms.yaml
+        sourceRequired: true
+        semanticTerm: local:legalForm
+        label: Legal form
+        description: Declared legal form of the synthetic organisation.
+      registeredJurisdiction:
+        sourceColumn: jurisdiction_code
+        type: controlled-code
+        codelist: codelists/jurisdictions.yaml
+        sourceRequired: true
+        semanticTerm: local:registeredJurisdiction
+        label: Registered jurisdiction
+        description: Jurisdiction maintaining the synthetic registration.
+    disclosureProfiles:
+      public-register:
+        properties: [registrationNumber, legalName, registrationStatus, legalForm, registeredJurisdiction]
+      registrar-register:
+        properties: [registrationNumber, registrarLegalName, registrarNote, registrationStatus, legalForm, registeredJurisdiction]
+    operations:
+      list:
+        defaultAccessProfile: public-register
+        accessProfiles:
+          public-register: {access: public, disclosureProfile: public-register}
+          registrar:
+            access: {scope: registry:business:list-registrar}
+            disclosureProfile: registrar-register
+        filters:
+          - {name: status, property: registrationStatus, type: controlled-code}
+          - {name: jurisdiction, property: registeredJurisdiction, type: controlled-code}
+        allowUnfiltered: true
+        orderBy: [registrationNumber]
+        pagination: {defaultPageSize: 2, maximumPageSize: 4}
+      read:
+        defaultAccessProfile: public-register
+        accessProfiles:
+          public-register: {access: public, disclosureProfile: public-register}
+          registrar:
+            access: {scope: registry:business:read-registrar}
+            disclosureProfile: registrar-register
+    processingDescriptions:
+      - id: statutory-publication
+        operationRefs: [list, read]
+        purpose: statutory-publication
+        recipientClass: public
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [reviewed-public-view, property-minimization, deterministic-pagination, change-impact-review]
+  - id: registered-premises
+    title: Registered premises
+    description: Current synthetic public premises locations associated with registered businesses.
+    semanticClass: local:RegisteredPremises
+    source:
+      source: companies
+      view: relay_registered_premises
+    classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    recordContext:
+      recordIdentifier: {sourceColumn: premises_identifier}
+      revisionIdentifier: {sourceColumn: record_revision}
+      lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
+      recordedAt: {sourceColumn: recorded_at}
+    sourceColumnClassifications:
+      longitude: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+      latitude: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    properties:
+      premisesIdentifier:
+        sourceColumn: premises_identifier
+        type: string
+        sourceRequired: true
+        semanticTerm: local:premisesIdentifier
+        label: Premises identifier
+        description: Stable synthetic identifier for the registered premises Record.
+      businessRegistrationNumber:
+        sourceColumn: business_registration_number
+        type: string
+        sourceRequired: true
+        semanticTerm: local:businessRegistrationNumber
+        label: Business registration number
+        description: Registration number of the business associated with the premises.
+      premisesName:
+        sourceColumn: premises_name
+        type: string
+        sourceRequired: true
+        semanticTerm: local:premisesName
+        label: Premises name
+        description: Published name of the synthetic registered premises.
+      location:
+        type: point
+        crs: http://www.opengis.net/def/crs/OGC/0/CRS84
+        source: {longitudeColumn: longitude, latitudeColumn: latitude}
+        sourceRequired: true
+        semanticTerm: local:location
+        label: Premises location
+        description: Reviewed Point location of the registered premises in CRS84 longitude-latitude order.
+        classification: {privacy: non-personal, institutional: public, handling: public, status: reviewed}
+    primaryGeometry: location
+    disclosureProfiles:
+      public-premises:
+        properties: [premisesIdentifier, premisesName, location]
+      registrar-premises:
+        properties: [premisesIdentifier, businessRegistrationNumber, premisesName, location]
+    operations:
+      list:
+        defaultAccessProfile: registrar-premises
+        accessProfiles:
+          registrar-premises:
+            access: {scope: registry:business:premises-list}
+            disclosureProfile: registrar-premises
+        allowUnfiltered: true
+        orderBy: [premisesIdentifier]
+        pagination: {defaultPageSize: 2, maximumPageSize: 4}
+      read:
+        defaultAccessProfile: public-premises
+        accessProfiles:
+          public-premises: {access: public, disclosureProfile: public-premises}
+          registrar-premises:
+            access: {scope: registry:business:premises-read-registrar}
+            disclosureProfile: registrar-premises
+      searches:
+        - id: within-bbox
+          query:
+            kind: point-bbox
+            maximumLongitudeSpanDegrees: 2
+            maximumLatitudeSpanDegrees: 2
+          defaultAccessProfile: public-premises
+          accessProfiles:
+            public-premises: {access: public, disclosureProfile: public-premises}
+            registrar-premises:
+              access: {scope: registry:business:premises-search-registrar}
+              disclosureProfile: registrar-premises
+          orderBy: [premisesIdentifier]
+          pagination: {defaultPageSize: 2, maximumPageSize: 4}
+    processingDescriptions:
+      - id: public-premises-publication
+        operationRefs: [list, read, search:within-bbox]
+        purpose: statutory-publication
+        recipientClass: public
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [reviewed-public-view, geometry-disclosure-review, bounded-point-bbox, deterministic-pagination, change-impact-review]
+metadataVisibility:
+  service: public
+  resources: public
+  semantics: public
+  classifications: public
+  processing: public

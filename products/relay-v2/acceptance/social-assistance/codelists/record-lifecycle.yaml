@@ -1,0 +1,4 @@
+id: social-record-lifecycle
+version: 1
+status: reviewed
+values: [ACTIVE, SUSPENDED, RETIRED]

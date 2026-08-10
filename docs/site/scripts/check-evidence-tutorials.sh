@@ -93,6 +93,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	manage-evidence-verifier-trust                   # how-to against the reader's own deployment; no fixed scenario this gate can replay
 	move-evidence-to-production-signing              # drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
 	prove-an-evidence-project                        # how-to against the reader's own project; no fixed scenario this gate can replay
+	publish-governed-sqlite-registry                 # Relay V2 journey; replayed by the Relay product and real-process acceptance gates
 	publish-spreadsheet-secured-registry-api         # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
 	request-a-holder-bound-credential                # draft: true, hidden from the sidebar; no verified wallet flow exists to replay
 	rotate-evidence-signing-keys                     # drift-checked by evidence-production-build-docs.test.mjs; needs a deployed signing key

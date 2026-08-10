@@ -1,0 +1,4 @@
+id: social-enrolment-status
+version: 1
+status: reviewed
+values: [ELIGIBLE, SUSPENDED, CLOSED]

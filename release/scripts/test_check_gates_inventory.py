@@ -490,6 +490,28 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Relay exposure check", self.module.missing_gates(text))
 
+    def test_missing_relay_v2_product_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "relay-v2-contracts:",
+                "relay-v2-disabled:",
+                "Relay V2 product contract gate",
+            ),
+            (
+                "run: products/relay-v2/scripts/check-contracts.sh",
+                "run: true # Relay V2 contracts disabled",
+                "Relay V2 contract consistency",
+            ),
+            (
+                "run: products/relay-v2/scripts/test-http.sh",
+                "run: true # Relay V2 HTTP disabled",
+                "Relay V2 coequal HTTP journeys",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement)
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_missing_debian13_image_contract_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: python3 release/scripts/check-debian13-images.py",
@@ -643,7 +665,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_relay_all_features_shard_is_reported(self) -> None:
         classifier = self.classifier.replace(
-            '"all_features": shard_name == "relay"',
+            '"all_features": shard_name in {"relay", "relay-v2"}',
             '"all_features": False',
         )
         self.assertIn(

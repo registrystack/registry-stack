@@ -1,0 +1,145 @@
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RegistryContract
+metadata:
+  id: social-assistance-enrolments
+  version: 2026-08-01
+  title: Synthetic social assistance enrolment consultations
+registry:
+  registryIdentifier: urn:example:registry:social-assistance-enrolments
+  name: Synthetic social assistance enrolment Registry
+  authority:
+    identifier: urn:example:institution:social-protection-authority
+    name: Example Social Protection Authority
+  operator:
+    identifier: urn:example:institution:digital-service-operator
+    name: Example Digital Service Operator
+  authoritativeScope: Synthetic social assistance enrolment decisions for Relay acceptance testing
+  baseUri: https://social-registry.example.invalid/registry/
+  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
+  alignmentTargets:
+    - name: govstack-digital-registries
+      version: 3.0.0-alpha.2
+      status: directional
+    - name: govstack-api-design-guide
+      version: 0.1.0-draft
+      status: directional
+governance:
+  controller: urn:example:institution:social-protection-authority
+  publisher: urn:example:institution:social-registry-office
+  auditOwner: urn:example:institution:internal-audit
+semantics:
+  localVocabulary: https://social-registry.example.invalid/vocabulary/
+  alignments: []
+classifications:
+  privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
+  institutional: {scheme: https://social-registry.example.invalid/classification, version: "1"}
+  handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
+  provenanceRef: governance/classification-review.yaml
+sources:
+  assistance:
+    kind: sqlite
+    profile: live-read-only
+    expectedSchemaFingerprint: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
+resources:
+  - id: assistance-enrolment
+    title: Assistance enrolment
+    description: Current synthetic assistance enrolment status.
+    semanticClass: local:AssistanceEnrolment
+    source:
+      source: assistance
+      view: relay_assistance_enrolments
+    classificationDefaults: {privacy: sensitive-personal, institutional: restricted, handling: restricted, status: reviewed}
+    sourceColumnClassifications:
+      enrolment_reference: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}
+      masked_enrolment_reference: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}
+      case_reference: {privacy: identifying}
+      person_reference: {privacy: identifying}
+      service_area_code: {privacy: personal-context}
+    recordContext:
+      recordIdentifier: {sourceColumn: enrolment_reference}
+      revisionIdentifier: {sourceColumn: record_revision}
+      lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
+      recordedAt: {sourceColumn: recorded_at}
+    properties:
+      enrolmentReference:
+        sourceColumn: enrolment_reference
+        type: string
+        sourceRequired: true
+        semanticTerm: local:enrolmentReference
+        label: Enrolment reference
+        description: Stable synthetic enrolment reference.
+        classification: {privacy: identifying}
+      maskedEnrolmentReference:
+        sourceColumn: masked_enrolment_reference
+        transform: {kind: partial-string, reveal: suffix, characters: 4}
+        type: string
+        sourceRequired: true
+        semanticTerm: local:maskedEnrolmentReference
+        label: Masked enrolment reference
+        description: Relay-owned partial-string view with only the final four Unicode scalars visible.
+        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}
+      programmeCode:
+        sourceColumn: programme_code
+        type: controlled-code
+        codelist: codelists/programmes.yaml
+        sourceRequired: true
+        semanticTerm: local:programme
+        label: Programme
+        description: Programme under which the synthetic enrolment is maintained.
+      enrolmentStatus:
+        sourceColumn: enrolment_status
+        type: controlled-code
+        codelist: codelists/enrolment-status.yaml
+        sourceRequired: true
+        semanticTerm: local:enrolmentStatus
+        label: Enrolment status
+        description: Current status of the synthetic enrolment.
+      validThrough:
+        sourceColumn: valid_through
+        type: date
+        sourceRequired: false
+        semanticTerm: local:validThrough
+        label: Valid through
+        description: Last date on which the status is valid when bounded.
+        classification: {privacy: personal}
+    disclosureProfiles:
+      limited:
+        properties: [maskedEnrolmentReference, enrolmentStatus, validThrough]
+      caseworker:
+        properties: [enrolmentReference, programmeCode, enrolmentStatus, validThrough]
+    operations:
+      lookups:
+        - id: by-case-and-person
+          requestBody:
+            maximumBytes: 512
+            selectors:
+              caseReference: {sourceColumn: case_reference, type: string, minimumBytes: 8, maximumBytes: 96}
+              personReference: {sourceColumn: person_reference, type: string, minimumBytes: 8, maximumBytes: 96}
+          defaultAccessProfile: limited
+          accessProfiles:
+            limited:
+              access:
+                scope: registry:social-assistance:limited
+                purpose: {claim: purpose, allowed: [benefit-delivery]}
+                authorityRowBinding: {claim: service_area, sourceColumn: service_area_code}
+              disclosureProfile: limited
+            caseworker:
+              access:
+                scope: registry:social-assistance:caseworker
+                purpose: {claim: purpose, allowed: [benefit-delivery]}
+                authorityRowBinding: {claim: service_area, sourceColumn: service_area_code}
+              disclosureProfile: caseworker
+    processingDescriptions:
+      - id: benefit-delivery-consultation
+        operationRefs: [lookup:by-case-and-person]
+        purpose: benefit-delivery
+        recipientClass: authorized-service-officer
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/legal-basis.yaml
+        safeguards: [exact-lookup, principal-row-binding, property-minimization, value-free-audit]
+metadataVisibility:
+  service: public
+  resources: operation-bound
+  semantics: operation-bound
+  classifications: operator-only
+  processing: operation-bound
