@@ -109,7 +109,8 @@ impl RelayService {
 /// Construct the fixed V2 route inventory. Individual data operations remain
 /// compiler-confined by handler dispatch against the immutable model.
 pub fn router(service: Arc<RelayService>) -> Router {
-    Router::new()
+    let has_statistical_datasets = !service.registry.statistical_datasets.is_empty();
+    let router = Router::new()
         .route("/health", get(crate::api::health))
         .route("/ready", get(crate::api::ready))
         .route("/openapi.json", get(crate::api::openapi))
@@ -135,6 +136,33 @@ pub fn router(service: Arc<RelayService>) -> Router {
             "/v2/artifacts/{artifact_identifier}",
             get(crate::api::artifact),
         )
+        .route(
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}",
+            get(crate::sdmx::data),
+        )
+        .route(
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}",
+            get(crate::sdmx::data_without_key),
+        )
+        .route(
+            "/sdmx/v2/structure/{artefact_type}/{agency}/{resource}/{version}",
+            get(crate::sdmx::structure),
+        );
+    let router = if has_statistical_datasets {
+        router
+            .route(
+                "/sdmx/v2/schema/{context}/{agency}/{resource}/{version}",
+                get(crate::sdmx::schema),
+            )
+            .route("/sdmx/v2/availability", get(crate::sdmx::unsupported))
+            .route(
+                "/sdmx/v2/availability/{*rest}",
+                get(crate::sdmx::unsupported),
+            )
+    } else {
+        router
+    };
+    router
         .fallback(crate::api::not_found)
         .with_state(service)
         .layer(
@@ -180,8 +208,12 @@ fn operational_method(method: &http::Method) -> &'static str {
 /// Classify only the fixed route shape. Dynamic identifiers and query values
 /// never cross the operational logging boundary.
 fn operational_route(uri: &http::Uri) -> &'static str {
+    if uri.path() == "/sdmx/v2/availability" || uri.path().starts_with("/sdmx/v2/availability/") {
+        return "/sdmx/v2/availability/{*rest}";
+    }
     let mut segments = uri.path().trim_start_matches('/').split('/');
     let parts = (
+        segments.next(),
         segments.next(),
         segments.next(),
         segments.next(),
@@ -194,27 +226,33 @@ fn operational_route(uri: &http::Uri) -> &'static str {
         return "unmatched";
     }
     match parts {
-        (Some("health"), None, None, None, None, None, None) => "/health",
-        (Some("ready"), None, None, None, None, None, None) => "/ready",
-        (Some("openapi.json"), None, None, None, None, None, None) => "/openapi.json",
-        (Some("v2"), None, None, None, None, None, None) => "/v2",
-        (Some("v2"), Some("resources"), None, None, None, None, None) => "/v2/resources",
-        (Some("v2"), Some("resources"), Some(resource), None, None, None, None)
+        (Some("health"), None, None, None, None, None, None, None) => "/health",
+        (Some("ready"), None, None, None, None, None, None, None) => "/ready",
+        (Some("openapi.json"), None, None, None, None, None, None, None) => "/openapi.json",
+        (Some("v2"), None, None, None, None, None, None, None) => "/v2",
+        (Some("v2"), Some("resources"), None, None, None, None, None, None) => "/v2/resources",
+        (Some("v2"), Some("resources"), Some(resource), None, None, None, None, None)
             if !resource.is_empty() =>
         {
             "/v2/resources/{resource}"
-        }
-        (Some("v2"), Some("resources"), Some(resource), Some("records"), None, None, None)
-            if !resource.is_empty() =>
-        {
-            "/v2/resources/{resource}/records"
         }
         (
             Some("v2"),
             Some("resources"),
             Some(resource),
             Some("records"),
+            None,
+            None,
+            None,
+            None,
+        ) if !resource.is_empty() => "/v2/resources/{resource}/records",
+        (
+            Some("v2"),
+            Some("resources"),
+            Some(resource),
+            Some("records"),
             Some(record_identifier),
+            None,
             None,
             None,
         ) if !resource.is_empty() && !record_identifier.is_empty() => {
@@ -228,13 +266,84 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             Some(lookup),
             None,
             None,
+            None,
         ) if !resource.is_empty() && !lookup.is_empty() => {
             "/v2/resources/{resource}/lookups/{lookup}"
         }
-        (Some("v2"), Some("artifacts"), Some(artifact_identifier), None, None, None, None)
-            if !artifact_identifier.is_empty() =>
+        (
+            Some("v2"),
+            Some("artifacts"),
+            Some(artifact_identifier),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ) if !artifact_identifier.is_empty() => "/v2/artifacts/{artifact_identifier}",
+        (
+            Some("sdmx"),
+            Some("v2"),
+            Some("data"),
+            Some(context),
+            Some(agency),
+            Some(resource),
+            Some(version),
+            Some(key),
+        ) if !context.is_empty()
+            && !agency.is_empty()
+            && !resource.is_empty()
+            && !version.is_empty()
+            && !key.is_empty() =>
         {
-            "/v2/artifacts/{artifact_identifier}"
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}"
+        }
+        (
+            Some("sdmx"),
+            Some("v2"),
+            Some("data"),
+            Some(context),
+            Some(agency),
+            Some(resource),
+            Some(version),
+            None,
+        ) if !context.is_empty()
+            && !agency.is_empty()
+            && !resource.is_empty()
+            && !version.is_empty() =>
+        {
+            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}"
+        }
+        (
+            Some("sdmx"),
+            Some("v2"),
+            Some("structure"),
+            Some(context),
+            Some(agency),
+            Some(resource),
+            Some(version),
+            None,
+        ) if !context.is_empty()
+            && !agency.is_empty()
+            && !resource.is_empty()
+            && !version.is_empty() =>
+        {
+            "/sdmx/v2/structure/{context}/{agency}/{resource}/{version}"
+        }
+        (
+            Some("sdmx"),
+            Some("v2"),
+            Some("schema"),
+            Some(context),
+            Some(agency),
+            Some(resource),
+            Some(version),
+            None,
+        ) if !context.is_empty()
+            && !agency.is_empty()
+            && !resource.is_empty()
+            && !version.is_empty() =>
+        {
+            "/sdmx/v2/schema/{context}/{agency}/{resource}/{version}"
         }
         _ => "unmatched",
     }
@@ -341,6 +450,14 @@ mod tests {
         );
         assert!(!operational_route(&uri).contains("private-registry"));
         assert!(!operational_route(&uri).contains("protected-record"));
+        let availability = "/sdmx/v2/availability/dataflow/PRIVATE/SECRET/1.0.0/*/REF_AREA"
+            .parse()
+            .expect("availability URI");
+        assert_eq!(
+            operational_route(&availability),
+            "/sdmx/v2/availability/{*rest}"
+        );
+        assert!(!operational_route(&availability).contains("SECRET"));
         assert_eq!(
             operational_method(&http::Method::from_bytes(b"ATTACKER-CONTROLLED").expect("method")),
             "OTHER"

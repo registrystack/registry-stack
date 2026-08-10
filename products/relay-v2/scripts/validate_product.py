@@ -54,6 +54,8 @@ SECURITY_INVARIANT_IDS = {
     "sec-representation-state-and-metadata-binding",
     "sec-operation-quota",
     "sec-trusted-context",
+    "sec-statistical-binding-inherits-access",
+    "sec-statistical-query-closed-and-bounded",
     "sec-disclosure-monotonic",
     "sec-lookup-non-enumeration",
     "sec-malformed-row-atomicity",

@@ -63,8 +63,8 @@ owns:
 
 - contract identity and version;
 - one Registry identifier, name, Registry Authority, optional operator,
-  authoritative scope, base URI, identifier-lifecycle policy, and pinned
-  alignment targets;
+  authoritative scope, base URI, identifier-lifecycle policy, and authored
+  alignment targets, with binding-owned targets added by compilation;
 - reviewed SQLite sources and views;
 - resources, Registry Core source bindings, URL-safe camelCase property keys,
   published properties, datatypes, source requiredness, codelists, labels,
@@ -359,7 +359,7 @@ return their declared media type directly rather than a JSON envelope.
 
 `GET /v2` is public Registry service metadata. Its generated schema contains
 Registry identifier, name, Authority, operator, authoritative scope, product
-and API binding versions, pinned standards and CFR alignment targets, visible
+and API binding versions, pinned authored and compiler-derived standards and CFR alignment targets, visible
 derived Consultation capabilities, and links. Resource and operation details
 remain visibility-gated. The maintained alignment note records any intentional
 API-guide difference.
@@ -748,8 +748,8 @@ future compatibility profiles do not block focused implementation milestones.
 
 - caller-dependent maximum disclosure entitlements within one operation;
 - a GovStack compatibility flag, BB problem namespace, or formal conformance;
-- any Digital Registries family other than the three declared Consultation
-  patterns;
+- any Digital Registries family or Aggregate Data pattern other than the three
+  declared Consultation patterns and the pre-aggregated statistical dataflow;
 - publisher-owned live revisions, live pagination, and live caching;
 - multi-issuer selection, new authorization-server discovery modes, and Mint
   grant changes;
@@ -760,6 +760,6 @@ future compatibility profiles do not block focused implementation milestones.
   GeoJSON, relationships, nested properties, arrays, decimals, search language,
   fuzzy matching, and Record Match;
 - dynamic masking, general PDP, consent workflow, writes, notification,
-  aggregate computation, principal-facing access history, response signing,
+  dynamic aggregate computation, principal-facing access history, response signing,
   and credential lifecycle;
 - any change to `registryctl`.

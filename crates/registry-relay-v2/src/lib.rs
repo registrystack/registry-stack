@@ -16,6 +16,7 @@ pub mod identification;
 pub mod model;
 pub mod package;
 pub mod problem;
+pub mod sdmx;
 pub mod semantics;
 pub mod server;
 mod source_observation;

@@ -22,6 +22,15 @@ import yaml
 PRODUCT_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = PRODUCT_ROOT.parents[1]
 PROJECTS = ("social-assistance", "business-registry", "civil-event")
+STATISTICAL_PROJECTS = {
+    "labour-statistics": (
+        PRODUCT_ROOT / "examples" / "labour-statistics",
+        "relay_labour_force_rates",
+        "time_period",
+        "obs_value",
+        ("unit_measure",),
+    ),
+}
 BASELINE_PATH = PRODUCT_ROOT / "contracts/generated-baselines.yaml"
 CONFIGURATION_REFERENCE = PRODUCT_ROOT / "CONFIGURATION-EXAMPLES.md"
 CONFIGURATION_MARKERS = {
@@ -211,7 +220,7 @@ def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
     capability_ids = {
         capability["operationIdentifier"] for capability in capabilities["capabilities"]
     }
-    fixed_ids = {
+    required_fixed_ids = {
         "relay.health",
         "relay.ready",
         "relay.openapi.public",
@@ -220,8 +229,18 @@ def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
         "relay.resources.retrieve",
         "relay.artifacts.retrieve",
     }
+    optional_fixed_ids = {
+        "relay.sdmx.schema.not-implemented",
+        "relay.sdmx.availability.not-implemented",
+    }
     full_ids = {operation["operationId"] for operation in full_operations.values()}
-    if full_ids != fixed_ids | capability_ids:
+    fixed_ids = required_fixed_ids | (optional_fixed_ids & full_ids)
+    full_capability_ids = {
+        operation.get("x-registry-capability-operation", operation["operationId"])
+        for operation in full_operations.values()
+        if operation["operationId"] not in fixed_ids
+    }
+    if not required_fixed_ids.issubset(full_ids) or full_capability_ids != capability_ids:
         raise GateFailure("full OpenAPI does not exactly cover compiled capabilities and router metadata")
 
     public_capabilities = json.loads(
@@ -241,7 +260,12 @@ def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
     }
     if not required_public_ids.issubset(public_ids):
         raise GateFailure("public OpenAPI omits a required public router operation")
-    if public_ids - fixed_ids != public_capability_ids:
+    public_openapi_capabilities = {
+        operation.get("x-registry-capability-operation", operation["operationId"])
+        for operation in public_operations.values()
+        if operation["operationId"] not in fixed_ids
+    }
+    if public_openapi_capabilities != public_capability_ids:
         raise GateFailure("public OpenAPI capability paths do not match public discovery")
 
 
@@ -364,8 +388,17 @@ def exercise_nontrivial_diff(
     assert_diff_change(report, "filter-removed", "breaking")
 
 
-def run_workflow(relayctl: Path, project_name: str, root: Path) -> tuple[list[dict[str, Any]], list[bytes], dict[str, Any]]:
-    source = PRODUCT_ROOT / "acceptance" / project_name
+def run_workflow(
+    relayctl: Path,
+    project_name: str,
+    source: Path,
+    root: Path,
+    *,
+    statistical_view: str | None = None,
+    time_column: str | None = None,
+    measure_column: str | None = None,
+    attribute_columns: tuple[str, ...] = (),
+) -> tuple[list[dict[str, Any]], list[bytes], dict[str, Any]]:
     project = root / "project"
     previous = root / "previous"
 
@@ -389,7 +422,58 @@ def run_workflow(relayctl: Path, project_name: str, root: Path) -> tuple[list[di
     shutil.copytree(source, project, dirs_exist_ok=True)
     materialize(project)
     shutil.copytree(project, previous)
-    accepted(["inspect", str(project / "fixture.sqlite"), "--starters", str(root / "inspection")])
+    inspect_arguments = [
+        "inspect",
+        str(project / "fixture.sqlite"),
+        "--starters",
+        str(root / "inspection"),
+    ]
+    if statistical_view is not None:
+        if time_column is None or measure_column is None:
+            raise GateFailure(f"{project_name}: statistical inspection columns are incomplete")
+        inspect_arguments.extend(
+            [
+                "--statistical-view",
+                statistical_view,
+                "--time-column",
+                time_column,
+                "--measure-column",
+                measure_column,
+            ]
+        )
+        for attribute_column in attribute_columns:
+            inspect_arguments.extend(["--attribute-column", attribute_column])
+    inspection = accepted(inspect_arguments)
+    if statistical_view is not None:
+        starter_path = root / "inspection" / "statistical-dataset-starter.yaml"
+        starter = yaml.safe_load(starter_path.read_text(encoding="utf-8"))
+        datasets = starter.get("statisticalDatasets") if isinstance(starter, dict) else None
+        if not isinstance(datasets, list) or len(datasets) != 1:
+            raise GateFailure(f"{project_name}: inspect did not create one neutral statistical starter")
+        dataset = datasets[0]
+        attributes = dataset.get("attributes", {})
+        if (
+            inspection["details"].get("statistical_starter_file")
+            != "statistical-dataset-starter.yaml"
+            or dataset.get("publication", {}).get("releaseAt") != "REVIEW_REQUIRED"
+            or dataset.get("classificationDefaults", {}).get("status") != "suggested"
+            or dataset.get("bindings", {}).get("sdmx") != {}
+            or dataset.get("time", {}).get("column") != time_column
+            or dataset.get("measure", {}).get("column") != measure_column
+            or not isinstance(attributes, dict)
+            or sorted(
+                attribute.get("column")
+                for attribute in attributes.values()
+                if isinstance(attribute, dict)
+            )
+            != sorted(attribute_columns)
+        ):
+            raise GateFailure(f"{project_name}: statistical starter is not review-gated and binding-neutral")
+        if any(
+            name in dataset.get("bindings", {}).get("sdmx", {})
+            for name in ("agencyId", "dataflowId", "dataStructureId", "conceptSchemeId")
+        ):
+            raise GateFailure(f"{project_name}: novice starter authored advanced SDMX identities")
     check = accepted(["check", str(project), "--production"])
     accepted(["generate", str(project), "--output", str(root / "generated")])
     accepted(["test", str(project)])
@@ -474,10 +558,37 @@ def main() -> int:
         key_paths = {"registry": set(), "runtime": set()}
         for project_name in PROJECTS:
             with tempfile.TemporaryDirectory(prefix=f"relay-v2-{project_name}-") as raw:
-                _, outputs, result = run_workflow(relayctl, project_name, Path(raw))
+                _, outputs, result = run_workflow(
+                    relayctl,
+                    project_name,
+                    PRODUCT_ROOT / "acceptance" / project_name,
+                    Path(raw),
+                )
                 canaries = protected_canaries(PRODUCT_ROOT / "acceptance" / project_name)
                 assert_value_free(outputs, canaries, project_name)
                 snapshots[project_name] = baseline(result["manifest"])
+                for kind in key_paths:
+                    key_paths[kind].update(result["keyPaths"][kind])
+
+        for project_name, (
+            source,
+            statistical_view,
+            time_column,
+            measure_column,
+            attribute_columns,
+        ) in STATISTICAL_PROJECTS.items():
+            with tempfile.TemporaryDirectory(prefix=f"relay-v2-{project_name}-") as raw:
+                _, outputs, result = run_workflow(
+                    relayctl,
+                    project_name,
+                    source,
+                    Path(raw),
+                    statistical_view=statistical_view,
+                    time_column=time_column,
+                    measure_column=measure_column,
+                    attribute_columns=attribute_columns,
+                )
+                assert_value_free(outputs, protected_canaries(source), project_name)
                 for kind in key_paths:
                     key_paths[kind].update(result["keyPaths"][kind])
 

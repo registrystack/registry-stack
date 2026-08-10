@@ -22,7 +22,14 @@ use crate::compiler::{
     classification_inventory_digest, compile_contract_with_governed_files,
     referenced_governed_files, GovernedFileSet,
 };
-use crate::contract::{ClassificationReviewDocument, RegistryContract, RelayRuntime};
+use crate::contract::{
+    AccessRule, ClassificationPartial, ClassificationReviewDocument, Handling, OrderedMap,
+    ProtectedAccess, RegistryContract, RelayRuntime, ResourceSource, ReviewStatus,
+    SdmxBindingDefinition, StatisticalAttributeDefinition, StatisticalBindings,
+    StatisticalDatasetDefinition, StatisticalDimensionDefinition, StatisticalMeasureDefinition,
+    StatisticalPublication, StatisticalQueryProfile, StatisticalTimeDimensionDefinition,
+    StatisticalValueType,
+};
 use crate::cursor::CursorKey;
 use crate::diff::{diff_registries, ChangeImpactReport};
 use crate::fixtures::{
@@ -55,6 +62,10 @@ pub struct InitOptions {
 pub struct InspectOptions {
     pub database_path: PathBuf,
     pub starter_output: Option<PathBuf>,
+    pub statistical_view: Option<String>,
+    pub time_column: Option<String>,
+    pub measure_column: Option<String>,
+    pub attribute_columns: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +145,7 @@ pub enum ToolingDetails {
         fingerprint: String,
         objects: Vec<InspectedObject>,
         starter_file: Option<String>,
+        statistical_starter_file: Option<String>,
     },
     Check {
         contract_revision: Option<String>,
@@ -296,6 +308,30 @@ pub fn inspect_schema(options: &InspectOptions) -> Result<ToolingReport, Tooling
                 .collect(),
         })
         .collect::<Vec<_>>();
+    let statistical_selection = match (
+        options.statistical_view.as_deref(),
+        options.time_column.as_deref(),
+        options.measure_column.as_deref(),
+    ) {
+        (None, None, None) if options.attribute_columns.is_empty() => None,
+        (Some(view), Some(time), Some(measure)) => Some((view, time, measure)),
+        _ => {
+            return Ok(ToolingReport::refused(
+                vec![diagnostic(
+                    "statistics.starter_selection_incomplete",
+                    "--statistical-view",
+                    "a statistical starter requires one view, one explicit time column, and one explicit measure column",
+                )],
+                ToolingDetails::SchemaInspection {
+                    fingerprint: catalog.fingerprint,
+                    objects,
+                    starter_file: None,
+                    statistical_starter_file: None,
+                },
+            ));
+        }
+    };
+    let mut statistical_starter_file = None;
     let starter_file = if let Some(output) = &options.starter_output {
         if output.exists()
             && fs::symlink_metadata(output)
@@ -314,14 +350,130 @@ pub fn inspect_schema(options: &InspectOptions) -> Result<ToolingReport, Tooling
         .map_err(|_| ToolingError::Write)?;
         let path = output.join("schema-starter.yaml");
         fs::write(&path, starter).map_err(|_| ToolingError::Write)?;
+        if let Some((view_name, time_column, measure_column)) = statistical_selection {
+            let Some(view) = objects.iter().find(|object| {
+                object.kind == InspectedObjectKind::View && object.name == view_name
+            }) else {
+                return Ok(ToolingReport::refused(
+                    vec![diagnostic(
+                        "statistics.starter_view_unknown",
+                        "--statistical-view",
+                        "the selected statistical starter view is absent from the inspected schema",
+                    )],
+                    ToolingDetails::SchemaInspection {
+                        fingerprint: catalog.fingerprint,
+                        objects,
+                        starter_file: Some("schema-starter.yaml".into()),
+                        statistical_starter_file: None,
+                    },
+                ));
+            };
+            let selected_time = view
+                .columns
+                .iter()
+                .find(|column| column.name == time_column);
+            let selected_measure = view
+                .columns
+                .iter()
+                .find(|column| column.name == measure_column);
+            if time_column == measure_column
+                || selected_time.is_none()
+                || selected_measure.is_none()
+            {
+                return Ok(ToolingReport::refused(
+                    vec![diagnostic(
+                        "statistics.starter_column_invalid",
+                        "--time-column",
+                        "the time and measure columns must be distinct exact columns in the selected statistical view",
+                    )],
+                    ToolingDetails::SchemaInspection {
+                        fingerprint: catalog.fingerprint,
+                        objects,
+                        starter_file: Some("schema-starter.yaml".into()),
+                        statistical_starter_file: None,
+                    },
+                ));
+            }
+            let selected_attributes = options.attribute_columns.iter().collect::<BTreeSet<_>>();
+            if selected_attributes.len() != options.attribute_columns.len()
+                || selected_attributes.iter().any(|column| {
+                    column.as_str() == time_column || column.as_str() == measure_column
+                })
+                || selected_attributes.iter().any(|column| {
+                    !view
+                        .columns
+                        .iter()
+                        .any(|candidate| candidate.name == column.as_str())
+                })
+            {
+                return Ok(ToolingReport::refused(
+                    vec![diagnostic(
+                        "statistics.starter_attribute_invalid",
+                        "--attribute-column",
+                        "attribute columns must be distinct exact non-time, non-measure columns in the selected statistical view",
+                    )],
+                    ToolingDetails::SchemaInspection {
+                        fingerprint: catalog.fingerprint,
+                        objects,
+                        starter_file: Some("schema-starter.yaml".into()),
+                        statistical_starter_file: None,
+                    },
+                ));
+            }
+            if !selected_time
+                .is_some_and(|column| compatible_suggested_time_type(&column.declared_type))
+                || !selected_measure
+                    .is_some_and(|column| compatible_suggested_measure_type(&column.declared_type))
+            {
+                return Ok(ToolingReport::refused(
+                    vec![diagnostic(
+                        "statistics.starter_column_type_invalid",
+                        "--time-column/--measure-column",
+                        "select a text-like time column and a numeric measure column from the statistical view",
+                    )],
+                    ToolingDetails::SchemaInspection {
+                        fingerprint: catalog.fingerprint,
+                        objects,
+                        starter_file: Some("schema-starter.yaml".into()),
+                        statistical_starter_file: None,
+                    },
+                ));
+            }
+            let statistical = statistical_starter(
+                view,
+                time_column,
+                measure_column,
+                &options.attribute_columns,
+            );
+            let content = serde_norway::to_string(&statistical).map_err(|_| ToolingError::Write)?;
+            fs::write(output.join("statistical-dataset-starter.yaml"), content)
+                .map_err(|_| ToolingError::Write)?;
+            statistical_starter_file = Some("statistical-dataset-starter.yaml".into());
+        }
         Some("schema-starter.yaml".into())
     } else {
+        if options.statistical_view.is_some() {
+            return Ok(ToolingReport::refused(
+                vec![diagnostic(
+                    "statistics.starter_output_missing",
+                    "--starters",
+                    "a statistical starter requires an explicit starter output directory",
+                )],
+                ToolingDetails::SchemaInspection {
+                    fingerprint: catalog.fingerprint,
+                    objects,
+                    starter_file: None,
+                    statistical_starter_file: None,
+                },
+            ));
+        }
         None
     };
     Ok(ToolingReport::success(ToolingDetails::SchemaInspection {
         fingerprint: catalog.fingerprint,
         objects,
         starter_file,
+        statistical_starter_file,
     }))
 }
 
@@ -376,6 +528,9 @@ fn collect_configuration_key_paths(document: &serde_json::Value) -> Vec<String> 
                         | "resources[].properties"
                         | "resources[].disclosureProfiles"
                         | "resources[].operations.lookups[].requestBody.selectors"
+                        | "statisticalDatasets[].sourceColumnClassifications"
+                        | "statisticalDatasets[].dimensions"
+                        | "statisticalDatasets[].attributes"
                 );
                 if dynamic_map {
                     let wildcard = format!("{prefix}.*");
@@ -632,8 +787,7 @@ pub fn test_project(options: &TestOptions) -> Result<ToolingReport, ToolingError
                 name: operator.name.clone(),
             }),
         authoritative_scope: contract.registry.authoritative_scope.clone(),
-        alignment_targets: contract
-            .registry
+        alignment_targets: registry
             .alignment_targets
             .iter()
             .map(|target| AlignmentMetadata {
@@ -764,6 +918,205 @@ struct SchemaStarter<'a> {
     schema_fingerprint: &'a str,
     review_status: &'static str,
     objects: &'a [InspectedObject],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatisticalDatasetPatch {
+    statistical_datasets: Vec<StatisticalDatasetDefinition>,
+}
+
+fn statistical_starter(
+    view: &InspectedObject,
+    time_column: &str,
+    measure_column: &str,
+    attribute_columns: &[String],
+) -> StatisticalDatasetPatch {
+    let mut dimensions = Vec::new();
+    let mut attributes = Vec::new();
+    for column in &view.columns {
+        if column.name == time_column || column.name == measure_column {
+            continue;
+        }
+        let id = to_authoring_id(&column.name);
+        if attribute_columns.contains(&column.name) {
+            attributes.push((
+                id.clone(),
+                StatisticalAttributeDefinition {
+                    label: id.clone(),
+                    description: "Review this explicitly selected observation attribute.".into(),
+                    column: column.name.clone(),
+                    data_type: suggested_dimension_type(&column.declared_type),
+                    vocabulary: None,
+                    required: !column.nullable,
+                    concept: format!("local:{id}"),
+                    classification: ClassificationPartial::default(),
+                },
+            ));
+        } else {
+            dimensions.push((
+                id.clone(),
+                StatisticalDimensionDefinition {
+                    label: id.clone(),
+                    description: "Review this schema-derived suggested dimension.".into(),
+                    column: column.name.clone(),
+                    data_type: suggested_dimension_type(&column.declared_type),
+                    vocabulary: None,
+                    concept: format!("local:{id}"),
+                    classification: ClassificationPartial::default(),
+                },
+            ));
+        }
+    }
+    let time_id = to_authoring_id(time_column);
+    let measure_id = to_authoring_id(measure_column);
+    let measure_type = view
+        .columns
+        .iter()
+        .find(|column| column.name == measure_column)
+        .map_or(StatisticalValueType::Decimal, |column| {
+            suggested_measure_type(&column.declared_type)
+        });
+    let id = to_kebab_id(&view.name);
+    StatisticalDatasetPatch {
+        statistical_datasets: vec![StatisticalDatasetDefinition {
+            id: id.clone(),
+            title: id.clone(),
+            description: "Review this schema-derived statistical dataset before publication."
+                .into(),
+            publication: StatisticalPublication {
+                release_at: "REVIEW_REQUIRED".into(),
+            },
+            source: ResourceSource {
+                source: "REVIEW_REQUIRED".into(),
+                view: view.name.clone(),
+            },
+            classification_defaults: ClassificationPartial {
+                privacy: Some("review-required".into()),
+                institutional: Some("review-required".into()),
+                handling: Some(Handling::Restricted),
+                status: Some(ReviewStatus::Suggested),
+            },
+            source_column_classifications: OrderedMap::default(),
+            dimensions: OrderedMap::from_entries(dimensions),
+            time: StatisticalTimeDimensionDefinition {
+                label: time_id.clone(),
+                description: "Review this explicitly selected time-period dimension.".into(),
+                column: time_column.into(),
+                concept: format!("local:{time_id}"),
+                classification: ClassificationPartial::default(),
+            },
+            measure: StatisticalMeasureDefinition {
+                id: measure_id.clone(),
+                label: measure_id.clone(),
+                description: "Review this explicitly selected measure.".into(),
+                column: measure_column.into(),
+                data_type: measure_type,
+                concept: format!("local:{measure_id}"),
+                classification: ClassificationPartial::default(),
+            },
+            attributes: OrderedMap::from_entries(attributes),
+            access: AccessRule::Protected(ProtectedAccess {
+                scope: "statistics:review-required:read".into(),
+                purpose: None,
+                authority_row_binding: None,
+            }),
+            query: StatisticalQueryProfile {
+                allow_unfiltered: false,
+                maximum_observations: 1_000,
+                maximum_offset: 0,
+            },
+            bindings: StatisticalBindings {
+                sdmx: Some(SdmxBindingDefinition::default()),
+            },
+            processing_descriptions: Vec::new(),
+        }],
+    }
+}
+
+fn suggested_dimension_type(declared_type: &str) -> StatisticalValueType {
+    let declared = declared_type.to_ascii_uppercase();
+    if declared.contains("INT") {
+        StatisticalValueType::Integer
+    } else if declared.contains("REAL")
+        || declared.contains("FLOA")
+        || declared.contains("DOUB")
+        || declared.contains("DEC")
+        || declared.contains("NUM")
+    {
+        StatisticalValueType::Decimal
+    } else if declared == "BOOLEAN" {
+        StatisticalValueType::Boolean
+    } else {
+        StatisticalValueType::String
+    }
+}
+
+fn suggested_measure_type(declared_type: &str) -> StatisticalValueType {
+    if declared_type.to_ascii_uppercase().contains("INT") {
+        StatisticalValueType::Integer
+    } else {
+        StatisticalValueType::Decimal
+    }
+}
+
+fn compatible_suggested_time_type(declared_type: &str) -> bool {
+    let declared = declared_type.trim().to_ascii_uppercase();
+    declared.contains("CHAR")
+        || declared.contains("CLOB")
+        || declared.contains("TEXT")
+        || declared == "DATE"
+        || declared == "DATETIME"
+}
+
+fn compatible_suggested_measure_type(declared_type: &str) -> bool {
+    let declared = declared_type.trim().to_ascii_uppercase();
+    declared.contains("INT")
+        || declared.contains("REAL")
+        || declared.contains("FLOA")
+        || declared.contains("DOUB")
+        || declared.contains("DEC")
+        || declared.contains("NUM")
+}
+
+fn to_authoring_id(value: &str) -> String {
+    let mut output = String::new();
+    let mut uppercase_next = false;
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            let character = character.to_ascii_lowercase();
+            if output.is_empty() {
+                if character.is_ascii_digit() {
+                    output.push_str("component");
+                }
+                output.push(character);
+            } else if uppercase_next {
+                output.push(character.to_ascii_uppercase());
+                uppercase_next = false;
+            } else {
+                output.push(character);
+            }
+        } else if !output.is_empty() {
+            uppercase_next = true;
+        }
+    }
+    if output.is_empty() {
+        "component".into()
+    } else {
+        output
+    }
+}
+
+fn to_kebab_id(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            output.push(character.to_ascii_lowercase());
+        } else if !output.is_empty() && !output.ends_with('-') {
+            output.push('-');
+        }
+    }
+    output.trim_matches('-').to_owned()
 }
 
 enum ProjectCompilation {
@@ -938,7 +1291,7 @@ fn validate_runtime(
             "a Registry with a list operation requires an opaque-cursor key and age bound",
         ));
     }
-    let protected = contract.resources.iter().any(|resource| {
+    let protected_resource = contract.resources.iter().any(|resource| {
         resource
             .operations
             .list
@@ -963,11 +1316,22 @@ fn validate_runtime(
             }))
             .any(|access| matches!(access, crate::contract::AccessRule::Protected(_)))
     });
-    if protected && runtime.authentication.issuer.is_none() {
+    let protected_dataflow = contract
+        .statistical_datasets
+        .iter()
+        .any(|dataflow| matches!(dataflow.access, crate::contract::AccessRule::Protected(_)));
+    if (protected_resource || protected_dataflow) && runtime.authentication.issuer.is_none() {
         diagnostics.push(diagnostic(
             "runtime.issuer_missing",
             "runtime.yaml.authentication.issuer",
             "a Registry with protected operations requires one configured issuer",
+        ));
+    }
+    if !contract.statistical_datasets.is_empty() && runtime.quotas.is_none() {
+        diagnostics.push(diagnostic(
+            "runtime.quota_missing",
+            "runtime.yaml.quotas",
+            "a Registry with an SDMX data query requires a bounded process-local quota",
         ));
     }
     diagnostics
@@ -1174,6 +1538,129 @@ mod tests {
     fn initialized_contract_is_strictly_parseable() {
         assert!(RegistryContract::parse_yaml(STARTER_REGISTRY).is_ok());
         assert!(RelayRuntime::parse_yaml(STARTER_RUNTIME).is_ok());
+    }
+
+    #[test]
+    fn schema_only_inspection_writes_an_unreviewed_neutral_statistical_starter() {
+        let temporary = tempfile::tempdir().expect("temporary directory creates");
+        let database = temporary.path().join("statistics.sqlite");
+        materialize_fixture(
+            &database,
+            "CREATE TABLE observations (ref_area TEXT NOT NULL, time_period TEXT NOT NULL, obs_value REAL NOT NULL, unit_measure TEXT NOT NULL);\nCREATE VIEW published_rates AS SELECT ref_area, time_period, obs_value, unit_measure FROM observations;",
+        )
+        .expect("fixture materializes");
+        let output = temporary.path().join("starters");
+
+        let report = inspect_schema(&InspectOptions {
+            database_path: database,
+            starter_output: Some(output.clone()),
+            statistical_view: Some("published_rates".into()),
+            time_column: Some("time_period".into()),
+            measure_column: Some("obs_value".into()),
+            attribute_columns: vec!["unit_measure".into()],
+        })
+        .expect("schema inspection completes");
+
+        assert!(report.is_success(), "{report:?}");
+        let ToolingDetails::SchemaInspection {
+            statistical_starter_file,
+            ..
+        } = report.details
+        else {
+            panic!("schema inspection details are returned");
+        };
+        assert_eq!(
+            statistical_starter_file.as_deref(),
+            Some("statistical-dataset-starter.yaml")
+        );
+        let starter = fs::read_to_string(output.join("statistical-dataset-starter.yaml"))
+            .expect("starter reads");
+        let patch: serde_norway::Value =
+            serde_norway::from_str(&starter).expect("starter is valid YAML");
+        assert!(patch.get("statisticalDatasets").is_some());
+        assert!(starter.contains("status: suggested"));
+        assert!(starter.contains("time:"));
+        assert!(starter.contains("column: time_period"));
+        assert!(starter.contains("measure:"));
+        assert!(starter.contains("column: obs_value"));
+        assert!(starter.contains("attributes:"));
+        assert!(starter.contains("column: unit_measure"));
+        assert!(starter.contains("required: false"));
+        assert!(starter.contains("type: decimal"));
+        assert!(starter.contains("type: string"));
+        assert!(starter.contains("releaseAt: REVIEW_REQUIRED"));
+        assert!(starter.contains("sdmx: {}"));
+        assert!(!starter.contains("role:"));
+        assert!(!starter.contains("vocabulary:"));
+        assert!(!starter.contains("CREATE TABLE"));
+        assert!(!output.join("codelists").exists());
+    }
+
+    #[test]
+    fn statistical_inspection_refuses_incomplete_or_incompatible_explicit_columns() {
+        let temporary = tempfile::tempdir().expect("temporary directory creates");
+        let database = temporary.path().join("statistics.sqlite");
+        materialize_fixture(
+            &database,
+            "CREATE TABLE observations (period_number INTEGER NOT NULL, value_label TEXT NOT NULL);\nCREATE VIEW published_rates AS SELECT period_number, value_label FROM observations;",
+        )
+        .expect("fixture materializes");
+
+        let incomplete = inspect_schema(&InspectOptions {
+            database_path: database.clone(),
+            starter_output: Some(temporary.path().join("incomplete")),
+            statistical_view: Some("published_rates".into()),
+            time_column: Some("period_number".into()),
+            measure_column: None,
+            attribute_columns: Vec::new(),
+        })
+        .expect("schema inspection completes");
+        assert!(!incomplete.is_success());
+        assert_eq!(
+            incomplete.diagnostics[0].code,
+            "statistics.starter_selection_incomplete"
+        );
+
+        let invalid_attribute = inspect_schema(&InspectOptions {
+            database_path: database.clone(),
+            starter_output: Some(temporary.path().join("invalid-attribute")),
+            statistical_view: Some("published_rates".into()),
+            time_column: Some("period_number".into()),
+            measure_column: Some("value_label".into()),
+            attribute_columns: vec!["period_number".into()],
+        })
+        .expect("schema inspection completes");
+        assert!(!invalid_attribute.is_success());
+        assert_eq!(
+            invalid_attribute.diagnostics[0].code,
+            "statistics.starter_attribute_invalid"
+        );
+
+        let incompatible = inspect_schema(&InspectOptions {
+            database_path: database,
+            starter_output: Some(temporary.path().join("incompatible")),
+            statistical_view: Some("published_rates".into()),
+            time_column: Some("period_number".into()),
+            measure_column: Some("value_label".into()),
+            attribute_columns: Vec::new(),
+        })
+        .expect("schema inspection completes");
+        assert!(!incompatible.is_success());
+        assert_eq!(
+            incompatible.diagnostics[0].code,
+            "statistics.starter_column_type_invalid"
+        );
+        assert!(!temporary
+            .path()
+            .join("incompatible/statistical-dataset-starter.yaml")
+            .exists());
+    }
+
+    #[test]
+    fn statistical_starter_identifiers_are_camel_case_for_common_sql_names() {
+        assert_eq!(to_authoring_id("REF_AREA"), "refArea");
+        assert_eq!(to_authoring_id("time_period"), "timePeriod");
+        assert_eq!(to_authoring_id("2024_VALUE"), "component2024Value");
     }
 
     #[test]

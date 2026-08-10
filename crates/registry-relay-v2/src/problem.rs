@@ -22,6 +22,9 @@ pub enum ProblemCode {
     InvalidFilter,
     CursorInvalid,
     RepresentationInvalid,
+    StatisticalQueryInvalid,
+    StatisticalQueryTooLarge,
+    StatisticalFeatureUnsupported,
     MissingCredential,
     InvalidCredential,
     ConsultationDenied,
@@ -49,6 +52,9 @@ impl ProblemCode {
             Self::InvalidFilter => "filter.invalid_value",
             Self::CursorInvalid => "query.cursor_invalid",
             Self::RepresentationInvalid => "request.representation_invalid",
+            Self::StatisticalQueryInvalid => "aggregate-data.invalid_request",
+            Self::StatisticalQueryTooLarge => "aggregate-data.too_large",
+            Self::StatisticalFeatureUnsupported => "aggregate-data.not_implemented",
             Self::MissingCredential => "auth.missing_credential",
             Self::InvalidCredential => "auth.invalid_credential",
             Self::ConsultationDenied => "consultation.denied",
@@ -76,6 +82,9 @@ impl ProblemCode {
             Self::InvalidFilter => "Filter value is invalid",
             Self::CursorInvalid => "Cursor is invalid",
             Self::RepresentationInvalid => "Representation selection is invalid",
+            Self::StatisticalQueryInvalid => "Statistical data query is invalid",
+            Self::StatisticalQueryTooLarge => "Statistical data query is too broad",
+            Self::StatisticalFeatureUnsupported => "Statistical data feature is not implemented",
             Self::MissingCredential => "Bearer access token is required",
             Self::InvalidCredential => "Bearer access token is invalid",
             Self::ConsultationDenied => "Consultation is not permitted",
@@ -102,18 +111,20 @@ impl ProblemCode {
             | Self::UnknownFilter
             | Self::InvalidFilter
             | Self::CursorInvalid
-            | Self::RepresentationInvalid => 400,
+            | Self::RepresentationInvalid
+            | Self::StatisticalQueryInvalid => 400,
             Self::MissingCredential | Self::InvalidCredential => 401,
             Self::ConsultationDenied => 403,
             Self::ResourceNotFound | Self::ConsultationUnresolved => 404,
             Self::UnsupportedRepresentation => 406,
-            Self::BodyTooLarge => 413,
+            Self::BodyTooLarge | Self::StatisticalQueryTooLarge => 413,
             Self::UriTooLong => 414,
             Self::UnsupportedMediaType => 415,
             Self::RateLimited => 429,
             Self::SourceUnavailable | Self::AuditUnavailable => 503,
             Self::ServiceNotReady => 503,
             Self::Timeout => 504,
+            Self::StatisticalFeatureUnsupported => 501,
             Self::Internal => 500,
         }
     }
@@ -171,6 +182,13 @@ impl ProblemCode {
             Self::InvalidFilter => "filter value is invalid",
             Self::CursorInvalid => "cursor is invalid for this query",
             Self::RepresentationInvalid => "representation selection is invalid",
+            Self::StatisticalQueryInvalid => "the statistical data query is invalid",
+            Self::StatisticalQueryTooLarge => {
+                "the statistical data query exceeds its reviewed bound"
+            }
+            Self::StatisticalFeatureUnsupported => {
+                "the requested SDMX feature is outside this binding profile"
+            }
             Self::MissingCredential => "a bearer access token is required",
             Self::InvalidCredential => "bearer access token validation failed",
             Self::ConsultationDenied => "the consultation is not permitted",

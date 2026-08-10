@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path};
 
+use chrono::DateTime;
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -12,7 +13,7 @@ use url::Url;
 use crate::contract::{
     AccessRule, AuthorityRowBinding, ClassificationPartial, DataType, DateInputType, DatePrecision,
     Handling, IdentificationMethod, RegistryContract, RepresentationDefinition, ReviewStatus,
-    SourceProfile, TransformDefinition,
+    SourceProfile, StatisticalValueType, TransformDefinition,
 };
 use crate::model::{
     CapabilityFamily, ColumnAccount, ColumnUse, CompileProfile, CompileReport, CompiledAccess,
@@ -20,9 +21,12 @@ use crate::model::{
     CompiledGeneratedIdentificationBinding, CompiledGovernedFile, CompiledMetadataVisibility,
     CompiledOperation, CompiledPagination, CompiledProperty, CompiledPurpose,
     CompiledRecordContext, CompiledRegistry, CompiledRepresentation, CompiledResource,
-    CompiledRowBinding, CompiledSelector, CompiledSource, CompiledTransform, ConsultationPattern,
-    Diagnostic, DiagnosticSeverity, EffectiveClassification, ObservedSourceSchema, OperationKind,
-    QueryPlan, RowAuthoritySource, StarterColumn, StarterContract,
+    CompiledRowBinding, CompiledSdmxBinding, CompiledSelector, CompiledSource,
+    CompiledStatisticalAttribute, CompiledStatisticalDataset, CompiledStatisticalDimension,
+    CompiledStatisticalMeasure, CompiledStatisticalTimeDimension, CompiledTransform,
+    ConsultationPattern, Diagnostic, DiagnosticSeverity, EffectiveClassification,
+    ObservedSourceSchema, OperationKind, QueryPlan, RowAuthoritySource, StarterColumn,
+    StarterContract,
 };
 
 const API_VERSION: &str = "relay.registrystack.org/v2alpha1";
@@ -39,6 +43,11 @@ const MAXIMUM_LOOKUP_REQUEST_BODY_BYTES: u32 = 1024 * 1024;
 const MAXIMUM_LOOKUP_SELECTORS: usize = 32;
 const MAXIMUM_SELECTOR_BYTES: u32 = 4 * 1024;
 const MAXIMUM_PARTIAL_STRING_CHARACTERS: u16 = 64;
+const MAXIMUM_STATISTICAL_DATASETS: usize = 32;
+const MAXIMUM_SDMX_DIMENSIONS: usize = 16;
+const MAXIMUM_SDMX_ATTRIBUTES: usize = 32;
+const MAXIMUM_SDMX_OBSERVATIONS: u32 = 10_000;
+const MAXIMUM_SDMX_OFFSET: u32 = 1_000_000;
 
 pub type GovernedFileSet = BTreeMap<String, Vec<u8>>;
 
@@ -64,6 +73,22 @@ pub(crate) fn referenced_governed_files(contract: &RegistryContract) -> BTreeSet
             }
         }
         for processing in &resource.processing_descriptions {
+            references.insert(processing.legal_basis_ref.as_str());
+            references.insert(processing.dpv_profile_ref.as_str());
+        }
+    }
+    for dataset in &contract.statistical_datasets {
+        for (_, dimension) in dataset.dimensions.iter() {
+            if let Some(vocabulary) = dimension.vocabulary.as_deref() {
+                references.insert(vocabulary);
+            }
+        }
+        for (_, attribute) in dataset.attributes.iter() {
+            if let Some(vocabulary) = attribute.vocabulary.as_deref() {
+                references.insert(vocabulary);
+            }
+        }
+        for processing in &dataset.processing_descriptions {
             references.insert(processing.legal_basis_ref.as_str());
             references.insert(processing.dpv_profile_ref.as_str());
         }
@@ -107,6 +132,7 @@ pub fn compile_contract(
             "the compiled representation count exceeds the Registry runtime ceiling",
         );
     }
+    let statistical_datasets = compiler.compile_statistical_datasets();
     compiler.validate_observed_source_closure();
 
     if compiler.report.has_errors() {
@@ -137,7 +163,7 @@ pub fn compile_contract(
         authoritative_scope: contract.registry.authoritative_scope.clone(),
         base_uri: contract.registry.base_uri.clone(),
         identifier_lifecycle_policy_ref: contract.registry.identifier_lifecycle_policy_ref.clone(),
-        alignment_targets: contract.registry.alignment_targets.clone(),
+        alignment_targets: compiled_alignment_targets(contract),
         controller_identifier: contract.governance.controller.clone(),
         publisher_identifier: contract.governance.publisher.clone(),
         audit_owner_identifier: contract.governance.audit_owner.clone(),
@@ -157,6 +183,7 @@ pub fn compile_contract(
             })
             .collect(),
         resources,
+        statistical_datasets,
         metadata_visibility: CompiledMetadataVisibility {
             service: contract.metadata_visibility.service,
             resources: contract.metadata_visibility.resources,
@@ -273,6 +300,38 @@ fn governed_file_roles(
             }
         }
     }
+    for dataset in &contract.statistical_datasets {
+        for (dimension_id, dimension) in dataset.dimensions.iter() {
+            if dimension.vocabulary.as_deref() == Some(path) {
+                roles.push(format!(
+                    "statistical-vocabulary:{}:{dimension_id}",
+                    dataset.id
+                ));
+            }
+        }
+        for (attribute_id, attribute) in dataset.attributes.iter() {
+            if attribute.vocabulary.as_deref() == Some(path) {
+                roles.push(format!(
+                    "statistical-vocabulary:{}:{attribute_id}",
+                    dataset.id
+                ));
+            }
+        }
+        for processing in &dataset.processing_descriptions {
+            if processing.legal_basis_ref == path {
+                roles.push(format!(
+                    "processing:{}:{}:legal-basis",
+                    dataset.id, processing.id
+                ));
+            }
+            if processing.dpv_profile_ref == path {
+                roles.push(format!(
+                    "processing:{}:{}:dpv-profile",
+                    dataset.id, processing.id
+                ));
+            }
+        }
+    }
     roles.sort();
     roles.dedup();
     roles
@@ -322,6 +381,9 @@ struct Compiler<'a> {
     report: CompileReport,
     scopes: HashSet<String>,
     resource_ids: HashSet<String>,
+    statistical_dataset_ids: HashSet<String>,
+    statistical_endpoint_ids: HashSet<(String, String, String)>,
+    statistical_structure_ids: HashSet<(String, String, String)>,
     used_observed_sources: HashSet<&'a str>,
 }
 
@@ -352,6 +414,9 @@ impl<'a> Compiler<'a> {
             report,
             scopes: HashSet::new(),
             resource_ids: HashSet::new(),
+            statistical_dataset_ids: HashSet::new(),
+            statistical_endpoint_ids: HashSet::new(),
+            statistical_structure_ids: HashSet::new(),
             used_observed_sources: HashSet::new(),
         }
     }
@@ -466,11 +531,13 @@ impl<'a> Compiler<'a> {
                 "the identifier lifecycle policy must be a contained relative file reference",
             );
         }
-        if self.contract.registry.alignment_targets.is_empty() {
+        if self.contract.registry.alignment_targets.is_empty()
+            && self.contract.statistical_datasets.is_empty()
+        {
             self.error(
                 "registry.alignment_targets_empty",
                 "registry.alignmentTargets",
-                "at least one directional alignment target is required",
+                "at least one authored or compiler-derived directional alignment target is required",
             );
         }
         let mut target_names = HashSet::new();
@@ -481,6 +548,17 @@ impl<'a> Compiler<'a> {
                     "registry.alignment_target_duplicate",
                     &location,
                     "alignment target names must be unique",
+                );
+            }
+            if !self.contract.statistical_datasets.is_empty()
+                && derived_sdmx_alignment_targets()
+                    .iter()
+                    .any(|derived| derived.name == target.name)
+            {
+                self.error(
+                    "registry.alignment_target_derived",
+                    &location,
+                    "SDMX binding alignment targets are compiler-derived and must not be authored",
                 );
             }
             if target.name.trim().is_empty()
@@ -572,11 +650,11 @@ impl<'a> Compiler<'a> {
                 "at least one reviewed SQLite source is required",
             );
         }
-        if self.contract.resources.is_empty() {
+        if self.contract.resources.is_empty() && self.contract.statistical_datasets.is_empty() {
             self.error(
-                "resource.none",
+                "publication.none",
                 "resources",
-                "at least one resource is required",
+                "at least one Registry resource or statistical dataset is required",
             );
         }
         if self.contract.resources.len() > MAXIMUM_RESOURCES {
@@ -584,6 +662,13 @@ impl<'a> Compiler<'a> {
                 "resource.bound_exceeded",
                 "resources",
                 "the governed resource count exceeds the product ceiling",
+            );
+        }
+        if self.contract.statistical_datasets.len() > MAXIMUM_STATISTICAL_DATASETS {
+            self.error(
+                "statistics.dataset_bound_exceeded",
+                "statisticalDatasets",
+                "the governed statistical-dataset count exceeds the product ceiling",
             );
         }
         for (source_id, source) in self.contract.sources.iter() {
@@ -1211,6 +1296,837 @@ impl<'a> Compiler<'a> {
             });
         }
         compiled
+    }
+
+    fn compile_statistical_datasets(&mut self) -> Vec<CompiledStatisticalDataset> {
+        let mut compiled = Vec::with_capacity(self.contract.statistical_datasets.len());
+        for (index, dataset) in self.contract.statistical_datasets.iter().enumerate() {
+            let root = format!("statisticalDatasets[{index}]");
+            if !self.statistical_dataset_ids.insert(dataset.id.clone()) {
+                self.error(
+                    "statistics.dataset_id_duplicate",
+                    &format!("{root}.id"),
+                    "statistical dataset identifiers must be unique",
+                );
+            }
+            if !valid_kebab_identifier(&dataset.id) {
+                self.error(
+                    "statistics.dataset_id_invalid",
+                    &format!("{root}.id"),
+                    "a statistical dataset identifier must be URL-safe kebab case",
+                );
+            }
+            if dataset.title.trim().is_empty() || dataset.description.trim().is_empty() {
+                self.error(
+                    "statistics.documentation_empty",
+                    &root,
+                    "statistical datasets require a title and description",
+                );
+            }
+            if DateTime::parse_from_rfc3339(&dataset.publication.release_at).is_err() {
+                self.error(
+                    "statistics.release_at_invalid",
+                    &format!("{root}.publication.releaseAt"),
+                    "a statistical publication release time must be an RFC 3339 timestamp",
+                );
+            }
+            if dataset.dimensions.len().saturating_add(1) > MAXIMUM_SDMX_DIMENSIONS {
+                self.error(
+                    "statistics.dimension_bound_invalid",
+                    &format!("{root}.dimensions"),
+                    "the ordinary dimensions plus the required time dimension exceed the product ceiling",
+                );
+            }
+            if dataset.attributes.len() > MAXIMUM_SDMX_ATTRIBUTES {
+                self.error(
+                    "statistics.attribute_bound_exceeded",
+                    &format!("{root}.attributes"),
+                    "the statistical attribute count exceeds the product ceiling",
+                );
+            }
+            if dataset.query.maximum_observations == 0
+                || dataset.query.maximum_observations > MAXIMUM_SDMX_OBSERVATIONS
+                || dataset.query.maximum_offset > MAXIMUM_SDMX_OFFSET
+            {
+                self.error(
+                    "statistics.query_bound_invalid",
+                    &format!("{root}.query"),
+                    "statistical observation and offset bounds must stay within the product ceilings",
+                );
+            }
+
+            let Some(sdmx) = dataset.bindings.sdmx.as_ref() else {
+                self.error(
+                    "statistics.binding_missing",
+                    &format!("{root}.bindings"),
+                    "the initial statistical profile requires the SDMX binding to be selected",
+                );
+                continue;
+            };
+            let generated_id = to_sdmx_id(&dataset.id);
+            let agency_id = sdmx
+                .agency_id
+                .clone()
+                .unwrap_or_else(|| to_sdmx_id(&self.contract.metadata.id));
+            let dataflow_id = sdmx
+                .dataflow_id
+                .clone()
+                .unwrap_or_else(|| generated_id.clone());
+            let version = sdmx.version.clone().unwrap_or_else(|| "1.0.0".into());
+            let data_structure_id = sdmx
+                .data_structure_id
+                .clone()
+                .unwrap_or_else(|| format!("{generated_id}_DSD"));
+            let concept_scheme_id = sdmx
+                .concept_scheme_id
+                .clone()
+                .unwrap_or_else(|| format!("{generated_id}_CONCEPTS"));
+
+            if !valid_sdmx_agency_id(&agency_id) {
+                self.error(
+                    "sdmx.identifier_invalid",
+                    &format!("{root}.bindings.sdmx.agencyId"),
+                    "an SDMX agency identifier must use dot-separated NCName-compatible segments",
+                );
+            }
+            for (value, location) in [
+                (&dataflow_id, format!("{root}.bindings.sdmx.dataflowId")),
+                (
+                    &data_structure_id,
+                    format!("{root}.bindings.sdmx.dataStructureId"),
+                ),
+                (
+                    &concept_scheme_id,
+                    format!("{root}.bindings.sdmx.conceptSchemeId"),
+                ),
+            ] {
+                if !valid_sdmx_maintainable_id(value) {
+                    self.error(
+                        "sdmx.identifier_invalid",
+                        &location,
+                        "an SDMX artefact identifier must use the single-level NCName-compatible profile",
+                    );
+                }
+            }
+            if !valid_sdmx_version(&version) {
+                self.error(
+                    "sdmx.version_invalid",
+                    &format!("{root}.bindings.sdmx.version"),
+                    "the initial SDMX binding requires one shared three-part numeric semantic version without leading zeroes",
+                );
+            }
+            if !self.statistical_endpoint_ids.insert((
+                agency_id.clone(),
+                dataflow_id.clone(),
+                version.clone(),
+            )) {
+                self.error(
+                    "sdmx.endpoint_duplicate",
+                    &format!("{root}.bindings.sdmx"),
+                    "generated SDMX agency, dataflow, and version tuples must be unique",
+                );
+            }
+            if !self.statistical_structure_ids.insert((
+                agency_id.clone(),
+                data_structure_id.clone(),
+                version.clone(),
+            )) {
+                self.error(
+                    "sdmx.structure_endpoint_duplicate",
+                    &format!("{root}.bindings.sdmx"),
+                    "generated SDMX agency, data structure, and version tuples must be unique",
+                );
+            }
+
+            if !valid_sql_identifier(&dataset.source.view) {
+                self.error(
+                    "statistics.view_invalid",
+                    &format!("{root}.source.view"),
+                    "reviewed SQLite view names must be simple identifiers",
+                );
+            }
+            if self.contract.sources.get(&dataset.source.source).is_none() {
+                self.error(
+                    "statistics.source_unknown",
+                    &format!("{root}.source.source"),
+                    "the statistical dataset names no governed source",
+                );
+                continue;
+            }
+            let observed_view =
+                self.observed
+                    .get(dataset.source.source.as_str())
+                    .and_then(|schema| {
+                        schema
+                            .views
+                            .iter()
+                            .find(|view| view.name == dataset.source.view)
+                    });
+            if self.observed.contains_key(dataset.source.source.as_str()) && observed_view.is_none()
+            {
+                self.error(
+                    "statistics.view_unknown",
+                    &format!("{root}.source.view"),
+                    "the reviewed statistical view is absent from the observed source schema",
+                );
+            }
+            let observed_columns = observed_view.map(|view| {
+                view.columns
+                    .iter()
+                    .map(|column| column.name.as_str())
+                    .collect::<BTreeSet<_>>()
+            });
+            if effective_classification(self.contract, &dataset.classification_defaults, None)
+                .is_none()
+            {
+                self.error(
+                    "classification.defaults_incomplete",
+                    &format!("{root}.classificationDefaults"),
+                    "statistical-dataset classification defaults must resolve every dimension",
+                );
+            }
+
+            let mut component_ids = HashSet::new();
+            let mut component_columns = HashSet::new();
+            let mut classifications = BTreeMap::<String, EffectiveClassification>::new();
+            let mut dimensions = Vec::with_capacity(dataset.dimensions.len());
+            for (local_id, dimension) in dataset.dimensions.iter() {
+                let location = format!("{root}.dimensions.{local_id}");
+                if !valid_camel_identifier(local_id) {
+                    self.error(
+                        "statistics.component_id_invalid",
+                        &location,
+                        "statistical component identifiers must be camelCase",
+                    );
+                }
+                let component_id = to_sdmx_id(local_id);
+                self.validate_statistical_component_identity(
+                    &component_id,
+                    &dimension.label,
+                    &dimension.description,
+                    &dimension.column,
+                    &location,
+                    &mut component_ids,
+                    &mut component_columns,
+                    observed_columns.as_ref(),
+                );
+                if !compatible_sdmx_declared_type(
+                    dimension.data_type,
+                    observed_view.and_then(|view| {
+                        view.columns
+                            .iter()
+                            .find(|column| column.name == dimension.column)
+                            .map(|column| column.declared_type.as_str())
+                    }),
+                ) {
+                    self.error(
+                        "statistics.component_type_incompatible",
+                        &format!("{location}.type"),
+                        "the statistical value type is incompatible with the reviewed SQLite declaration",
+                    );
+                }
+                if dimension.data_type == StatisticalValueType::TimePeriod
+                    || dimension.vocabulary.as_deref().is_some_and(|value| {
+                        dimension.data_type != StatisticalValueType::Code
+                            || value.trim().is_empty()
+                            || !valid_relative_reference(value)
+                    })
+                {
+                    self.error(
+                        "statistics.dimension_vocabulary_invalid",
+                        &location,
+                        "ordinary dimensions cannot be time periods, and only code dimensions may name a contained reviewed vocabulary",
+                    );
+                }
+                let Some(classification) = effective_classification(
+                    self.contract,
+                    &dataset.classification_defaults,
+                    Some(&dimension.classification),
+                ) else {
+                    self.error(
+                        "classification.property_incomplete",
+                        &format!("{location}.classification"),
+                        "the dimension classification is incomplete",
+                    );
+                    continue;
+                };
+                self.validate_statistical_output_classification(&classification, &location);
+                let semantic_iri = match expand_local_term(
+                    &self.contract.semantics.local_vocabulary,
+                    &dimension.concept,
+                ) {
+                    Some(value) => value,
+                    None => {
+                        self.error(
+                            "statistics.concept_invalid",
+                            &format!("{location}.concept"),
+                            "a statistical concept must be a local term or absolute HTTP IRI",
+                        );
+                        dimension.concept.clone()
+                    }
+                };
+                classifications.insert(dimension.column.clone(), classification.clone());
+                dimensions.push(CompiledStatisticalDimension {
+                    id: component_id,
+                    label: dimension.label.clone(),
+                    description: dimension.description.clone(),
+                    source_column: dimension.column.clone(),
+                    data_type: dimension.data_type,
+                    codelist: dimension.vocabulary.clone(),
+                    semantic_iri,
+                    classification,
+                });
+            }
+
+            let time_definition = &dataset.time;
+            let time_location = format!("{root}.time");
+            let time_id = "TIME_PERIOD".to_owned();
+            self.validate_statistical_component_identity(
+                &time_id,
+                &time_definition.label,
+                &time_definition.description,
+                &time_definition.column,
+                &time_location,
+                &mut component_ids,
+                &mut component_columns,
+                observed_columns.as_ref(),
+            );
+            if !compatible_sdmx_declared_type(
+                StatisticalValueType::TimePeriod,
+                observed_view.and_then(|view| {
+                    view.columns
+                        .iter()
+                        .find(|column| column.name == time_definition.column)
+                        .map(|column| column.declared_type.as_str())
+                }),
+            ) {
+                self.error(
+                    "statistics.component_type_incompatible",
+                    &format!("{time_location}.column"),
+                    "the time-period dimension is incompatible with the reviewed SQLite declaration",
+                );
+            }
+            let Some(time_classification) = effective_classification(
+                self.contract,
+                &dataset.classification_defaults,
+                Some(&time_definition.classification),
+            ) else {
+                self.error(
+                    "classification.property_incomplete",
+                    &format!("{time_location}.classification"),
+                    "the time-dimension classification is incomplete",
+                );
+                continue;
+            };
+            self.validate_statistical_output_classification(&time_classification, &time_location);
+            let time_semantic_iri = match expand_local_term(
+                &self.contract.semantics.local_vocabulary,
+                &time_definition.concept,
+            ) {
+                Some(value) => value,
+                None => {
+                    self.error(
+                        "statistics.concept_invalid",
+                        &format!("{time_location}.concept"),
+                        "a statistical concept must be a local term or absolute HTTP IRI",
+                    );
+                    time_definition.concept.clone()
+                }
+            };
+            classifications.insert(time_definition.column.clone(), time_classification.clone());
+            let time = CompiledStatisticalTimeDimension {
+                id: time_id,
+                label: time_definition.label.clone(),
+                description: time_definition.description.clone(),
+                source_column: time_definition.column.clone(),
+                semantic_iri: time_semantic_iri,
+                classification: time_classification,
+            };
+
+            let measure_definition = &dataset.measure;
+            let measure_location = format!("{root}.measure");
+            if !valid_camel_identifier(&measure_definition.id) {
+                self.error(
+                    "statistics.component_id_invalid",
+                    &format!("{measure_location}.id"),
+                    "statistical component identifiers must be camelCase",
+                );
+            }
+            let measure_id = to_sdmx_id(&measure_definition.id);
+            self.validate_statistical_component_identity(
+                &measure_id,
+                &measure_definition.label,
+                &measure_definition.description,
+                &measure_definition.column,
+                &measure_location,
+                &mut component_ids,
+                &mut component_columns,
+                observed_columns.as_ref(),
+            );
+            if !matches!(
+                measure_definition.data_type,
+                StatisticalValueType::Integer | StatisticalValueType::Decimal
+            ) {
+                self.error(
+                    "statistics.measure_invalid",
+                    &measure_location,
+                    "the initial statistical profile requires one numeric measure",
+                );
+            }
+            if !compatible_sdmx_declared_type(
+                measure_definition.data_type,
+                observed_view.and_then(|view| {
+                    view.columns
+                        .iter()
+                        .find(|column| column.name == measure_definition.column)
+                        .map(|column| column.declared_type.as_str())
+                }),
+            ) {
+                self.error(
+                    "statistics.component_type_incompatible",
+                    &format!("{measure_location}.type"),
+                    "the statistical measure type is incompatible with the reviewed SQLite declaration",
+                );
+            }
+            let Some(measure_classification) = effective_classification(
+                self.contract,
+                &dataset.classification_defaults,
+                Some(&measure_definition.classification),
+            ) else {
+                self.error(
+                    "classification.property_incomplete",
+                    &format!("{measure_location}.classification"),
+                    "the measure classification is incomplete",
+                );
+                continue;
+            };
+            self.validate_statistical_output_classification(
+                &measure_classification,
+                &measure_location,
+            );
+            let measure_semantic_iri = match expand_local_term(
+                &self.contract.semantics.local_vocabulary,
+                &measure_definition.concept,
+            ) {
+                Some(value) => value,
+                None => {
+                    self.error(
+                        "statistics.concept_invalid",
+                        &format!("{measure_location}.concept"),
+                        "a statistical concept must be a local term or absolute HTTP IRI",
+                    );
+                    measure_definition.concept.clone()
+                }
+            };
+            classifications.insert(
+                measure_definition.column.clone(),
+                measure_classification.clone(),
+            );
+            let measure = CompiledStatisticalMeasure {
+                id: measure_id,
+                label: measure_definition.label.clone(),
+                description: measure_definition.description.clone(),
+                source_column: measure_definition.column.clone(),
+                data_type: measure_definition.data_type,
+                semantic_iri: measure_semantic_iri,
+                classification: measure_classification,
+            };
+
+            let mut attributes = Vec::with_capacity(dataset.attributes.len());
+            for (local_id, attribute) in dataset.attributes.iter() {
+                let location = format!("{root}.attributes.{local_id}");
+                if !valid_camel_identifier(local_id) {
+                    self.error(
+                        "statistics.component_id_invalid",
+                        &location,
+                        "statistical component identifiers must be camelCase",
+                    );
+                }
+                let component_id = to_sdmx_id(local_id);
+                self.validate_statistical_component_identity(
+                    &component_id,
+                    &attribute.label,
+                    &attribute.description,
+                    &attribute.column,
+                    &location,
+                    &mut component_ids,
+                    &mut component_columns,
+                    observed_columns.as_ref(),
+                );
+                let vocabulary_invalid = match attribute.data_type {
+                    StatisticalValueType::Code => attribute
+                        .vocabulary
+                        .as_deref()
+                        .is_none_or(|value| !valid_relative_reference(value)),
+                    StatisticalValueType::TimePeriod => true,
+                    _ => attribute.vocabulary.is_some(),
+                };
+                if vocabulary_invalid {
+                    self.error(
+                        "statistics.attribute_invalid",
+                        &location,
+                        "coded attributes require one vocabulary and other observation attributes cannot declare one",
+                    );
+                }
+                if !compatible_sdmx_declared_type(
+                    attribute.data_type,
+                    observed_view.and_then(|view| {
+                        view.columns
+                            .iter()
+                            .find(|column| column.name == attribute.column)
+                            .map(|column| column.declared_type.as_str())
+                    }),
+                ) {
+                    self.error(
+                        "statistics.component_type_incompatible",
+                        &format!("{location}.type"),
+                        "the statistical attribute type is incompatible with the reviewed SQLite declaration",
+                    );
+                }
+                let Some(classification) = effective_classification(
+                    self.contract,
+                    &dataset.classification_defaults,
+                    Some(&attribute.classification),
+                ) else {
+                    self.error(
+                        "classification.property_incomplete",
+                        &format!("{location}.classification"),
+                        "the attribute classification is incomplete",
+                    );
+                    continue;
+                };
+                self.validate_statistical_output_classification(&classification, &location);
+                let semantic_iri = match expand_local_term(
+                    &self.contract.semantics.local_vocabulary,
+                    &attribute.concept,
+                ) {
+                    Some(value) => value,
+                    None => {
+                        self.error(
+                            "statistics.concept_invalid",
+                            &format!("{location}.concept"),
+                            "a statistical concept must be a local term or absolute HTTP IRI",
+                        );
+                        attribute.concept.clone()
+                    }
+                };
+                classifications.insert(attribute.column.clone(), classification.clone());
+                attributes.push(CompiledStatisticalAttribute {
+                    id: component_id,
+                    label: attribute.label.clone(),
+                    description: attribute.description.clone(),
+                    source_column: attribute.column.clone(),
+                    data_type: attribute.data_type,
+                    codelist: attribute.vocabulary.clone(),
+                    source_required: attribute.required,
+                    semantic_iri,
+                    classification,
+                });
+            }
+
+            let Some(access) =
+                self.compile_access(&dataset.access, observed_columns.as_ref(), &root)
+            else {
+                continue;
+            };
+            let column_accounting = self.compile_statistical_column_accounting(
+                dataset,
+                &dimensions,
+                &time,
+                &measure,
+                &attributes,
+                &access,
+                &classifications,
+                observed_columns.as_ref(),
+                &root,
+            );
+            let processing_handling = column_accounting
+                .iter()
+                .map(|column| column.classification.handling)
+                .max()
+                .unwrap_or(Handling::Public);
+            let disclosure_handling = dimensions
+                .iter()
+                .map(|component| component.classification.handling)
+                .chain(std::iter::once(time.classification.handling))
+                .chain(std::iter::once(measure.classification.handling))
+                .chain(
+                    attributes
+                        .iter()
+                        .map(|component| component.classification.handling),
+                )
+                .max()
+                .unwrap_or(Handling::Public);
+            if processing_handling > Handling::Public && matches!(access, CompiledAccess::Public) {
+                self.error(
+                    "statistics.public_nonpublic_forbidden",
+                    &format!("{root}.access"),
+                    "anonymous statistical publication may process only public-handling columns",
+                );
+            }
+            self.validate_statistical_processing(dataset, &root);
+            self.validate_statistical_metadata_closure(&access, processing_handling, &root);
+            compiled.push(CompiledStatisticalDataset {
+                id: dataset.id.clone(),
+                title: dataset.title.clone(),
+                description: dataset.description.clone(),
+                sdmx: CompiledSdmxBinding {
+                    agency_id,
+                    dataflow_id,
+                    version,
+                    data_structure_id,
+                    concept_scheme_id,
+                },
+                release_at: dataset.publication.release_at.clone(),
+                source: dataset.source.source.clone(),
+                view: dataset.source.view.clone(),
+                dimensions,
+                time,
+                measure,
+                attributes,
+                access,
+                allow_unfiltered: dataset.query.allow_unfiltered,
+                maximum_observations: dataset.query.maximum_observations,
+                maximum_offset: dataset.query.maximum_offset,
+                processing_handling,
+                disclosure_handling,
+                column_accounting,
+                processing_descriptions: dataset.processing_descriptions.clone(),
+            });
+        }
+        compiled
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_statistical_component_identity(
+        &mut self,
+        id: &str,
+        label: &str,
+        description: &str,
+        source_column: &str,
+        location: &str,
+        component_ids: &mut HashSet<String>,
+        component_columns: &mut HashSet<String>,
+        observed_columns: Option<&BTreeSet<&str>>,
+    ) {
+        if !valid_sdmx_component_id(id) || !component_ids.insert(id.to_owned()) {
+            self.error(
+                "statistics.binding_component_id_invalid",
+                location,
+                "generated SDMX component identifiers must be unique uppercase identifiers",
+            );
+        }
+        if label.trim().is_empty() || description.trim().is_empty() {
+            self.error(
+                "statistics.component_documentation_empty",
+                location,
+                "statistical components require a label and description",
+            );
+        }
+        if !valid_sql_identifier(source_column) || !column_exists(observed_columns, source_column) {
+            self.error(
+                "statistics.component_column_invalid",
+                &format!("{location}.column"),
+                "a statistical component must bind one reviewed source column",
+            );
+        }
+        if !component_columns.insert(source_column.to_owned()) {
+            self.error(
+                "statistics.component_column_reused",
+                &format!("{location}.column"),
+                "one reviewed column cannot back more than one SDMX component",
+            );
+        }
+    }
+
+    fn validate_statistical_output_classification(
+        &mut self,
+        classification: &EffectiveClassification,
+        location: &str,
+    ) {
+        self.validate_review_status(classification, &format!("{location}.classification"));
+        if classification.privacy != "non-personal" {
+            self.error(
+                "statistics.personal_output_forbidden",
+                &format!("{location}.classification.privacy"),
+                "the first statistical profile publishes only reviewed non-personal aggregate components",
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_statistical_column_accounting(
+        &mut self,
+        dataset: &crate::contract::StatisticalDatasetDefinition,
+        dimensions: &[CompiledStatisticalDimension],
+        time: &CompiledStatisticalTimeDimension,
+        measure: &CompiledStatisticalMeasure,
+        attributes: &[CompiledStatisticalAttribute],
+        access: &CompiledAccess,
+        classifications: &BTreeMap<String, EffectiveClassification>,
+        observed_columns: Option<&BTreeSet<&str>>,
+        root: &str,
+    ) -> Vec<ColumnAccount> {
+        let mut uses = BTreeMap::<String, BTreeSet<ColumnUse>>::new();
+        for dimension in dimensions {
+            uses.entry(dimension.source_column.clone())
+                .or_default()
+                .insert(ColumnUse::StatisticalDimension(dimension.id.clone()));
+        }
+        uses.entry(time.source_column.clone())
+            .or_default()
+            .insert(ColumnUse::StatisticalDimension(time.id.clone()));
+        uses.entry(measure.source_column.clone())
+            .or_default()
+            .insert(ColumnUse::StatisticalMeasure(measure.id.clone()));
+        for attribute in attributes {
+            uses.entry(attribute.source_column.clone())
+                .or_default()
+                .insert(ColumnUse::StatisticalAttribute(attribute.id.clone()));
+        }
+        if let CompiledAccess::Protected {
+            row_binding: Some(binding),
+            ..
+        } = access
+        {
+            uses.entry(binding.source_column.clone())
+                .or_default()
+                .insert(ColumnUse::RowBinding(format!(
+                    "{}.statistics.read",
+                    dataset.id
+                )));
+        }
+        if let Some(columns) = observed_columns {
+            for column in columns {
+                if !uses.contains_key(*column) {
+                    self.error(
+                        "source.column_unaccounted",
+                        &format!("{root}.source"),
+                        "the reviewed statistical view contains an unaccounted column",
+                    );
+                }
+            }
+        }
+        for (column, _) in dataset.source_column_classifications.iter() {
+            if !uses.contains_key(column) {
+                self.error(
+                    "classification.column_override_unknown",
+                    &format!("{root}.sourceColumnClassifications.{column}"),
+                    "a source-column classification override must name an accounted reviewed column",
+                );
+            }
+        }
+        let mut accounts = Vec::with_capacity(uses.len());
+        for (column, column_uses) in uses {
+            let base = classifications.get(&column).map_or_else(
+                || dataset.classification_defaults.clone(),
+                classification_to_partial,
+            );
+            let Some(classification) = effective_classification(
+                self.contract,
+                &base,
+                dataset.source_column_classifications.get(&column),
+            ) else {
+                self.error(
+                    "classification.column_incomplete",
+                    &format!("{root}.sourceColumnClassifications"),
+                    "an accounted source column has no complete classification",
+                );
+                continue;
+            };
+            if classifications
+                .get(&column)
+                .is_some_and(|component| classification.handling < component.handling)
+            {
+                self.error(
+                    "classification.column_weaker_than_property",
+                    &format!("{root}.sourceColumnClassifications"),
+                    "a source-column override cannot weaken component handling",
+                );
+            }
+            self.validate_review_status(
+                &classification,
+                &format!("{root}.sourceColumnClassifications"),
+            );
+            accounts.push(ColumnAccount {
+                column,
+                uses: column_uses.into_iter().collect(),
+                classification,
+            });
+        }
+        accounts
+    }
+
+    fn validate_statistical_processing(
+        &mut self,
+        dataset: &crate::contract::StatisticalDatasetDefinition,
+        root: &str,
+    ) {
+        if dataset.processing_descriptions.is_empty() {
+            self.error(
+                "processing.description_missing",
+                &format!("{root}.processingDescriptions"),
+                "a statistical publication requires a reviewed processing description",
+            );
+        }
+        let mut ids = HashSet::new();
+        for (index, processing) in dataset.processing_descriptions.iter().enumerate() {
+            let location = format!("{root}.processingDescriptions[{index}]");
+            if !ids.insert(processing.id.as_str())
+                || !valid_kebab_identifier(&processing.id)
+                || processing.purpose.trim().is_empty()
+                || processing.recipient_class.trim().is_empty()
+                || processing.safeguards.is_empty()
+                || has_duplicates(&processing.safeguards)
+                || !valid_relative_reference(&processing.legal_basis_ref)
+                || !valid_relative_reference(&processing.dpv_profile_ref)
+            {
+                self.error(
+                    "processing.description_invalid",
+                    &location,
+                    "processing descriptions require stable identifiers, contained governance references, and reviewed safeguards",
+                );
+            }
+            if processing.operation_refs != ["statistics:read"] {
+                self.error(
+                    "processing.operations_invalid",
+                    &format!("{location}.operationRefs"),
+                    "a statistical processing description must name the neutral statistics:read operation",
+                );
+            }
+        }
+    }
+
+    fn validate_statistical_metadata_closure(
+        &mut self,
+        access: &CompiledAccess,
+        maximum_handling: Handling,
+        root: &str,
+    ) {
+        use crate::contract::Visibility;
+        if matches!(access, CompiledAccess::Public) {
+            for (name, visibility) in [
+                ("resources", self.contract.metadata_visibility.resources),
+                ("semantics", self.contract.metadata_visibility.semantics),
+            ] {
+                if visibility != Visibility::Public {
+                    self.error(
+                        "metadata.reference_visibility_invalid",
+                        &format!("metadataVisibility.{name}"),
+                        "a public statistical audience must be able to resolve its generated binding structure and semantics",
+                    );
+                }
+            }
+        }
+        if maximum_handling >= Handling::Confidential
+            && self.contract.metadata_visibility.classifications == Visibility::Public
+        {
+            self.error(
+                "metadata.classification_visibility_invalid",
+                root,
+                "confidential or restricted statistical components forbid public classification metadata",
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2144,6 +3060,8 @@ pub fn classification_inventory_digest(
         registry_identifier: &'a str,
         sources: Vec<SourceInventory<'a>>,
         resources: Vec<ResourceInventory<'a>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        statistical_datasets: Vec<StatisticalDatasetInventory<'a>>,
     }
 
     #[derive(Serialize)]
@@ -2227,6 +3145,49 @@ pub fn classification_inventory_digest(
         transform_inventory: &'a [String],
     }
 
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatisticalDatasetInventory<'a> {
+        id: &'a str,
+        source: &'a str,
+        view: &'a str,
+        dimensions: Vec<StatisticalComponentInventory<'a>>,
+        time: StatisticalTimeInventory<'a>,
+        measure: StatisticalComponentInventory<'a>,
+        attributes: Vec<StatisticalAttributeInventory<'a>>,
+        column_accounting: Vec<ColumnInventory<'a>>,
+        access: &'a CompiledAccess,
+        processing_handling: Handling,
+        disclosure_handling: Handling,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatisticalComponentInventory<'a> {
+        id: &'a str,
+        source_column: &'a str,
+        data_type: StatisticalValueType,
+        codelist: Option<&'a str>,
+        semantic_iri: &'a str,
+        classification: &'a EffectiveClassification,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatisticalTimeInventory<'a> {
+        id: &'a str,
+        source_column: &'a str,
+        semantic_iri: &'a str,
+        classification: &'a EffectiveClassification,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct StatisticalAttributeInventory<'a> {
+        component: StatisticalComponentInventory<'a>,
+        source_required: bool,
+    }
+
     let inventory = Inventory {
         registry_identifier: &registry.registry_identifier,
         sources: registry
@@ -2308,6 +3269,68 @@ pub fn classification_inventory_digest(
                     .collect(),
             })
             .collect(),
+        statistical_datasets: registry
+            .statistical_datasets
+            .iter()
+            .map(|dataset| StatisticalDatasetInventory {
+                id: &dataset.id,
+                source: &dataset.source,
+                view: &dataset.view,
+                dimensions: dataset
+                    .dimensions
+                    .iter()
+                    .map(|component| StatisticalComponentInventory {
+                        id: &component.id,
+                        source_column: &component.source_column,
+                        data_type: component.data_type,
+                        codelist: component.codelist.as_deref(),
+                        semantic_iri: &component.semantic_iri,
+                        classification: &component.classification,
+                    })
+                    .collect(),
+                time: StatisticalTimeInventory {
+                    id: &dataset.time.id,
+                    source_column: &dataset.time.source_column,
+                    semantic_iri: &dataset.time.semantic_iri,
+                    classification: &dataset.time.classification,
+                },
+                measure: StatisticalComponentInventory {
+                    id: &dataset.measure.id,
+                    source_column: &dataset.measure.source_column,
+                    data_type: dataset.measure.data_type,
+                    codelist: None,
+                    semantic_iri: &dataset.measure.semantic_iri,
+                    classification: &dataset.measure.classification,
+                },
+                attributes: dataset
+                    .attributes
+                    .iter()
+                    .map(|component| StatisticalAttributeInventory {
+                        component: StatisticalComponentInventory {
+                            id: &component.id,
+                            source_column: &component.source_column,
+                            data_type: component.data_type,
+                            codelist: component.codelist.as_deref(),
+                            semantic_iri: &component.semantic_iri,
+                            classification: &component.classification,
+                        },
+                        source_required: component.source_required,
+                    })
+                    .collect(),
+                column_accounting: dataset
+                    .column_accounting
+                    .iter()
+                    .map(|column| ColumnInventory {
+                        column: &column.column,
+                        uses: &column.uses,
+                        classification: &column.classification,
+                    })
+                    .collect(),
+                access: &dataset.access,
+                processing_handling: dataset.processing_handling,
+                disclosure_handling: dataset.disclosure_handling,
+            })
+            .collect(),
     };
     revision(&inventory).map_err(|()| CompileReport {
         diagnostics: vec![Diagnostic {
@@ -2317,6 +3340,39 @@ pub fn classification_inventory_digest(
             message: "the classification inventory could not be canonicalized".into(),
         }],
     })
+}
+
+fn derived_sdmx_alignment_targets() -> [crate::contract::AlignmentTarget; 3] {
+    [
+        crate::contract::AlignmentTarget {
+            name: "sdmx-rest".into(),
+            version: "2.2.2".into(),
+            cfr_target: None,
+            status: "directional".into(),
+        },
+        crate::contract::AlignmentTarget {
+            name: "sdmx-json".into(),
+            version: "2.1.0".into(),
+            cfr_target: None,
+            status: "directional".into(),
+        },
+        crate::contract::AlignmentTarget {
+            name: "sdmx-csv".into(),
+            version: "2.1.0".into(),
+            cfr_target: None,
+            status: "directional".into(),
+        },
+    ]
+}
+
+fn compiled_alignment_targets(
+    contract: &RegistryContract,
+) -> Vec<crate::contract::AlignmentTarget> {
+    let mut targets = contract.registry.alignment_targets.clone();
+    if !contract.statistical_datasets.is_empty() {
+        targets.extend(derived_sdmx_alignment_targets());
+    }
+    targets
 }
 
 #[derive(Deserialize)]
@@ -2531,6 +3587,22 @@ fn validate_governed_files(
             }
         }
         for processing in &resource.processing_descriptions {
+            sidecar_paths.insert(processing.legal_basis_ref.as_str());
+            sidecar_paths.insert(processing.dpv_profile_ref.as_str());
+        }
+    }
+    for dataset in &contract.statistical_datasets {
+        for (_, dimension) in dataset.dimensions.iter() {
+            if let Some(vocabulary) = dimension.vocabulary.as_deref() {
+                codelist_paths.insert(vocabulary);
+            }
+        }
+        for (_, attribute) in dataset.attributes.iter() {
+            if let Some(vocabulary) = attribute.vocabulary.as_deref() {
+                codelist_paths.insert(vocabulary);
+            }
+        }
+        for processing in &dataset.processing_descriptions {
             sidecar_paths.insert(processing.legal_basis_ref.as_str());
             sidecar_paths.insert(processing.dpv_profile_ref.as_str());
         }
@@ -2898,6 +3970,84 @@ fn valid_sql_identifier(value: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
+fn valid_sdmx_ncname_segment(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(first) if first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn valid_sdmx_agency_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && value.split('.').all(valid_sdmx_ncname_segment)
+}
+
+fn valid_sdmx_maintainable_id(value: &str) -> bool {
+    value.len() <= 128 && valid_sdmx_ncname_segment(value)
+}
+
+fn valid_sdmx_component_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(first) if first.is_ascii_uppercase())
+        && value.len() <= 128
+        && bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn valid_sdmx_version(value: &str) -> bool {
+    let parts = value.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts.iter().all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+                && (part == &"0" || !part.starts_with('0'))
+        })
+}
+
+fn to_sdmx_id(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            if character.is_ascii_uppercase() && !output.is_empty() && !output.ends_with('_') {
+                output.push('_');
+            }
+            output.push(character.to_ascii_uppercase());
+        } else if !output.is_empty() && !output.ends_with('_') {
+            output.push('_');
+        }
+    }
+    output.trim_end_matches('_').to_owned()
+}
+
+fn compatible_sdmx_declared_type(
+    data_type: StatisticalValueType,
+    declared_type: Option<&str>,
+) -> bool {
+    let Some(declared_type) = declared_type else {
+        return true;
+    };
+    let declared = declared_type.trim().to_ascii_uppercase();
+    match data_type {
+        StatisticalValueType::Boolean | StatisticalValueType::Integer => {
+            declared.contains("INT") || declared == "BOOLEAN"
+        }
+        StatisticalValueType::Decimal => {
+            declared.contains("REAL")
+                || declared.contains("FLOA")
+                || declared.contains("DOUB")
+                || declared.contains("DEC")
+                || declared.contains("NUM")
+                || declared.contains("INT")
+        }
+        StatisticalValueType::Code
+        | StatisticalValueType::String
+        | StatisticalValueType::TimePeriod => {
+            declared.contains("CHAR")
+                || declared.contains("CLOB")
+                || declared.contains("TEXT")
+                || declared == "DATE"
+                || declared == "DATETIME"
+        }
+    }
+}
+
 fn compatible_declared_type(data_type: DataType, declared_type: &str) -> bool {
     let declared = declared_type.trim().to_ascii_uppercase();
     match data_type {
@@ -3104,6 +4254,233 @@ pub(crate) mod tests {
         assert!(!valid_camel_identifier("source.column"));
         assert!(valid_kebab_identifier("registered-business"));
         assert!(!valid_kebab_identifier("RegisteredBusiness"));
+    }
+
+    #[test]
+    fn sdmx_compiled_identity_profiles_have_closed_boundaries() {
+        assert!(valid_sdmx_agency_id("A"));
+        assert!(valid_sdmx_agency_id("EXAMPLE.Stat_Agency-1"));
+        assert!(valid_sdmx_agency_id(&"A".repeat(128)));
+        assert!(!valid_sdmx_agency_id("1AGENCY"));
+        assert!(!valid_sdmx_agency_id("AGENCY..SUB"));
+        assert!(!valid_sdmx_agency_id("AGENCY."));
+        assert!(!valid_sdmx_agency_id(&"A".repeat(129)));
+
+        assert!(valid_sdmx_maintainable_id("A"));
+        assert!(valid_sdmx_maintainable_id("FLOW_1-A"));
+        assert!(valid_sdmx_maintainable_id(&"A".repeat(128)));
+        assert!(!valid_sdmx_maintainable_id("FLOW.ONE"));
+        assert!(!valid_sdmx_maintainable_id("_FLOW"));
+        assert!(!valid_sdmx_maintainable_id(&"A".repeat(129)));
+
+        assert!(valid_sdmx_version("0.0.0"));
+        assert!(valid_sdmx_version("12.345.6789"));
+        assert!(!valid_sdmx_version("draft"));
+        assert!(!valid_sdmx_version("1.0"));
+        assert!(!valid_sdmx_version("01.0.0"));
+        assert!(!valid_sdmx_version("1.00.0"));
+        assert!(!valid_sdmx_version("1.0.0-draft"));
+    }
+
+    #[test]
+    fn governed_sdmx_identity_overrides_compile_or_report_the_exact_field() {
+        let statistical = RegistryContract::parse_yaml(include_str!(
+            "../../../products/relay-v2/examples/labour-statistics/registry.yaml"
+        ))
+        .expect("strict statistical contract");
+        let mut valid_value = serde_json::to_value(&statistical).expect("contract serializes");
+        let valid_binding = valid_value
+            .pointer_mut("/statisticalDatasets/0/bindings/sdmx")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("SDMX binding object");
+        valid_binding.insert("agencyId".into(), serde_json::json!("EXAMPLE.Stat-1"));
+        valid_binding.insert("dataflowId".into(), serde_json::json!("FLOW_1-A"));
+        valid_binding.insert("version".into(), serde_json::json!("2.0.0"));
+        valid_binding.insert("dataStructureId".into(), serde_json::json!("DSD_1-A"));
+        valid_binding.insert("conceptSchemeId".into(), serde_json::json!("CONCEPTS_1-A"));
+        let valid_contract = serde_json::from_value::<RegistryContract>(valid_value)
+            .expect("valid override contract");
+        let compiled = compile_contract(
+            &valid_contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("official SDMX identity profiles compile");
+        assert_eq!(
+            compiled.statistical_datasets[0].sdmx.agency_id,
+            "EXAMPLE.Stat-1"
+        );
+        assert_eq!(
+            compiled.statistical_datasets[0].sdmx.dataflow_id,
+            "FLOW_1-A"
+        );
+        assert_eq!(compiled.statistical_datasets[0].sdmx.version, "2.0.0");
+
+        for (field, invalid, expected_location, code) in [
+            (
+                "agencyId",
+                "AGENCY..SUB",
+                "statisticalDatasets[0].bindings.sdmx.agencyId",
+                "sdmx.identifier_invalid",
+            ),
+            (
+                "dataflowId",
+                "FLOW.ONE",
+                "statisticalDatasets[0].bindings.sdmx.dataflowId",
+                "sdmx.identifier_invalid",
+            ),
+            (
+                "dataStructureId",
+                "DSD.ONE",
+                "statisticalDatasets[0].bindings.sdmx.dataStructureId",
+                "sdmx.identifier_invalid",
+            ),
+            (
+                "conceptSchemeId",
+                "CONCEPTS.ONE",
+                "statisticalDatasets[0].bindings.sdmx.conceptSchemeId",
+                "sdmx.identifier_invalid",
+            ),
+            (
+                "version",
+                "draft",
+                "statisticalDatasets[0].bindings.sdmx.version",
+                "sdmx.version_invalid",
+            ),
+        ] {
+            let mut value = serde_json::to_value(&statistical).expect("contract serializes");
+            value
+                .pointer_mut("/statisticalDatasets/0/bindings/sdmx")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("SDMX binding object")
+                .insert(field.into(), serde_json::json!(invalid));
+            let contract = serde_json::from_value::<RegistryContract>(value)
+                .expect("invalid identity reaches compiler validation");
+            let report = compile_contract(
+                &contract,
+                &[statistical_observed_schema()],
+                CompileProfile::Production,
+            )
+            .expect_err("invalid SDMX identity is refused");
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|item| item.code == code && item.location == expected_location),
+                "missing {code} at {expected_location} in {:?}",
+                report.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn statistical_binding_derives_alignment_targets_and_refuses_authored_duplicates() {
+        let contract = RegistryContract::parse_yaml(include_str!(
+            "../../../products/relay-v2/examples/labour-statistics/registry.yaml"
+        ))
+        .expect("strict statistical contract");
+        let compiled = compile_contract(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("statistical contract compiles");
+        assert_eq!(
+            compiled
+                .alignment_targets
+                .iter()
+                .map(|target| (target.name.as_str(), target.version.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("sdmx-rest", "2.2.2"),
+                ("sdmx-json", "2.1.0"),
+                ("sdmx-csv", "2.1.0"),
+            ]
+        );
+
+        let mut value = serde_json::to_value(&contract).expect("contract serializes");
+        value["registry"]["alignmentTargets"] = serde_json::json!([
+            {"name": "sdmx-rest", "version": "2.2.2", "status": "directional"}
+        ]);
+        let duplicate = serde_json::from_value::<RegistryContract>(value)
+            .expect("duplicate target contract parses");
+        let report = compile_contract(
+            &duplicate,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect_err("compiler-owned SDMX target cannot be authored");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "registry.alignment_target_derived"));
+    }
+
+    #[test]
+    fn statistical_processing_handling_includes_hidden_columns_but_disclosure_does_not() {
+        let contract = RegistryContract::parse_yaml(include_str!(
+            "../../../products/relay-v2/examples/labour-statistics/registry.yaml"
+        ))
+        .expect("strict statistical contract");
+        let mut value = serde_json::to_value(&contract).expect("contract serializes");
+        value["statisticalDatasets"][1]["sourceColumnClassifications"]["authority_scope"]
+            ["handling"] = serde_json::json!("restricted");
+        value["metadataVisibility"]["classifications"] = serde_json::json!("operation-bound");
+        let contract =
+            serde_json::from_value::<RegistryContract>(value).expect("contract reparses");
+        let compiled = compile_contract(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("protected statistical contract compiles");
+        let protected = &compiled.statistical_datasets[1];
+        assert_eq!(protected.processing_handling, Handling::Restricted);
+        assert_eq!(protected.disclosure_handling, Handling::Internal);
+        let digest = classification_inventory_digest(&compiled).expect("inventory digests");
+        let report = crate::identification::representation_report(&compiled, &digest)
+            .expect("representation report");
+        let boundary = report
+            .statistical_datasets
+            .iter()
+            .find(|dataset| dataset.dataset == protected.id)
+            .expect("protected statistical boundary");
+        assert_eq!(boundary.processing_handling, Handling::Restricted);
+        assert_eq!(boundary.disclosure_handling, Handling::Internal);
+        assert!(boundary
+            .processed_source_columns
+            .contains(&"authority_scope".into()));
+        assert!(!boundary
+            .disclosed_components
+            .contains(&"authority_scope".into()));
+        let findings = crate::identification::contextual_review_findings(&compiled, &digest)
+            .expect("contextual findings");
+        assert!(findings.findings.iter().any(|finding| {
+            finding.code == "classification.context.statistics_processing_exceeds_disclosure"
+                && finding.resource == protected.id
+                && finding.source_columns == ["authority_scope"]
+        }));
+    }
+
+    #[test]
+    fn statistical_classification_is_bound_into_the_review_inventory() {
+        let contract = RegistryContract::parse_yaml(include_str!(
+            "../../../products/relay-v2/examples/labour-statistics/registry.yaml"
+        ))
+        .expect("strict statistical contract");
+        let mut registry = compile_contract(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("statistical contract compiles");
+        let reviewed = classification_inventory_digest(&registry).expect("inventory digests");
+        registry.statistical_datasets[0].dimensions[0]
+            .classification
+            .handling = Handling::Internal;
+        let changed =
+            classification_inventory_digest(&registry).expect("changed inventory digests");
+        assert_ne!(reviewed, changed);
     }
 
     #[test]
@@ -3758,6 +5135,62 @@ pub(crate) mod tests {
             .map(|_| serde_json::json!("name"))
             .collect();
         assert_refused(&parse_value(order_value), "list.order_bound_exceeded");
+
+        let statistical = RegistryContract::parse_yaml(include_str!(
+            "../../../products/relay-v2/examples/labour-statistics/registry.yaml"
+        ))
+        .expect("strict statistical contract");
+        let mut datasets_value = serde_json::to_value(&statistical).expect("contract serializes");
+        let datasets = datasets_value
+            .get_mut("statisticalDatasets")
+            .and_then(serde_json::Value::as_array_mut)
+            .expect("statistical datasets array");
+        let dataset = datasets[0].clone();
+        for index in datasets.len()..=MAXIMUM_STATISTICAL_DATASETS {
+            let mut item = dataset.clone();
+            item.as_object_mut()
+                .expect("statistical dataset object")
+                .insert("id".into(), serde_json::json!(format!("dataset-{index}")));
+            datasets.push(item);
+        }
+        assert_refused(
+            &parse_value(datasets_value),
+            "statistics.dataset_bound_exceeded",
+        );
+
+        let mut dimensions_value = serde_json::to_value(&statistical).expect("contract serializes");
+        let dimensions = dimensions_value
+            .pointer_mut("/statisticalDatasets/0/dimensions")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("statistical dimensions object");
+        let dimension = dimensions
+            .get("refArea")
+            .expect("reference dimension")
+            .clone();
+        for index in dimensions.len()..=MAXIMUM_SDMX_DIMENSIONS {
+            dimensions.insert(format!("dimension{index}"), dimension.clone());
+        }
+        assert_refused(
+            &parse_value(dimensions_value),
+            "statistics.dimension_bound_invalid",
+        );
+
+        let mut attributes_value = serde_json::to_value(&statistical).expect("contract serializes");
+        let attributes = attributes_value
+            .pointer_mut("/statisticalDatasets/0/attributes")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("statistical attributes object");
+        let attribute = attributes
+            .get("unitMeasure")
+            .expect("unit attribute")
+            .clone();
+        for index in attributes.len()..=MAXIMUM_SDMX_ATTRIBUTES {
+            attributes.insert(format!("attribute{index}"), attribute.clone());
+        }
+        assert_refused(
+            &parse_value(attributes_value),
+            "statistics.attribute_bound_exceeded",
+        );
     }
 
     #[test]
@@ -3996,6 +5429,43 @@ pub(crate) mod tests {
                     })
                     .collect(),
             }],
+        }
+    }
+
+    fn statistical_observed_schema() -> ObservedSourceSchema {
+        let column = |name: &str, declared_type: &str| crate::model::ObservedColumn {
+            name: name.into(),
+            declared_type: declared_type.into(),
+            nullable: false,
+            primary_key: false,
+        };
+        ObservedSourceSchema {
+            source: "labour-statistics".into(),
+            fingerprint: "sha256:21890387ccf8d33a95a4ba38d085b6eac79e4522b8a8b34a10a4a637711b4034"
+                .into(),
+            views: vec![
+                crate::model::ObservedView {
+                    name: "relay_labour_force_rates".into(),
+                    columns: vec![
+                        column("ref_area", "TEXT"),
+                        column("sex", "TEXT"),
+                        column("time_period", "TEXT"),
+                        column("obs_value", "REAL"),
+                        column("unit_measure", "TEXT"),
+                    ],
+                },
+                crate::model::ObservedView {
+                    name: "relay_authority_labour_force_rates".into(),
+                    columns: vec![
+                        column("ref_area", "TEXT"),
+                        column("sex", "TEXT"),
+                        column("time_period", "TEXT"),
+                        column("obs_value", "REAL"),
+                        column("unit_measure", "TEXT"),
+                        column("authority_scope", "TEXT"),
+                    ],
+                },
+            ],
         }
     }
 

@@ -25,8 +25,8 @@ use crate::cursor::{
     CursorBindings, CursorPayload, CursorValue,
 };
 use crate::model::{
-    CompiledAccess, CompiledOperation, CompiledRepresentation, CompiledResource, OperationKind,
-    RowAuthoritySource,
+    CompiledAccess, CompiledOperation, CompiledRepresentation, CompiledResource,
+    CompiledStatisticalDataset, OperationKind, RowAuthoritySource,
 };
 use crate::problem::{ProblemCode, TraceContext};
 use crate::server::{uri_within_bound, RelayService};
@@ -121,6 +121,22 @@ pub async fn service_metadata(
             capabilities.extend(operations.into_iter().map(|(operation, representation)| {
                 capability(&service, resource, operation, representation)
             }));
+        }
+        for dataflow in &service.registry.statistical_datasets {
+            let visible = match service.registry.metadata_visibility.resources {
+                Visibility::Public => matches!(dataflow.access, CompiledAccess::Public),
+                Visibility::OperationBound => principal.as_ref().is_some_and(|principal| {
+                    service.authenticator.as_ref().is_some_and(|authenticator| {
+                        authenticator
+                            .authorize(&dataflow.access, Some(principal))
+                            .is_ok()
+                    })
+                }),
+                Visibility::OperatorOnly => false,
+            };
+            if visible {
+                capabilities.push(sdmx_capability(&service, dataflow));
+            }
         }
     }
     let alignment_targets = service
@@ -2766,6 +2782,34 @@ fn capability(
         );
     }
     document
+}
+
+fn sdmx_capability(service: &RelayService, dataflow: &CompiledStatisticalDataset) -> Value {
+    json!({
+        "family": "aggregate-data",
+        "pattern": "statistical-dataflow",
+        "profile": "sdmx-rest-2.2-read",
+        "resourceIdentifier": dataflow.id,
+        "operationIdentifier": dataflow.operation_identifier(),
+        "dataflow": format!("{}:{}({})", dataflow.sdmx.agency_id, dataflow.sdmx.dataflow_id, dataflow.sdmx.version),
+        "dataStructure": format!("{}:{}({})", dataflow.sdmx.agency_id, dataflow.sdmx.data_structure_id, dataflow.sdmx.version),
+        "processingHandling": dataflow.processing_handling,
+        "disclosureHandling": dataflow.disclosure_handling,
+        "href": absolute(
+            &service.registry.base_uri,
+            &format!(
+                "/sdmx/v2/data/dataflow/{}/{}/{}/{{key}}",
+                dataflow.sdmx.agency_id, dataflow.sdmx.dataflow_id, dataflow.sdmx.version
+            ),
+        ),
+        "structureReference": absolute(
+            &service.registry.base_uri,
+            &format!(
+                "/sdmx/v2/structure/dataflow/{}/{}/{}",
+                dataflow.sdmx.agency_id, dataflow.sdmx.dataflow_id, dataflow.sdmx.version
+            ),
+        ),
+    })
 }
 
 fn sibling_artifact_reference(reference: &str, artifact_identifier: &str) -> String {

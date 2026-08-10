@@ -1902,8 +1902,7 @@ impl ProjectHarness {
                     name: operator.name.clone(),
                 }),
             authoritative_scope: contract.registry.authoritative_scope.clone(),
-            alignment_targets: contract
-                .registry
+            alignment_targets: compiled
                 .alignment_targets
                 .iter()
                 .map(|target| AlignmentMetadata {

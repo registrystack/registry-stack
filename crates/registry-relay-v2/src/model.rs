@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::contract::{
     AlignmentTarget, DataType, DateInputType, DatePrecision, Handling, IdentificationMethod,
-    PartialStringReveal, ProcessingDescription, SemanticAlignment, SourceProfile, Visibility,
+    PartialStringReveal, ProcessingDescription, SemanticAlignment, SourceProfile,
+    StatisticalValueType, Visibility,
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -95,6 +96,8 @@ pub struct CompiledRegistry {
     pub codelists: Vec<CompiledCodelist>,
     pub sources: Vec<CompiledSource>,
     pub resources: Vec<CompiledResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statistical_datasets: Vec<CompiledStatisticalDataset>,
     pub metadata_visibility: CompiledMetadataVisibility,
 }
 
@@ -139,6 +142,97 @@ pub struct CompiledResource {
     pub operations: Vec<CompiledOperation>,
     pub column_accounting: Vec<ColumnAccount>,
     pub processing_descriptions: Vec<ProcessingDescription>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalDataset {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub sdmx: CompiledSdmxBinding,
+    pub release_at: String,
+    pub source: String,
+    pub view: String,
+    pub dimensions: Vec<CompiledStatisticalDimension>,
+    pub time: CompiledStatisticalTimeDimension,
+    pub measure: CompiledStatisticalMeasure,
+    pub attributes: Vec<CompiledStatisticalAttribute>,
+    pub access: CompiledAccess,
+    pub allow_unfiltered: bool,
+    pub maximum_observations: u32,
+    pub maximum_offset: u32,
+    pub processing_handling: Handling,
+    pub disclosure_handling: Handling,
+    pub column_accounting: Vec<ColumnAccount>,
+    pub processing_descriptions: Vec<ProcessingDescription>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledSdmxBinding {
+    pub agency_id: String,
+    pub dataflow_id: String,
+    pub version: String,
+    pub data_structure_id: String,
+    pub concept_scheme_id: String,
+}
+
+impl CompiledStatisticalDataset {
+    #[must_use]
+    pub fn operation_identifier(&self) -> String {
+        format!("{}.statistics.read", self.id)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalDimension {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub data_type: StatisticalValueType,
+    pub codelist: Option<String>,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalTimeDimension {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalMeasure {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub data_type: StatisticalValueType,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledStatisticalAttribute {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub source_column: String,
+    pub data_type: StatisticalValueType,
+    pub codelist: Option<String>,
+    pub source_required: bool,
+    pub semantic_iri: String,
+    pub classification: EffectiveClassification,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -274,6 +368,7 @@ pub struct CompiledRepresentation {
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityFamily {
     Consultation,
+    AggregateData,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -384,6 +479,9 @@ pub enum ColumnUse {
     Order,
     Selector(String),
     RowBinding(String),
+    StatisticalDimension(String),
+    StatisticalMeasure(String),
+    StatisticalAttribute(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

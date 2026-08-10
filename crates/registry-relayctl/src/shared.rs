@@ -16,6 +16,10 @@ pub(crate) fn execute(command: Command) -> Result<ToolingReport, ToolingError> {
         Command::Inspect(args) => tooling::inspect_schema(&InspectOptions {
             database_path: args.database,
             starter_output: args.starters,
+            statistical_view: args.statistical_view,
+            time_column: args.time_column,
+            measure_column: args.measure_column,
+            attribute_columns: args.attribute_column,
         }),
         Command::Check(args) => tooling::check_project(&CheckOptions {
             project_root: args.project,

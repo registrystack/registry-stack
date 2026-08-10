@@ -2,7 +2,7 @@ schemaVersion: relay.registrystack.org/generated-baselines/v1alpha1
 product: relay-v2
 projects:
   social-assistance:
-    packageRevision: sha256:bb39e792cbe09e374e5e8fd3ebb468af64b99838158a273a6f48163b0179ae99
+    packageRevision: sha256:e1e2a03aab4a7ded6627de1615b148610a70eb5cc9ed2e93d7143858493b97d0
     contractRevision: sha256:0fd06f53b937afbb0252715010ff222c4cb8817a6c62648a2a72ac4d35eae282
     sourceSchemaFingerprints:
       assistance: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
@@ -187,14 +187,14 @@ projects:
       operationIdentifier: null
       path: generated/openapi.full.yaml
       representationIdentifier: null
-      sha256: sha256:b7ea4f0e0c1d392b05e8862dbec696d5ced4439d184dc9c9c9b83af3ee842d5b
+      sha256: sha256:24d0694918c8cc841dd7cf959bfbe486346d18967f5aab0ef27462951eac84bb
       visibility: operator-only
     - id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
       representationIdentifier: null
-      sha256: sha256:b1a460e09d3d45200f82d9c5f44f5b7fdd2e04db4ee226e716b9104af4573ac8
+      sha256: sha256:5ceab19c242afd2ecf5d3ec796d47f725675bc9ef76c9ab14ce8f4152cc140c7
       visibility: public
     governedFiles:
     - generated: false
@@ -252,7 +252,7 @@ projects:
       size: 6472
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:6bc260ff78b6600b4c6b019e00a79a41e604cb92adcb64142eb0a15c464ca52d
+    packageRevision: sha256:1c442165e65738ec97ca910d0ab72a426ab9e5152cdcdc5c18ee67853caa24fc
     contractRevision: sha256:6c4ea84a578cf589ffb851722830f90d7c241998d82ea419f7b823640cd056b5
     sourceSchemaFingerprints:
       companies: sha256:5f12cd971dfa9cafd98018bd8723f2c3902e7d96b3c57ecf5c20e4885eb806a8
@@ -528,14 +528,14 @@ projects:
       operationIdentifier: null
       path: generated/openapi.full.yaml
       representationIdentifier: null
-      sha256: sha256:f0f97d965af38fde18f51bdd9aff22199541ff64f51c9c10635fb43c137b4896
+      sha256: sha256:afe18e3cca109baa6ccf02a5071bb808c13f62bbae8506d0dc31b05318b27618
       visibility: operator-only
     - id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
       representationIdentifier: null
-      sha256: sha256:81707ee9bbf12e1ed50f126be4ccb07303decb986d66c2f8ff481c1eeec5a59e
+      sha256: sha256:402ea7c1192e2d411d3c71cb16d363a5e6153dcc49b1cad62aacdba168c44b98
       visibility: public
     governedFiles:
     - generated: false
@@ -599,7 +599,7 @@ projects:
       size: 7020
       visibility: operator-only
   civil-event:
-    packageRevision: sha256:1321aa211982705a63644c45435dc716aacf36b9f0a5872013202fb1985446c1
+    packageRevision: sha256:2e7fc426443bd27d16dfe925c70438183bbe62073751abddc73c2dac8096fe6c
     contractRevision: sha256:44a3604af965eb51983e44c8cebbb2486cd0655bfe265ce8a47cef22c8f1246a
     sourceSchemaFingerprints:
       events: sha256:7f770d64cb19ec54caca2aa56378b13a43cd5edc206ff44b5fecc99ee9e63759
@@ -840,14 +840,14 @@ projects:
       operationIdentifier: null
       path: generated/openapi.full.yaml
       representationIdentifier: null
-      sha256: sha256:04b9fc444ace2a9e3062f82fdf3e9cbd3d375422c109dd0c3bdd42fe7b8efdf4
+      sha256: sha256:20109402ac65cfeb65c53376c7cb907e36c454fba3d9886ed11c254464e69164
       visibility: operator-only
     - id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
       representationIdentifier: null
-      sha256: sha256:2dc557335daf6824d9a037998ef20fa1efe835c877fb46feec1e3fd2d19ac392
+      sha256: sha256:a5035c88812da486afff16ba3cfe4ab5162c6c660a6f856be13de9633eec4457
       visibility: public
     governedFiles:
     - generated: false

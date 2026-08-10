@@ -674,6 +674,22 @@ fn capture_governed_closure(
             references.insert(generated.report_ref.as_str());
         }
     }
+    for dataset in &contract.statistical_datasets {
+        for (_, dimension) in dataset.dimensions.iter() {
+            if let Some(vocabulary) = dimension.vocabulary.as_deref() {
+                references.insert(vocabulary);
+            }
+        }
+        for (_, attribute) in dataset.attributes.iter() {
+            if let Some(vocabulary) = attribute.vocabulary.as_deref() {
+                references.insert(vocabulary);
+            }
+        }
+        for processing in &dataset.processing_descriptions {
+            references.insert(processing.legal_basis_ref.as_str());
+            references.insert(processing.dpv_profile_ref.as_str());
+        }
+    }
     if references.len() > MAX_AUTHORED_FILES {
         return Err(PackageError::ClosureBound);
     }
@@ -1430,5 +1446,76 @@ mod tests {
         let artifact = &manifest.artifacts[0];
         fs::write(output.join(&artifact.path), b"tampered").expect("tamper fixture");
         assert!(load_package(&resolved_output).is_err());
+    }
+
+    #[test]
+    fn labour_statistics_package_captures_and_verifies_its_governed_closure() {
+        use registry_platform_sqlite::materialize_fixture;
+
+        const PROJECT: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/relay-v2/examples/labour-statistics"
+        );
+
+        let project = Path::new(PROJECT);
+        let contract = RegistryContract::parse_yaml(
+            &fs::read_to_string(project.join("registry.yaml")).expect("contract reads"),
+        )
+        .expect("contract parses");
+        let temporary = tempfile::tempdir().expect("temporary project");
+        let database = temporary.path().join("fixture.sqlite");
+        materialize_fixture(
+            &database,
+            &fs::read_to_string(project.join("fixture.sql")).expect("fixture reads"),
+        )
+        .expect("fixture materializes");
+        let (_, definition) = contract.sources.iter().next().expect("one source");
+        let runtime = crate::contract::RelayRuntime::parse_yaml(
+            &fs::read_to_string(project.join("runtime.yaml"))
+                .expect("runtime reads")
+                .replace(
+                    "path: fixture.sqlite",
+                    &format!("path: {}", database.display()),
+                ),
+        )
+        .expect("runtime parses");
+        let observed = crate::source_observation::observe_sources(project, &contract, &runtime)
+            .expect("fixture schema inspects");
+        assert_eq!(
+            observed[0].fingerprint,
+            definition.expected_schema_fingerprint
+        );
+        let mut governed =
+            capture_governed_closure(project, &contract, None).expect("closure captures");
+        governed.insert(
+            "governance/classification-review-rationale.md".into(),
+            fs::read(project.join("governance/classification-review-rationale.md"))
+                .expect("classification rationale reads"),
+        );
+        let registry = compile_contract_with_governed_files(
+            &contract,
+            &observed,
+            CompileProfile::Production,
+            &governed,
+        )
+        .unwrap_or_else(|report| panic!("labour statistics compiles: {report:?}"));
+        let artifacts = generate_artifacts(&registry).expect("artifacts generate");
+        let output = temporary.path().join("package");
+        let manifest = build_package(project, &output, &contract, &registry, &artifacts)
+            .expect("package builds");
+
+        for vocabulary in [
+            "codelists/areas.yaml",
+            "codelists/sex.yaml",
+            "codelists/units.yaml",
+        ] {
+            assert!(manifest
+                .files
+                .iter()
+                .any(|entry| entry.path == format!("governed/{vocabulary}")));
+        }
+        let verified = load_package(&output.canonicalize().expect("package resolves"))
+            .expect("package verifies");
+        assert_eq!(verified.registry, registry);
     }
 }

@@ -19,9 +19,10 @@ use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::auth::RowAuthority;
-use crate::contract::{DataType, SourceProfile};
+use crate::contract::{DataType, SourceProfile, StatisticalValueType};
 use crate::model::{
-    CompiledOperation, CompiledRegistry, CompiledRepresentation, CompiledResource, OperationKind,
+    CompiledOperation, CompiledRegistry, CompiledRepresentation, CompiledResource,
+    CompiledStatisticalDataset, OperationKind,
 };
 
 const MAXIMUM_CELL_BYTES: usize = 1024 * 1024;
@@ -30,6 +31,10 @@ const MAXIMUM_STATEMENT_STEPS: u64 = 2_000_000;
 const SCHEMA_MAXIMUM_OBJECTS: usize = 10_000;
 const SCHEMA_MAXIMUM_SQL_BYTES: usize = 8 * 1024 * 1024;
 const SCHEMA_MAXIMUM_STEPS: u64 = 1_000_000;
+pub const MAXIMUM_SDMX_VALUES_PER_DIMENSION: usize = 16;
+pub(crate) const SDMX_OBSERVATION_COUNT_COLUMN: &str = "__relay_observation_count";
+pub(crate) const SDMX_MAX_OBSERVATION_COUNT_COLUMN: &str = "__relay_max_observation_count";
+pub(crate) const SDMX_PAGE_ROW_PRESENT_COLUMN: &str = "__relay_page_row_present";
 
 #[derive(Clone, Debug)]
 pub struct SqliteRuntimeLimits {
@@ -74,6 +79,27 @@ pub struct OperationResult {
     pub source_revision: SourceRevision,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct SdmxConstraint {
+    pub values: Vec<Value>,
+    pub lower: Option<String>,
+    pub upper: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SdmxOperationQuery {
+    pub constraints: BTreeMap<String, SdmxConstraint>,
+    pub row_authority: Option<RowAuthority>,
+    pub offset: u32,
+    pub fetch_limit: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct SdmxOperationResult {
+    pub rows: Vec<ResultRow>,
+    pub source_revision: SourceRevision,
+}
+
 #[derive(Debug, Error)]
 pub enum SqliteRuntimeError {
     #[error("runtime source binding is missing")]
@@ -102,6 +128,12 @@ struct OperationInventory {
     representations: BTreeMap<String, OperationExecutor>,
 }
 
+struct SdmxOperationExecutor {
+    statement: Arc<ReadOnlyStatement>,
+    dataflow: CompiledStatisticalDataset,
+    source_revision: SourceRevision,
+}
+
 #[derive(Clone)]
 struct ReadinessSource {
     profile: DatabaseProfile,
@@ -111,6 +143,7 @@ struct ReadinessSource {
 /// Fixed operation inventory over one compiled Registry.
 pub struct SqliteRuntime {
     operations: BTreeMap<String, OperationInventory>,
+    sdmx_operations: BTreeMap<String, SdmxOperationExecutor>,
     readiness_sources: Vec<ReadinessSource>,
     admission: Arc<Semaphore>,
     timeout: Duration,
@@ -217,8 +250,37 @@ impl SqliteRuntime {
             }
         }
 
+        let mut sdmx_operations = BTreeMap::new();
+        for dataflow in &registry.statistical_datasets {
+            let (profile, source_revision) = profiles
+                .get(&dataflow.source)
+                .ok_or(SqliteRuntimeError::MissingSource)?;
+            let source = registry
+                .sources
+                .iter()
+                .find(|source| source.id == dataflow.source)
+                .ok_or(SqliteRuntimeError::MissingSource)?;
+            let contract =
+                sdmx_statement_contract(dataflow, &limits, &source.expected_schema_fingerprint)?;
+            let statement = ReadOnlyStatement::open(profile.clone(), contract)?;
+            if sdmx_operations
+                .insert(
+                    dataflow.operation_identifier(),
+                    SdmxOperationExecutor {
+                        statement: Arc::new(statement),
+                        dataflow: dataflow.clone(),
+                        source_revision: source_revision.clone(),
+                    },
+                )
+                .is_some()
+            {
+                return Err(SqliteRuntimeError::InvalidPlan);
+            }
+        }
+
         Ok(Self {
             operations,
+            sdmx_operations,
             readiness_sources,
             admission: Arc::new(Semaphore::new(limits.concurrent_queries)),
             timeout: limits.request_timeout,
@@ -259,6 +321,30 @@ impl SqliteRuntime {
         self.operations
             .get(operation)
             .map(|item| &item.source_revision)
+            .or_else(|| {
+                self.sdmx_operations
+                    .get(operation)
+                    .map(|item| &item.source_revision)
+            })
+    }
+
+    pub async fn execute_sdmx(
+        &self,
+        operation: &str,
+        query: SdmxOperationQuery,
+    ) -> Result<SdmxOperationResult, SqliteRuntimeError> {
+        let executor = self
+            .sdmx_operations
+            .get(operation)
+            .ok_or(SqliteRuntimeError::UnknownOperation)?;
+        let permit = self.acquire().await?;
+        let values = bind_sdmx_values(&executor.dataflow, query)?;
+        let result = executor.statement.execute(&values).await;
+        drop(permit);
+        Ok(SdmxOperationResult {
+            rows: result?.rows,
+            source_revision: executor.source_revision.clone(),
+        })
     }
 
     pub async fn execute(
@@ -288,6 +374,277 @@ impl SqliteRuntime {
             .map_err(|_| SqliteRuntimeError::AdmissionTimeout)?
             .map_err(|_| SqliteRuntimeError::InvalidPlan)
     }
+}
+
+fn sdmx_statement_contract(
+    dataflow: &CompiledStatisticalDataset,
+    limits: &SqliteRuntimeLimits,
+    expected_schema_fingerprint: &str,
+) -> Result<StatementContract, SqliteRuntimeError> {
+    let mut columns = dataflow
+        .dimensions
+        .iter()
+        .map(|component| ColumnContract {
+            name: component.source_column.clone(),
+            value_type: sdmx_column_type(component.data_type),
+        })
+        .collect::<Vec<_>>();
+    columns.push(ColumnContract {
+        name: dataflow.time.source_column.clone(),
+        value_type: ColumnType::String,
+    });
+    columns.push(ColumnContract {
+        name: dataflow.measure.source_column.clone(),
+        value_type: sdmx_column_type(dataflow.measure.data_type),
+    });
+    columns.extend(dataflow.attributes.iter().map(|component| ColumnContract {
+        name: component.source_column.clone(),
+        value_type: sdmx_column_type(component.data_type),
+    }));
+    let projected = columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect::<Vec<_>>();
+    columns.push(ColumnContract {
+        name: SDMX_OBSERVATION_COUNT_COLUMN.to_owned(),
+        value_type: ColumnType::Integer,
+    });
+    columns.push(ColumnContract {
+        name: SDMX_MAX_OBSERVATION_COUNT_COLUMN.to_owned(),
+        value_type: ColumnType::Integer,
+    });
+    columns.push(ColumnContract {
+        name: SDMX_PAGE_ROW_PRESENT_COLUMN.to_owned(),
+        value_type: ColumnType::Integer,
+    });
+    let mut parameters = Vec::new();
+    let mut predicates = Vec::new();
+    for (index, dimension) in dataflow.dimensions.iter().enumerate() {
+        let present = format!("dimension_{index}_present");
+        parameters.push(parameter(&present));
+        let mut choices = Vec::new();
+        for value_index in 0..MAXIMUM_SDMX_VALUES_PER_DIMENSION {
+            let name = format!("dimension_{index}_{value_index}");
+            parameters.push(parameter(&name));
+            choices.push(format!(":{name}"));
+        }
+        predicates.push(format!(
+            "(:{present} = 0 OR {} IN ({}))",
+            quote_identifier(&dimension.source_column),
+            choices.join(", ")
+        ));
+    }
+    let time_index = dataflow.dimensions.len();
+    let time_present = format!("dimension_{time_index}_present");
+    parameters.push(parameter(&time_present));
+    let mut time_choices = Vec::new();
+    for value_index in 0..MAXIMUM_SDMX_VALUES_PER_DIMENSION {
+        let name = format!("dimension_{time_index}_{value_index}");
+        parameters.push(parameter(&name));
+        time_choices.push(format!(":{name}"));
+    }
+    predicates.push(format!(
+        "(:{time_present} = 0 OR {} IN ({}))",
+        quote_identifier(&dataflow.time.source_column),
+        time_choices.join(", ")
+    ));
+    for (suffix, operator) in [("lower", ">="), ("upper", "<=")] {
+        let bound_present = format!("dimension_{time_index}_{suffix}_present");
+        let bound = format!("dimension_{time_index}_{suffix}");
+        parameters.push(parameter(&bound_present));
+        parameters.push(parameter(&bound));
+        predicates.push(format!(
+            "(:{bound_present} = 0 OR {} {operator} :{bound})",
+            quote_identifier(&dataflow.time.source_column)
+        ));
+    }
+    if let crate::model::CompiledAccess::Protected {
+        row_binding: Some(binding),
+        ..
+    } = &dataflow.access
+    {
+        parameters.push(parameter("row_authority"));
+        predicates.push(format!(
+            "{} = :row_authority",
+            quote_identifier(&binding.source_column)
+        ));
+    }
+    parameters.push(parameter("fetch_limit"));
+    parameters.push(parameter("offset"));
+    let where_clause = if predicates.is_empty() {
+        "1 = 1".to_owned()
+    } else {
+        predicates.join(" AND ")
+    };
+    let mut dimension_columns = dataflow
+        .dimensions
+        .iter()
+        .map(|dimension| quote_identifier(&dimension.source_column))
+        .collect::<Vec<_>>();
+    dimension_columns.push(quote_identifier(&dataflow.time.source_column));
+    let mut order = dataflow
+        .dimensions
+        .iter()
+        .map(|dimension| format!("{} ASC", quote_identifier(&dimension.source_column)))
+        .collect::<Vec<_>>();
+    order.push(format!(
+        "{} ASC",
+        quote_identifier(&dataflow.time.source_column)
+    ));
+    let base = quote_identifier("__relay_base");
+    let page = quote_identifier("__relay_page");
+    let summary = quote_identifier("__relay_summary");
+    let qualified_projected = projected
+        .iter()
+        .map(|column| format!("{page}.{}", quote_identifier(column)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let qualified_order = dataflow
+        .dimensions
+        .iter()
+        .map(|dimension| format!("{page}.{} ASC", quote_identifier(&dimension.source_column)))
+        .chain(std::iter::once(format!(
+            "{page}.{} ASC",
+            quote_identifier(&dataflow.time.source_column)
+        )))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let observation_count = quote_identifier(SDMX_OBSERVATION_COUNT_COLUMN);
+    let maximum_observation_count = quote_identifier(SDMX_MAX_OBSERVATION_COUNT_COLUMN);
+    let page_row_present = quote_identifier(SDMX_PAGE_ROW_PRESENT_COLUMN);
+    let sql = format!(
+        "WITH {base} AS (SELECT {}, COUNT(*) OVER (PARTITION BY {}) AS {observation_count} FROM {} WHERE {}), {page} AS (SELECT *, 1 AS {page_row_present} FROM {base} ORDER BY {} LIMIT :fetch_limit OFFSET :offset), {summary} AS (SELECT COALESCE(MAX({observation_count}), 0) AS {maximum_observation_count} FROM {base}) SELECT {qualified_projected}, {page}.{observation_count}, {summary}.{maximum_observation_count}, COALESCE({page}.{page_row_present}, 0) AS {page_row_present} FROM {summary} LEFT JOIN {page} ON 1 = 1 ORDER BY {qualified_order}",
+        select_list(&projected),
+        dimension_columns.join(", "),
+        quote_identifier(&dataflow.view),
+        where_clause,
+        order.join(", "),
+    );
+    Ok(StatementContract {
+        sql,
+        columns,
+        parameters,
+        limits: StatementLimits {
+            maximum_rows: u64::from(dataflow.maximum_observations).saturating_add(1),
+            maximum_cell_bytes: MAXIMUM_CELL_BYTES,
+            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+            maximum_statement_steps: MAXIMUM_STATEMENT_STEPS,
+            timeout: limits.request_timeout,
+            concurrency: 1,
+        },
+        schema: Some(SchemaBinding {
+            expected_fingerprint: expected_schema_fingerprint.to_owned(),
+            maximum_objects: SCHEMA_MAXIMUM_OBJECTS,
+            maximum_sql_bytes: SCHEMA_MAXIMUM_SQL_BYTES,
+        }),
+    })
+}
+
+fn sdmx_column_type(value: StatisticalValueType) -> ColumnType {
+    match value {
+        StatisticalValueType::Integer => ColumnType::Integer,
+        StatisticalValueType::Decimal => ColumnType::Number,
+        StatisticalValueType::Boolean => ColumnType::Boolean,
+        StatisticalValueType::Code
+        | StatisticalValueType::String
+        | StatisticalValueType::TimePeriod => ColumnType::String,
+    }
+}
+
+fn bind_sdmx_values(
+    dataflow: &CompiledStatisticalDataset,
+    query: SdmxOperationQuery,
+) -> Result<BTreeMap<String, Value>, SqliteRuntimeError> {
+    if query.fetch_limit == 0
+        || query.fetch_limit > dataflow.maximum_observations.saturating_add(1)
+        || query.offset > dataflow.maximum_offset
+        || query.constraints.keys().any(|id| {
+            !dataflow
+                .dimensions
+                .iter()
+                .any(|dimension| dimension.id == *id)
+                && dataflow.time.id != *id
+        })
+    {
+        return Err(SqliteRuntimeError::InvalidPlan);
+    }
+    let mut values = BTreeMap::new();
+    for (index, dimension) in dataflow.dimensions.iter().enumerate() {
+        let constraint = query.constraints.get(&dimension.id);
+        let choices = constraint.map_or(&[][..], |value| value.values.as_slice());
+        if choices.len() > MAXIMUM_SDMX_VALUES_PER_DIMENSION
+            || constraint.is_some_and(|value| value.lower.is_some() || value.upper.is_some())
+        {
+            return Err(SqliteRuntimeError::InvalidPlan);
+        }
+        values.insert(
+            format!("dimension_{index}_present"),
+            Value::Integer(i64::from(!choices.is_empty())),
+        );
+        for value_index in 0..MAXIMUM_SDMX_VALUES_PER_DIMENSION {
+            values.insert(
+                format!("dimension_{index}_{value_index}"),
+                choices.get(value_index).cloned().unwrap_or(Value::Null),
+            );
+        }
+    }
+    let time_index = dataflow.dimensions.len();
+    let time_constraint = query.constraints.get(&dataflow.time.id);
+    let time_choices = time_constraint.map_or(&[][..], |value| value.values.as_slice());
+    if time_choices.len() > MAXIMUM_SDMX_VALUES_PER_DIMENSION {
+        return Err(SqliteRuntimeError::InvalidPlan);
+    }
+    values.insert(
+        format!("dimension_{time_index}_present"),
+        Value::Integer(i64::from(!time_choices.is_empty())),
+    );
+    for value_index in 0..MAXIMUM_SDMX_VALUES_PER_DIMENSION {
+        values.insert(
+            format!("dimension_{time_index}_{value_index}"),
+            time_choices
+                .get(value_index)
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
+    }
+    for (suffix, bound) in [
+        (
+            "lower",
+            time_constraint.and_then(|value| value.lower.as_ref()),
+        ),
+        (
+            "upper",
+            time_constraint.and_then(|value| value.upper.as_ref()),
+        ),
+    ] {
+        values.insert(
+            format!("dimension_{time_index}_{suffix}_present"),
+            Value::Integer(i64::from(bound.is_some())),
+        );
+        values.insert(
+            format!("dimension_{time_index}_{suffix}"),
+            bound.cloned().map(Value::String).unwrap_or(Value::Null),
+        );
+    }
+    if let crate::model::CompiledAccess::Protected {
+        row_binding: Some(binding),
+        ..
+    } = &dataflow.access
+    {
+        let row = query.row_authority.ok_or(SqliteRuntimeError::InvalidPlan)?;
+        if row.source_column != binding.source_column {
+            return Err(SqliteRuntimeError::InvalidPlan);
+        }
+        values.insert("row_authority".into(), Value::String(row.value));
+    } else if query.row_authority.is_some() {
+        return Err(SqliteRuntimeError::InvalidPlan);
+    }
+    values.insert(
+        "fetch_limit".into(),
+        Value::Integer(i64::from(query.fetch_limit)),
+    );
+    values.insert("offset".into(), Value::Integer(i64::from(query.offset)));
+    Ok(values)
 }
 
 fn statement_contract(

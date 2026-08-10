@@ -37,8 +37,8 @@ pub struct GeneratedArtifact {
     pub path: String,
     pub media_type: String,
     pub visibility: Visibility,
-    /// Present only for operation-bound artifacts. The HTTP layer must mount
-    /// the artifact behind this exact compiled operation's static access gate.
+    /// Present only for operation-bound artifacts. If the HTTP layer mounts
+    /// the artifact, it must use this exact compiled operation's access gate.
     pub operation_identifier: Option<String>,
     /// Present with `operation_identifier` when an operation-bound artifact
     /// belongs to one exact finite representation.
@@ -747,11 +747,170 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 .insert(method.into(), operation_value);
         }
     }
+    for dataflow in &registry.statistical_datasets {
+        if public_only && !matches!(dataflow.access, CompiledAccess::Public) {
+            continue;
+        }
+        let security = match dataflow.access {
+            CompiledAccess::Public => json!([]),
+            CompiledAccess::Protected { .. } => json!([{"bearerAuth": []}]),
+        };
+        let path = format!(
+            "/sdmx/v2/data/dataflow/{}/{}/{}/{{key}}",
+            dataflow.sdmx.agency_id, dataflow.sdmx.dataflow_id, dataflow.sdmx.version
+        );
+        let mut parameters = vec![json!({
+            "name": "key", "in": "path", "required": true,
+            "schema": {"type": "string", "minLength": 1},
+            "description": "SDMX positional key in compiled DSD order; use * for a wildcard"
+        })];
+        for dimension in &dataflow.dimensions {
+            parameters.push(json!({
+                "name": format!("c[{}]", dimension.id),
+                "in": "query", "required": false,
+                "schema": {"type": "string", "minLength": 1},
+                "description": "Comma-separated exact values"
+            }));
+        }
+        parameters.push(json!({
+            "name": format!("c[{}]", dataflow.time.id),
+            "in": "query", "required": false,
+            "schema": {"type": "string", "minLength": 1},
+            "description": "Exact values, ge: lower bound, and le: upper bound"
+        }));
+        parameters.extend([
+            json!({"name": "offset", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0, "maximum": dataflow.maximum_offset, "default": 0}}),
+            json!({"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": dataflow.maximum_observations}}),
+            json!({"name": "dimensionAtObservation", "in": "query", "required": false, "schema": {"type": "string", "enum": ["TIME_PERIOD", "AllDimensions"], "default": "TIME_PERIOD"}}),
+        ]);
+        let mut operation = json!({
+            "operationId": dataflow.operation_identifier(),
+            "x-registry-family": "aggregate-data",
+            "x-registry-pattern": "statistical-dataflow",
+            "x-registry-capability-operation": dataflow.operation_identifier(),
+            "x-sdmx-publication-mode": "pre-aggregated",
+            "security": security,
+            "parameters": parameters,
+            "responses": {
+                "200": {"description": "SDMX 2.1 statistical observations", "content": {
+                    "application/vnd.sdmx.data+json;version=2.1.0": {},
+                    "application/vnd.sdmx.data+csv;version=2.1.0": {}
+                }},
+                "204": {"description": "No observations match"},
+                "default": {"$ref": "#/components/responses/Problem"}
+            }
+        });
+        if let CompiledAccess::Protected { scope, .. } = &dataflow.access {
+            operation
+                .as_object_mut()
+                .expect("SDMX operation")
+                .insert("x-registry-required-scope".into(), json!(scope));
+        }
+        paths.insert(path, json!({"get": operation.clone()}));
+        let mut without_key = operation;
+        let operation = without_key
+            .as_object_mut()
+            .expect("SDMX operation is an object");
+        operation.insert(
+            "operationId".into(),
+            json!(format!("{}.without-key", dataflow.operation_identifier())),
+        );
+        if let Some(parameters) = operation
+            .get_mut("parameters")
+            .and_then(Value::as_array_mut)
+        {
+            parameters.retain(|parameter| parameter.get("name") != Some(&json!("key")));
+        }
+        paths.insert(
+            format!(
+                "/sdmx/v2/data/dataflow/{}/{}/{}",
+                dataflow.sdmx.agency_id, dataflow.sdmx.dataflow_id, dataflow.sdmx.version
+            ),
+            json!({"get": without_key}),
+        );
+        for (kind, identifier, version) in [
+            (
+                "structure/dataflow",
+                &dataflow.sdmx.dataflow_id,
+                &dataflow.sdmx.version,
+            ),
+            (
+                "structure/datastructure",
+                &dataflow.sdmx.data_structure_id,
+                &dataflow.sdmx.version,
+            ),
+        ] {
+            paths.insert(
+                format!(
+                    "/sdmx/v2/{kind}/{}/{identifier}/{version}",
+                    dataflow.sdmx.agency_id
+                ),
+                json!({"get": {
+                    "operationId": format!("{}.sdmx.{}", dataflow.id, kind.replace('/', ".")),
+                    "x-registry-family": "aggregate-data",
+                    "x-registry-capability-operation": dataflow.operation_identifier(),
+                    "security": security,
+                    "parameters": [{
+                        "name": "references",
+                        "in": "query",
+                        "required": false,
+                        "schema": {"type": "string", "enum": ["none"], "default": "none"},
+                        "description": "Version one returns only the requested artefact"
+                    }],
+                    "responses": {"200": {"description": "Governed SDMX structure metadata", "content": {
+                        "application/vnd.sdmx.structure+json;version=2.0.0": {}
+                    }}, "default": {"$ref": "#/components/responses/Problem"}}
+                }})
+            );
+        }
+    }
+    if !registry.statistical_datasets.is_empty()
+        && (!public_only
+            || registry
+                .statistical_datasets
+                .iter()
+                .any(|dataflow| matches!(dataflow.access, CompiledAccess::Public)))
+    {
+        paths.insert(
+            "/sdmx/v2/schema/{context}/{agency}/{resource}/{version}".into(),
+            json!({"get": {
+                "operationId": "relay.sdmx.schema.not-implemented",
+                "description": "The canonical SDMX schema surface is reserved and explicitly deferred in this profile.",
+                "x-registry-family": "aggregate-data",
+                "security": [],
+                "parameters": [
+                    {"name": "context", "in": "path", "required": true, "schema": {"type": "string"}},
+                    {"name": "agency", "in": "path", "required": true, "schema": {"type": "string"}},
+                    {"name": "resource", "in": "path", "required": true, "schema": {"type": "string"}},
+                    {"name": "version", "in": "path", "required": true, "schema": {"type": "string"}}
+                ],
+                "responses": {"501": {"$ref": "#/components/responses/Problem"}}
+            }}),
+        );
+        paths.insert(
+            "/sdmx/v2/availability/{context}/{agency}/{resource}/{version}/{key}/{component}".into(),
+            json!({"get": {
+                "operationId": "relay.sdmx.availability.not-implemented",
+                "description": "The canonical SDMX availability surface is reserved and explicitly deferred in this profile.",
+                "x-registry-family": "aggregate-data",
+                "security": [],
+                "parameters": [
+                    {"name": "context", "in": "path", "required": true, "schema": {"type": "string"}},
+                    {"name": "agency", "in": "path", "required": true, "schema": {"type": "string"}},
+                    {"name": "resource", "in": "path", "required": true, "schema": {"type": "string"}},
+                    {"name": "version", "in": "path", "required": true, "schema": {"type": "string"}},
+                    {"name": "key", "in": "path", "required": true, "schema": {"type": "string"}},
+                    {"name": "component", "in": "path", "required": true, "schema": {"type": "string"}}
+                ],
+                "responses": {"501": {"$ref": "#/components/responses/Problem"}}
+            }}),
+        );
+    }
     paths.insert(
         "/v2/artifacts/{artifactIdentifier}".into(),
         json!({"get": {
             "operationId": "relay.artifacts.retrieve",
-            "description": "Retrieve a visibility-appropriate generated Registry artifact",
+            "description": "Retrieve an HTTP-mounted, visibility-appropriate generated Registry artifact. Package-only artifacts return 404.",
             "security": [{}, {"bearerAuth": []}],
             "parameters": [{
                 "name": "artifactIdentifier", "in": "path", "required": true,
@@ -868,7 +1027,7 @@ fn capability_inventory(
     registry: &CompiledRegistry,
     projection: CapabilityProjection<'_>,
 ) -> Value {
-    let capabilities = registry
+    let mut capabilities = registry
         .resources
         .iter()
         .flat_map(|resource| {
@@ -911,6 +1070,36 @@ fn capability_inventory(
             })
         })
         .collect::<Vec<_>>();
+    capabilities.extend(registry.statistical_datasets.iter().filter_map(|dataflow| {
+        let include = match projection {
+            CapabilityProjection::Public => matches!(dataflow.access, CompiledAccess::Public),
+            CapabilityProjection::Full => true,
+            CapabilityProjection::Representation(_, _) => false,
+        };
+        include.then(|| json!({
+            "resource": dataflow.id,
+            "operationIdentifier": dataflow.operation_identifier(),
+            "family": "aggregate-data",
+            "pattern": "statistical-dataflow",
+            "profile": "sdmx-rest-2.2-read",
+            "dataflow": format!("{}:{}({})", dataflow.sdmx.agency_id, dataflow.sdmx.dataflow_id, dataflow.sdmx.version),
+            "dataStructure": format!("{}:{}({})", dataflow.sdmx.agency_id, dataflow.sdmx.data_structure_id, dataflow.sdmx.version),
+            "processingHandling": dataflow.processing_handling,
+            "disclosureHandling": dataflow.disclosure_handling,
+        }))
+    }));
+    let unsupported = [
+        "provisioning",
+        "evidence",
+        "write",
+        "notification",
+        "aggregate-data",
+        "access-transparency",
+        "identity-federation",
+    ]
+    .into_iter()
+    .filter(|family| *family != "aggregate-data" || registry.statistical_datasets.is_empty())
+    .collect::<Vec<_>>();
     json!({
         "registryIdentifier": registry.registry_identifier,
         "authorityIdentifier": registry.authority_identifier,
@@ -919,7 +1108,7 @@ fn capability_inventory(
         "alignmentTargets": registry.alignment_targets,
         "metadataVisibility": registry.metadata_visibility,
         "capabilities": capabilities,
-        "unsupportedFamilies": ["provisioning", "evidence", "write", "notification", "aggregate-data", "access-transparency", "identity-federation"]
+        "unsupportedFamilies": unsupported
     })
 }
 
@@ -977,9 +1166,11 @@ fn audit_event_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::{compile_contract_with_governed_files, tests as compiler_tests};
+    use crate::compiler::{
+        compile_contract, compile_contract_with_governed_files, tests as compiler_tests,
+    };
     use crate::contract::RegistryContract;
-    use crate::model::CompileProfile;
+    use crate::model::{CompileProfile, ObservedColumn, ObservedSourceSchema, ObservedView};
 
     #[test]
     fn generated_inventory_covers_required_v1_artifact_classes_only() {
@@ -1091,6 +1282,116 @@ mod tests {
         assert!(full["components"]["securitySchemes"]
             .get("oauth2")
             .is_none());
+        for deferred in [
+            "/sdmx/v2/schema/{context}/{agency}/{resource}/{version}",
+            "/sdmx/v2/availability/{context}/{agency}/{resource}/{version}/{key}/{component}",
+        ] {
+            assert!(
+                full["paths"].get(deferred).is_none(),
+                "non-statistical OpenAPI must not advertise {deferred}"
+            );
+            assert!(
+                public["paths"].get(deferred).is_none(),
+                "non-statistical public OpenAPI must not advertise {deferred}"
+            );
+        }
+    }
+
+    #[test]
+    fn protected_statistical_dataset_is_absent_from_public_openapi() {
+        let mut value = serde_json::to_value(
+            RegistryContract::parse_yaml(include_str!(
+                "../../../products/relay-v2/examples/labour-statistics/registry.yaml"
+            ))
+            .expect("statistical contract parses"),
+        )
+        .expect("statistical contract serializes");
+        value["statisticalDatasets"]
+            .as_array_mut()
+            .expect("statistical datasets array")
+            .remove(0);
+        let contract = serde_json::from_value::<RegistryContract>(value)
+            .expect("protected statistical contract parses");
+        let registry = compile_contract(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect("protected statistical contract compiles");
+        let generated = generate_artifacts(&registry).expect("artifacts generate");
+        let full: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.full.yaml")
+                .expect("full OpenAPI")
+                .content,
+        )
+        .expect("full OpenAPI is JSON-compatible YAML");
+        let public: Value = serde_json::from_slice(
+            &generated
+                .get("openapi.public.json")
+                .expect("public OpenAPI")
+                .content,
+        )
+        .expect("public OpenAPI JSON");
+
+        let full_paths = full["paths"].as_object().expect("full paths");
+        let public_paths = public["paths"].as_object().expect("public paths");
+        for deferred in [
+            "/sdmx/v2/schema/{context}/{agency}/{resource}/{version}",
+            "/sdmx/v2/availability/{context}/{agency}/{resource}/{version}/{key}/{component}",
+        ] {
+            assert!(
+                full_paths.contains_key(deferred),
+                "full OpenAPI must advertise {deferred}"
+            );
+            assert!(
+                !public_paths.contains_key(deferred),
+                "public OpenAPI must not advertise protected-only {deferred}"
+            );
+        }
+        assert!(public_paths
+            .keys()
+            .all(|path| !path.starts_with("/sdmx/v2/")));
+        assert!(generated.artifacts.iter().all(|artifact| {
+            artifact.media_type != "application/vnd.sdmx.structure+json;version=2.0.0"
+        }));
+    }
+
+    fn statistical_observed_schema() -> ObservedSourceSchema {
+        let column = |name: &str, declared_type: &str| ObservedColumn {
+            name: name.into(),
+            declared_type: declared_type.into(),
+            nullable: false,
+            primary_key: false,
+        };
+        ObservedSourceSchema {
+            source: "labour-statistics".into(),
+            fingerprint: "sha256:21890387ccf8d33a95a4ba38d085b6eac79e4522b8a8b34a10a4a637711b4034"
+                .into(),
+            views: vec![
+                ObservedView {
+                    name: "relay_labour_force_rates".into(),
+                    columns: vec![
+                        column("ref_area", "TEXT"),
+                        column("sex", "TEXT"),
+                        column("time_period", "TEXT"),
+                        column("obs_value", "REAL"),
+                        column("unit_measure", "TEXT"),
+                    ],
+                },
+                ObservedView {
+                    name: "relay_authority_labour_force_rates".into(),
+                    columns: vec![
+                        column("ref_area", "TEXT"),
+                        column("sex", "TEXT"),
+                        column("time_period", "TEXT"),
+                        column("obs_value", "REAL"),
+                        column("unit_measure", "TEXT"),
+                        column("authority_scope", "TEXT"),
+                    ],
+                },
+            ],
+        }
     }
 
     #[test]

@@ -69,6 +69,10 @@ pub struct FixtureExpectation {
     #[serde(default)]
     pub item_count: Option<u32>,
     #[serde(default)]
+    pub observation_count: Option<u32>,
+    #[serde(default)]
+    pub media_type: Option<String>,
+    #[serde(default)]
     pub next_cursor: Option<Value>,
     #[serde(default)]
     pub registry_core_required: Option<bool>,

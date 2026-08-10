@@ -63,6 +63,20 @@ the representation `meta` links the JSON-LD context separately.
 
 Each example shows the governed and runtime documents together for readability. A real project would keep them as separately validated files and package them with synthetic fixtures and generated artifacts.
 
+The executable [labour statistics example](examples/labour-statistics/) adds a
+fourth, orthogonal shape: a reviewed pre-aggregated view declared under
+`statisticalDatasets`. Its primary configuration uses ordinary statistical
+terms for dimensions, one time dimension, one measure, attributes, controlled vocabularies,
+publication, access, and bounds. `bindings.sdmx` selects generated SDMX REST,
+JSON, CSV, dataflow, and DSD outputs. The DSD references derived concept-scheme
+and codelist identities rather than publishing separate artifacts. Existing SDMX
+publishers may override the generated identities, while new adopters can leave
+the binding empty and review deterministic defaults. Version one requires that
+explicit selection before publication because SDMX is its only statistical
+binding; the surrounding dataset remains binding-neutral. The example is linked
+rather than duplicated here so the file exercised by tests remains the
+authoring reference.
+
 ## Example 1: social assistance enrolment
 
 This is a sensitive, exact-lookup-only registry. It deliberately has no list or identifier-read operation. An authorized service officer supplies two exact selectors in a bounded request body. Relay also binds the verified officer's service area to a hidden source column. The response discloses a reviewed status summary, not names, addresses, dates of birth, selectors, or household membership.
@@ -930,6 +944,107 @@ sources.*
 sources.*.expectedSchemaFingerprint
 sources.*.kind
 sources.*.profile
+statisticalDatasets
+statisticalDatasets[]
+statisticalDatasets[].access
+statisticalDatasets[].access.authorityRowBinding
+statisticalDatasets[].access.authorityRowBinding.claim
+statisticalDatasets[].access.authorityRowBinding.sourceColumn
+statisticalDatasets[].access.purpose
+statisticalDatasets[].access.purpose.allowed
+statisticalDatasets[].access.purpose.allowed[]
+statisticalDatasets[].access.purpose.claim
+statisticalDatasets[].access.scope
+statisticalDatasets[].attributes
+statisticalDatasets[].attributes.*
+statisticalDatasets[].attributes.*.classification
+statisticalDatasets[].attributes.*.classification.handling
+statisticalDatasets[].attributes.*.classification.institutional
+statisticalDatasets[].attributes.*.classification.privacy
+statisticalDatasets[].attributes.*.classification.status
+statisticalDatasets[].attributes.*.column
+statisticalDatasets[].attributes.*.concept
+statisticalDatasets[].attributes.*.description
+statisticalDatasets[].attributes.*.label
+statisticalDatasets[].attributes.*.required
+statisticalDatasets[].attributes.*.type
+statisticalDatasets[].attributes.*.vocabulary
+statisticalDatasets[].bindings
+statisticalDatasets[].bindings.sdmx
+statisticalDatasets[].bindings.sdmx.agencyId
+statisticalDatasets[].bindings.sdmx.conceptSchemeId
+statisticalDatasets[].bindings.sdmx.dataStructureId
+statisticalDatasets[].bindings.sdmx.dataflowId
+statisticalDatasets[].bindings.sdmx.version
+statisticalDatasets[].classificationDefaults
+statisticalDatasets[].classificationDefaults.handling
+statisticalDatasets[].classificationDefaults.institutional
+statisticalDatasets[].classificationDefaults.privacy
+statisticalDatasets[].classificationDefaults.status
+statisticalDatasets[].description
+statisticalDatasets[].dimensions
+statisticalDatasets[].dimensions.*
+statisticalDatasets[].dimensions.*.classification
+statisticalDatasets[].dimensions.*.classification.handling
+statisticalDatasets[].dimensions.*.classification.institutional
+statisticalDatasets[].dimensions.*.classification.privacy
+statisticalDatasets[].dimensions.*.classification.status
+statisticalDatasets[].dimensions.*.column
+statisticalDatasets[].dimensions.*.concept
+statisticalDatasets[].dimensions.*.description
+statisticalDatasets[].dimensions.*.label
+statisticalDatasets[].dimensions.*.type
+statisticalDatasets[].dimensions.*.vocabulary
+statisticalDatasets[].id
+statisticalDatasets[].measure
+statisticalDatasets[].measure.classification
+statisticalDatasets[].measure.classification.handling
+statisticalDatasets[].measure.classification.institutional
+statisticalDatasets[].measure.classification.privacy
+statisticalDatasets[].measure.classification.status
+statisticalDatasets[].measure.column
+statisticalDatasets[].measure.concept
+statisticalDatasets[].measure.description
+statisticalDatasets[].measure.id
+statisticalDatasets[].measure.label
+statisticalDatasets[].measure.type
+statisticalDatasets[].processingDescriptions
+statisticalDatasets[].processingDescriptions[]
+statisticalDatasets[].processingDescriptions[].dpvProfileRef
+statisticalDatasets[].processingDescriptions[].id
+statisticalDatasets[].processingDescriptions[].legalBasisRef
+statisticalDatasets[].processingDescriptions[].operationRefs
+statisticalDatasets[].processingDescriptions[].operationRefs[]
+statisticalDatasets[].processingDescriptions[].purpose
+statisticalDatasets[].processingDescriptions[].recipientClass
+statisticalDatasets[].processingDescriptions[].safeguards
+statisticalDatasets[].processingDescriptions[].safeguards[]
+statisticalDatasets[].publication
+statisticalDatasets[].publication.releaseAt
+statisticalDatasets[].query
+statisticalDatasets[].query.allowUnfiltered
+statisticalDatasets[].query.maximumObservations
+statisticalDatasets[].query.maximumOffset
+statisticalDatasets[].source
+statisticalDatasets[].source.source
+statisticalDatasets[].source.view
+statisticalDatasets[].sourceColumnClassifications
+statisticalDatasets[].sourceColumnClassifications.*
+statisticalDatasets[].sourceColumnClassifications.*.handling
+statisticalDatasets[].sourceColumnClassifications.*.institutional
+statisticalDatasets[].sourceColumnClassifications.*.privacy
+statisticalDatasets[].sourceColumnClassifications.*.status
+statisticalDatasets[].time
+statisticalDatasets[].time.classification
+statisticalDatasets[].time.classification.handling
+statisticalDatasets[].time.classification.institutional
+statisticalDatasets[].time.classification.privacy
+statisticalDatasets[].time.classification.status
+statisticalDatasets[].time.column
+statisticalDatasets[].time.concept
+statisticalDatasets[].time.description
+statisticalDatasets[].time.label
+statisticalDatasets[].title
 ```
 <!-- relay-v2-registry-key-paths:end -->
 

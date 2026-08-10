@@ -29,6 +29,7 @@ use crate::audit::RelayAudit;
 use crate::auth::RelayAuthenticator;
 use crate::contract::{AccessRule, IssuerRuntime, RegistryContract, RelayRuntime};
 use crate::cursor::CursorKey;
+use crate::model::CompiledRegistry;
 use crate::package::{load_package, VerifiedPackage};
 use crate::server::{
     router, AlignmentMetadata, InstitutionMetadata, QuotaConfig, RelayService, ServiceMetadata,
@@ -128,7 +129,7 @@ pub async fn prepare(runtime_path: &Path) -> Result<PreparedRelay, StartupError>
         requests_per_minute: quota.requests_per_minute,
         burst: quota.burst,
     });
-    let metadata = service_metadata(&package.contract);
+    let metadata = service_metadata(&package.contract, &package.registry);
     let service = Arc::new(RelayService::new(
         Arc::new(package.registry),
         Arc::new(package.artifacts),
@@ -505,15 +506,19 @@ fn validate_runtime_contract(
                     .map(|(_, item)| &item.access)
             }))
             .any(|access| matches!(access, AccessRule::Protected(_)))
-    });
+    }) || contract
+        .statistical_datasets
+        .iter()
+        .any(|dataset| matches!(dataset.access, AccessRule::Protected(_)));
     if protected && runtime.authentication.issuer.is_none() {
         return Err(StartupError::IssuerUnavailable);
     }
-    let has_lookup = contract
-        .resources
-        .iter()
-        .any(|resource| !resource.operations.lookups.is_empty());
-    if has_lookup && runtime.quotas.is_none() {
+    let quota_required = !contract.statistical_datasets.is_empty()
+        || contract
+            .resources
+            .iter()
+            .any(|resource| !resource.operations.lookups.is_empty());
+    if quota_required && runtime.quotas.is_none() {
         return Err(StartupError::RuntimeInvalid);
     }
     Ok(())
@@ -672,7 +677,7 @@ fn resolve_secret(
         .map_err(|_| StartupError::SecretUnavailable)
 }
 
-fn service_metadata(contract: &RegistryContract) -> ServiceMetadata {
+fn service_metadata(contract: &RegistryContract, registry: &CompiledRegistry) -> ServiceMetadata {
     ServiceMetadata {
         authority: InstitutionMetadata {
             identifier: contract.registry.authority.identifier.clone(),
@@ -687,8 +692,7 @@ fn service_metadata(contract: &RegistryContract) -> ServiceMetadata {
                 name: operator.name.clone(),
             }),
         authoritative_scope: contract.registry.authoritative_scope.clone(),
-        alignment_targets: contract
-            .registry
+        alignment_targets: registry
             .alignment_targets
             .iter()
             .map(|target| AlignmentMetadata {
@@ -1044,6 +1048,66 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             burst: 10,
         });
         assert_eq!(validate_runtime_contract(&lookup_runtime, &lookup), Ok(()));
+    }
+
+    #[test]
+    fn protected_statistical_datasets_require_an_issuer_and_all_statistical_reads_require_quota() {
+        const PROJECT: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../products/relay-v2/examples/labour-statistics"
+        );
+
+        let project = Path::new(PROJECT);
+        let contract = RegistryContract::parse_yaml(
+            &fs::read_to_string(project.join("registry.yaml")).expect("contract reads"),
+        )
+        .expect("contract parses");
+        let governed = [
+            "governance/identifier-lifecycle.yaml",
+            "governance/legal-basis.yaml",
+            "codelists/areas.yaml",
+            "codelists/sex.yaml",
+            "codelists/units.yaml",
+        ]
+        .into_iter()
+        .map(|relative| {
+            (
+                relative.to_owned(),
+                fs::read(project.join(relative)).expect("governed file reads"),
+            )
+        })
+        .collect();
+        let compiled = crate::compiler::compile_contract_with_governed_files(
+            &contract,
+            &[],
+            crate::model::CompileProfile::Authoring,
+            &governed,
+        )
+        .unwrap_or_else(|report| panic!("statistical contract compiles: {report:?}"));
+        assert!(compiled.statistical_datasets.iter().any(|dataset| matches!(
+            dataset.access,
+            crate::model::CompiledAccess::Protected { .. }
+        )));
+
+        let runtime = RelayRuntime::parse_yaml(
+            &fs::read_to_string(project.join("runtime.yaml")).expect("runtime reads"),
+        )
+        .expect("runtime parses");
+        assert_eq!(validate_runtime_contract(&runtime, &contract), Ok(()));
+
+        let mut missing_issuer = runtime.clone();
+        missing_issuer.authentication.issuer = None;
+        assert_eq!(
+            validate_runtime_contract(&missing_issuer, &contract),
+            Err(StartupError::IssuerUnavailable)
+        );
+
+        let mut missing_quota = runtime;
+        missing_quota.quotas = None;
+        assert_eq!(
+            validate_runtime_contract(&missing_quota, &contract),
+            Err(StartupError::RuntimeInvalid)
+        );
     }
 
     #[test]

@@ -18,7 +18,9 @@ pub use crate::fixture_contract::{
     parse_journey, FixtureAuthorization, FixtureError, FixtureExpectation, FixtureJourney,
     FixtureMethod, FixtureRequest, FixtureStep,
 };
-use crate::model::{CompiledAccess, CompiledRegistry, OperationKind};
+use crate::model::{
+    CompiledAccess, CompiledOperation, CompiledRegistry, CompiledStatisticalDataset, OperationKind,
+};
 
 const JOURNEY_VERSION: &str = "relay.registrystack.org/http-journey/v1alpha1";
 const MAXIMUM_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -119,7 +121,21 @@ pub fn compile_fixture_plan(
         }
         if !matches!(
             step.expect.status,
-            200 | 304 | 400 | 401 | 403 | 404 | 406 | 413 | 414 | 415 | 429 | 500 | 503 | 504
+            200 | 204
+                | 304
+                | 400
+                | 401
+                | 403
+                | 404
+                | 406
+                | 413
+                | 414
+                | 415
+                | 429
+                | 500
+                | 501
+                | 503
+                | 504
         ) {
             diagnostic(
                 &mut diagnostics,
@@ -142,20 +158,27 @@ pub fn compile_fixture_plan(
                 "a successful fixture names no compiled operation",
             );
         }
-        if let Some(operation) = operation {
-            let representation_identifier = step
-                .request
-                .query
-                .get("representation")
-                .and_then(Value::as_str)
-                .unwrap_or(&operation.default_representation);
-            let protected = operation
-                .representations
-                .iter()
-                .find(|representation| representation.id == representation_identifier)
-                .is_some_and(|representation| {
-                    matches!(representation.access, CompiledAccess::Protected { .. })
-                });
+        if let Some(operation) = operation.as_ref() {
+            let protected = match operation {
+                ResolvedOperation::Consultation(operation) => {
+                    let representation_identifier = step
+                        .request
+                        .query
+                        .get("representation")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&operation.default_representation);
+                    operation
+                        .representations
+                        .iter()
+                        .find(|representation| representation.id == representation_identifier)
+                        .is_some_and(|representation| {
+                            matches!(representation.access, CompiledAccess::Protected { .. })
+                        })
+                }
+                ResolvedOperation::Sdmx(dataflow) => {
+                    matches!(dataflow.access, CompiledAccess::Protected { .. })
+                }
+            };
             if protected && step.expect.status == 200 && step.authorization_fixture.is_none() {
                 diagnostic(
                     &mut diagnostics,
@@ -167,7 +190,7 @@ pub fn compile_fixture_plan(
         }
         steps.push(FixturePlanStep {
             id: step.id.clone(),
-            operation_identifier: operation.map(|operation| operation.identifier.clone()),
+            operation_identifier: operation.as_ref().map(ResolvedOperation::identifier),
             expected_status: step.expect.status,
             actual_status: None,
             actual_code: None,
@@ -442,6 +465,31 @@ fn assert_expectations(
             );
         }
     }
+    if let Some(expected) = step.expect.observation_count {
+        let actual = response.document.map(sdmx_observation_count);
+        if actual != usize::try_from(expected).ok() {
+            mismatch(
+                diagnostics,
+                "fixture.observation_count_mismatch",
+                &location,
+                "SDMX observation count",
+            );
+        }
+    }
+    if let Some(expected) = step.expect.media_type.as_deref() {
+        let actual = response
+            .headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok());
+        if actual != Some(expected) {
+            mismatch(
+                diagnostics,
+                "fixture.media_type_mismatch",
+                &location,
+                "response media type",
+            );
+        }
+    }
     if let Some(expected) = step.expect.next_cursor.as_ref().and_then(Value::as_str) {
         let cursor = response
             .document
@@ -694,11 +742,25 @@ fn validate_authorizations(journey: &FixtureJourney, diagnostics: &mut Vec<Fixtu
     }
 }
 
+enum ResolvedOperation<'a> {
+    Consultation(&'a CompiledOperation),
+    Sdmx(&'a CompiledStatisticalDataset),
+}
+
+impl ResolvedOperation<'_> {
+    fn identifier(&self) -> String {
+        match self {
+            Self::Consultation(operation) => operation.identifier.clone(),
+            Self::Sdmx(dataflow) => dataflow.operation_identifier(),
+        }
+    }
+}
+
 fn resolve_operation<'a>(
     registry: &'a CompiledRegistry,
     request: &FixtureRequest,
-) -> Option<&'a crate::model::CompiledOperation> {
-    registry.resources.iter().find_map(|resource| {
+) -> Option<ResolvedOperation<'a>> {
+    let consultation = registry.resources.iter().find_map(|resource| {
         resource
             .operations
             .iter()
@@ -718,6 +780,18 @@ fn resolve_operation<'a>(
                         && request.path == format!("/v2/resources/{}/lookups/{name}", resource.id)
                 }
             })
+            .map(ResolvedOperation::Consultation)
+    });
+    consultation.or_else(|| {
+        registry.statistical_datasets.iter().find_map(|dataflow| {
+            let base = format!(
+                "/sdmx/v2/data/dataflow/{}/{}/{}",
+                dataflow.sdmx.agency_id, dataflow.sdmx.dataflow_id, dataflow.sdmx.version
+            );
+            (request.method == FixtureMethod::Get
+                && (request.path == base || request.path.starts_with(&format!("{base}/"))))
+            .then_some(ResolvedOperation::Sdmx(dataflow))
+        })
     })
 }
 
@@ -778,6 +852,26 @@ fn response_records(document: &Value) -> Vec<&Value> {
             .and_then(Value::as_array)
             .map_or_else(Vec::new, |items| items.iter().collect())
     }
+}
+
+fn sdmx_observation_count(document: &Value) -> usize {
+    if let Some(observations) = document
+        .pointer("/data/dataSets/0/observations")
+        .and_then(Value::as_object)
+    {
+        return observations.len();
+    }
+    document
+        .pointer("/data/dataSets/0/series")
+        .and_then(Value::as_object)
+        .map(|series| {
+            series
+                .values()
+                .filter_map(|item| item.get("observations").and_then(Value::as_object))
+                .map(serde_json::Map::len)
+                .sum()
+        })
+        .unwrap_or_default()
 }
 
 fn has_registry_core(record: &Value) -> bool {
@@ -848,7 +942,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 fn is_data_path(path: &str) -> bool {
-    path.contains("/records") || path.contains("/lookups/")
+    path.contains("/records") || path.contains("/lookups/") || path.starts_with("/sdmx/v2/data/")
 }
 
 fn mismatch(diagnostics: &mut Vec<FixtureDiagnostic>, code: &str, location: &str, subject: &str) {

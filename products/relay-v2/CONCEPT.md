@@ -78,7 +78,8 @@ Inspection is schema-only by default. Any future value sampling must be explicit
 
 A Relay deployment describes exactly one Registry. The Registry has a globally
 stable identifier, name, Registry Authority, optional operator, authoritative
-scope, base URI, standards-alignment targets, resources, and operations. The
+scope, base URI, authored institutional and compiler-derived binding alignment
+targets, resources, and operations. The
 Registry Authority is accountable for the Registry in its declared scope. It
 is not automatically the same party as the privacy controller, publisher, or
 technical operator.
@@ -130,8 +131,8 @@ alignment evidence. The institutional guarantee remains named as such.
 API families are external capability and trust groupings. They are not crates,
 services, URL prefixes, or an invitation to implement every family.
 
-Relay V2 implements only the Consultation patterns actually compiled for a
-Registry:
+Relay V2 implements only the capabilities actually compiled for a Registry.
+Registry Core resources support these Consultation patterns:
 
 - identifier read maps to `consultation.retrieve`;
 - collection list maps to `consultation.list`;
@@ -142,11 +143,40 @@ matching explanation. Family and pattern identifiers are attached to compiled
 operations and generated into capability discovery. They are not repeated in
 an independently authored capability list and do not appear in route names.
 
-Relay V2 does not claim Provisioning, Evidence, Write, Notification, Aggregate
-Data, Access Transparency, or Identity Federation. `relayctl` is offline
-authoring tooling, not a Provisioning API. Internal audit is not an Access
-Transparency service. OAuth protection and optional Mint issuance are not
-Identity Federation. Registry Evidence remains a separate product.
+An explicitly declared pre-aggregated statistical dataset may instead compile
+the Aggregate Data `statistical-dataflow` pattern. Adopters describe the
+dataset in format-neutral terms: source view, dimensions, one time dimension, one measure,
+attributes, concepts, controlled vocabularies, publication facts,
+classification, access, and query bounds. An optional SDMX binding generates
+stable dataflow, DSD, concept-scheme and codelist identities plus the closed
+SDMX REST read surface. Identity overrides are available to institutions that
+already govern SDMX artefacts; understanding SDMX is not required to author a
+starter dataset. Version one requires an explicit `sdmx: {}` selection before
+a statistical dataset is published, but no SDMX identity or DSD is authored by
+default. This keeps the dataset reusable by later bindings without making an
+unused statistical declaration silently active. Callers may select exact
+dimension values, apply lower and upper bounds to the one time dimension, and
+request bounded offset and limit values. Relay serializes SDMX-JSON and
+SDMX-CSV and generates SDMX structure
+metadata. Dataflow and DSD structure reads are implemented. The canonical
+schema and availability surfaces return an explicit value-free `501` until a
+separate validity-schema profile is designed. Relay never infers a statistical
+model from arbitrary rows or performs caller-directed aggregation.
+
+Binding specification versions are compiler-owned alignment metadata. An
+adopter does not repeat the SDMX REST, JSON, or CSV versions in the Registry
+contract and cannot accidentally advertise versions different from those the
+runtime implements. Statistical processing handling is derived from every
+consulted source column, including a hidden authority-binding column;
+disclosure handling is derived only from emitted dimensions, time, measure,
+and attributes. Both appear in generated review evidence and value-free audit.
+
+Relay V2 does not claim Provisioning, Evidence, Write, Notification, other
+Aggregate Data patterns, Access Transparency, or Identity Federation.
+`relayctl` is offline authoring tooling, not a Provisioning API. Internal audit
+is not an Access Transparency service. OAuth protection and optional Mint
+issuance are not Identity Federation. Registry Evidence remains a separate
+product.
 
 The draft Digital Registries target is recorded as an `alignmentTarget`, and
 the generated mapping is `alignmentEvidence`. Relay does not claim GovStack
@@ -352,7 +382,7 @@ GET  /v2/artifacts/{artifactIdentifier}
 
 `GET /v2` is the Registry service-metadata document. It publishes the Registry
 identifier, name, Authority, operator, authoritative scope, product and API
-binding versions, pinned alignment targets, derived visible Consultation
+binding versions, pinned authored and compiler-derived alignment targets, derived visible Consultation
 capabilities, and links to resources and artifacts. Registry identity is public;
 resource, operation, schema, semantic, classification, and processing details
 remain subject to their compiled visibility. Treating this service document as
@@ -771,6 +801,9 @@ shape. The generated schema makes their constraints precise.
 - multi-issuer selection and a frozen `relay`/`relayctl` subprocess protocol;
 - Registry Manifest, DPV, safeguards, and machine-readable GovStack alignment projections;
 - formal GovStack conformance or a compatibility flag translating wire conventions;
-- a Digital Registries family beyond Consultation;
+- another Digital Registries family or Aggregate Data pattern beyond the
+  compiled pre-aggregated statistical dataflow;
 - additional sources, GeoJSON, and SpatiaLite;
+- SDMX availability queries, history, structure maintenance, arbitrary
+  operators, dynamic aggregation, and large-result streaming;
 - dynamic masking, a general PDP, write operations, notification, access-history publication, and response signing.

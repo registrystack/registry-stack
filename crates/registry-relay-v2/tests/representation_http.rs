@@ -1057,6 +1057,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             column_accounting: Vec::new(),
             processing_descriptions: Vec::new(),
         }],
+        statistical_datasets: Vec::new(),
         metadata_visibility: CompiledMetadataVisibility {
             service: Visibility::Public,
             resources: Visibility::Public,

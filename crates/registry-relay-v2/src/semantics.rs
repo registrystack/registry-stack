@@ -519,6 +519,7 @@ mod tests {
             codelists: Vec::new(),
             sources: Vec::new(),
             resources: Vec::new(),
+            statistical_datasets: Vec::new(),
             metadata_visibility: CompiledMetadataVisibility {
                 service: Visibility::Public,
                 resources: Visibility::Public,

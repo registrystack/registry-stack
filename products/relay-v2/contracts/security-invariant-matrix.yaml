@@ -95,14 +95,15 @@ invariants:
       - {path: crates/registry-relay-v2/tests/representation_http.rs, name: preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_source_access}
       - {path: crates/registry-relay-v2/tests/representation_http.rs, name: fields_only_minimize_the_selected_representation}
   - id: sec-public-representation-processing-floor
-    threat: A public masked or minimized representation reads a confidential or restricted raw source column.
-    enforcementPoint: Per-representation processed-column closure and processing-handling compilation before route activation.
+    threat: A public Record representation or statistical publication reads a confidential or restricted raw source column.
+    enforcementPoint: Per-output processed-column closure and processing-versus-disclosure handling compilation before route activation.
     negativeTest: public_masked_representation_cannot_process_restricted_source
-    expected: Anonymous release requires public processing handling, including transform inputs and every selector, filter, order, and Registry Core source column.
+    expected: Anonymous release requires public processing handling, including transform inputs, selectors, filters, order, Registry Core, statistical components, and hidden authority-binding source columns; disclosure handling includes only emitted values.
     evidence: compiler-handling-tests
     tests:
       - {path: crates/registry-relay-v2/src/compiler.rs, name: public_masked_representation_cannot_process_restricted_source}
       - {path: crates/registry-relay-v2/src/compiler.rs, name: public_operation_cannot_process_nonpublic_columns}
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: statistical_processing_handling_includes_hidden_columns_but_disclosure_does_not}
   - id: sec-closed-mask-and-date-transforms
     threat: Caller-directed or malformed transform input releases a raw, complete, noncanonical, wrongly typed, or over-precise value, or a transformed list filter or order key becomes an oracle over raw source values.
     enforcementPoint: Response-only compiled transform catalog, compile-time filter and order exclusion, and value-free source failure before response serialization.
@@ -144,6 +145,27 @@ invariants:
     tests:
       - {path: crates/registry-relay-v2/src/compiler.rs, name: row_authority_is_a_compiler_injected_lane_not_a_filter}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: trusted_purpose_and_row_binding_refusals_use_only_verified_claims}
+  - id: sec-statistical-binding-inherits-access
+    threat: A generated statistical binding widens the dataset's scope, purpose, row authority, metadata visibility, or cache posture.
+    enforcementPoint: Neutral statistical dataset compilation followed by one-way SDMX binding generation and the ordinary Relay authorization, audit, and cache gates.
+    negativeTest: protected_structure_refusals_are_indistinguishable_and_value_free
+    expected: Every generated SDMX data and structure response remains inside the dataset's compiled access rule; protected rows, authority claims, and source values are never exposed through output or audit.
+    evidence: real-router-statistical-authorization-tests
+    tests:
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: governed_sdmx_data_structure_formats_and_bounds_use_the_real_router}
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: protected_structure_refusals_are_indistinguishable_and_value_free}
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: canonical_structure_uses_the_operation_quota_and_live_sources_are_never_cacheable}
+  - id: sec-statistical-query-closed-and-bounded
+    threat: A caller turns a reviewed pre-aggregated view into a generic analytics or SQL surface, evades result limits, or releases ambiguous or unreviewed observations.
+    enforcementPoint: Closed dimension and time parser, compiler-owned bound query plan, reviewed codelists, global dimension-tuple uniqueness check, and serialized response ceiling.
+    negativeTest: duplicate_observation_keys_fail_closed_across_page_boundaries
+    expected: Only compiled exact dimension and bounded time constraints execute; unsupported operators and aggregation are refused, duplicate observation keys fail across page boundaries, and unreviewed codes fail without value disclosure.
+    evidence: real-router-statistical-boundary-tests
+    tests:
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: governed_sdmx_data_structure_formats_and_bounds_use_the_real_router}
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: duplicate_observation_keys_fail_closed_across_page_boundaries}
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: governed_sdmx_refuses_an_unreviewed_source_code_without_disclosing_it}
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: invalid_bearer_precedes_every_deferred_or_malformed_sdmx_surface}
   - id: sec-disclosure-monotonic
     threat: Field selection expands disclosure, changes predicates, or exposes source columns.
     enforcementPoint: One compiled maximum disclosure per operation followed by subset-only projection.
@@ -189,6 +211,8 @@ invariants:
     tests:
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: audit_attempt_failure_prevents_source_access}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: audit_terminal_failure_discards_held_record_bytes}
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: sdmx_attempt_audit_failure_prevents_sqlite_execution}
+      - {path: crates/registry-relay-v2/tests/sdmx_http.rs, name: sdmx_terminal_audit_failure_discards_held_representation_bytes}
   - id: sec-audit-correlation-and-minimization
     threat: An emitted audit event cannot be correlated to the released operation or records protected request, response, source-row, or principal values.
     enforcementPoint: Relay-owned closed audit vocabulary populated from compiled and verified operation context.
@@ -255,7 +279,7 @@ invariants:
   - id: sec-unsigned-family-boundary
     threat: Relay output is mistaken for portable signed Evidence or API authentication is mistaken for Identity Federation.
     enforcementPoint: Product routes, dependencies, discovery, and family-alignment inventory.
-    expected: Relay advertises only compiled Consultation patterns, signs no response, and exposes no credential, federation, write, notification, aggregate, or access-history surface.
+    expected: Relay advertises only compiled Consultation patterns and explicitly bound statistical dataflows, signs no response, and exposes no credential, federation, write, notification, dynamic aggregate, or access-history surface.
     evidence: family-alignment-and-route-inventory
     negativeTest: generated_inventory_covers_required_v1_artifact_classes_only
     tests:

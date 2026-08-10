@@ -10,8 +10,10 @@ The initial boundary is intentionally narrow:
 - one Relay process serves one governed Registry;
 - SQLite is read-only and is the only source profile;
 - resources are Record types within the Registry;
-- compiled operations map only to Consultation Retrieve, List, and constrained
-  Search;
+- Record operations map to Consultation Retrieve, List, and constrained Search;
+- explicitly declared format-neutral statistical datasets may additionally
+  expose the Aggregate Data `statistical-dataflow` pattern by selecting the
+  generated SDMX REST read binding available in Version one;
 - responses are unsigned;
 - Registry Mint is optional and Registry Evidence remains a separate product;
 - the written GovStack drafts are alignment inputs, not conformance contracts;
@@ -28,6 +30,7 @@ The initial boundary is intentionally narrow:
 | `STANDARDS-ALIGNMENT.md` | Maintained directional mapping to the pinned GovStack drafts. |
 | `contracts/` | Hand-authored product catalogs and security invariants. |
 | `acceptance/` | Three coequal one-Registry deployment projects. |
+| `examples/labour-statistics/` | Executable neutral statistical-dataset example with generated SDMX binding. |
 | `scripts/` | Product-local validation, neutrality, and fixture checks. |
 
 The acceptance projects are synthetic. Their identifiers, organisations, and

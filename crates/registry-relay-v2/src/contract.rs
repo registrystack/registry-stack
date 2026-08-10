@@ -15,10 +15,21 @@ use thiserror::Error;
 ///
 /// Property and selector order is authored behavior, while ordinary map
 /// containers would erase both duplicate keys and order before compilation.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderedMap<T>(Vec<(String, T)>);
 
+impl<T> Default for OrderedMap<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
 impl<T> OrderedMap<T> {
+    #[cfg(feature = "tooling")]
+    pub(crate) fn from_entries(entries: Vec<(String, T)>) -> Self {
+        Self(entries)
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&str, &T)> {
         self.0.iter().map(|(key, value)| (key.as_str(), value))
     }
@@ -125,7 +136,10 @@ pub struct RegistryContract {
     pub semantics: Semantics,
     pub classifications: ClassificationCatalog,
     pub sources: OrderedMap<SourceDefinition>,
+    #[serde(default)]
     pub resources: Vec<ResourceDefinition>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statistical_datasets: Vec<StatisticalDatasetDefinition>,
     pub metadata_visibility: MetadataVisibility,
 }
 
@@ -154,6 +168,7 @@ pub struct RegistryDefinition {
     pub authoritative_scope: String,
     pub base_uri: String,
     pub identifier_lifecycle_policy_ref: String,
+    #[serde(default)]
     pub alignment_targets: Vec<AlignmentTarget>,
 }
 
@@ -255,6 +270,147 @@ pub struct ResourceDefinition {
 pub struct ResourceSource {
     pub source: String,
     pub view: String,
+}
+
+/// One explicitly modelled, pre-aggregated statistical dataset.
+///
+/// The authored model is independent of any exchange format. Bindings such as
+/// SDMX are compiler targets over the same governed source, semantics,
+/// classification, access rule, and query bounds. Relay never infers a cube
+/// from arbitrary rows and never performs caller-directed aggregation over
+/// administrative records.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalDatasetDefinition {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub publication: StatisticalPublication,
+    pub source: ResourceSource,
+    pub classification_defaults: ClassificationPartial,
+    #[serde(default)]
+    pub source_column_classifications: OrderedMap<ClassificationPartial>,
+    pub dimensions: OrderedMap<StatisticalDimensionDefinition>,
+    pub time: StatisticalTimeDimensionDefinition,
+    pub measure: StatisticalMeasureDefinition,
+    #[serde(default)]
+    pub attributes: OrderedMap<StatisticalAttributeDefinition>,
+    pub access: AccessRule,
+    pub query: StatisticalQueryProfile,
+    pub bindings: StatisticalBindings,
+    #[serde(default)]
+    pub processing_descriptions: Vec<ProcessingDescription>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalPublication {
+    pub release_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalDimensionDefinition {
+    pub label: String,
+    pub description: String,
+    pub column: String,
+    #[serde(rename = "type")]
+    pub data_type: StatisticalValueType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<String>,
+    pub concept: String,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+/// The one observation-time dimension in a statistical dataset.
+///
+/// Its separate authored position makes the time-period role intrinsic and
+/// prevents an ordinary dimension from being ambiguously role-tagged as time.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalTimeDimensionDefinition {
+    pub label: String,
+    pub description: String,
+    pub column: String,
+    pub concept: String,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalMeasureDefinition {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub column: String,
+    #[serde(rename = "type")]
+    pub data_type: StatisticalValueType,
+    pub concept: String,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalAttributeDefinition {
+    pub label: String,
+    pub description: String,
+    pub column: String,
+    #[serde(rename = "type")]
+    pub data_type: StatisticalValueType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<String>,
+    pub required: bool,
+    pub concept: String,
+    #[serde(default)]
+    pub classification: ClassificationPartial,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatisticalValueType {
+    Code,
+    String,
+    Integer,
+    Decimal,
+    Boolean,
+    TimePeriod,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalQueryProfile {
+    pub allow_unfiltered: bool,
+    pub maximum_observations: u32,
+    pub maximum_offset: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct StatisticalBindings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdmx: Option<SdmxBindingDefinition>,
+}
+
+/// Optional identity overrides for the compiler-generated SDMX binding.
+/// Omitted values are derived deterministically from the Registry contract and
+/// statistical dataset identifier. One version applies to every generated
+/// maintainable artefact in this binding.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SdmxBindingDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agency_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dataflow_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_structure_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concept_scheme_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -830,6 +986,58 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
 "#;
 
         assert!(RegistryContract::parse_yaml(input).is_err());
+    }
+
+    #[test]
+    fn statistical_authoring_rejects_the_old_binding_first_shape() {
+        let neutral =
+            include_str!("../../../products/relay-v2/examples/labour-statistics/registry.yaml");
+        assert!(RegistryContract::parse_yaml(neutral).is_ok());
+        let binding_first = neutral.replacen("statisticalDatasets:", "statisticalDataflows:", 1);
+        assert!(RegistryContract::parse_yaml(&binding_first).is_err());
+    }
+
+    #[test]
+    fn statistical_authoring_has_one_explicit_time_and_measure_shape() {
+        let contract = RegistryContract::parse_yaml(include_str!(
+            "../../../products/relay-v2/examples/labour-statistics/registry.yaml"
+        ))
+        .expect("neutral statistical contract parses");
+        let original = serde_json::to_value(contract).expect("contract serializes");
+
+        let mut role_tagged = original.clone();
+        role_tagged
+            .pointer_mut("/statisticalDatasets/0/dimensions/refArea")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("dimension object")
+            .insert("role".into(), serde_json::json!("dimension"));
+        assert!(serde_json::from_value::<RegistryContract>(role_tagged).is_err());
+
+        let mut time_id = original.clone();
+        time_id
+            .pointer_mut("/statisticalDatasets/0/time")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("time object")
+            .insert("id".into(), serde_json::json!("timePeriod"));
+        assert!(serde_json::from_value::<RegistryContract>(time_id).is_err());
+
+        let mut missing_measure_id = original.clone();
+        missing_measure_id
+            .pointer_mut("/statisticalDatasets/0/measure")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("measure object")
+            .remove("id");
+        assert!(serde_json::from_value::<RegistryContract>(missing_measure_id).is_err());
+
+        for obsolete in ["dataStructureVersion", "conceptSchemeVersion"] {
+            let mut version_override = original.clone();
+            version_override
+                .pointer_mut("/statisticalDatasets/0/bindings/sdmx")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("SDMX binding object")
+                .insert(obsolete.into(), serde_json::json!("1.0.0"));
+            assert!(serde_json::from_value::<RegistryContract>(version_override).is_err());
+        }
     }
 
     #[test]
