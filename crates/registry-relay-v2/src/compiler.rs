@@ -10,28 +10,28 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::contract::{
-    AccessRule, AuthorityRowBinding, ClassificationPartial, DataType, DateInputType, DatePrecision,
-    Handling, IdentificationMethod, RegistryContract, RepresentationDefinition, ReviewStatus,
+    AccessProfileDefinition, AccessRule, AuthorityRowBinding, ClassificationPartial, DataType,
+    DateInputType, DatePrecision, Handling, IdentificationMethod, RegistryContract, ReviewStatus,
     SourceProfile, TransformDefinition,
 };
 use crate::model::{
     CapabilityFamily, ColumnAccount, ColumnUse, CompileProfile, CompileReport, CompiledAccess,
-    CompiledClassificationReview, CompiledCodelist, CompiledDisclosureProfile, CompiledFilter,
-    CompiledGeneratedIdentificationBinding, CompiledGovernedFile, CompiledMetadataVisibility,
-    CompiledOperation, CompiledPagination, CompiledProperty, CompiledPurpose,
-    CompiledRecordContext, CompiledRegistry, CompiledRepresentation, CompiledResource,
+    CompiledAccessProfile, CompiledClassificationReview, CompiledCodelist,
+    CompiledDisclosureProfile, CompiledFilter, CompiledGeneratedIdentificationBinding,
+    CompiledGovernedFile, CompiledMetadataVisibility, CompiledOperation, CompiledPagination,
+    CompiledProperty, CompiledPurpose, CompiledRecordContext, CompiledRegistry, CompiledResource,
     CompiledRowBinding, CompiledSelector, CompiledSource, CompiledTransform, ConsultationPattern,
     Diagnostic, DiagnosticSeverity, EffectiveClassification, ObservedSourceSchema, OperationKind,
     QueryPlan, RowAuthoritySource, StarterColumn, StarterContract,
 };
 
 const API_VERSION: &str = "relay.registrystack.org/v2alpha1";
-const RESERVED_PARAMETERS: [&str; 4] = ["pageSize", "cursor", "fields", "representation"];
+const RESERVED_PARAMETERS: [&str; 4] = ["pageSize", "cursor", "fields", "accessProfile"];
 const MAXIMUM_RESOURCES: usize = 128;
 const MAXIMUM_PROPERTIES_PER_RESOURCE: usize = 128;
 const MAXIMUM_DISCLOSURE_PROFILES_PER_RESOURCE: usize = 64;
-const MAXIMUM_REPRESENTATIONS_PER_OPERATION: usize = 16;
-const MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY: usize = 128;
+const MAXIMUM_ACCESS_PROFILES_PER_OPERATION: usize = 16;
+const MAXIMUM_ACCESS_PROFILE_EXECUTORS_PER_REGISTRY: usize = 128;
 const MAXIMUM_LIST_FILTERS: usize = 32;
 const MAXIMUM_LIST_ORDER_KEYS: usize = 32;
 const MAXIMUM_LIST_PAGE_SIZE: u32 = 1_000;
@@ -114,16 +114,16 @@ pub fn compile_contract(
     let mut compiler = Compiler::new(contract, observed, profile);
     compiler.validate_top_level();
     let resources = compiler.compile_resources();
-    let representation_executors = resources
+    let access_profile_executors = resources
         .iter()
         .flat_map(|resource| &resource.operations)
-        .map(|operation| operation.representations.len())
+        .map(|operation| operation.access_profiles.len())
         .sum::<usize>();
-    if representation_executors > MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY {
+    if access_profile_executors > MAXIMUM_ACCESS_PROFILE_EXECUTORS_PER_REGISTRY {
         compiler.error(
-            "representation.registry_bound_exceeded",
+            "access_profile.registry_bound_exceeded",
             "resources",
-            "the compiled representation count exceeds the Registry runtime ceiling",
+            "the compiled access profile count exceeds the Registry runtime ceiling",
         );
     }
     compiler.validate_observed_source_closure();
@@ -1075,8 +1075,8 @@ impl<'a> Compiler<'a> {
                     &root,
                     "read",
                     OperationKind::Read,
-                    &read.default_representation,
-                    &read.representations,
+                    &read.default_access_profile,
+                    &read.access_profiles,
                 ) {
                     operations.push(operation);
                 }
@@ -1209,8 +1209,8 @@ impl<'a> Compiler<'a> {
                     OperationKind::Lookup {
                         name: lookup.id.clone(),
                     },
-                    &lookup.default_representation,
-                    &lookup.representations,
+                    &lookup.default_access_profile,
+                    &lookup.access_profiles,
                 ) {
                     operation.identifier = format!("{}.lookup.{}", resource.id, lookup.id);
                     operation.query.selectors = selectors;
@@ -1314,38 +1314,38 @@ impl<'a> Compiler<'a> {
         root: &str,
         operation_location: &str,
         kind: OperationKind,
-        default_representation: &str,
-        representation_definitions: &crate::contract::OrderedMap<RepresentationDefinition>,
+        default_access_profile: &str,
+        access_profile_definitions: &crate::contract::OrderedMap<AccessProfileDefinition>,
     ) -> Option<CompiledOperation> {
         let location = if operation_location == "lookup" {
             root.to_owned()
         } else {
             format!("{root}.operations.{operation_location}")
         };
-        if representation_definitions.is_empty() {
+        if access_profile_definitions.is_empty() {
             self.error(
-                "representation.none",
-                &format!("{location}.representations"),
-                "an operation must declare at least one finite representation",
+                "access_profile.none",
+                &format!("{location}.accessProfiles"),
+                "an operation must declare at least one finite access profile",
             );
             return None;
         }
-        if representation_definitions.len() > MAXIMUM_REPRESENTATIONS_PER_OPERATION {
+        if access_profile_definitions.len() > MAXIMUM_ACCESS_PROFILES_PER_OPERATION {
             self.error(
-                "representation.bound_exceeded",
-                &format!("{location}.representations"),
-                "the representation count exceeds the per-operation product ceiling",
+                "access_profile.bound_exceeded",
+                &format!("{location}.accessProfiles"),
+                "the access profile count exceeds the per-operation product ceiling",
             );
         }
-        if !valid_kebab_identifier(default_representation)
-            || representation_definitions
-                .get(default_representation)
+        if !valid_kebab_identifier(default_access_profile)
+            || access_profile_definitions
+                .get(default_access_profile)
                 .is_none()
         {
             self.error(
-                "representation.default_invalid",
-                &format!("{location}.defaultRepresentation"),
-                "the explicit default must name exactly one declared representation",
+                "access_profile.default_invalid",
+                &format!("{location}.defaultAccessProfile"),
+                "the explicit default must name exactly one declared access profile",
             );
         }
         let identifier = match &kind {
@@ -1359,14 +1359,14 @@ impl<'a> Compiler<'a> {
             OperationKind::Lookup { .. } => ConsultationPattern::Search,
         };
         let artifact_stem = operation_artifact_stem(&resource.id, &kind);
-        let mut representations = Vec::with_capacity(representation_definitions.len());
-        for (representation_id, definition) in representation_definitions.iter() {
-            let representation_location = format!("{location}.representations.{representation_id}");
-            if !valid_kebab_identifier(representation_id) {
+        let mut access_profiles = Vec::with_capacity(access_profile_definitions.len());
+        for (access_profile_id, definition) in access_profile_definitions.iter() {
+            let access_profile_location = format!("{location}.accessProfiles.{access_profile_id}");
+            if !valid_kebab_identifier(access_profile_id) {
                 self.error(
-                    "representation.id_invalid",
-                    &representation_location,
-                    "representation identifiers must be URL-safe kebab case",
+                    "access_profile.id_invalid",
+                    &access_profile_location,
+                    "access profile identifiers must be URL-safe kebab case",
                 );
             }
             let Some(disclosure) = disclosures
@@ -1374,9 +1374,9 @@ impl<'a> Compiler<'a> {
                 .find(|item| item.id == definition.disclosure_profile)
             else {
                 self.error(
-                    "representation.disclosure_unknown",
-                    &format!("{representation_location}.disclosureProfile"),
-                    "the representation names no disclosure profile",
+                    "access_profile.disclosure_unknown",
+                    &format!("{access_profile_location}.disclosureProfile"),
+                    "the access profile names no disclosure profile",
                 );
                 continue;
             };
@@ -1384,7 +1384,7 @@ impl<'a> Compiler<'a> {
                 &definition.access,
                 observed_view,
                 observed_columns,
-                &representation_location,
+                &access_profile_location,
             ) else {
                 continue;
             };
@@ -1393,12 +1393,12 @@ impl<'a> Compiler<'a> {
                 disclosure,
                 &access,
                 matches!(&kind, OperationKind::List),
-                &representation_location,
+                &access_profile_location,
             );
-            let representation_artifact_stem =
-                format!("{artifact_stem}--representation-{representation_id}");
-            representations.push(CompiledRepresentation {
-                id: representation_id.to_owned(),
+            let access_profile_artifact_stem =
+                format!("{artifact_stem}--access-profile-{access_profile_id}");
+            access_profiles.push(CompiledAccessProfile {
+                id: access_profile_id.to_owned(),
                 access,
                 disclosure_profile: disclosure.id.clone(),
                 selectable_properties: disclosure.properties.clone(),
@@ -1421,32 +1421,32 @@ impl<'a> Compiler<'a> {
                     .collect(),
                 schema_reference: artifact_url(
                     &self.contract.registry.base_uri,
-                    &format!("{representation_artifact_stem}-schema"),
+                    &format!("{access_profile_artifact_stem}-schema"),
                 ),
                 semantic_model_reference: artifact_url(
                     &self.contract.registry.base_uri,
-                    &format!("{representation_artifact_stem}-vocabulary"),
+                    &format!("{access_profile_artifact_stem}-vocabulary"),
                 ),
                 context_reference: artifact_url(
                     &self.contract.registry.base_uri,
-                    &format!("{representation_artifact_stem}-context"),
+                    &format!("{access_profile_artifact_stem}-context"),
                 ),
             });
         }
-        if representations
+        if access_profiles
             .iter()
-            .any(|representation| matches!(representation.access, CompiledAccess::Public))
-            && representations
+            .any(|access_profile| matches!(access_profile.access, CompiledAccess::Public))
+            && access_profiles
                 .iter()
-                .find(|representation| representation.id == default_representation)
-                .is_some_and(|representation| {
-                    !matches!(representation.access, CompiledAccess::Public)
+                .find(|access_profile| access_profile.id == default_access_profile)
+                .is_some_and(|access_profile| {
+                    !matches!(access_profile.access, CompiledAccess::Public)
                 })
         {
             self.error(
-                "representation.public_default_required",
-                &format!("{location}.defaultRepresentation"),
-                "an operation with a public representation must use a public default",
+                "access_profile.public_default_required",
+                &format!("{location}.defaultAccessProfile"),
+                "an operation with a public access profile must use a public default",
             );
         }
         Some(CompiledOperation {
@@ -1454,8 +1454,8 @@ impl<'a> Compiler<'a> {
             family: CapabilityFamily::Consultation,
             pattern,
             kind,
-            default_representation: default_representation.to_owned(),
-            representations,
+            default_access_profile: default_access_profile.to_owned(),
+            access_profiles,
             query: QueryPlan {
                 source: resource.source.source.clone(),
                 view: resource.source.view.clone(),
@@ -1489,8 +1489,8 @@ impl<'a> Compiler<'a> {
             root,
             "list",
             OperationKind::List,
-            &list.default_representation,
-            &list.representations,
+            &list.default_access_profile,
+            &list.access_profiles,
         )?;
         let location = format!("{root}.operations.list");
         if list.filters.len() > MAXIMUM_LIST_FILTERS {
@@ -2011,16 +2011,16 @@ impl<'a> Compiler<'a> {
                     .or_default()
                     .insert(ColumnUse::Selector(selector.name.clone()));
             }
-            for representation in &operation.representations {
+            for access_profile in &operation.access_profiles {
                 if let CompiledAccess::Protected {
                     row_binding: Some(row_binding),
                     ..
-                } = &representation.access
+                } = &access_profile.access
                 {
                     uses.entry(&row_binding.source_column).or_default().insert(
                         ColumnUse::RowBinding(format!(
                             "{}:{}",
-                            operation.identifier, representation.id
+                            operation.identifier, access_profile.id
                         )),
                     );
                 }
@@ -2142,9 +2142,9 @@ impl<'a> Compiler<'a> {
                     format!("{root}.operations.lookups.{name}")
                 }
             };
-            for representation in &mut operation.representations {
+            for access_profile in &mut operation.access_profiles {
                 let mut referenced = BTreeSet::new();
-                referenced.extend(representation.projected_columns.iter().map(String::as_str));
+                referenced.extend(access_profile.projected_columns.iter().map(String::as_str));
                 referenced.extend(
                     operation
                         .query
@@ -2163,33 +2163,33 @@ impl<'a> Compiler<'a> {
                 if let CompiledAccess::Protected {
                     row_binding: Some(binding),
                     ..
-                } = &representation.access
+                } = &access_profile.access
                 {
                     referenced.insert(&binding.source_column);
                 }
-                representation.processing_handling = columns
+                access_profile.processing_handling = columns
                     .iter()
                     .filter(|column| referenced.contains(column.column.as_str()))
                     .fold(Handling::Public, |maximum, column| {
                         maximum.max(column.classification.handling)
                     });
-                let representation_location =
-                    format!("{location}.representations.{}", representation.id);
-                if representation.processing_handling > Handling::Public
-                    && matches!(representation.access, CompiledAccess::Public)
+                let access_profile_location =
+                    format!("{location}.accessProfiles.{}", access_profile.id);
+                if access_profile.processing_handling > Handling::Public
+                    && matches!(access_profile.access, CompiledAccess::Public)
                 {
                     self.error(
                         "access.public_nonpublic_forbidden",
-                        &representation_location,
-                        "anonymous representations may process only public-handling reviewed columns",
+                        &access_profile_location,
+                        "anonymous access profiles may process only public-handling reviewed columns",
                     );
                 }
-                if representation.processing_handling == Handling::Restricted
+                if access_profile.processing_handling == Handling::Restricted
                     && matches!(&operation.kind, OperationKind::List)
                 {
                     self.error(
                         "operation.restricted_list_forbidden",
-                        &representation_location,
+                        &access_profile_location,
                         "restricted reviewed data cannot be processed by a collection list",
                     );
                 }
@@ -2208,9 +2208,9 @@ impl<'a> Compiler<'a> {
 
         let has_public = operations.iter().any(|operation| {
             operation
-                .representations
+                .access_profiles
                 .iter()
-                .any(|representation| matches!(representation.access, CompiledAccess::Public))
+                .any(|access_profile| matches!(access_profile.access, CompiledAccess::Public))
         });
         for (name, visibility) in [
             ("resources", self.contract.metadata_visibility.resources),
@@ -2227,7 +2227,7 @@ impl<'a> Compiler<'a> {
             }
         }
         // Classification and processing artifacts are projected per finite
-        // representation. A protected representation is operation-bound even
+        // access profile. A protected access profile is operation-bound even
         // when a public sibling permits public metadata for its own profile.
     }
 
@@ -2342,7 +2342,7 @@ fn revision<T: Serialize>(value: &T) -> Result<String, ()> {
 /// Digest the non-circular inventory an institutional classification review
 /// accepts. Contract revisions, governed file bytes, and review metadata are
 /// deliberately absent; processed source columns, governed properties, query
-/// uses, and finite representation disclosures are present.
+/// uses, and finite access profile disclosures are present.
 pub fn classification_inventory_digest(
     registry: &CompiledRegistry,
 ) -> Result<String, CompileReport> {
@@ -2418,13 +2418,13 @@ pub fn classification_inventory_digest(
     #[serde(rename_all = "camelCase")]
     struct OperationInventory<'a> {
         kind: &'a OperationKind,
-        default_representation: &'a str,
-        representations: Vec<RepresentationInventory<'a>>,
+        default_access_profile: &'a str,
+        access_profiles: Vec<AccessProfileInventory<'a>>,
     }
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
-    struct RepresentationInventory<'a> {
+    struct AccessProfileInventory<'a> {
         id: &'a str,
         access: &'a CompiledAccess,
         disclosure_profile: &'a str,
@@ -2497,19 +2497,19 @@ pub fn classification_inventory_digest(
                     .iter()
                     .map(|operation| OperationInventory {
                         kind: &operation.kind,
-                        default_representation: &operation.default_representation,
-                        representations: operation
-                            .representations
+                        default_access_profile: &operation.default_access_profile,
+                        access_profiles: operation
+                            .access_profiles
                             .iter()
-                            .map(|representation| RepresentationInventory {
-                                id: &representation.id,
-                                access: &representation.access,
-                                disclosure_profile: &representation.disclosure_profile,
-                                selectable_properties: &representation.selectable_properties,
-                                projected_columns: &representation.projected_columns,
-                                processing_handling: representation.processing_handling,
-                                disclosure_handling: representation.disclosure_handling,
-                                transform_inventory: &representation.transform_inventory,
+                            .map(|access_profile| AccessProfileInventory {
+                                id: &access_profile.id,
+                                access: &access_profile.access,
+                                disclosure_profile: &access_profile.disclosure_profile,
+                                selectable_properties: &access_profile.selectable_properties,
+                                projected_columns: &access_profile.projected_columns,
+                                processing_handling: access_profile.processing_handling,
+                                disclosure_handling: access_profile.disclosure_handling,
+                                transform_inventory: &access_profile.transform_inventory,
                             })
                             .collect(),
                     })
@@ -3020,8 +3020,8 @@ fn projected_columns(
     ] {
         push_unique(&mut columns, column);
     }
-    // Only the selected finite representation may widen the Registry Core
-    // projection. This is what lets a public representation prove that it
+    // Only the selected finite access profile may widen the Registry Core
+    // projection. This is what lets a public access profile prove that it
     // never processes a hidden non-public source column.
     for name in disclosure {
         if let Some(property) = properties.iter().find(|property| property.name == *name) {
@@ -3522,11 +3522,11 @@ pub(crate) mod tests {
         let second_artifacts = crate::artifacts::generate_artifacts(&second).expect("artifacts");
         assert_eq!(first_artifacts, second_artifacts);
         let operation = &first.resources[0].operations[0];
-        let representation = &operation.representations[0];
+        let access_profile = &operation.access_profiles[0];
         let schema = first_artifacts
             .artifacts
             .iter()
-            .find(|artifact| representation.schema_reference.ends_with(&artifact.id))
+            .find(|artifact| access_profile.schema_reference.ends_with(&artifact.id))
             .expect("operation schema is mounted by its exact artifact identifier");
         assert_eq!(schema.visibility, crate::contract::Visibility::Public);
     }
@@ -3590,8 +3590,8 @@ pub(crate) mod tests {
     fn every_referenced_selector_codelist_must_be_in_the_governed_closure() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: 1024\n            selectors:\n              name: {sourceColumn: name, type: controlled-code, codelist: codelists/selector-names.yaml}\n          defaultRepresentation: public\n          representations:\n            public: {access: public, disclosureProfile: public}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: 1024\n            selectors:\n              name: {sourceColumn: name, type: controlled-code, codelist: codelists/selector-names.yaml}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {access: public, disclosureProfile: public}",
             )
             .replace("operationRefs: [read]", "operationRefs: [lookup:by-name]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict lookup contract");
@@ -3616,8 +3616,8 @@ pub(crate) mod tests {
                 "        semanticTerm: local:name\n      recordId:\n        label: Record identifier\n        description: Stable record identifier\n        sourceColumn: id\n        type: string\n        sourceRequired: true\n        semanticTerm: local:recordId\n    disclosureProfiles",
             )
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [recordId, name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [recordId, name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
@@ -3634,8 +3634,8 @@ pub(crate) mod tests {
     fn optional_and_unsupported_cursor_order_columns_are_refused() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let optional = yaml.replace(
@@ -3680,8 +3680,8 @@ pub(crate) mod tests {
 
         let filtered = transformed
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&filtered).expect("strict filter contract");
@@ -3703,8 +3703,8 @@ pub(crate) mod tests {
 
         let ordered = transformed
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&ordered).expect("strict order contract");
@@ -3729,8 +3729,8 @@ pub(crate) mod tests {
     fn sqlite_view_nullable_metadata_does_not_override_required_order_contract() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
@@ -3750,8 +3750,8 @@ pub(crate) mod tests {
     fn required_record_identifier_tie_breaker_is_included_in_order_cap() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let base = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
@@ -3810,8 +3810,8 @@ pub(crate) mod tests {
     fn classification_inventory_excludes_presentation_and_runtime_tuning() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
@@ -3833,10 +3833,10 @@ pub(crate) mod tests {
             .as_mut()
             .expect("list pagination")
             .maximum_page_size = 99;
-        operation.representations[0].schema_reference = "https://elsewhere.invalid/schema".into();
-        operation.representations[0].semantic_model_reference =
+        operation.access_profiles[0].schema_reference = "https://elsewhere.invalid/schema".into();
+        operation.access_profiles[0].semantic_model_reference =
             "https://elsewhere.invalid/vocabulary".into();
-        operation.representations[0].context_reference = "https://elsewhere.invalid/context".into();
+        operation.access_profiles[0].context_reference = "https://elsewhere.invalid/context".into();
         assert_eq!(
             classification_inventory_digest(&presentation_only).expect("narrow digest"),
             baseline
@@ -3881,7 +3881,7 @@ pub(crate) mod tests {
         );
 
         let mut transform_inventory_changed = compiled.clone();
-        transform_inventory_changed.resources[0].operations[0].representations[0]
+        transform_inventory_changed.resources[0].operations[0].access_profiles[0]
             .transform_inventory
             .push("partial-string:suffix:2".into());
         assert_ne!(
@@ -3891,7 +3891,7 @@ pub(crate) mod tests {
         );
 
         let mut access_changed = compiled.clone();
-        access_changed.resources[0].operations[0].representations[0].access =
+        access_changed.resources[0].operations[0].access_profiles[0].access =
             CompiledAccess::Protected {
                 scope: "registry:changed:read".into(),
                 purpose: None,
@@ -3903,7 +3903,7 @@ pub(crate) mod tests {
         );
 
         let mut disclosure_changed = compiled;
-        disclosure_changed.resources[0].operations[0].representations[0].disclosure_handling =
+        disclosure_changed.resources[0].operations[0].access_profiles[0].disclosure_handling =
             Handling::Internal;
         assert_ne!(
             classification_inventory_digest(&disclosure_changed).expect("disclosure digest"),
@@ -4002,9 +4002,9 @@ pub(crate) mod tests {
     #[test]
     fn governed_query_bounds_cannot_exceed_product_ceilings() {
         let oversized_list = valid_contract().replace(
-            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
             &format!(
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {{access: public, disclosureProfile: public}}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {{defaultPageSize: 1, maximumPageSize: {}}}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {{access: public, disclosureProfile: public}}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {{defaultPageSize: 1, maximumPageSize: {}}}",
                 MAXIMUM_LIST_PAGE_SIZE + 1
             ),
         );
@@ -4022,9 +4022,9 @@ pub(crate) mod tests {
             .any(|item| item.code == "list.pagination_invalid"));
 
         let oversized_lookup = valid_contract().replace(
-            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
             &format!(
-                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: {}\n            selectors:\n              name: {{sourceColumn: name, type: string, maximumBytes: 32}}\n          defaultRepresentation: public\n          representations:\n            public: {{access: {{scope: registry:records:lookup}}, disclosureProfile: public}}",
+                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: {}\n            selectors:\n              name: {{sourceColumn: name, type: string, maximumBytes: 32}}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {{access: {{scope: registry:records:lookup}}, disclosureProfile: public}}",
                 MAXIMUM_LOOKUP_REQUEST_BODY_BYTES + 1
             ),
         );
@@ -4226,9 +4226,9 @@ pub(crate) mod tests {
         let lookup = |maximum: u32, data_type: &str| {
             valid_contract()
                 .replace(
-                    "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                    "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
                     &format!(
-                        "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: {maximum}\n            selectors:\n              name: {{sourceColumn: name, type: {data_type}, minimumBytes: 1, maximumBytes: 32}}\n          defaultRepresentation: public\n          representations:\n            public: {{access: public, disclosureProfile: public}}"
+                        "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: {maximum}\n            selectors:\n              name: {{sourceColumn: name, type: {data_type}, minimumBytes: 1, maximumBytes: 32}}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {{access: public, disclosureProfile: public}}"
                     ),
                 )
                 .replace("operationRefs: [read]", "operationRefs: [lookup:by-name]")
@@ -4278,8 +4278,8 @@ pub(crate) mod tests {
     fn list_filter_source_columns_inherit_property_affinity_validation() {
         let yaml = valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters:\n          - {name: byName, property: name, type: string}\n        allowUnfiltered: false\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [list]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict filter contract");
@@ -4304,9 +4304,9 @@ pub(crate) mod tests {
         let lookup = |maximum: u32| {
             valid_contract()
                 .replace(
-                    "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                    "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
                     &format!(
-                        "lookups:\n        - id: verify-registration\n          requestBody:\n            maximumBytes: {maximum}\n            selectors:\n              registrationNumber: {{sourceColumn: name, type: string, minimumBytes: 12, maximumBytes: 96}}\n              eventType: {{sourceColumn: name, type: controlled-code, codelist: codelists/selector-types.yaml}}\n          defaultRepresentation: public\n          representations:\n            public: {{access: public, disclosureProfile: public}}"
+                        "lookups:\n        - id: verify-registration\n          requestBody:\n            maximumBytes: {maximum}\n            selectors:\n              registrationNumber: {{sourceColumn: name, type: string, minimumBytes: 12, maximumBytes: 96}}\n              eventType: {{sourceColumn: name, type: controlled-code, codelist: codelists/selector-types.yaml}}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {{access: public, disclosureProfile: public}}"
                     ),
                 )
                 .replace(
@@ -4355,8 +4355,8 @@ pub(crate) mod tests {
             let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
             let mut value = serde_json::to_value(contract).expect("contract serializes");
             *value
-                .pointer_mut("/resources/0/operations/read/representations/public/access")
-                .expect("representation access") = serde_json::json!({"scope": scope});
+                .pointer_mut("/resources/0/operations/read/accessProfiles/public/access")
+                .expect("access profile access") = serde_json::json!({"scope": scope});
             serde_json::from_value(value).expect("strict contract")
         };
         compile_contract(
@@ -4505,44 +4505,44 @@ pub(crate) mod tests {
         }
         assert_refused(&parse_value(disclosures_value), "disclosure.bound_exceeded");
 
-        let mut representations_value = serde_json::to_value(&base).expect("contract serializes");
-        let representations = representations_value
-            .pointer_mut("/resources/0/operations/read/representations")
+        let mut access_profiles_value = serde_json::to_value(&base).expect("contract serializes");
+        let access_profiles = access_profiles_value
+            .pointer_mut("/resources/0/operations/read/accessProfiles")
             .and_then(serde_json::Value::as_object_mut)
-            .expect("representations object");
-        let representation = representations
+            .expect("access profiles object");
+        let access_profile = access_profiles
             .get("public")
-            .expect("public representation")
+            .expect("public access profile")
             .clone();
-        for index in 1..=MAXIMUM_REPRESENTATIONS_PER_OPERATION {
-            representations.insert(format!("profile-{index}"), representation.clone());
+        for index in 1..=MAXIMUM_ACCESS_PROFILES_PER_OPERATION {
+            access_profiles.insert(format!("profile-{index}"), access_profile.clone());
         }
         assert_refused(
-            &parse_value(representations_value),
-            "representation.bound_exceeded",
+            &parse_value(access_profiles_value),
+            "access_profile.bound_exceeded",
         );
 
-        let mut registry_representations_value =
+        let mut registry_access_profiles_value =
             serde_json::to_value(&base).expect("contract serializes");
-        let registry_representations = registry_representations_value
-            .pointer_mut("/resources/0/operations/read/representations")
+        let registry_access_profiles = registry_access_profiles_value
+            .pointer_mut("/resources/0/operations/read/accessProfiles")
             .and_then(serde_json::Value::as_object_mut)
-            .expect("representations object");
-        let representation = registry_representations
+            .expect("access profiles object");
+        let access_profile = registry_access_profiles
             .get("public")
-            .expect("public representation")
+            .expect("public access profile")
             .clone();
-        for index in 1..=MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY {
-            registry_representations.insert(format!("profile-{index}"), representation.clone());
+        for index in 1..=MAXIMUM_ACCESS_PROFILE_EXECUTORS_PER_REGISTRY {
+            registry_access_profiles.insert(format!("profile-{index}"), access_profile.clone());
         }
         assert_refused(
-            &parse_value(registry_representations_value),
-            "representation.registry_bound_exceeded",
+            &parse_value(registry_access_profiles_value),
+            "access_profile.registry_bound_exceeded",
         );
 
         let list_yaml = valid_contract().replace(
-            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-            "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 1}",
+            "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+            "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 1}",
         );
         let list_contract = RegistryContract::parse_yaml(&list_yaml).expect("strict list contract");
         let mut filters_value = serde_json::to_value(&list_contract).expect("contract serializes");
@@ -4571,10 +4571,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_operation_with_a_public_representation_requires_a_public_default() {
+    fn an_operation_with_a_public_access_profile_requires_a_public_default() {
         let contract = RegistryContract::parse_yaml(&valid_contract().replace(
-            "defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-            "defaultRepresentation: protected\n        representations:\n          public: {access: public, disclosureProfile: public}\n          protected: {access: {scope: registry:record:protected}, disclosureProfile: public}",
+            "defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+            "defaultAccessProfile: protected\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n          protected: {access: {scope: registry:record:protected}, disclosureProfile: public}",
         ))
         .expect("strict contract");
         let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
@@ -4582,24 +4582,24 @@ pub(crate) mod tests {
         assert!(report
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "representation.public_default_required"));
+            .any(|diagnostic| diagnostic.code == "access_profile.public_default_required"));
     }
 
     #[test]
-    fn one_operation_compiles_finite_representations_with_distinct_handling() {
-        let contract = RegistryContract::parse_yaml(&governed_representations_contract())
-            .expect("strict representation contract");
+    fn one_operation_compiles_finite_access_profiles_with_distinct_handling() {
+        let contract = RegistryContract::parse_yaml(&governed_access_profiles_contract())
+            .expect("strict access profile contract");
         let compiled =
             compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
-                .expect("representations compile");
+                .expect("access profiles compile");
         let resource = &compiled.resources[0];
         assert_eq!(resource.operations.len(), 1);
         let operation = &resource.operations[0];
         assert_eq!(operation.identifier, "record.read");
-        assert_eq!(operation.default_representation, "limited");
-        assert_eq!(operation.representations.len(), 2);
-        let limited = &operation.representations[0];
-        let full = &operation.representations[1];
+        assert_eq!(operation.default_access_profile, "limited");
+        assert_eq!(operation.access_profiles.len(), 2);
+        let limited = &operation.access_profiles[0];
+        let full = &operation.access_profiles[1];
         assert_eq!(limited.id, "limited");
         assert_eq!(limited.disclosure_handling, Handling::Confidential);
         assert_eq!(limited.processing_handling, Handling::Restricted);
@@ -4631,7 +4631,7 @@ pub(crate) mod tests {
 
     #[test]
     fn transformed_and_multiply_bound_columns_require_explicit_review() {
-        let yaml = governed_representations_contract().replace(
+        let yaml = governed_access_profiles_contract().replace(
             "    sourceColumnClassifications:\n      name: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}\n",
             "    sourceColumnClassifications: {}\n",
         );
@@ -4644,10 +4644,10 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn representation_default_and_transform_parameters_fail_closed() {
-        let invalid_default = governed_representations_contract().replace(
-            "defaultRepresentation: limited",
-            "defaultRepresentation: absent",
+    fn access_profile_default_and_transform_parameters_fail_closed() {
+        let invalid_default = governed_access_profiles_contract().replace(
+            "defaultAccessProfile: limited",
+            "defaultAccessProfile: absent",
         );
         let contract = RegistryContract::parse_yaml(&invalid_default).expect("strict contract");
         let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
@@ -4655,10 +4655,10 @@ pub(crate) mod tests {
         assert!(report
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "representation.default_invalid"));
+            .any(|diagnostic| diagnostic.code == "access_profile.default_invalid"));
 
         for characters in [0, MAXIMUM_PARTIAL_STRING_CHARACTERS + 1] {
-            let yaml = governed_representations_contract()
+            let yaml = governed_access_profiles_contract()
                 .replace("characters: 4", &format!("characters: {characters}"));
             let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
             let report =
@@ -4671,8 +4671,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn public_masked_representation_cannot_process_restricted_source() {
-        let yaml = governed_representations_contract()
+    fn public_masked_access_profile_cannot_process_restricted_source() {
+        let yaml = governed_access_profiles_contract()
             .replace(
                 "classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}",
                 "classification: {privacy: partially-revealed-identifying, institutional: public, handling: public, status: reviewed}",
@@ -4692,7 +4692,7 @@ pub(crate) mod tests {
 
     #[test]
     fn date_precision_is_typed_and_closed() {
-        let yaml = governed_representations_contract()
+        let yaml = governed_access_profiles_contract()
             .replace("type: string\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: partial-string, reveal: suffix, characters: 4}", "type: year-month\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: date-precision, sourceType: date-time, precision: year-month}");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict date transform");
         let compiled =
@@ -4752,7 +4752,7 @@ pub(crate) mod tests {
         let CompiledAccess::Protected {
             row_binding: Some(binding),
             ..
-        } = &operation.representations[0].access
+        } = &operation.access_profiles[0].access
         else {
             panic!("row-bound protected access expected");
         };
@@ -4793,7 +4793,7 @@ pub(crate) mod tests {
             .expect("stable row-binding declaration diagnostic");
         assert_eq!(
             diagnostic.location,
-            "resources[0].operations.read.representations.public.access.authorityRowBinding.sourceColumn"
+            "resources[0].operations.read.accessProfiles.public.access.authorityRowBinding.sourceColumn"
         );
         assert_eq!(
             diagnostic.message,
@@ -4865,7 +4865,7 @@ pub(crate) mod tests {
             ),
             (
                 "governance/review-rationale",
-                "reviewed classification and representation design\n",
+                "reviewed classification and access profile design\n",
             ),
             (
                 "governance/processing.dpv.yaml",
@@ -4886,7 +4886,7 @@ pub(crate) mod tests {
         files
     }
 
-    fn governed_representations_contract() -> String {
+    fn governed_access_profiles_contract() -> String {
         valid_contract()
             .replace(
                 "    sourceColumnClassifications: {}",
@@ -4897,8 +4897,8 @@ pub(crate) mod tests {
                 "        semanticTerm: local:name\n        classification: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}\n      maskedName:\n        label: Masked name\n        description: Partially revealed Record name\n        sourceColumn: name\n        type: string\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: partial-string, reveal: suffix, characters: 4}\n    disclosureProfiles:\n      limited: {properties: [maskedName]}\n      full: {properties: [name]}",
             )
             .replace(
-                "      read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "      read:\n        defaultRepresentation: limited\n        representations:\n          limited:\n            access: {scope: registry:records:limited}\n            disclosureProfile: limited\n          full:\n            access: {scope: registry:records:full}\n            disclosureProfile: full",
+                "      read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "      read:\n        defaultAccessProfile: limited\n        accessProfiles:\n          limited:\n            access: {scope: registry:records:limited}\n            disclosureProfile: limited\n          full:\n            access: {scope: registry:records:full}\n            disclosureProfile: full",
             )
             .replace(
                 "metadataVisibility: {service: public, resources: public, semantics: public, classifications: public, processing: public}",
@@ -4952,8 +4952,8 @@ resources:
     disclosureProfiles: {public: {properties: [name]}}
     operations:
       read:
-        defaultRepresentation: public
-        representations:
+        defaultAccessProfile: public
+        accessProfiles:
           public: {access: public, disclosureProfile: public}
     processingDescriptions:
       - id: statutory-publication

@@ -83,25 +83,26 @@ invariants:
     tests:
       - {path: crates/registry-relay-v2/src/compiler.rs, name: stale_review_fails_production_but_remains_an_authoring_finding}
       - {path: crates/registry-relay-v2/src/compiler.rs, name: starter_never_marks_classification_reviewed}
-  - id: sec-finite-representation-authorization
-    threat: A request selects an undeclared, malformed, or denied representation, crosses profiles with fields, or falls back to a different disclosure.
-    enforcementPoint: Closed compiled representation map, one exact default, pre-source selection, and selected-profile field validation.
-    negativeTest: representation_selection_authenticates_then_authorizes_the_exact_profile
-    expected: An operation has one declared default and finite names; access and disclosure are evaluated only for the exact selection, unknown and scope-hidden names are indistinguishable as resource.not_found, and fields cannot cross the selected profile.
-    evidence: compiler-and-real-router-representation-tests
+  - id: sec-finite-access-profile-authorization
+    threat: A request selects an undeclared, malformed, denied, or retired access profile, crosses profiles with fields, or falls back to a different disclosure.
+    enforcementPoint: Closed compiled access profile map, one exact default, pre-source selection, and selected-profile field validation.
+    negativeTest: access_profile_selection_authenticates_then_authorizes_the_exact_profile
+    expected: An operation has one declared default and finite names; access and disclosure are evaluated only for the exact selection, the retired representation selector is invalid rather than an alias, unknown and scope-hidden names are indistinguishable as resource.not_found, and fields cannot cross the selected profile.
+    evidence: compiler-and-real-router-access-profile-tests
     tests:
-      - {path: crates/registry-relay-v2/src/compiler.rs, name: representation_default_and_transform_parameters_fail_closed}
-      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: representation_selection_authenticates_then_authorizes_the_exact_profile}
-      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_source_access}
-      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: fields_only_minimize_the_selected_representation}
-  - id: sec-public-representation-processing-floor
-    threat: A public masked or minimized representation reads a confidential or restricted raw source column.
-    enforcementPoint: Per-representation processed-column closure and processing-handling compilation before route activation.
-    negativeTest: public_masked_representation_cannot_process_restricted_source
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: access_profile_default_and_transform_parameters_fail_closed}
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: access_profile_selection_authenticates_then_authorizes_the_exact_profile}
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: retired_representation_selector_is_invalid_for_every_data_route}
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_source_access}
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: fields_only_minimize_the_selected_access_profile}
+  - id: sec-public-access-profile-processing-floor
+    threat: A public masked or minimized access profile reads a confidential or restricted raw source column.
+    enforcementPoint: Per-access-profile processed-column closure and processing-handling compilation before route activation.
+    negativeTest: public_masked_access_profile_cannot_process_restricted_source
     expected: Anonymous release requires public processing handling, including transform inputs and every selector, filter, order, and Registry Core source column.
     evidence: compiler-handling-tests
     tests:
-      - {path: crates/registry-relay-v2/src/compiler.rs, name: public_masked_representation_cannot_process_restricted_source}
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: public_masked_access_profile_cannot_process_restricted_source}
       - {path: crates/registry-relay-v2/src/compiler.rs, name: public_operation_cannot_process_nonpublic_columns}
   - id: sec-closed-mask-and-date-transforms
     threat: Caller-directed or malformed transform input releases a raw, complete, noncanonical, wrongly typed, or over-precise value, or a transformed list filter or order key becomes an oracle over raw source values.
@@ -115,17 +116,17 @@ invariants:
       - {path: crates/registry-relay-v2/src/transform.rs, name: date_precision_accepts_only_the_compiled_source_shape}
       - {path: crates/registry-relay-v2/src/compiler.rs, name: date_precision_is_typed_and_closed}
       - {path: crates/registry-relay-v2/src/compiler.rs, name: transformed_properties_cannot_be_list_filters_or_order_keys}
-      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
-  - id: sec-representation-state-and-metadata-binding
-    threat: A cursor, ETag, metadata route, artifact, or quota crosses a representation boundary or reveals a protected profile.
-    enforcementPoint: Representation-bound cursor and cache identity, exact representation artifact gates, and operation-owned quota state.
-    negativeTest: cursor_and_etag_are_bound_to_selected_representation
-    expected: Cursor and ETag reuse across profiles fails; metadata and artifacts authorize one representation exactly; adding profiles does not multiply the operation quota.
-    evidence: real-router-representation-state-tests
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
+  - id: sec-access-profile-state-and-metadata-binding
+    threat: A cursor, ETag, metadata route, artifact, or quota crosses an access-profile boundary or reveals a protected profile.
+    enforcementPoint: Access profile-bound cursor and cache identity, exact access-profile artifact gates, and operation-owned quota state.
+    negativeTest: cursor_and_etag_are_bound_to_selected_access_profile
+    expected: Cursor and ETag reuse across profiles fails; metadata and artifacts authorize one access profile exactly; adding profiles does not multiply the operation quota.
+    evidence: real-router-access-profile-state-tests
     tests:
-      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: cursor_and_etag_are_bound_to_selected_representation}
-      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: metadata_and_artifacts_authorize_each_representation_exactly}
-      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: quotas_remain_operation_scoped_across_representations}
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: cursor_and_etag_are_bound_to_selected_access_profile}
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: metadata_and_artifacts_authorize_each_access_profile_exactly}
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: quotas_remain_operation_scoped_across_access_profiles}
   - id: sec-operation-quota
     threat: One named lookup exhausts another resource or operation's request budget.
     enforcementPoint: Runtime quota configuration compiled into an operation-keyed limiter before readiness.
@@ -170,7 +171,7 @@ invariants:
     tests:
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: malformed_disclosed_property_type_and_requiredness_fail_closed}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: business_list_with_a_late_malformed_row_fails_atomically}
-      - {path: crates/registry-relay-v2/tests/representation_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
+      - {path: crates/registry-relay-v2/tests/access_profile_http.rs, name: transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes}
   - id: sec-reference-visibility
     threat: A Record leaks protected metadata or points its caller to an unresolvable schema or semantic model.
     enforcementPoint: Compile-time visibility closure across operation, resource, schema, semantic, capability, and OpenAPI artifacts.

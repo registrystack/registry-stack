@@ -11,24 +11,24 @@ artifacts:
     visibility: public
     source: compiled-registry
     generated: true
-  - id: representation-schema
+  - id: access-profile-schema
     mediaType: application/schema+json
     visibility: operation-compatible
     source: compiled-resource
     generated: true
-    invariant: One artifact exists per compiled operation representation and validates mandatory Registry Core with every allowed selected-profile domainData subset.
-  - id: representation-shacl
+    invariant: One artifact exists per compiled operation access profile and validates mandatory Registry Core with every allowed selected-profile domainData subset.
+  - id: access-profile-shacl
     mediaType: text/turtle
     visibility: operation-compatible
-    source: compiled-operation-representation
+    source: compiled-operation-access-profile
     generated: true
-    invariant: One shape exists per compiled operation representation; public projection never inventories protected profile identifiers.
+    invariant: One shape exists per compiled operation access profile; public projection never inventories protected profile identifiers.
   - id: full-record-schema
     mediaType: application/schema+json
     visibility: operator-only
     source: compiled-resource
     generated: true
-    invariant: Validates the complete reviewed source representation before field minimization.
+    invariant: Validates the complete reviewed source access profile before field minimization.
   - id: full-record-shacl
     mediaType: text/turtle
     visibility: operator-only
@@ -78,12 +78,12 @@ artifacts:
     source: compiled-classifications
     generated: true
     invariant: Accounts for every processed source column and disclosed property.
-  - id: representation-report
+  - id: access-profile-report
     mediaType: application/json
     visibility: operator-only
-    source: compiled-operation-representations
+    source: compiled-operation-access-profiles
     generated: true
-    invariant: Separates per-representation processed columns and processing handling from disclosed properties and disclosure handling.
+    invariant: Separates per-access-profile processed columns and processing handling from disclosed properties and disclosure handling.
   - id: contextual-review-findings
     mediaType: application/json
     visibility: operator-only

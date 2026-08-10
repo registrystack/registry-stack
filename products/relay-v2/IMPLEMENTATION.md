@@ -26,7 +26,7 @@ complete and green, but no partial milestone is described as Relay V2 complete.
 
 | Package | Boundary |
 |---|---|
-| `registry-relay-v2` | New library and final `relay` binary. Owns the strict Relay contract, compiler, generated artifacts, fixture kernel, access and disclosure plans, representations, HTTP service, and Relay event/problem vocabularies. It has no dependency on Relay V1. |
+| `registry-relay-v2` | New library and final `relay` binary. Owns the strict Relay contract, compiler, generated artifacts, fixture kernel, access and disclosure plans, access profiles, HTTP service, and Relay event/problem vocabularies. It has no dependency on Relay V1. |
 | `registry-relayctl` | New `relayctl` binary. Owns authoring presentation and orchestration only. It links the shared Relay compiler library and never reimplements its rules. |
 | `registry-platform-sqlite` | New product-neutral SQLite security boundary shared by Evidence and Relay. It is SQLite-specific, not a generic storage abstraction. |
 | `products/relay-v2` | Canonical concept, contract schemas, examples, fixtures, generated artifacts, compact scenario and security traceability, alignment note, and drift scripts. |
@@ -70,13 +70,13 @@ owns:
   published properties, datatypes, source requiredness, codelists, labels,
   descriptions, and local semantic IRIs;
 - compiled list, read, or named exact-lookup operations; query shape remains
-  operation-owned while each operation declares one `defaultRepresentation`
-  and finite ordered `representations` with representation-owned `access` and
+  operation-owned while each operation declares one `defaultAccessProfile`
+  and finite ordered `accessProfiles` with access-profile-owned `access` and
   `disclosureProfile`; list presence derives the enumeration posture;
 - direct typed equality filters, explicit unfiltered permission, fixed ordering,
   page bounds, lookup selectors, and query limits;
 - reusable disclosure profiles whose `properties` lists are selected only by a
-  compiled representation; callers may narrow only the selected profile with
+  compiled access profile; callers may narrow only the selected profile with
   `fields`, never cross profiles;
 - privacy, institutional, and `public`/`internal`/`confidential`/`restricted`
   technical handling classifications for every published property and reviewed
@@ -107,8 +107,8 @@ not part of the Version one contract.
 
 `sourceRequired` governs validation of the complete authoritative source
 Record. It does not make a property mandatory in every requester-minimized
-representation. The compiler emits separate full-record validation and
-permitted-representation artifacts. The latter requires Registry Core and
+access profile. The compiler emits separate full-record validation and
+permitted-access-profile artifacts. The latter requires Registry Core and
 validates selectable `domainData` properties when present; the former preserves
 source requiredness and full SHACL cardinality.
 
@@ -169,19 +169,19 @@ Registry Manifest projection is deferred portability tooling. Source columns,
 access rules, scopes, disclosure, classifications, processing constraints, and
 limits remain Relay-owned and never enter Manifest.
 
-### Identification, review, and governed representation increment
+### Identification, review, and governed access profile increment
 
-The compiler owns the closed representation model and never receives
+The compiler owns the closed access profile model and never receives
 caller-authored transforms or policy expressions. It validates exactly one
-`defaultRepresentation` against each finite operation map; compiles access,
+`defaultAccessProfile` against each finite operation map; compiles access,
 disclosure, processing handling, disclosure handling, transform inventory, and
-artifact identity per representation; and carries operation query shape,
+artifact identity per access profile; and carries operation query shape,
 filters, selectors, order, pagination, and quotas outside that map.
 
 `sourceColumnClassifications` remains resource-owned. The compiler requires an
 explicit complete reviewed classification for a transformed or multiply-bound
 column, accounts for all Registry Core and hidden processing columns, and
-rejects a public representation that processes a non-public column. It accepts
+rejects a public access profile that processes a non-public column. It accepts
 only `partial-string` and `date-precision`: their pure implementation is
 separate from parsing, SQL, authorization, and serialization. The marker is
 the fixed Relay constant `***`; output types are `string`, `year`, or
@@ -197,11 +197,11 @@ authority. The compiler's artifact and package paths carry every profile for
 operator review while public projection includes only public-visible profile
 artifacts.
 
-The HTTP layer parses `representation` once before source access, authenticates
+The HTTP layer parses `accessProfile` once before source access, authenticates
 any supplied bearer before public default selection, authorizes the exact
 profile, then narrows `fields` within it. Cursor and public ETag construction
 include profile identity and transform inventory. Protected, non-public
-processing, and live responses are `no-store`. Audit adds representation,
+processing, and live responses are `no-store`. Audit adds access profile,
 disclosure, selected properties, both handling levels, and transform IDs, but
 no values; terminal audit gates the exact serialized bytes.
 
@@ -288,9 +288,10 @@ nullable. `semanticModelReference` points to the local vocabulary/model while
 `links.context` points to the JSON-LD context. `meta` contains no selector,
 row-binding value, raw principal, token, SQL, or protected source value.
 
-Where caching is allowed, a strong ETag hashes the exact response bytes, so
-field subsets and the two representations have different ETags. `Vary: Accept,
-Authorization`, `If-None-Match`, and `304` are part of the GET contract.
+Where caching is allowed, a strong ETag hashes the exact response bytes and
+therefore binds the selected access profile, field subset, and JSON or JSON-LD
+wire representation. `Vary: Accept, Authorization`, `If-None-Match`, and `304`
+are part of the GET contract.
 Non-public and unversioned-live responses are `no-store` and emit no ETag.
 
 `fields` is a comma-separated, non-empty, duplicate-free list of public
@@ -397,7 +398,7 @@ reviewed pre-derived source property.
 `pageSize` is bounded by the operation default and maximum. Ordering is fixed
 with `recordIdentifier` as the unique tie-breaker.
 The client-opaque authenticated-encrypted cursor binds contract and source revisions, operation,
-selected representation and disclosure profile, filters, fixed order, fields,
+selected access profile and disclosure profile, filters, fixed order, fields,
 authorization-relevant context, and expiry. Every page
 is reauthorized. Authenticated encryption prevents filters and keyset-order
 values from bypassing field minimization. A caller cannot sort, name a source
@@ -411,7 +412,7 @@ context. Repeating or changing first-page parameters with a cursor is
 
 Version 1 accepts one deployment quota with `requestsPerMinute` and `burst`.
 Relay maintains one bucket per compiled operation, shared by all of that
-operation's representations. The state is bounded and in-process, so the
+operation's access profiles. The state is bounded and in-process, so the
 declared deployment profile is one Relay replica per Registry. A multi-replica deployment must put
 a trusted ingress or shared limiter in front that enforces the same ceilings;
 distributed rate-limit state is outside the initial runtime.
@@ -460,8 +461,8 @@ No match, ambiguity, policy-hidden record, and unknown or protected identifier
 return the same `404` problem and headers. Only independently generated trace
 correlation may differ. An invalid selected source row is an authoritative
 source failure and returns the value-free `503 source.unavailable` problem.
-Malformed requests, credentials, insufficient authority, unsupported
-representation, body size, quota, internal failure, source failure, and audit
+Malformed requests, credentials, insufficient authority, unsupported response
+format, body size, quota, internal failure, source failure, and audit
 failure use stable separate Registry Stack codes without reflecting input
 values. Problems are `no-store`.
 `401` includes `WWW-Authenticate`; Relay-owned `429` includes a coarse
@@ -485,17 +486,17 @@ error array is emitted.
 |---|---:|---|---|
 | Malformed JSON, query syntax, or lookup body | 400 | `consultation.invalid_request` | `the consultation request is invalid` |
 | Invalid, empty, repeated, unknown, or non-public `fields` selection | 400 | `request.fields_invalid` | `field selection is invalid` |
-| Malformed, empty, or repeated `representation` selection | 400 | `request.representation_invalid` | `representation selection is invalid` |
+| Malformed, empty, repeated, or retired `accessProfile` selection | 400 | `request.access_profile_invalid` | `access profile selection is invalid` |
 | Undeclared filter | 400 | `filter.unknown_field` | `filter is not declared for this operation` |
 | Invalid filter value or combination | 400 | `filter.invalid_value` | `filter value is invalid` |
 | Malformed, expired, stale, or differently bound cursor | 400 | `query.cursor_invalid` | `cursor is invalid for this query` |
 | Missing credential on a protected operation | 401 | `auth.missing_credential` | `a bearer access token is required` |
 | Invalid credential | 401 | `auth.invalid_credential` | `bearer access token validation failed` |
-| Valid credential without the selected operation or representation scope | 404 | `resource.not_found` | `the requested resource was not found` |
+| Valid credential without the selected operation or access profile scope | 404 | `resource.not_found` | `the requested resource was not found` |
 | Insufficient purpose or row authority after scope selection | 403 | `consultation.denied` | `the consultation is not permitted` |
-| Unknown or visibility-hidden resource, artifact, operation, or representation | 404 | `resource.not_found` | `the requested resource was not found` |
+| Unknown or visibility-hidden resource, artifact, operation, or access profile | 404 | `resource.not_found` | `the requested resource was not found` |
 | Unknown, hidden, ambiguous, or policy-hidden Record outcome | 404 | `consultation.unresolved` | `the requested record was not resolved` |
-| Unsupported response `Accept` | 406 | `representation.unsupported` | `the requested representation is not supported` |
+| Unsupported response `Accept` | 406 | `format.unsupported` | `the requested format is not supported` |
 | Request body too large | 413 | `internal.payload_too_large` | `request body exceeds the configured limit` |
 | Request URI too long | 414 | `internal.uri_too_long` | `request URI exceeds the configured limit` |
 | Unsupported request body media type | 415 | `request.media_type_unsupported` | `request body must use application/json` |
@@ -537,17 +538,17 @@ Protected operations accept only a registered JWT access-token profile:
   single-use claim;
 - principal resolved in order from `sub`, `client_id`, then `azp`, with a
   malformed higher-priority claim failing rather than falling through;
-- one exact selected-representation scope plus any compiled purpose and row-binding claim.
+- one exact selected-access-profile scope plus any compiled purpose and row-binding claim.
 
 The deployment has at most one issuer verification configuration. Its exact
 issuer is checked before its keys can authorize the token. A missing bearer is
-allowed only for an explicitly public default representation. An anonymous
-explicit request for a protected representation is concealed like an unknown
-representation; an invalid bearer is never treated as anonymous. Caller purpose
+allowed only for an explicitly public default access profile. An anonymous
+explicit request for a protected access profile is concealed like an unknown
+access profile; an invalid bearer is never treated as anonymous. Caller purpose
 headers are rejected. Purpose and
 row authority come only from verified claims assigned by the authorization
 server. Every protected operation scope is non-empty and unique across the
-Registry contract. Missing selected-representation scope is concealed as
+Registry contract. Missing selected-access-profile scope is concealed as
 `resource.not_found` before source access. An authority row binding explicitly selects either the
 resolved principal or one direct verified scalar claim. Relay injects its
 hidden typed equality predicate; caller filters cannot satisfy or replace it.
@@ -563,7 +564,7 @@ as a release gate:
 
 Audit sink failure returns `503` and prevents source access or response release
 at the relevant gate. Events contain stable Registry, resource, operation,
-representation, access-rule, processing, disclosure, transform,
+access profile, access-rule, processing, disclosure, transform,
 selected-property, handling, contract, and truthful source revision identifiers. They contain no token, selector, SQL,
 path, source or response value, or raw principal identifier.
 
@@ -665,7 +666,7 @@ Registry. No `registryctl` file or command changes.
 - Keep route construction hardcoded from compiled operation kinds. Contract
   data chooses which routes exist but cannot supply arbitrary paths or SQL.
 
-Gate: focused route, cursor, representation, caching, source-boundary, and
+Gate: focused route, cursor, access profile, caching, source-boundary, and
 non-disclosure integration tests plus generated OpenAPI validation and drift.
 The maintained alignment note is reviewed here. A draft GovStack linter is not
 a Version one gate.

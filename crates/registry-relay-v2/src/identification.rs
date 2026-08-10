@@ -18,13 +18,13 @@ use crate::contract::{
     Handling, IdentificationMethod, RegistryContract, ReviewStatus, RulePackBinding,
 };
 use crate::model::{
-    ColumnUse, CompiledAccess, CompiledOperation, CompiledRegistry, CompiledRepresentation,
+    ColumnUse, CompiledAccess, CompiledAccessProfile, CompiledOperation, CompiledRegistry,
     CompiledResource, EffectiveClassification, ObservedColumn, ObservedSourceSchema, OperationKind,
 };
 
 pub const IDENTIFICATION_REPORT_PATH: &str = "reports/identification-report.json";
 pub const CLASSIFICATION_INVENTORY_REPORT_PATH: &str = "reports/classification-inventory.json";
-pub const REPRESENTATION_REPORT_PATH: &str = "reports/representation-report.json";
+pub const ACCESS_PROFILE_REPORT_PATH: &str = "reports/access-profile-report.json";
 pub const CONTEXTUAL_REVIEW_FINDINGS_PATH: &str = "reports/contextual-review-findings.json";
 pub const CLASSIFICATION_REVIEW_STARTER_PATH: &str =
     "governance/classification-review-starter.yaml";
@@ -378,36 +378,36 @@ pub fn render_classification_inventory_report(
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RepresentationReport {
+pub struct AccessProfileReport {
     pub api_version: String,
     pub kind: String,
     pub registry_identifier: String,
     pub classification_inventory_digest: String,
-    pub resources: Vec<ResourceRepresentationReport>,
+    pub resources: Vec<ResourceAccessProfileReport>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ResourceRepresentationReport {
+pub struct ResourceAccessProfileReport {
     pub resource: String,
     pub source: String,
     pub view: String,
-    pub operations: Vec<OperationRepresentationReport>,
+    pub operations: Vec<OperationAccessProfileReport>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct OperationRepresentationReport {
+pub struct OperationAccessProfileReport {
     pub operation: String,
     pub operation_kind: String,
-    pub default_representation: String,
-    pub representations: Vec<RepresentationBoundary>,
+    pub default_access_profile: String,
+    pub access_profiles: Vec<AccessProfileBoundary>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RepresentationBoundary {
-    pub representation: String,
+pub struct AccessProfileBoundary {
+    pub access_profile: String,
     pub default: bool,
     pub disclosure_profile: String,
     pub processed_source_columns: Vec<String>,
@@ -417,10 +417,10 @@ pub struct RepresentationBoundary {
     pub transforms: Vec<String>,
 }
 
-pub fn representation_report(
+pub fn access_profile_report(
     registry: &CompiledRegistry,
     classification_inventory_digest: &str,
-) -> Result<RepresentationReport, IdentificationError> {
+) -> Result<AccessProfileReport, IdentificationError> {
     require_inventory_digest(registry, classification_inventory_digest)?;
     let mut resources = registry
         .resources
@@ -430,36 +430,36 @@ pub fn representation_report(
                 .operations
                 .iter()
                 .map(|operation| {
-                    let mut representations = operation
-                        .representations
+                    let mut access_profiles = operation
+                        .access_profiles
                         .iter()
-                        .map(|representation| RepresentationBoundary {
-                            representation: representation.id.clone(),
-                            default: representation.id == operation.default_representation,
-                            disclosure_profile: representation.disclosure_profile.clone(),
-                            processed_source_columns: processed_columns(operation, representation),
+                        .map(|access_profile| AccessProfileBoundary {
+                            access_profile: access_profile.id.clone(),
+                            default: access_profile.id == operation.default_access_profile,
+                            disclosure_profile: access_profile.disclosure_profile.clone(),
+                            processed_source_columns: processed_columns(operation, access_profile),
                             disclosed_properties: sorted_unique(
-                                representation.selectable_properties.iter().cloned(),
+                                access_profile.selectable_properties.iter().cloned(),
                             ),
-                            processing_handling: representation.processing_handling,
-                            disclosure_handling: representation.disclosure_handling,
+                            processing_handling: access_profile.processing_handling,
+                            disclosure_handling: access_profile.disclosure_handling,
                             transforms: sorted_unique(
-                                representation.transform_inventory.iter().cloned(),
+                                access_profile.transform_inventory.iter().cloned(),
                             ),
                         })
                         .collect::<Vec<_>>();
-                    representations
-                        .sort_by(|left, right| left.representation.cmp(&right.representation));
-                    OperationRepresentationReport {
+                    access_profiles
+                        .sort_by(|left, right| left.access_profile.cmp(&right.access_profile));
+                    OperationAccessProfileReport {
                         operation: operation.identifier.clone(),
                         operation_kind: operation_kind(&operation.kind),
-                        default_representation: operation.default_representation.clone(),
-                        representations,
+                        default_access_profile: operation.default_access_profile.clone(),
+                        access_profiles,
                     }
                 })
                 .collect::<Vec<_>>();
             operations.sort_by(|left, right| left.operation.cmp(&right.operation));
-            ResourceRepresentationReport {
+            ResourceAccessProfileReport {
                 resource: resource.id.clone(),
                 source: resource.source.clone(),
                 view: resource.view.clone(),
@@ -468,17 +468,17 @@ pub fn representation_report(
         })
         .collect::<Vec<_>>();
     resources.sort_by(|left, right| left.resource.cmp(&right.resource));
-    Ok(RepresentationReport {
-        api_version: "relay.registrystack.org/representation-report/v1".into(),
-        kind: "RepresentationReport".into(),
+    Ok(AccessProfileReport {
+        api_version: "relay.registrystack.org/access-profile-report/v1".into(),
+        kind: "AccessProfileReport".into(),
         registry_identifier: registry.registry_identifier.clone(),
         classification_inventory_digest: classification_inventory_digest.into(),
         resources,
     })
 }
 
-pub fn render_representation_report(
-    report: &RepresentationReport,
+pub fn render_access_profile_report(
+    report: &AccessProfileReport,
 ) -> Result<Vec<u8>, IdentificationError> {
     render_canonical(report)
 }
@@ -500,7 +500,7 @@ pub struct ContextualReviewFinding {
     pub status: ContextualFindingStatus,
     pub resource: String,
     pub operation: Option<String>,
-    pub representation: Option<String>,
+    pub access_profile: Option<String>,
     pub properties: Vec<String>,
     pub source_columns: Vec<String>,
     pub message: String,
@@ -513,7 +513,7 @@ pub enum ContextualFindingStatus {
 }
 
 /// Generate fixed contextual prompts. Findings never grant access, select a
-/// representation, or alter a compiled handling floor.
+/// access profile, or alter a compiled handling floor.
 pub fn contextual_review_findings(
     registry: &CompiledRegistry,
     classification_inventory_digest: &str,
@@ -653,14 +653,14 @@ pub fn contextual_review_findings(
         }
 
         for operation in &resource.operations {
-            for representation in &operation.representations {
+            for access_profile in &operation.access_profiles {
                 let restrictive_selectors = operation
                     .query
                     .selectors
                     .iter()
                     .filter(|selector| {
                         column_handling(resource, &selector.source_column)
-                            .is_some_and(|handling| handling > representation.disclosure_handling)
+                            .is_some_and(|handling| handling > access_profile.disclosure_handling)
                     })
                     .collect::<Vec<_>>();
                 if !restrictive_selectors.is_empty() {
@@ -669,8 +669,8 @@ pub fn contextual_review_findings(
                         "classification.context.selector_more_restrictive_than_disclosure",
                         resource,
                         Some(&operation.identifier),
-                        Some(&representation.id),
-                        representation.selectable_properties.iter().cloned(),
+                        Some(&access_profile.id),
+                        access_profile.selectable_properties.iter().cloned(),
                         restrictive_selectors
                             .iter()
                             .map(|selector| selector.source_column.clone()),
@@ -678,22 +678,22 @@ pub fn contextual_review_findings(
                     );
                 }
                 if matches!(operation.kind, OperationKind::List)
-                    && representation.disclosure_handling >= Handling::Confidential
+                    && access_profile.disclosure_handling >= Handling::Confidential
                 {
                     push_finding(
                         &mut findings,
                         "classification.context.nonpublic_list_disclosure",
                         resource,
                         Some(&operation.identifier),
-                        Some(&representation.id),
-                        representation.selectable_properties.iter().cloned(),
+                        Some(&access_profile.id),
+                        access_profile.selectable_properties.iter().cloned(),
                         std::iter::empty(),
-                        "confidential or restricted data appears in a list representation",
+                        "confidential or restricted data appears in a list access profile",
                     );
                 }
-                if matches!(representation.access, CompiledAccess::Public) {
-                    let disclosed_columns = disclosed_source_columns(resource, representation);
-                    let hidden_nonpublic = processed_columns(operation, representation)
+                if matches!(access_profile.access, CompiledAccess::Public) {
+                    let disclosed_columns = disclosed_source_columns(resource, access_profile);
+                    let hidden_nonpublic = processed_columns(operation, access_profile)
                         .into_iter()
                         .filter(|column| !disclosed_columns.contains(column))
                         .filter(|column| {
@@ -707,10 +707,10 @@ pub fn contextual_review_findings(
                             "classification.context.public_processes_hidden_nonpublic",
                             resource,
                             Some(&operation.identifier),
-                            Some(&representation.id),
-                            representation.selectable_properties.iter().cloned(),
+                            Some(&access_profile.id),
+                            access_profile.selectable_properties.iter().cloned(),
                             hidden_nonpublic,
-                            "a public representation processes hidden non-public source columns",
+                            "a public access profile processes hidden non-public source columns",
                         );
                     }
                 }
@@ -721,7 +721,7 @@ pub fn contextual_review_findings(
         left.resource
             .cmp(&right.resource)
             .then(left.operation.cmp(&right.operation))
-            .then(left.representation.cmp(&right.representation))
+            .then(left.access_profile.cmp(&right.access_profile))
             .then(left.code.cmp(&right.code))
             .then(left.properties.cmp(&right.properties))
             .then(left.source_columns.cmp(&right.source_columns))
@@ -1213,13 +1213,13 @@ fn authored_hints(contract: &RegistryContract) -> BTreeMap<(String, String, Stri
                     );
                 }
             }
-            for (_, representation) in operation.representations.iter() {
-                add_access_roles(&mut hints, source, view, &representation.access);
+            for (_, access_profile) in operation.access_profiles.iter() {
+                add_access_roles(&mut hints, source, view, &access_profile.access);
             }
         }
         if let Some(operation) = &resource.operations.read {
-            for (_, representation) in operation.representations.iter() {
-                add_access_roles(&mut hints, source, view, &representation.access);
+            for (_, access_profile) in operation.access_profiles.iter() {
+                add_access_roles(&mut hints, source, view, &access_profile.access);
             }
         }
         for lookup in &resource.operations.lookups {
@@ -1235,8 +1235,8 @@ fn authored_hints(contract: &RegistryContract) -> BTreeMap<(String, String, Stri
                     add_codelist(&mut hints, source, view, &selector.source_column);
                 }
             }
-            for (_, representation) in lookup.representations.iter() {
-                add_access_roles(&mut hints, source, view, &representation.access);
+            for (_, access_profile) in lookup.access_profiles.iter() {
+                add_access_roles(&mut hints, source, view, &access_profile.access);
             }
         }
     }
@@ -1531,9 +1531,9 @@ fn operation_kind(kind: &OperationKind) -> String {
 
 fn processed_columns(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> Vec<String> {
-    let mut columns = representation
+    let mut columns = access_profile
         .projected_columns
         .iter()
         .cloned()
@@ -1556,7 +1556,7 @@ fn processed_columns(
     if let CompiledAccess::Protected {
         row_binding: Some(binding),
         ..
-    } = &representation.access
+    } = &access_profile.access
     {
         columns.insert(binding.source_column.clone());
     }
@@ -1565,7 +1565,7 @@ fn processed_columns(
 
 fn disclosed_source_columns(
     resource: &CompiledResource,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> BTreeSet<String> {
     let mut columns = [
         &resource.record_context.record_identifier_column,
@@ -1576,7 +1576,7 @@ fn disclosed_source_columns(
     .into_iter()
     .cloned()
     .collect::<BTreeSet<_>>();
-    for name in &representation.selectable_properties {
+    for name in &access_profile.selectable_properties {
         if let Some(property) = resource
             .properties
             .iter()
@@ -1606,7 +1606,7 @@ fn push_finding<I, J>(
     code: &str,
     resource: &CompiledResource,
     operation: Option<&str>,
-    representation: Option<&str>,
+    access_profile: Option<&str>,
     properties: I,
     source_columns: J,
     message: &str,
@@ -1619,7 +1619,7 @@ fn push_finding<I, J>(
         status: ContextualFindingStatus::ReviewRequired,
         resource: resource.id.clone(),
         operation: operation.map(str::to_owned),
-        representation: representation.map(str::to_owned),
+        access_profile: access_profile.map(str::to_owned),
         properties: sorted_unique(properties.into_iter()),
         source_columns: sorted_unique(source_columns.into_iter()),
         message: message.into(),

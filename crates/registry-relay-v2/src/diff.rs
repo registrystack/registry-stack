@@ -60,9 +60,9 @@ pub enum ChangeClass {
     OperationAdded,
     OperationRemoved,
     OperationChanged,
-    RepresentationAdded,
-    RepresentationRemoved,
-    DefaultRepresentationChanged,
+    AccessProfileAdded,
+    AccessProfileRemoved,
+    DefaultAccessProfileChanged,
     DisclosureExpanded,
     DisclosureNarrowed,
     DisclosureProfileChanged,
@@ -542,51 +542,51 @@ fn diff_operation(
             "the operation source or view changed",
         );
     }
-    if previous.default_representation != current.default_representation {
+    if previous.default_access_profile != current.default_access_profile {
         push(
             changes,
-            ChangeClass::DefaultRepresentationChanged,
+            ChangeClass::DefaultAccessProfileChanged,
             ChangeImpact::Breaking,
-            format!("{location}.defaultRepresentation"),
-            "the representation selected when the caller omits an explicit choice changed",
+            format!("{location}.defaultAccessProfile"),
+            "the access profile selected when the caller omits an explicit choice changed",
         );
     }
-    let before_representations = previous
-        .representations
+    let before_access_profiles = previous
+        .access_profiles
         .iter()
-        .map(|representation| (representation.id.as_str(), representation))
+        .map(|access_profile| (access_profile.id.as_str(), access_profile))
         .collect::<BTreeMap<_, _>>();
-    let after_representations = current
-        .representations
+    let after_access_profiles = current
+        .access_profiles
         .iter()
-        .map(|representation| (representation.id.as_str(), representation))
+        .map(|access_profile| (access_profile.id.as_str(), access_profile))
         .collect::<BTreeMap<_, _>>();
-    for id in before_representations
+    for id in before_access_profiles
         .keys()
-        .chain(after_representations.keys())
+        .chain(after_access_profiles.keys())
         .collect::<BTreeSet<_>>()
     {
-        let representation_location = format!("{location}.representations.{id}");
+        let access_profile_location = format!("{location}.accessProfiles.{id}");
         match (
-            before_representations.get(*id),
-            after_representations.get(*id),
+            before_access_profiles.get(*id),
+            after_access_profiles.get(*id),
         ) {
             (None, Some(_)) => push(
                 changes,
-                ChangeClass::RepresentationAdded,
+                ChangeClass::AccessProfileAdded,
                 ChangeImpact::Widening,
-                representation_location,
-                "a callable representation was added to the operation",
+                access_profile_location,
+                "a callable access profile was added to the operation",
             ),
             (Some(_), None) => push(
                 changes,
-                ChangeClass::RepresentationRemoved,
+                ChangeClass::AccessProfileRemoved,
                 ChangeImpact::Breaking,
-                representation_location,
-                "a callable representation was removed from the operation",
+                access_profile_location,
+                "a callable access profile was removed from the operation",
             ),
             (Some(before), Some(after)) => {
-                diff_representation(before, after, &representation_location, changes);
+                diff_access_profile(before, after, &access_profile_location, changes);
             }
             (None, None) => unreachable!(),
         }
@@ -686,9 +686,9 @@ fn diff_operation(
     );
 }
 
-fn diff_representation(
-    previous: &crate::model::CompiledRepresentation,
-    current: &crate::model::CompiledRepresentation,
+fn diff_access_profile(
+    previous: &crate::model::CompiledAccessProfile,
+    current: &crate::model::CompiledAccessProfile,
     location: &str,
     changes: &mut Vec<ContractChange>,
 ) {
@@ -754,7 +754,7 @@ fn diff_representation(
             ChangeClass::TransformationChanged,
             ChangeImpact::Breaking,
             format!("{location}.transforms"),
-            "the representation transformation inventory changed",
+            "the access profile transformation inventory changed",
         );
     }
     if previous.projected_columns != current.projected_columns {
@@ -775,7 +775,7 @@ fn diff_representation(
             ChangeClass::SemanticModelChanged,
             ChangeImpact::Breaking,
             format!("{location}.semanticReferences"),
-            "the representation schema, semantic model, or JSON-LD context reference changed",
+            "the access profile schema, semantic model, or JSON-LD context reference changed",
         );
     }
     if previous.processing_handling != current.processing_handling
@@ -786,7 +786,7 @@ fn diff_representation(
             ChangeClass::ClassificationChanged,
             ChangeImpact::Breaking,
             format!("{location}.handling"),
-            "the representation processing or disclosure handling floor changed",
+            "the access profile processing or disclosure handling floor changed",
         );
     }
     diff_access(&previous.access, &current.access, location, changes);
@@ -1280,10 +1280,10 @@ mod tests {
     #[test]
     fn disclosure_property_order_change_is_reported() {
         let mut previous = compiled();
-        let representation = &mut previous.resources[0].operations[0].representations[0];
-        representation.selectable_properties = vec!["first".into(), "second".into()];
+        let access_profile = &mut previous.resources[0].operations[0].access_profiles[0];
+        access_profile.selectable_properties = vec!["first".into(), "second".into()];
         let mut current = previous.clone();
-        current.resources[0].operations[0].representations[0]
+        current.resources[0].operations[0].access_profiles[0]
             .selectable_properties
             .reverse();
 
@@ -1405,17 +1405,17 @@ mod tests {
     }
 
     #[test]
-    fn representations_transforms_defaults_and_review_bindings_are_reported() {
+    fn access_profiles_transforms_defaults_and_review_bindings_are_reported() {
         let previous = compiled();
         let mut current = previous.clone();
         let operation = &mut current.resources[0].operations[0];
-        operation.representations[0]
+        operation.access_profiles[0]
             .transform_inventory
             .push("partial-string:suffix:4".into());
-        let mut alternate = operation.representations[0].clone();
+        let mut alternate = operation.access_profiles[0].clone();
         alternate.id = "alternate".into();
-        operation.representations.push(alternate);
-        operation.default_representation = "alternate".into();
+        operation.access_profiles.push(alternate);
+        operation.default_access_profile = "alternate".into();
         current
             .classification_review
             .as_mut()
@@ -1425,8 +1425,8 @@ mod tests {
         let report = diff_registries(&previous, &current);
         for class in [
             ChangeClass::TransformationChanged,
-            ChangeClass::RepresentationAdded,
-            ChangeClass::DefaultRepresentationChanged,
+            ChangeClass::AccessProfileAdded,
+            ChangeClass::DefaultAccessProfileChanged,
             ChangeClass::ClassificationReviewChanged,
         ] {
             assert!(
@@ -1439,7 +1439,7 @@ mod tests {
         assert!(reverse
             .changes
             .iter()
-            .any(|change| change.class == ChangeClass::RepresentationRemoved));
+            .any(|change| change.class == ChangeClass::AccessProfileRemoved));
     }
 
     #[test]

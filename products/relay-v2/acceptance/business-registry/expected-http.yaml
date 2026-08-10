@@ -76,24 +76,24 @@ steps:
     request:
       method: GET
       path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
-      query: {representation: registrar, fields: "registrarLegalName,registrarNote"}
+      query: {accessProfile: registrar, fields: "registrarLegalName,registrarNote"}
     expect:
       status: 200
       registryCoreRequired: true
       domainDataKeys: [registrarLegalName, registrarNote]
       cache: no-store
-  - id: registrar-representation-denied
+  - id: registrar-access-profile-denied
     authorizationFixture: business-unentitled
     request:
       method: GET
       path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
-      query: {representation: registrar}
+      query: {accessProfile: registrar}
     expect: {status: 404, code: resource.not_found}
-  - id: public-representation-unknown
+  - id: public-access-profile-unknown
     request:
       method: GET
       path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
-      query: {representation: registrar-private}
+      query: {accessProfile: registrar-private}
     expect: {status: 404, code: resource.not_found}
   - id: identifier-read-jsonld
     request:

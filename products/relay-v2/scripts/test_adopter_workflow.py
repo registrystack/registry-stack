@@ -109,22 +109,24 @@ def openapi_operations(document: dict[str, Any]) -> dict[tuple[str, str], dict[s
     return result
 
 
-def representation_identifiers(operation: dict[str, Any], label: str) -> set[str]:
-    profiles = operation.get("x-registry-representations")
+def access_profile_identifiers(operation: dict[str, Any], label: str) -> set[str]:
+    profiles = operation.get("x-registry-access-profiles")
     if not isinstance(profiles, list) or not profiles:
-        raise GateFailure(f"{label} has no finite representations")
+        raise GateFailure(f"{label} has no finite access profiles")
     identifiers: set[str] = set()
     for profile in profiles:
-        if not isinstance(profile, dict) or not isinstance(profile.get("identifier"), str):
-            raise GateFailure(f"{label} has a malformed representation")
-        identifier = profile["identifier"]
+        if not isinstance(profile, dict) or not isinstance(
+            profile.get("accessProfileIdentifier"), str
+        ):
+            raise GateFailure(f"{label} has a malformed access profile")
+        identifier = profile["accessProfileIdentifier"]
         if not identifier or identifier in identifiers:
-            raise GateFailure(f"{label} has duplicate or empty representation identifiers")
+            raise GateFailure(f"{label} has duplicate or empty access-profile identifiers")
         identifiers.add(identifier)
     return identifiers
 
 
-def public_representation_parameters(operation: dict[str, Any], label: str) -> set[str]:
+def public_access_profile_parameters(operation: dict[str, Any], label: str) -> set[str]:
     parameters = operation.get("parameters")
     if not isinstance(parameters, list):
         raise GateFailure(f"{label} has no parameters")
@@ -132,14 +134,14 @@ def public_representation_parameters(operation: dict[str, Any], label: str) -> s
         parameter
         for parameter in parameters
         if isinstance(parameter, dict)
-        and parameter.get("name") == "representation"
+        and parameter.get("name") == "accessProfile"
         and parameter.get("in") == "query"
     ]
     if len(matches) != 1:
-        raise GateFailure(f"{label} has no unique representation parameter")
+        raise GateFailure(f"{label} has no unique accessProfile parameter")
     identifiers = matches[0].get("schema", {}).get("enum")
     if not isinstance(identifiers, list) or not all(isinstance(item, str) for item in identifiers):
-        raise GateFailure(f"{label} has a malformed representation parameter")
+        raise GateFailure(f"{label} has a malformed accessProfile parameter")
     return set(identifiers)
 
 
@@ -154,29 +156,30 @@ def validate_public_operation(
 ) -> None:
     if public.get("operationId") != full.get("operationId"):
         raise GateFailure("public OpenAPI operation identifier does not match full OpenAPI")
-    public_ids = representation_identifiers(public, "public OpenAPI operation")
-    full_ids = representation_identifiers(full, "full OpenAPI operation")
+    public_ids = access_profile_identifiers(public, "public OpenAPI operation")
+    full_ids = access_profile_identifiers(full, "full OpenAPI operation")
     if not public_ids.issubset(full_ids):
-        raise GateFailure("public OpenAPI representation is absent from full OpenAPI")
-    if public_representation_parameters(public, "public OpenAPI operation") != public_ids:
-        raise GateFailure("public OpenAPI representation parameter does not match public profiles")
+        raise GateFailure("public OpenAPI access profile is absent from full OpenAPI")
+    if public_access_profile_parameters(public, "public OpenAPI operation") != public_ids:
+        raise GateFailure("public OpenAPI access profile parameter does not match public profiles")
     if public.get("security") != [] or "x-registry-required-scopes" in public:
         raise GateFailure("public OpenAPI operation carries protected access or security")
     full_profiles = {
-        profile["identifier"]: profile
-        for profile in full["x-registry-representations"]
+        profile["accessProfileIdentifier"]: profile
+        for profile in full["x-registry-access-profiles"]
     }
     protected_ids = {
-        entry.get("representation")
+        entry.get("accessProfileIdentifier")
         for entry in full.get("x-registry-required-scopes", [])
-        if isinstance(entry, dict) and isinstance(entry.get("representation"), str)
+        if isinstance(entry, dict)
+        and isinstance(entry.get("accessProfileIdentifier"), str)
     }
-    for profile in public["x-registry-representations"]:
-        identifier = profile["identifier"]
+    for profile in public["x-registry-access-profiles"]:
+        identifier = profile["accessProfileIdentifier"]
         if identifier in protected_ids:
-            raise GateFailure("public OpenAPI exposes a protected representation")
+            raise GateFailure("public OpenAPI exposes a protected access profile")
         if profile != full_profiles[identifier]:
-            raise GateFailure("public OpenAPI representation differs from its full profile")
+            raise GateFailure("public OpenAPI access profile differs from its full profile")
         for reference_key in (
             "schemaReference",
             "semanticModelReference",
@@ -200,7 +203,7 @@ def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
         full_operation = full_operations.get(key)
         if full_operation is None:
             raise GateFailure("public OpenAPI path is absent from full OpenAPI")
-        if "x-registry-representations" in operation or "x-registry-representations" in full_operation:
+        if "x-registry-access-profiles" in operation or "x-registry-access-profiles" in full_operation:
             validate_public_operation(operation, full_operation, public_artifact_ids)
         elif operation != full_operation:
             raise GateFailure("public fixed OpenAPI operation differs from full OpenAPI")

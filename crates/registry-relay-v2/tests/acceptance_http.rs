@@ -834,7 +834,7 @@ async fn operation_bound_metadata_is_no_store_and_links_only_visible_artifacts()
             capability["processingReference"]
                 .as_str()
                 .is_some_and(|reference| reference.ends_with(
-                    "/v2/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-limited-processing"
+                    "/v2/artifacts/assistance-enrolment--lookup-by-case-and-person--access-profile-limited-processing"
                 )),
             "processing metadata link resolves to the mounted artifact identifier"
         );
@@ -1418,10 +1418,10 @@ fn validate_response_contracts(
         .pointer("/meta/operationIdentifier")
         .and_then(Value::as_str)
         .expect("Record response names its compiled operation");
-    let representation_identifier = document
-        .pointer("/meta/representation")
+    let access_profile_identifier = document
+        .pointer("/meta/accessProfile")
         .and_then(Value::as_str)
-        .expect("Record response names its selected representation");
+        .expect("Record response names its selected access profile");
     let matching_bindings = harness
         .service
         .artifacts
@@ -1429,13 +1429,13 @@ fn validate_response_contracts(
         .iter()
         .filter(|binding| {
             binding.operation_identifier == operation_identifier
-                && binding.representation_identifier == representation_identifier
+                && binding.access_profile_identifier == access_profile_identifier
         })
         .collect::<Vec<_>>();
     assert_eq!(
         matching_bindings.len(),
         1,
-        "{project}/{} must resolve one exact operation and representation binding",
+        "{project}/{} must resolve one exact operation and access profile binding",
         step.id
     );
     let binding = matching_bindings[0];
@@ -1444,7 +1444,7 @@ fn validate_response_contracts(
         let schema_reference = record
             .get("schemaReference")
             .and_then(Value::as_str)
-            .expect("Record carries its exact permitted-representation schema reference");
+            .expect("Record carries its exact permitted-access profile schema reference");
         assert_eq!(
             document
                 .pointer("/meta/links/schema")
@@ -1469,7 +1469,7 @@ fn validate_response_contracts(
         assert_eq!(
             matching_schemas.len(),
             1,
-            "{project}/{} must resolve exactly one generated permitted-representation schema",
+            "{project}/{} must resolve exactly one generated permitted-access profile schema",
             step.id
         );
         let (schema_artifact, schema) = &matching_schemas[0];
@@ -1479,22 +1479,22 @@ fn validate_response_contracts(
             .compile(schema)
             .unwrap_or_else(|_| {
                 panic!(
-                    "{project}/{} generated permitted-representation schema must compile",
+                    "{project}/{} generated permitted-access profile schema must compile",
                     step.id
                 )
             });
         assert!(
             validator.is_valid(record),
-            "{project}/{} Record must validate against its exact generated permitted-representation schema",
+            "{project}/{} Record must validate against its exact generated permitted-access profile schema",
             step.id
         );
 
         assert_eq!(
-            binding.representation_schema_path, schema_artifact.path,
-            "{project}/{} schema must belong to the exact operation and representation",
+            binding.access_profile_schema_path, schema_artifact.path,
+            "{project}/{} schema must belong to the exact operation and access profile",
             step.id
         );
-        let shacl_path = &binding.representation_shacl_path;
+        let shacl_path = &binding.access_profile_shacl_path;
         let shacl_artifact = harness
             .service
             .artifacts
@@ -1538,29 +1538,29 @@ fn validate_json_ld_graph(
                 .any(|operation| operation.identifier == binding.operation_identifier)
         })
         .expect("compiled operation belongs to one resource");
-    let representation = resource
+    let access_profile = resource
         .operations
         .iter()
         .find(|operation| operation.identifier == binding.operation_identifier)
         .and_then(|operation| {
             operation
-                .representations
+                .access_profiles
                 .iter()
-                .find(|representation| representation.id == binding.representation_identifier)
+                .find(|access_profile| access_profile.id == binding.access_profile_identifier)
         })
-        .expect("compiled operation carries the selected representation");
+        .expect("compiled operation carries the selected access profile");
     assert_eq!(
         document.get("@context").and_then(Value::as_str),
-        Some(representation.context_reference.as_str()),
-        "{project}/{} JSON-LD response must name the selected representation context",
+        Some(access_profile.context_reference.as_str()),
+        "{project}/{} JSON-LD response must name the selected access profile context",
         step.id
     );
     assert_eq!(
         document
             .pointer("/meta/links/context")
             .and_then(Value::as_str),
-        Some(representation.context_reference.as_str()),
-        "{project}/{} response metadata must name the selected representation context",
+        Some(access_profile.context_reference.as_str()),
+        "{project}/{} response metadata must name the selected access profile context",
         step.id
     );
     let context_artifact = harness
@@ -1598,7 +1598,7 @@ fn validate_json_ld_graph(
         &harness
             .service
             .artifacts
-            .get(&binding.representation_shacl_path)
+            .get(&binding.access_profile_shacl_path)
             .expect("bound SHACL artifact exists")
             .content,
     )
@@ -1664,7 +1664,7 @@ fn validate_json_ld_graph(
                 .iter()
                 .find(|property| property.name == *property_name)
                 .expect("disclosed property is compiled");
-            assert!(representation.selectable_properties.contains(property_name));
+            assert!(access_profile.selectable_properties.contains(property_name));
             let datatype = registry_relay_v2::semantics::datatype_iri(property.data_type);
             assert_typed_quad(
                 &quads,

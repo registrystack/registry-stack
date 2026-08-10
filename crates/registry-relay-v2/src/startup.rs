@@ -486,19 +486,19 @@ fn validate_runtime_contract(
             .iter()
             .flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             })
             .chain(resource.operations.read.iter().flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             }))
             .chain(resource.operations.lookups.iter().flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             }))
@@ -990,7 +990,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         }
 
         let protected = contract(
-            "{read: {defaultRepresentation: default, representations: {default: {access: {scope: registry:record:read}, disclosureProfile: default}}}}",
+            "{read: {defaultAccessProfile: default, accessProfiles: {default: {access: {scope: registry:record:read}, disclosureProfile: default}}}}",
         );
         let protected_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18081'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
@@ -1002,7 +1002,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         );
 
         let list = contract(
-            "{list: {defaultRepresentation: default, representations: {default: {access: public, disclosureProfile: default}}, filters: [], allowUnfiltered: true, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}}",
+            "{list: {defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}, filters: [], allowUnfiltered: true, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}}",
         );
         let list_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18082'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
@@ -1014,7 +1014,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         );
 
         let lookup = contract(
-            "{lookups: [{id: by-label, requestBody: {maximumBytes: 128, selectors: {label: {sourceColumn: label, type: string, minimumBytes: 1, maximumBytes: 32}}}, defaultRepresentation: default, representations: {default: {access: public, disclosureProfile: default}}}]}",
+            "{lookups: [{id: by-label, requestBody: {maximumBytes: 128, selectors: {label: {sourceColumn: label, type: string, minimumBytes: 1, maximumBytes: 32}}}, defaultAccessProfile: default, accessProfiles: {default: {access: public, disclosureProfile: default}}}]}",
         );
         let mut lookup_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18083'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
@@ -1054,7 +1054,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         contract.metadata_visibility.resources = crate::contract::Visibility::Public;
         contract.resources[1].operations.read = Some(
             serde_norway::from_str(
-                "defaultRepresentation: protected\nrepresentations:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
+                "defaultAccessProfile: protected\naccessProfiles:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
             )
             .expect("protected read operation"),
         );

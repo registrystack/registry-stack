@@ -126,8 +126,8 @@ resources:
         properties: [registrationNumber, registrarLegalName, registrarNote, registrationStatus, legalForm, registeredJurisdiction]
     operations:
       list:
-        defaultRepresentation: public-register
-        representations:
+        defaultAccessProfile: public-register
+        accessProfiles:
           public-register: {access: public, disclosureProfile: public-register}
           registrar:
             access: {scope: registry:business:list-registrar}
@@ -139,8 +139,8 @@ resources:
         orderBy: [registrationNumber]
         pagination: {defaultPageSize: 2, maximumPageSize: 4}
       read:
-        defaultRepresentation: public-register
-        representations:
+        defaultAccessProfile: public-register
+        accessProfiles:
           public-register: {access: public, disclosureProfile: public-register}
           registrar:
             access: {scope: registry:business:read-registrar}

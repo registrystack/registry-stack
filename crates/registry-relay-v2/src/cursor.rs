@@ -34,7 +34,7 @@ pub struct CursorPayload {
     pub contract_revision: String,
     pub source_revision: String,
     pub operation: String,
-    pub representation: String,
+    pub access_profile: String,
     pub disclosure_profile: String,
     pub transforms_digest: String,
     pub filters_digest: String,
@@ -65,7 +65,7 @@ pub enum CursorValue {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorBindings {
-    pub representation: String,
+    pub access_profile: String,
     pub disclosure_profile: String,
     pub transforms_digest: String,
     pub filters_digest: String,
@@ -90,7 +90,7 @@ impl CursorPayload {
             contract_revision,
             source_revision,
             operation,
-            representation: bindings.representation,
+            access_profile: bindings.access_profile,
             disclosure_profile: bindings.disclosure_profile,
             transforms_digest: bindings.transforms_digest,
             filters_digest: bindings.filters_digest,
@@ -249,7 +249,7 @@ pub fn require_same_request(
     if cursor.contract_revision != request.contract_revision
         || cursor.source_revision != request.source_revision
         || cursor.operation != request.operation
-        || cursor.representation != request.representation
+        || cursor.access_profile != request.access_profile
         || cursor.disclosure_profile != request.disclosure_profile
         || cursor.transforms_digest != request.transforms_digest
         || cursor.filters_digest != request.filters_digest
@@ -281,7 +281,7 @@ mod tests {
             "sha256:source".to_owned(),
             "resource.list".to_owned(),
             CursorBindings {
-                representation: "public".to_owned(),
+                access_profile: "public".to_owned(),
                 disclosure_profile: "public".to_owned(),
                 transforms_digest: "sha256:transforms".to_owned(),
                 filters_digest: "sha256:filters".to_owned(),
@@ -381,9 +381,9 @@ mod tests {
     }
 
     #[test]
-    fn cursor_cannot_cross_representation_disclosure_or_transform_contexts() {
+    fn cursor_cannot_cross_access_profile_disclosure_or_transform_contexts() {
         let alterations: [fn(&mut CursorPayload); 3] = [
-            |payload: &mut CursorPayload| payload.representation = "caseworker".to_owned(),
+            |payload: &mut CursorPayload| payload.access_profile = "caseworker".to_owned(),
             |payload: &mut CursorPayload| {
                 payload.disclosure_profile = "caseworker".to_owned();
             },

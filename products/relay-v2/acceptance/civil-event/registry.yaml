@@ -139,8 +139,8 @@ resources:
         properties: [eventReference, eventType, registrationStatus, registrationYear, registrationYearMonth, certificateAvailable]
     operations:
       read:
-        defaultRepresentation: registrar
-        representations:
+        defaultAccessProfile: registrar
+        accessProfiles:
           registrar:
             access:
               scope: registry:civil-events:read
@@ -154,8 +154,8 @@ resources:
             selectors:
               registrationNumber: {sourceColumn: registration_number, type: string, minimumBytes: 12, maximumBytes: 96}
               eventType: {sourceColumn: event_type, type: controlled-code, codelist: codelists/civil-event-selector-types.yaml}
-          defaultRepresentation: registrar-verification
-          representations:
+          defaultAccessProfile: registrar-verification
+          accessProfiles:
             registrar-verification:
               access:
                 scope: registry:civil-events:lookup

@@ -50,7 +50,7 @@ pub struct PackageArtifact {
     pub media_type: String,
     pub visibility: Visibility,
     pub operation_identifier: Option<String>,
-    pub representation_identifier: Option<String>,
+    pub access_profile_identifier: Option<String>,
     pub sha256: String,
 }
 
@@ -165,7 +165,7 @@ pub fn build_package(
             media_type: artifact.media_type.clone(),
             visibility: artifact.visibility,
             operation_identifier: artifact.operation_identifier.clone(),
-            representation_identifier: artifact.representation_identifier.clone(),
+            access_profile_identifier: artifact.access_profile_identifier.clone(),
             sha256: artifact.sha256.clone(),
         })
         .collect::<Vec<_>>();
@@ -288,7 +288,7 @@ fn validate_build_inputs(
         .collect::<Result<Vec<_>, _>>()?;
     verify_compiled_derivation(contract, compiled, governed, &observed)?;
     verify_artifact_derivation(compiled, artifacts)?;
-    let expected_operation_representations = operation_representation_pairs(compiled);
+    let expected_operation_access_profiles = operation_access_profile_pairs(compiled);
     let mut artifact_ids = BTreeSet::new();
     let mut artifact_paths = BTreeSet::new();
     for artifact in &artifacts.artifacts {
@@ -299,17 +299,17 @@ fn validate_build_inputs(
             || artifact
                 .operation_identifier
                 .as_deref()
-                .zip(artifact.representation_identifier.as_deref())
-                .is_some_and(|pair| !expected_operation_representations.contains(&pair))
+                .zip(artifact.access_profile_identifier.as_deref())
+                .is_some_and(|pair| !expected_operation_access_profiles.contains(&pair))
             || artifact.operation_identifier.is_some()
-                != artifact.representation_identifier.is_some()
+                != artifact.access_profile_identifier.is_some()
         {
             return Err(PackageError::Verification);
         }
     }
     if !valid_operation_artifact_bindings(
         &artifacts.operation_bindings,
-        &expected_operation_representations,
+        &expected_operation_access_profiles,
         &artifact_paths,
     ) {
         return Err(PackageError::Verification);
@@ -552,7 +552,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
         return Err(PackageError::Verification);
     }
 
-    let expected_operation_representations = operation_representation_pairs(&registry);
+    let expected_operation_access_profiles = operation_access_profile_pairs(&registry);
     let mut artifact_ids = BTreeSet::new();
     let mut artifact_paths = BTreeSet::new();
     let mut generated_artifacts = Vec::with_capacity(manifest.artifacts.len());
@@ -567,10 +567,10 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
             || artifact
                 .operation_identifier
                 .as_deref()
-                .zip(artifact.representation_identifier.as_deref())
-                .is_some_and(|pair| !expected_operation_representations.contains(&pair))
+                .zip(artifact.access_profile_identifier.as_deref())
+                .is_some_and(|pair| !expected_operation_access_profiles.contains(&pair))
             || artifact.operation_identifier.is_some()
-                != artifact.representation_identifier.is_some()
+                != artifact.access_profile_identifier.is_some()
         {
             return Err(PackageError::Verification);
         }
@@ -597,7 +597,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
             media_type: artifact.media_type.clone(),
             visibility: artifact.visibility,
             operation_identifier: artifact.operation_identifier.clone(),
-            representation_identifier: artifact.representation_identifier.clone(),
+            access_profile_identifier: artifact.access_profile_identifier.clone(),
             sha256: artifact.sha256.clone(),
             content,
         });
@@ -609,7 +609,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
     if artifact_paths != loaded_generated_paths
         || !valid_operation_artifact_bindings(
             &manifest.operation_artifact_bindings,
-            &expected_operation_representations,
+            &expected_operation_access_profiles,
             &artifact_paths,
         )
     {
@@ -643,22 +643,22 @@ struct UnsignedManifest<'a> {
 
 fn valid_operation_artifact_bindings(
     bindings: &[OperationArtifactBindings],
-    expected_operation_representations: &BTreeSet<(&str, &str)>,
+    expected_operation_access_profiles: &BTreeSet<(&str, &str)>,
     artifact_paths: &BTreeSet<&str>,
 ) -> bool {
-    let mut bound_operation_representations = BTreeSet::new();
+    let mut bound_operation_access_profiles = BTreeSet::new();
     for binding in bindings {
         let pair = (
             binding.operation_identifier.as_str(),
-            binding.representation_identifier.as_str(),
+            binding.access_profile_identifier.as_str(),
         );
-        if !expected_operation_representations.contains(&pair)
-            || !bound_operation_representations.insert(pair)
+        if !expected_operation_access_profiles.contains(&pair)
+            || !bound_operation_access_profiles.insert(pair)
             || [
                 binding.vocabulary_path.as_str(),
                 binding.context_path.as_str(),
-                binding.representation_schema_path.as_str(),
-                binding.representation_shacl_path.as_str(),
+                binding.access_profile_schema_path.as_str(),
+                binding.access_profile_shacl_path.as_str(),
                 binding.classification_path.as_str(),
                 binding.processing_path.as_str(),
             ]
@@ -668,19 +668,19 @@ fn valid_operation_artifact_bindings(
             return false;
         }
     }
-    bound_operation_representations == *expected_operation_representations
+    bound_operation_access_profiles == *expected_operation_access_profiles
 }
 
-fn operation_representation_pairs(registry: &CompiledRegistry) -> BTreeSet<(&str, &str)> {
+fn operation_access_profile_pairs(registry: &CompiledRegistry) -> BTreeSet<(&str, &str)> {
     registry
         .resources
         .iter()
         .flat_map(|resource| resource.operations.iter())
         .flat_map(|operation| {
             operation
-                .representations
+                .access_profiles
                 .iter()
-                .map(|representation| (operation.identifier.as_str(), representation.id.as_str()))
+                .map(|access_profile| (operation.identifier.as_str(), access_profile.id.as_str()))
         })
         .collect()
 }
@@ -1083,11 +1083,11 @@ mod tests {
     }
 
     #[test]
-    fn multi_representation_package_bindings_are_exactly_closed() {
+    fn multi_access_profile_package_bindings_are_exactly_closed() {
         let yaml = crate::compiler::tests::valid_contract()
             .replace(
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
-                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n          alternate: {access: public, disclosureProfile: public}\n      list:\n        defaultRepresentation: listing\n        representations:\n          listing: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n          alternate: {access: public, disclosureProfile: public}\n      list:\n        defaultAccessProfile: listing\n        accessProfiles:\n          listing: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
             )
             .replace("operationRefs: [read]", "operationRefs: [read, list]");
         let contract = RegistryContract::parse_yaml(&yaml).expect("strict multi-profile contract");
@@ -1100,7 +1100,7 @@ mod tests {
         )
         .expect("multi-profile Registry compiles");
         let artifacts = generate_artifacts(&registry).expect("multi-profile artifacts generate");
-        let expected = operation_representation_pairs(&registry);
+        let expected = operation_access_profile_pairs(&registry);
         let artifact_paths = artifacts
             .artifacts
             .iter()
@@ -1131,17 +1131,17 @@ mod tests {
         ));
 
         let mut cross_operation = artifacts.operation_bindings.clone();
-        let listing_representation = cross_operation
+        let listing_access_profile = cross_operation
             .iter()
             .find(|binding| binding.operation_identifier.ends_with(".list"))
             .expect("list binding")
-            .representation_identifier
+            .access_profile_identifier
             .clone();
         let read_binding = cross_operation
             .iter_mut()
             .find(|binding| binding.operation_identifier.ends_with(".read"))
             .expect("read binding");
-        read_binding.representation_identifier = listing_representation;
+        read_binding.access_profile_identifier = listing_access_profile;
         assert!(!valid_operation_artifact_bindings(
             &cross_operation,
             &expected,
@@ -1387,6 +1387,14 @@ mod tests {
             manifest.operation_artifact_bindings,
             artifacts.operation_bindings
         );
+        let serialized_manifest = serde_json::to_value(&manifest).expect("manifest serializes");
+        assert!(serialized_manifest["artifacts"]
+            .as_array()
+            .expect("artifact array")
+            .iter()
+            .filter(|artifact| artifact["operationIdentifier"].is_string())
+            .all(|artifact| artifact.get("accessProfileIdentifier").is_some()
+                && artifact.get("representationIdentifier").is_none()));
 
         assert_resealed_package_rejected(
             temporary.path(),

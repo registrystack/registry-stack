@@ -171,19 +171,19 @@ fn resource_can_appear_in_metadata(resource: &ResourceDefinition, visibility: Vi
         .iter()
         .flat_map(|operation| {
             operation
-                .representations
+                .access_profiles
                 .iter()
                 .map(|(_, item)| &item.access)
         })
         .chain(resource.operations.read.iter().flat_map(|operation| {
             operation
-                .representations
+                .access_profiles
                 .iter()
                 .map(|(_, item)| &item.access)
         }))
         .chain(resource.operations.lookups.iter().flat_map(|operation| {
             operation
-                .representations
+                .access_profiles
                 .iter()
                 .map(|(_, item)| &item.access)
         }))
@@ -452,8 +452,8 @@ pub struct Operations {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ListOperation {
-    pub default_representation: String,
-    pub representations: OrderedMap<RepresentationDefinition>,
+    pub default_access_profile: String,
+    pub access_profiles: OrderedMap<AccessProfileDefinition>,
     #[serde(default)]
     pub filters: Vec<FilterDefinition>,
     pub allow_unfiltered: bool,
@@ -464,8 +464,8 @@ pub struct ListOperation {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecordOperation {
-    pub default_representation: String,
-    pub representations: OrderedMap<RepresentationDefinition>,
+    pub default_access_profile: String,
+    pub access_profiles: OrderedMap<AccessProfileDefinition>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -473,13 +473,13 @@ pub struct RecordOperation {
 pub struct LookupOperation {
     pub id: String,
     pub request_body: LookupRequestBody,
-    pub default_representation: String,
-    pub representations: OrderedMap<RepresentationDefinition>,
+    pub default_access_profile: String,
+    pub access_profiles: OrderedMap<AccessProfileDefinition>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RepresentationDefinition {
+pub struct AccessProfileDefinition {
     pub access: AccessRule,
     pub disclosure_profile: String,
 }
@@ -1019,7 +1019,7 @@ disclosureProfiles: {}
         protected_resource.id = "protected-record".into();
         protected_resource.operations.read = Some(
             serde_norway::from_str(
-                "defaultRepresentation: protected\nrepresentations:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
+                "defaultAccessProfile: protected\naccessProfiles:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
             )
             .expect("protected read operation"),
         );
@@ -1043,9 +1043,17 @@ disclosureProfiles: {}
     #[test]
     fn legacy_single_profile_operation_shape_is_not_accepted() {
         let yaml = crate::compiler::tests::valid_contract().replace(
-            "        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
             "        access: public\n        disclosureProfile: public",
         );
+        assert!(RegistryContract::parse_yaml(&yaml).is_err());
+    }
+
+    #[test]
+    fn old_representation_keys_are_rejected_without_aliases() {
+        let yaml = crate::compiler::tests::valid_contract()
+            .replace("defaultAccessProfile", "defaultRepresentation")
+            .replace("accessProfiles", "representations");
         assert!(RegistryContract::parse_yaml(&yaml).is_err());
     }
 }

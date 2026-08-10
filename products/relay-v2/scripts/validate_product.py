@@ -33,10 +33,10 @@ TRANSFORM_FAILURE_SCENARIOS = {
     "social-invalid-transform",
     "civil-invalid-transform",
 }
-REPRESENTATION_CONCEALMENT_STEPS = {
-    "social-assistance": {"unauthorized-representation", "unknown-representation"},
-    "business-registry": {"registrar-representation-denied", "public-representation-unknown"},
-    "civil-event": {"supervisory-representation-denied", "invalid-representation"},
+ACCESS_PROFILE_CONCEALMENT_STEPS = {
+    "social-assistance": {"unauthorized-access-profile", "unknown-access-profile"},
+    "business-registry": {"registrar-access-profile-denied", "public-access-profile-unknown"},
+    "civil-event": {"supervisory-access-profile-denied", "invalid-access-profile"},
 }
 SECURITY_INVARIANT_IDS = {
     "sec-contract-runtime-separation",
@@ -48,10 +48,10 @@ SECURITY_INVARIANT_IDS = {
     "sec-resource-existence-concealment",
     "sec-operation-confinement",
     "sec-classification-review-binding",
-    "sec-finite-representation-authorization",
-    "sec-public-representation-processing-floor",
+    "sec-finite-access-profile-authorization",
+    "sec-public-access-profile-processing-floor",
     "sec-closed-mask-and-date-transforms",
-    "sec-representation-state-and-metadata-binding",
+    "sec-access-profile-state-and-metadata-binding",
     "sec-operation-quota",
     "sec-trusted-context",
     "sec-disclosure-monotonic",
@@ -232,13 +232,13 @@ def validate_review_sidecar(
         errors.append(f"{project.name}: imported or manual review must not carry generated binding")
 
 
-def validate_acceptance_representation_contracts(errors: list[str]) -> None:
+def validate_acceptance_access_profile_contracts(errors: list[str]) -> None:
     expected_methods = {
         "social-assistance": "generated",
         "business-registry": "imported",
         "civil-event": "manual",
     }
-    expected_representations = {
+    expected_access_profiles = {
         "social-assistance": {"limited", "caseworker"},
         "business-registry": {"public-register", "registrar"},
         "civil-event": {"registrar", "supervisory"},
@@ -249,7 +249,7 @@ def validate_acceptance_representation_contracts(errors: list[str]) -> None:
         validate_review_sidecar(project, registry, expected_methods[project_name], errors)
         resources = sequence(registry.get("resources"), f"{project_name} resources", errors)
         operations = mapping(resources[0].get("operations") if resources else None, f"{project_name} operations", errors)
-        representations: set[str] = set()
+        access_profiles: set[str] = set()
         operation_definitions = [operations.get("list"), operations.get("read")] + list(
             operations.get("lookups", []) if isinstance(operations.get("lookups"), list) else []
         )
@@ -257,26 +257,36 @@ def validate_acceptance_representation_contracts(errors: list[str]) -> None:
             if operation is None:
                 continue
             operation = mapping(operation, f"{project_name} operation[{index}]", errors)
-            profiles = mapping(operation.get("representations"), f"{project_name} operation[{index}] representations", errors)
-            default = operation.get("defaultRepresentation")
+            profiles = mapping(
+                operation.get("accessProfiles"),
+                f"{project_name} operation[{index}] access profiles",
+                errors,
+            )
+            default = operation.get("defaultAccessProfile")
             if not isinstance(default, str) or default not in profiles or not profiles:
-                errors.append(f"{project_name}: every declared operation needs one declared default representation")
-            for identifier, representation in profiles.items():
-                representations.add(identifier)
-                representation = mapping(representation, f"{project_name} representation {identifier}", errors)
-                require_exact_keys(
-                    representation,
-                    {"access", "disclosureProfile"},
-                    f"{project_name} representation {identifier}",
+                errors.append(
+                    f"{project_name}: every declared operation needs one declared default access profile"
+                )
+            for identifier, access_profile in profiles.items():
+                access_profiles.add(identifier)
+                access_profile = mapping(
+                    access_profile,
+                    f"{project_name} access profile {identifier}",
                     errors,
                 )
-        if not expected_representations[project_name].issubset(representations):
-            errors.append(f"{project_name}: required acceptance representations are missing")
+                require_exact_keys(
+                    access_profile,
+                    {"access", "disclosureProfile"},
+                    f"{project_name} access profile {identifier}",
+                    errors,
+                )
+        if not expected_access_profiles[project_name].issubset(access_profiles):
+            errors.append(f"{project_name}: required acceptance access profiles are missing")
         if project_name == "social-assistance":
             properties = resources[0].get("properties", {}) if resources else {}
             transform = mapping(properties.get("maskedEnrolmentReference", {}).get("transform"), "social partial-string transform", errors)
             if transform != {"kind": "partial-string", "reveal": "suffix", "characters": 4}:
-                errors.append("social-assistance: limited representation must use the frozen partial-string transform")
+                errors.append("social-assistance: limited access profile must use the frozen partial-string transform")
             runtime = mapping(
                 load_yaml(project / "runtime.yaml"), "social-assistance runtime", errors
             )
@@ -290,7 +300,7 @@ def validate_acceptance_representation_contracts(errors: list[str]) -> None:
             properties = resources[0].get("properties", {}) if resources else {}
             transform = mapping(properties.get("registrationYear", {}).get("transform"), "civil date-precision transform", errors)
             if transform != {"kind": "date-precision", "sourceType": "date", "precision": "year"}:
-                errors.append("civil-event: supervisory representation must use the frozen date-precision transform")
+                errors.append("civil-event: supervisory access profile must use the frozen date-precision transform")
             if operations.get("list") is not None:
                 errors.append("civil-event: collection list remains out of scope")
             runtime = mapping(
@@ -305,7 +315,7 @@ def validate_acceptance_representation_contracts(errors: list[str]) -> None:
 
 
 def validate_catalogs(errors: list[str]) -> None:
-    validate_acceptance_representation_contracts(errors)
+    validate_acceptance_access_profile_contracts(errors)
     layout = mapping(
         load_yaml(PRODUCT_ROOT / "contracts/package-layout.yaml"), "package layout", errors
     )
@@ -375,8 +385,8 @@ def validate_catalogs(errors: list[str]) -> None:
     for required in {
         "openapi-full",
         "openapi-public",
-        "representation-schema",
-        "representation-shacl",
+        "access-profile-schema",
+        "access-profile-shacl",
         "full-record-schema",
         "full-record-shacl",
         "semantic-model",
@@ -387,7 +397,7 @@ def validate_catalogs(errors: list[str]) -> None:
         "audit-event-schema",
         "identification-report",
         "classification-inventory",
-        "representation-report",
+        "access-profile-report",
         "contextual-review-findings",
         "classification-review",
     }:
@@ -395,11 +405,11 @@ def validate_catalogs(errors: list[str]) -> None:
             errors.append(f"artifact inventory: missing {required}")
 
     steps = journey_steps(errors)
-    for project, concealed_steps in REPRESENTATION_CONCEALMENT_STEPS.items():
+    for project, concealed_steps in ACCESS_PROFILE_CONCEALMENT_STEPS.items():
         for step in concealed_steps:
             if steps.get(project, {}).get(step) != (404, "resource.not_found"):
                 errors.append(
-                    f"{project}: {step} must conceal representation existence as 404 resource.not_found"
+                    f"{project}: {step} must conceal access-profile existence as 404 resource.not_found"
                 )
     scenarios = mapping(
         load_yaml(PRODUCT_ROOT / "contracts/acceptance-scenario-matrix.yaml"),

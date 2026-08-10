@@ -251,14 +251,14 @@ pub struct CompiledOperation {
     pub family: CapabilityFamily,
     pub pattern: ConsultationPattern,
     pub kind: OperationKind,
-    pub default_representation: String,
-    pub representations: Vec<CompiledRepresentation>,
+    pub default_access_profile: String,
+    pub access_profiles: Vec<CompiledAccessProfile>,
     pub query: QueryPlan,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct CompiledRepresentation {
+pub struct CompiledAccessProfile {
     pub id: String,
     pub access: CompiledAccess,
     pub disclosure_profile: String,

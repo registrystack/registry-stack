@@ -95,7 +95,7 @@ pub fn json_ld_context(
     json!({"@context": context})
 }
 
-pub fn representation_schema(
+pub fn access_profile_schema(
     registry: &CompiledRegistry,
     resource: &CompiledResource,
     selected: &[String],
@@ -190,7 +190,7 @@ fn record_schema(
     })
 }
 
-pub fn representation_shacl(
+pub fn access_profile_shacl(
     registry: &CompiledRegistry,
     resource: &CompiledResource,
     selected: &[String],

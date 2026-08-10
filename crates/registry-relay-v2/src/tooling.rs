@@ -34,12 +34,12 @@ use crate::fixtures::{
     execute_fixture_journey, fixture_authenticator, parse_journey, FixturePlanReport,
 };
 use crate::identification::{
-    classification_inventory_report, classification_review_starter, contextual_review_findings,
-    identify_contract, render_classification_inventory_report, render_classification_review_yaml,
-    render_contextual_review_findings, render_identification_report, render_representation_report,
-    representation_report, CLASSIFICATION_INVENTORY_REPORT_PATH,
-    CLASSIFICATION_REVIEW_STARTER_PATH, CONTEXTUAL_REVIEW_FINDINGS_PATH,
-    IDENTIFICATION_REPORT_PATH, REPRESENTATION_REPORT_PATH,
+    access_profile_report, classification_inventory_report, classification_review_starter,
+    contextual_review_findings, identify_contract, render_access_profile_report,
+    render_classification_inventory_report, render_classification_review_yaml,
+    render_contextual_review_findings, render_identification_report, ACCESS_PROFILE_REPORT_PATH,
+    CLASSIFICATION_INVENTORY_REPORT_PATH, CLASSIFICATION_REVIEW_STARTER_PATH,
+    CONTEXTUAL_REVIEW_FINDINGS_PATH, IDENTIFICATION_REPORT_PATH,
 };
 use crate::model::{
     CompileProfile, CompileReport, CompiledRegistry, Diagnostic, DiagnosticSeverity,
@@ -458,7 +458,7 @@ pub fn generate_project(options: &GenerateOptions) -> Result<ToolingReport, Tool
         identify_contract(&contract, &observed).map_err(|_| ToolingError::Generate)?;
     let inventory = classification_inventory_report(&registry, &classification_digest)
         .map_err(|_| ToolingError::Generate)?;
-    let representations = representation_report(&registry, &classification_digest)
+    let access_profiles = access_profile_report(&registry, &classification_digest)
         .map_err(|_| ToolingError::Generate)?;
     let findings = contextual_review_findings(&registry, &classification_digest)
         .map_err(|_| ToolingError::Generate)?;
@@ -477,9 +477,9 @@ pub fn generate_project(options: &GenerateOptions) -> Result<ToolingReport, Tool
                 .map_err(|_| ToolingError::Generate)?,
         ),
         (
-            "representation-report",
-            REPRESENTATION_REPORT_PATH,
-            render_representation_report(&representations).map_err(|_| ToolingError::Generate)?,
+            "access-profile-report",
+            ACCESS_PROFILE_REPORT_PATH,
+            render_access_profile_report(&access_profiles).map_err(|_| ToolingError::Generate)?,
         ),
         (
             "contextual-review-findings",
@@ -967,19 +967,19 @@ fn validate_runtime(
             .iter()
             .flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             })
             .chain(resource.operations.read.iter().flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             }))
             .chain(resource.operations.lookups.iter().flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
                     .map(|(_, item)| &item.access)
             }))
@@ -1185,8 +1185,8 @@ resources:
     disclosureProfiles: {default: {properties: [recordValue]}}
     operations:
       read:
-        defaultRepresentation: default
-        representations:
+        defaultAccessProfile: default
+        accessProfiles:
           default: {access: {scope: "registry:record:read"}, disclosureProfile: default}
     processingDescriptions:
       - {id: consultation, operationRefs: [read], purpose: reviewed-consultation, recipientClass: authorized-client, legalBasisRef: governance/legal-basis.yaml, dpvProfileRef: governance/processing.dpv.yaml, safeguards: [property-minimization]}
@@ -1356,7 +1356,7 @@ mod tests {
             RegistryContract::parse_yaml(compiler_tests::valid_contract()).expect("contract");
         lookup_contract.resources[0].operations.lookups.push(
             serde_norway::from_str(
-                "id: by-name\nrequestBody:\n  maximumBytes: 128\n  selectors:\n    name: {sourceColumn: name, type: string, minimumBytes: 1, maximumBytes: 32}\ndefaultRepresentation: public\nrepresentations:\n  public: {access: public, disclosureProfile: public}\n",
+                "id: by-name\nrequestBody:\n  maximumBytes: 128\n  selectors:\n    name: {sourceColumn: name, type: string, minimumBytes: 1, maximumBytes: 32}\ndefaultAccessProfile: public\naccessProfiles:\n  public: {access: public, disclosureProfile: public}\n",
             )
             .expect("lookup parses"),
         );
@@ -1388,7 +1388,7 @@ mod tests {
         metadata_contract.metadata_visibility.resources = crate::contract::Visibility::Public;
         metadata_contract.resources[1].operations.read = Some(
             serde_norway::from_str(
-                "defaultRepresentation: protected\nrepresentations:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
+                "defaultAccessProfile: protected\naccessProfiles:\n  protected: {access: {scope: 'registry:record:read'}, disclosureProfile: public}\n",
             )
             .expect("protected read operation"),
         );

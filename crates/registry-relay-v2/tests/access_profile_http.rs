@@ -25,11 +25,11 @@ use registry_relay_v2::contract::{
 };
 use registry_relay_v2::cursor::CursorKey;
 use registry_relay_v2::model::{
-    CapabilityFamily, CompiledAccess, CompiledCodelist, CompiledDisclosureProfile,
-    CompiledMetadataVisibility, CompiledOperation, CompiledPagination, CompiledProperty,
-    CompiledPurpose, CompiledRecordContext, CompiledRegistry, CompiledRepresentation,
-    CompiledResource, CompiledRowBinding, CompiledSelector, CompiledSource, CompiledTransform,
-    ConsultationPattern, EffectiveClassification, OperationKind, QueryPlan, RowAuthoritySource,
+    CapabilityFamily, CompiledAccess, CompiledAccessProfile, CompiledCodelist,
+    CompiledDisclosureProfile, CompiledMetadataVisibility, CompiledOperation, CompiledPagination,
+    CompiledProperty, CompiledPurpose, CompiledRecordContext, CompiledRegistry, CompiledResource,
+    CompiledRowBinding, CompiledSelector, CompiledSource, CompiledTransform, ConsultationPattern,
+    EffectiveClassification, OperationKind, QueryPlan, RowAuthoritySource,
 };
 use registry_relay_v2::server::{
     router, InstitutionMetadata, QuotaConfig, RelayService, ServiceMetadata,
@@ -41,7 +41,8 @@ use tower::ServiceExt as _;
 
 const SOURCE: &str = "source";
 const RESOURCE: &str = "record";
-const AUDIENCE: &str = "urn:example:relay:representations";
+const AUDIENCE: &str = "urn:example:relay:access-profiles";
+const ENCODED_REPRESENTATION_SELECTOR: &str = "%72%65%70%72%65%73%65%6e%74%61%74%69%6f%6e=limited";
 
 const FIXTURE_SQL: &str = r#"
 CREATE TABLE source_records (
@@ -244,7 +245,7 @@ impl Harness {
                     name: "Example Authority".into(),
                 },
                 operator: None,
-                authoritative_scope: "Synthetic representation tests".into(),
+                authoritative_scope: "Synthetic access profile tests".into(),
                 alignment_targets: Vec::new(),
             },
         ));
@@ -332,7 +333,7 @@ impl Harness {
 }
 
 #[tokio::test]
-async fn representation_selection_authenticates_then_authorizes_the_exact_profile() {
+async fn access_profile_selection_authenticates_then_authorizes_the_exact_profile() {
     let sink = Arc::new(RecordingSink::default());
     let harness = Harness::open(None, Arc::clone(&sink)).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
@@ -340,7 +341,7 @@ async fn representation_selection_authenticates_then_authorizes_the_exact_profil
     let (status, _, body) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=missing",
+            "/v2/resources/record/records/record-1?accessProfile=missing",
             Some("not-a-jwt"),
             None,
             &[],
@@ -353,7 +354,7 @@ async fn representation_selection_authenticates_then_authorizes_the_exact_profil
         "auth.invalid_credential",
     );
 
-    for (token, representation, expected_status, expected_code) in [
+    for (token, access_profile, expected_status, expected_code) in [
         (
             None,
             "caseworker",
@@ -374,7 +375,7 @@ async fn representation_selection_authenticates_then_authorizes_the_exact_profil
             "resource.not_found",
         ),
     ] {
-        let uri = format!("/v2/resources/record/records/record-1?representation={representation}");
+        let uri = format!("/v2/resources/record/records/record-1?accessProfile={access_profile}");
         let (status, _, body) = harness.send(Method::GET, &uri, token, None, &[]).await;
         assert_problem(status, &body, expected_status, expected_code);
     }
@@ -383,11 +384,11 @@ async fn representation_selection_authenticates_then_authorizes_the_exact_profil
     assert!(records.iter().all(|event| event["phase"] == "refusal"));
     assert!(records
         .iter()
-        .all(|event| event.get("representation").is_none()));
+        .all(|event| event.get("accessProfile").is_none()));
     assert_eq!(
         records
             .iter()
-            .filter(|event| event.get("representation").is_none())
+            .filter(|event| event.get("accessProfile").is_none())
             .count(),
         5
     );
@@ -396,25 +397,25 @@ async fn representation_selection_authenticates_then_authorizes_the_exact_profil
 }
 
 #[tokio::test]
-async fn anonymous_explicit_protected_representation_conceals_known_and_unknown_routes() {
+async fn anonymous_explicit_protected_access_profile_conceals_known_and_unknown_routes() {
     let sink = Arc::new(RecordingSink::default());
     let harness = Harness::open(None, Arc::clone(&sink)).await;
 
     for (method, known, unknown) in [
         (
             Method::GET,
-            "/v2/resources/record/records?representation=caseworker",
-            "/v2/resources/unknown/records?representation=caseworker",
+            "/v2/resources/record/records?accessProfile=caseworker",
+            "/v2/resources/unknown/records?accessProfile=caseworker",
         ),
         (
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=caseworker",
-            "/v2/resources/unknown/records/record-1?representation=caseworker",
+            "/v2/resources/record/records/record-1?accessProfile=caseworker",
+            "/v2/resources/unknown/records/record-1?accessProfile=caseworker",
         ),
         (
             Method::POST,
-            "/v2/resources/record/lookups/by-key?representation=caseworker",
-            "/v2/resources/unknown/lookups/by-key?representation=caseworker",
+            "/v2/resources/record/lookups/by-key?accessProfile=caseworker",
+            "/v2/resources/unknown/lookups/by-key?accessProfile=caseworker",
         ),
     ] {
         let mut normalized = None;
@@ -443,7 +444,7 @@ async fn anonymous_explicit_protected_representation_conceals_known_and_unknown_
             && event["principalKind"] == "anonymous"
             && event.get("resourceIdentifier").is_none()
             && event.get("operationIdentifier").is_none()
-            && event.get("representation").is_none()
+            && event.get("accessProfile").is_none()
     }));
     assert!(!serde_json::to_string(&records)
         .expect("audit serializes")
@@ -451,7 +452,7 @@ async fn anonymous_explicit_protected_representation_conceals_known_and_unknown_
 }
 
 #[tokio::test]
-async fn malformed_explicit_representation_is_identical_for_known_and_unknown_routes() {
+async fn malformed_explicit_access_profile_is_identical_for_known_and_unknown_routes() {
     let sink = Arc::new(RecordingSink::default());
     let harness = Harness::open(None, Arc::clone(&sink)).await;
 
@@ -473,10 +474,10 @@ async fn malformed_explicit_representation_is_identical_for_known_and_unknown_ro
         ),
     ] {
         for selector in [
-            "representation=",
-            "representation=limited&representation=caseworker",
-            "representation=%GG",
-            "representation=Caseworker",
+            "accessProfile=",
+            "accessProfile=limited&accessProfile=caseworker",
+            "accessProfile=%GG",
+            "accessProfile=Caseworker",
         ] {
             let mut normalized = None;
             for route in [known, unknown] {
@@ -486,7 +487,7 @@ async fn malformed_explicit_representation_is_identical_for_known_and_unknown_ro
                     status,
                     &body,
                     StatusCode::BAD_REQUEST,
-                    "request.representation_invalid",
+                    "request.access_profile_invalid",
                 );
                 let document = problem_without_trace(&body);
                 if let Some(expected) = &normalized {
@@ -506,7 +507,7 @@ async fn malformed_explicit_representation_is_identical_for_known_and_unknown_ro
         assert_eq!(event["principalKind"], "anonymous");
         assert!(event.get("resourceIdentifier").is_none());
         assert!(event.get("operationIdentifier").is_none());
-        assert!(event.get("representation").is_none());
+        assert!(event.get("accessProfile").is_none());
     }
     let audit_wire = serde_json::to_string(&records).expect("audit serializes");
     for rejected in ["caseworker", "%GG", "Caseworker"] {
@@ -515,7 +516,63 @@ async fn malformed_explicit_representation_is_identical_for_known_and_unknown_ro
 }
 
 #[tokio::test]
-async fn unknown_route_representation_preflight_preserves_authentication_precedence() {
+async fn retired_representation_selector_is_invalid_for_every_data_route() {
+    let sink = Arc::new(RecordingSink::default());
+    let harness = Harness::open(None, Arc::clone(&sink)).await;
+
+    for (method, known, unknown) in [
+        (
+            Method::GET,
+            "/v2/resources/record/records",
+            "/v2/resources/unknown/records",
+        ),
+        (
+            Method::GET,
+            "/v2/resources/record/records/record-1",
+            "/v2/resources/unknown/records/record-1",
+        ),
+        (
+            Method::POST,
+            "/v2/resources/record/lookups/by-key",
+            "/v2/resources/unknown/lookups/by-key",
+        ),
+    ] {
+        for selector in ["representation=limited", ENCODED_REPRESENTATION_SELECTOR] {
+            let mut normalized = None;
+            for route in [known, unknown] {
+                let uri = format!("{route}?{selector}");
+                let (status, _, body) = harness.send(method.clone(), &uri, None, None, &[]).await;
+                assert_problem(
+                    status,
+                    &body,
+                    StatusCode::BAD_REQUEST,
+                    "request.access_profile_invalid",
+                );
+                let document = problem_without_trace(&body);
+                if let Some(expected) = &normalized {
+                    assert_eq!(&document, expected);
+                } else {
+                    normalized = Some(document);
+                }
+            }
+        }
+    }
+
+    let records = sink.values();
+    assert_eq!(records.len(), 12);
+    assert!(records.iter().all(|event| {
+        event["phase"] == "refusal"
+            && event["outcome"] == "invalid-request"
+            && event.get("accessProfile").is_none()
+    }));
+    assert!(!records.iter().any(|event| event["phase"] == "attempt"));
+    let audit_wire = serde_json::to_string(&records).expect("audit serializes");
+    assert!(!audit_wire.contains("representation"));
+    assert!(!audit_wire.contains("limited"));
+}
+
+#[tokio::test]
+async fn unknown_route_access_profile_preflight_preserves_authentication_precedence() {
     let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
 
     for (method, known, unknown) in [
@@ -543,30 +600,36 @@ async fn unknown_route_representation_preflight_preserves_authentication_precede
             "auth.missing_credential",
         );
 
-        for route in [known, unknown] {
-            let uri = format!("{route}?representation=%GG");
-            let (status, _, body) = harness
-                .send(method.clone(), &uri, Some("not-a-jwt"), None, &[])
-                .await;
-            assert_problem(
-                status,
-                &body,
-                StatusCode::UNAUTHORIZED,
-                "auth.invalid_credential",
-            );
+        for selector in [
+            "accessProfile=%GG",
+            "representation=limited",
+            ENCODED_REPRESENTATION_SELECTOR,
+        ] {
+            for route in [known, unknown] {
+                let uri = format!("{route}?{selector}");
+                let (status, _, body) = harness
+                    .send(method.clone(), &uri, Some("not-a-jwt"), None, &[])
+                    .await;
+                assert_problem(
+                    status,
+                    &body,
+                    StatusCode::UNAUTHORIZED,
+                    "auth.invalid_credential",
+                );
+            }
         }
     }
 }
 
 #[tokio::test]
-async fn oversized_uri_still_conceals_exact_representation_authorization() {
+async fn oversized_uri_still_conceals_exact_access_profile_authorization() {
     let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
     let padding = "x".repeat(20_000);
 
-    for representation in ["caseworker", "missing"] {
+    for access_profile in ["caseworker", "missing"] {
         let uri = format!(
-            "/v2/resources/record/records/record-1?representation={representation}&padding={padding}"
+            "/v2/resources/record/records/record-1?accessProfile={access_profile}&padding={padding}"
         );
         let (status, _, body) = harness
             .send(Method::GET, &uri, Some(&limited), None, &[])
@@ -576,7 +639,7 @@ async fn oversized_uri_still_conceals_exact_representation_authorization() {
 }
 
 #[tokio::test]
-async fn oversized_unknown_route_preserves_representation_preflight_ordering() {
+async fn oversized_unknown_route_preserves_access_profile_preflight_ordering() {
     let sink = Arc::new(RecordingSink::default());
     let harness = Harness::open(None, Arc::clone(&sink)).await;
     let padding = "x".repeat(20_000);
@@ -600,7 +663,7 @@ async fn oversized_unknown_route_preserves_representation_preflight_ordering() {
     ] {
         let mut normalized = None;
         for route in [known, unknown] {
-            let uri = format!("{route}?padding={padding}&representation=caseworker");
+            let uri = format!("{route}?padding={padding}&accessProfile=caseworker");
             let (status, _, body) = harness.send(method.clone(), &uri, None, None, &[]).await;
             assert_problem(status, &body, StatusCode::NOT_FOUND, "resource.not_found");
             let document = problem_without_trace(&body);
@@ -611,7 +674,12 @@ async fn oversized_unknown_route_preserves_representation_preflight_ordering() {
             }
         }
 
-        for selector in ["representation=", "representation=%GG"] {
+        for selector in [
+            "accessProfile=",
+            "accessProfile=%GG",
+            "representation=limited",
+            ENCODED_REPRESENTATION_SELECTOR,
+        ] {
             let mut normalized = None;
             for route in [known, unknown] {
                 let uri = format!("{route}?padding={padding}&{selector}");
@@ -620,7 +688,7 @@ async fn oversized_unknown_route_preserves_representation_preflight_ordering() {
                     status,
                     &body,
                     StatusCode::BAD_REQUEST,
-                    "request.representation_invalid",
+                    "request.access_profile_invalid",
                 );
                 let document = problem_without_trace(&body);
                 if let Some(expected) = &normalized {
@@ -641,7 +709,7 @@ async fn oversized_unknown_route_preserves_representation_preflight_ordering() {
         );
 
         for route in [known, unknown] {
-            let uri = format!("{route}?padding={padding}&representation=%GG");
+            let uri = format!("{route}?padding={padding}&accessProfile=%GG");
             let (status, _, body) = harness
                 .send(method.clone(), &uri, Some("not-a-jwt"), None, &[])
                 .await;
@@ -655,7 +723,7 @@ async fn oversized_unknown_route_preserves_representation_preflight_ordering() {
     }
 
     let records = sink.values();
-    assert_eq!(records.len(), 27);
+    assert_eq!(records.len(), 39);
     let audit_wire = serde_json::to_string(&records).expect("audit serializes");
     assert!(!audit_wire.contains(&padding));
     assert!(!audit_wire.contains("caseworker"));
@@ -672,24 +740,34 @@ async fn preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_sourc
         .expect("test source moves after runtime open");
     for (uri, expected_status, code) in [
         (
-            "/v2/resources/record/records?representation=",
+            "/v2/resources/record/records?accessProfile=",
             StatusCode::BAD_REQUEST,
-            "request.representation_invalid",
+            "request.access_profile_invalid",
         ),
         (
-            "/v2/resources/record/records?representation=limited&representation=caseworker",
+            "/v2/resources/record/records?accessProfile=limited&accessProfile=caseworker",
             StatusCode::BAD_REQUEST,
-            "request.representation_invalid",
+            "request.access_profile_invalid",
         ),
         (
-            "/v2/resources/record/records?representation=missing",
+            "/v2/resources/record/records?accessProfile=missing",
             StatusCode::NOT_FOUND,
             "resource.not_found",
         ),
         (
-            "/v2/resources/record/records?representation=limited&fields=secretValue",
+            "/v2/resources/record/records?accessProfile=limited&fields=secretValue",
             StatusCode::BAD_REQUEST,
             "request.fields_invalid",
+        ),
+        (
+            "/v2/resources/record/records?representation=limited",
+            StatusCode::BAD_REQUEST,
+            "request.access_profile_invalid",
+        ),
+        (
+            "/v2/resources/record/records?%72%65%70%72%65%73%65%6e%74%61%74%69%6f%6e=limited",
+            StatusCode::BAD_REQUEST,
+            "request.access_profile_invalid",
         ),
     ] {
         let (status, _, body) = harness
@@ -709,7 +787,7 @@ async fn preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_sourc
     let (status, _, body) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=limited",
+            "/v2/resources/record/records/record-1?accessProfile=limited",
             Some(&limited),
             None,
             &[],
@@ -733,13 +811,13 @@ async fn preflight_refusals_do_not_reach_source_and_attempt_audit_precedes_sourc
 }
 
 #[tokio::test]
-async fn fields_only_minimize_the_selected_representation() {
+async fn fields_only_minimize_the_selected_access_profile() {
     let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
     let limited = harness.token(&["registry:limited"], "review", "area-a");
     let (status, _, body) = harness
         .send(
             Method::POST,
-            "/v2/resources/record/lookups/by-key?representation=limited&fields=maskedSecret",
+            "/v2/resources/record/lookups/by-key?accessProfile=limited&fields=maskedSecret",
             Some(&limited),
             Some(json!({"selectors": {"lookupKey": "lookup-2"}})),
             &[],
@@ -751,13 +829,13 @@ async fn fields_only_minimize_the_selected_representation() {
         document["data"]["domainData"],
         json!({"maskedSecret": "***CDEF"})
     );
-    assert_eq!(document["meta"]["representation"], "limited");
+    assert_eq!(document["meta"]["accessProfile"], "limited");
     assert_eq!(document["meta"]["selectedFields"], json!(["maskedSecret"]));
 
     let (status, _, body) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=limited&fields=secretValue",
+            "/v2/resources/record/records/record-1?accessProfile=limited&fields=secretValue",
             Some(&limited),
             None,
             &[],
@@ -772,7 +850,7 @@ async fn fields_only_minimize_the_selected_representation() {
 }
 
 #[tokio::test]
-async fn cursor_and_etag_are_bound_to_selected_representation() {
+async fn cursor_and_etag_are_bound_to_selected_access_profile() {
     let sink = Arc::new(RecordingSink::default());
     let valid_core_fixture = FIXTURE_SQL.replace("'not-a-core-date'", "'2026-08-01T12:00:00Z'");
     assert_ne!(valid_core_fixture, FIXTURE_SQL);
@@ -800,7 +878,7 @@ async fn cursor_and_etag_are_bound_to_selected_representation() {
     let (status, headers, _) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=public",
+            "/v2/resources/record/records/record-1?accessProfile=public",
             None,
             None,
             &[(IF_NONE_MATCH.as_str(), &etag)],
@@ -865,7 +943,7 @@ async fn cursor_and_etag_are_bound_to_selected_representation() {
     let (status, headers, body) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records?representation=limited&pageSize=1",
+            "/v2/resources/record/records?accessProfile=limited&pageSize=1",
             Some(&all),
             None,
             &[],
@@ -883,7 +961,7 @@ async fn cursor_and_etag_are_bound_to_selected_representation() {
     let cursor = document["pageInfo"]["nextCursor"]
         .as_str()
         .expect("limited cursor");
-    let uri = format!("/v2/resources/record/records?representation=caseworker&cursor={cursor}");
+    let uri = format!("/v2/resources/record/records?accessProfile=caseworker&cursor={cursor}");
     let (status, _, body) = harness.send(Method::GET, &uri, Some(&all), None, &[]).await;
     assert_problem(
         status,
@@ -998,7 +1076,7 @@ async fn accept_negotiation_uses_quality_and_json_tie_break_without_leaking_valu
         status,
         &read_body,
         StatusCode::NOT_ACCEPTABLE,
-        "representation.unsupported",
+        "format.unsupported",
     );
     let records = sink.values();
     assert_eq!(records.last().expect("refusal exists")["phase"], "refusal");
@@ -1112,7 +1190,7 @@ async fn duplicate_identifier_fails_read_and_page_boundary_but_lookup_stays_unre
 }
 
 #[tokio::test]
-async fn metadata_and_artifacts_authorize_each_representation_exactly() {
+async fn metadata_and_artifacts_authorize_each_access_profile_exactly() {
     let harness = Harness::open(None, Arc::new(RecordingSink::default())).await;
     let (status, _, body) = harness.send(Method::GET, "/v2", None, None, &[]).await;
     assert_eq!(status, StatusCode::OK);
@@ -1125,8 +1203,8 @@ async fn metadata_and_artifacts_authorize_each_representation_exactly() {
         .artifacts
         .artifacts
         .iter()
-        .find(|artifact| artifact.representation_identifier.as_deref() == Some("limited"))
-        .expect("limited representation artifact");
+        .find(|artifact| artifact.access_profile_identifier.as_deref() == Some("limited"))
+        .expect("limited access profile artifact");
     let path = format!("/v2/artifacts/{}", limited_artifact.id);
     let caseworker = harness.token(&["registry:caseworker"], "review", "area-a");
     let (status, _, _) = harness
@@ -1213,7 +1291,7 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
     let (status, _, body) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=limited",
+            "/v2/resources/record/records/record-1?accessProfile=limited",
             Some(&limited),
             None,
             &[],
@@ -1235,7 +1313,7 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
     assert_eq!(correlated.len(), 2);
     assert_eq!(correlated[0]["operationId"], correlated[1]["operationId"]);
     for record in &correlated {
-        assert_eq!(record["representation"], "limited");
+        assert_eq!(record["accessProfile"], "limited");
         assert_eq!(record["disclosureProfile"], "limited-disclosure");
         assert_eq!(record["processingHandling"], "restricted");
         assert_eq!(record["disclosureHandling"], "confidential");
@@ -1266,7 +1344,7 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
         "record-overlong-secret",
         "record-overlong-date",
     ] {
-        let uri = format!("/v2/resources/record/records/{record}?representation=limited");
+        let uri = format!("/v2/resources/record/records/{record}?accessProfile=limited");
         let (status, _, body) = harness
             .send(Method::GET, &uri, Some(&limited), None, &[])
             .await;
@@ -1285,7 +1363,7 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
     let (status, _, body) = harness
         .send(
             Method::POST,
-            "/v2/resources/record/lookups/by-key?representation=limited",
+            "/v2/resources/record/lookups/by-key?accessProfile=limited",
             Some(&limited),
             Some(json!({"selectors": {"lookupKey": "lookup-3"}})),
             &[],
@@ -1306,7 +1384,7 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
     let (status, _, body) = failing
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-2?representation=limited",
+            "/v2/resources/record/records/record-2?accessProfile=limited",
             Some(&token),
             None,
             &[],
@@ -1324,7 +1402,7 @@ async fn transforms_are_bounded_value_free_and_terminal_audit_gates_exact_bytes(
 }
 
 #[tokio::test]
-async fn quotas_remain_operation_scoped_across_representations() {
+async fn quotas_remain_operation_scoped_across_access_profiles() {
     let harness = Harness::open(
         Some(QuotaConfig {
             requests_per_minute: 1,
@@ -1341,7 +1419,7 @@ async fn quotas_remain_operation_scoped_across_representations() {
     let (status, _, _) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=public",
+            "/v2/resources/record/records/record-1?accessProfile=public",
             None,
             None,
             &[],
@@ -1351,7 +1429,7 @@ async fn quotas_remain_operation_scoped_across_representations() {
     let (status, _, body) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=caseworker",
+            "/v2/resources/record/records/record-1?accessProfile=caseworker",
             Some(&all),
             None,
             &[],
@@ -1367,7 +1445,7 @@ async fn quotas_remain_operation_scoped_across_representations() {
     let (status, _, body) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=public",
+            "/v2/resources/record/records/record-1?accessProfile=public",
             None,
             None,
             &[],
@@ -1383,7 +1461,7 @@ async fn quotas_remain_operation_scoped_across_representations() {
     let (status, _, body) = harness
         .send(
             Method::GET,
-            "/v2/resources/record/records/record-1?representation=caseworker",
+            "/v2/resources/record/records/record-1?accessProfile=caseworker",
             Some(&all),
             None,
             &[],
@@ -1424,7 +1502,7 @@ fn problem_without_trace(body: &[u8]) -> Value {
 
 fn compiled_registry(fingerprint: String) -> CompiledRegistry {
     let core_columns = ["record_id", "revision", "lifecycle", "recorded_at"];
-    let public = representation(
+    let public = access_profile(
         "public",
         CompiledAccess::Public,
         "public-disclosure",
@@ -1448,7 +1526,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             source_column: "authority".into(),
         }),
     };
-    let limited = representation(
+    let limited = access_profile(
         "limited",
         protected_access("registry:limited"),
         "limited-disclosure",
@@ -1465,7 +1543,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
             "maskedOptional=partial-string:suffix:4",
         ],
     );
-    let caseworker = representation(
+    let caseworker = access_profile(
         "caseworker",
         protected_access("registry:caseworker"),
         "caseworker-disclosure",
@@ -1478,14 +1556,14 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
         Handling::Restricted,
         &[],
     );
-    let representations = vec![public.clone(), limited.clone(), caseworker.clone()];
+    let access_profiles = vec![public.clone(), limited.clone(), caseworker.clone()];
     let list = CompiledOperation {
         identifier: "record.list".into(),
         family: CapabilityFamily::Consultation,
         pattern: ConsultationPattern::List,
         kind: OperationKind::List,
-        default_representation: "public".into(),
-        representations: representations.clone(),
+        default_access_profile: "public".into(),
+        access_profiles: access_profiles.clone(),
         query: QueryPlan {
             source: SOURCE.into(),
             view: "relay_records".into(),
@@ -1505,8 +1583,8 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
         family: CapabilityFamily::Consultation,
         pattern: ConsultationPattern::Retrieve,
         kind: OperationKind::Read,
-        default_representation: "public".into(),
-        representations: representations.clone(),
+        default_access_profile: "public".into(),
+        access_profiles: access_profiles.clone(),
         query: QueryPlan {
             source: SOURCE.into(),
             view: "relay_records".into(),
@@ -1525,8 +1603,8 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
         kind: OperationKind::Lookup {
             name: "by-key".into(),
         },
-        default_representation: "public".into(),
-        representations,
+        default_access_profile: "public".into(),
+        access_profiles,
         query: QueryPlan {
             source: SOURCE.into(),
             view: "relay_records".into(),
@@ -1547,15 +1625,15 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
     };
     CompiledRegistry {
         contract_revision: "sha256:contract".into(),
-        contract_id: "representation-tests".into(),
+        contract_id: "access-profile-tests".into(),
         contract_version: "1".into(),
-        registry_identifier: "urn:example:registry:representations".into(),
-        registry_name: "Representation test Registry".into(),
+        registry_identifier: "urn:example:registry:access-profiles".into(),
+        registry_name: "Access profile test Registry".into(),
         authority_identifier: "urn:example:authority".into(),
         authority_name: "Example Authority".into(),
         operator_identifier: None,
         operator_name: None,
-        authoritative_scope: "Synthetic representation tests".into(),
+        authoritative_scope: "Synthetic access profile tests".into(),
         base_uri: "https://registry.example.invalid/".into(),
         identifier_lifecycle_policy_ref: "governance/lifecycle.yaml".into(),
         alignment_targets: Vec::new(),
@@ -1628,7 +1706,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn representation(
+fn access_profile(
     id: &str,
     access: CompiledAccess,
     disclosure_profile: &str,
@@ -1637,9 +1715,9 @@ fn representation(
     processing: Handling,
     disclosure: Handling,
     transforms: &[&str],
-) -> CompiledRepresentation {
+) -> CompiledAccessProfile {
     let stem = format!("https://registry.example.invalid/artifacts/{id}");
-    CompiledRepresentation {
+    CompiledAccessProfile {
         id: id.into(),
         access,
         disclosure_profile: disclosure_profile.into(),

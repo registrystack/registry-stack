@@ -25,7 +25,7 @@ use crate::cursor::{
     CursorBindings, CursorPayload, CursorValue,
 };
 use crate::model::{
-    CompiledAccess, CompiledOperation, CompiledRepresentation, CompiledResource, OperationKind,
+    CompiledAccess, CompiledAccessProfile, CompiledOperation, CompiledResource, OperationKind,
     RowAuthoritySource,
 };
 use crate::problem::{ProblemCode, TraceContext};
@@ -60,7 +60,7 @@ impl ResponseFormat {
 struct Access {
     principal: Option<Principal>,
     authorization: Authorization,
-    representation: CompiledRepresentation,
+    access_profile: CompiledAccessProfile,
 }
 
 pub async fn health() -> Response<Body> {
@@ -118,8 +118,8 @@ pub async fn service_metadata(
                 Err(ProblemCode::MissingCredential) => Vec::new(),
                 Err(code) => return code.response(&trace),
             };
-            capabilities.extend(operations.into_iter().map(|(operation, representation)| {
-                capability(&service, resource, operation, representation)
+            capabilities.extend(operations.into_iter().map(|(operation, access_profile)| {
+                capability(&service, resource, operation, access_profile)
             }));
         }
     }
@@ -351,14 +351,14 @@ pub async fn artifact(
             let Some(operation) = find_operation_by_id(&service, identifier) else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
-            let Some(representation_identifier) = artifact.representation_identifier.as_deref()
+            let Some(access_profile_identifier) = artifact.access_profile_identifier.as_deref()
             else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
-            let Some(representation) = operation
-                .representations
+            let Some(access_profile) = operation
+                .access_profiles
                 .iter()
-                .find(|representation| representation.id == representation_identifier)
+                .find(|access_profile| access_profile.id == access_profile_identifier)
             else {
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
@@ -366,7 +366,7 @@ pub async fn artifact(
                 return ProblemCode::ResourceNotFound.response(&trace);
             };
             if authenticator
-                .authorize(&representation.access, Some(principal))
+                .authorize(&access_profile.access, Some(principal))
                 .is_err()
             {
                 return ProblemCode::ResourceNotFound.response(&trace);
@@ -499,7 +499,7 @@ pub async fn record_list(
         .sqlite
         .execute(
             &operation.identifier,
-            &access.representation.id,
+            &access.access_profile.id,
             OperationQuery {
                 filters: query.filters.clone(),
                 row_authority: access.authorization.row_authority.clone(),
@@ -524,7 +524,7 @@ pub async fn record_list(
         let record = match record_value(
             &service,
             resource,
-            &access.representation,
+            &access.access_profile,
             row,
             &query.selected_fields,
         ) {
@@ -575,7 +575,7 @@ pub async fn record_list(
             &service,
             resource,
             operation,
-            &access.representation,
+            &access.access_profile,
             &query.selected_fields,
             &result.source_revision,
         ),
@@ -583,7 +583,7 @@ pub async fn record_list(
     apply_json_ld(
         &service,
         resource,
-        &access.representation,
+        &access.access_profile,
         response_format,
         &mut document,
     );
@@ -592,7 +592,7 @@ pub async fn record_list(
         &audit,
         document,
         response_format,
-        cacheable(&access.representation, &result.source_revision),
+        cacheable(&access.access_profile, &result.source_revision),
         &headers,
         &trace,
     )
@@ -758,7 +758,7 @@ pub async fn record_lookup(
     let fields = match selected_fields(
         resource,
         operation,
-        &access.representation,
+        &access.access_profile,
         request.uri().query(),
     ) {
         Ok(value) => value,
@@ -924,7 +924,7 @@ async fn single_operation(
             let fields = match selected_fields(
                 resource,
                 operation,
-                &access.representation,
+                &access.access_profile,
                 request.query_text,
             ) {
                 Ok(value) => value,
@@ -967,7 +967,7 @@ async fn single_operation(
         .sqlite
         .execute(
             &operation.identifier,
-            &access.representation.id,
+            &access.access_profile.id,
             request.query,
         )
         .await;
@@ -992,7 +992,7 @@ async fn single_operation(
     let record = match record_value(
         service,
         resource,
-        &access.representation,
+        &access.access_profile,
         &result.rows[0],
         &fields,
     ) {
@@ -1007,7 +1007,7 @@ async fn single_operation(
             service,
             resource,
             operation,
-            &access.representation,
+            &access.access_profile,
             &fields,
             &result.source_revision,
         ),
@@ -1015,7 +1015,7 @@ async fn single_operation(
     apply_json_ld(
         service,
         resource,
-        &access.representation,
+        &access.access_profile,
         representation,
         &mut document,
     );
@@ -1024,7 +1024,7 @@ async fn single_operation(
         &audit,
         document,
         representation,
-        cacheable(&access.representation, &result.source_revision),
+        cacheable(&access.access_profile, &result.source_revision),
         headers,
         trace,
     )
@@ -1039,7 +1039,7 @@ async fn access_operation(
     principal: Option<Principal>,
     trace: &TraceContext,
 ) -> Result<Access, Response<Body>> {
-    let selected = match select_representation(operation, query) {
+    let selected = match select_access_profile(operation, query) {
         Ok(value) => value,
         Err(ProblemCode::ResourceNotFound) => {
             return Err(refuse_unknown(
@@ -1052,7 +1052,7 @@ async fn access_operation(
             .await);
         }
         Err(code) => {
-            return Err(refuse_before_representation(
+            return Err(refuse_before_access_profile(
                 service,
                 resource,
                 operation,
@@ -1064,11 +1064,11 @@ async fn access_operation(
             .await);
         }
     };
-    let representation = selected.representation;
+    let access_profile = selected.access_profile;
     let explicit = selected.explicit;
     let authorization = match &service.authenticator {
-        Some(authenticator) => authenticator.authorize(&representation.access, principal.as_ref()),
-        None => match representation.access {
+        Some(authenticator) => authenticator.authorize(&access_profile.access, principal.as_ref()),
+        None => match access_profile.access {
             CompiledAccess::Public => Ok(Authorization {
                 row_authority: None,
                 purpose: None,
@@ -1080,7 +1080,7 @@ async fn access_operation(
         Ok(authorization) => Ok(Access {
             principal,
             authorization,
-            representation: representation.clone(),
+            access_profile: access_profile.clone(),
         }),
         Err(error) => {
             if error == AuthorizationError::AuthenticationRequired && explicit {
@@ -1120,7 +1120,7 @@ async fn access_operation(
                     row_authority: None,
                     purpose: None,
                 },
-                representation: representation.clone(),
+                access_profile: access_profile.clone(),
             };
             Err(refuse_known(
                 service,
@@ -1202,21 +1202,21 @@ async fn unknown_data_route(
     trace: &TraceContext,
     class: OperationClass,
 ) -> Response<Body> {
-    let explicit_representation = match representation_parameter(query) {
-        Ok(Some(identifier)) if valid_representation_identifier(&identifier) => true,
+    let explicit_access_profile = match access_profile_parameter(query) {
+        Ok(Some(identifier)) if valid_access_profile_identifier(&identifier) => true,
         Ok(Some(_)) | Err(_) => {
             return refuse_unknown(
                 service,
                 principal_kind(principal),
                 AuditOutcome::InvalidRequest,
-                ProblemCode::RepresentationInvalid,
+                ProblemCode::AccessProfileInvalid,
                 trace,
             )
             .await;
         }
         Ok(None) => false,
     };
-    if explicit_representation {
+    if explicit_access_profile {
         return refuse_unknown(
             service,
             principal_kind(principal),
@@ -1229,8 +1229,8 @@ async fn unknown_data_route(
     let protected = service.registry.resources.iter().any(|resource| {
         resource.operations.iter().any(|operation| {
             class_matches(&operation.kind, class)
-                && operation.representations.iter().any(|representation| {
-                    matches!(representation.access, CompiledAccess::Protected { .. })
+                && operation.access_profiles.iter().any(|access_profile| {
+                    matches!(access_profile.access, CompiledAccess::Protected { .. })
                 })
         })
     });
@@ -1297,7 +1297,7 @@ async fn refuse_known(
     code.response(trace)
 }
 
-async fn refuse_before_representation(
+async fn refuse_before_access_profile(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
@@ -1362,21 +1362,21 @@ fn audit_context(
         registry_identifier: service.registry.registry_identifier.clone(),
         resource_identifier: Some(resource.id.clone()),
         operation_identifier: Some(operation.identifier.clone()),
-        access_rule_revision: access.map(|access| access_revision(&access.representation)),
+        access_rule_revision: access.map(|access| access_revision(&access.access_profile)),
         purpose: access.and_then(|access| access.authorization.purpose.clone()),
         row_boundary_kind: access.map_or(RowBoundaryKind::Unknown, |access| {
-            row_boundary(&access.representation)
+            row_boundary(&access.access_profile)
         }),
-        representation: access.map(|access| access.representation.id.clone()),
-        disclosure_profile: access.map(|access| access.representation.disclosure_profile.clone()),
+        access_profile: access.map(|access| access.access_profile.id.clone()),
+        disclosure_profile: access.map(|access| access.access_profile.disclosure_profile.clone()),
         processing_description_identifiers: processing_description_identifiers(resource, operation),
         selected_properties,
         processing_handling: access
-            .map(|access| handling_label(access.representation.processing_handling).into()),
+            .map(|access| handling_label(access.access_profile.processing_handling).into()),
         disclosure_handling: access
-            .map(|access| handling_label(access.representation.disclosure_handling).into()),
+            .map(|access| handling_label(access.access_profile.disclosure_handling).into()),
         transform_identifiers: access.map_or_else(Vec::new, |access| {
-            transform_identifiers(&access.representation)
+            transform_identifiers(&access.access_profile)
         }),
         contract_revision: service.registry.contract_revision.clone(),
         source_revision: service
@@ -1411,7 +1411,7 @@ fn unknown_audit_context(
         access_rule_revision: None,
         purpose: None,
         row_boundary_kind: RowBoundaryKind::Unknown,
-        representation: None,
+        access_profile: None,
         disclosure_profile: None,
         processing_description_identifiers: Vec::new(),
         selected_properties: Vec::new(),
@@ -1443,15 +1443,15 @@ fn processing_description_identifiers(
         .collect()
 }
 
-fn access_revision(representation: &CompiledRepresentation) -> String {
-    let value = serde_json::to_value(&representation.access)
-        .expect("compiled representation access serializes");
-    let bytes = canonicalize_json(&value).expect("compiled representation access canonicalizes");
+fn access_revision(access_profile: &CompiledAccessProfile) -> String {
+    let value = serde_json::to_value(&access_profile.access)
+        .expect("compiled access-profile rule serializes");
+    let bytes = canonicalize_json(&value).expect("compiled access-profile rule canonicalizes");
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
-fn transform_identifiers(representation: &CompiledRepresentation) -> Vec<String> {
-    representation
+fn transform_identifiers(access_profile: &CompiledAccessProfile) -> Vec<String> {
+    access_profile
         .transform_inventory
         .iter()
         .filter_map(|entry| {
@@ -1464,8 +1464,8 @@ fn transform_identifiers(representation: &CompiledRepresentation) -> Vec<String>
         .collect()
 }
 
-fn row_boundary(representation: &CompiledRepresentation) -> RowBoundaryKind {
-    match &representation.access {
+fn row_boundary(access_profile: &CompiledAccessProfile) -> RowBoundaryKind {
+    match &access_profile.access {
         CompiledAccess::Protected {
             row_binding: Some(binding),
             ..
@@ -1496,41 +1496,44 @@ struct PreparedList {
     after_order: Option<Vec<SqlValue>>,
 }
 
-struct SelectedRepresentation<'a> {
-    representation: &'a CompiledRepresentation,
+struct SelectedAccessProfile<'a> {
+    access_profile: &'a CompiledAccessProfile,
     explicit: bool,
 }
 
-fn select_representation<'a>(
+fn select_access_profile<'a>(
     operation: &'a CompiledOperation,
     query: Option<&str>,
-) -> Result<SelectedRepresentation<'a>, ProblemCode> {
-    let requested = representation_parameter(query)?;
+) -> Result<SelectedAccessProfile<'a>, ProblemCode> {
+    let requested = access_profile_parameter(query)?;
     let identifier = requested
         .as_deref()
-        .unwrap_or(&operation.default_representation);
-    if !valid_representation_identifier(identifier) {
-        return Err(ProblemCode::RepresentationInvalid);
+        .unwrap_or(&operation.default_access_profile);
+    if !valid_access_profile_identifier(identifier) {
+        return Err(ProblemCode::AccessProfileInvalid);
     }
     let explicit = requested.is_some();
     operation
-        .representations
+        .access_profiles
         .iter()
-        .find(|representation| representation.id == identifier)
-        .map(|representation| SelectedRepresentation {
-            representation,
+        .find(|access_profile| access_profile.id == identifier)
+        .map(|access_profile| SelectedAccessProfile {
+            access_profile,
             explicit,
         })
         .ok_or(ProblemCode::ResourceNotFound)
 }
 
-/// Extract only the representation selector before URI-shape refusal.
+/// Extract only the access-profile selector before URI-shape refusal.
 ///
 /// This scans the already-buffered query in place and decodes only bounded
-/// candidate names and the one bounded representation value. It therefore
+/// candidate names and the one bounded access-profile value. It therefore
 /// preserves exact-profile authorization for an oversized URI without
 /// allocating or decoding unrelated attacker-controlled query values.
-fn representation_parameter(query: Option<&str>) -> Result<Option<String>, ProblemCode> {
+fn access_profile_parameter(query: Option<&str>) -> Result<Option<String>, ProblemCode> {
+    // `representation` is the longest decoded current-or-retired selector
+    // name. Three encoded bytes per decoded byte covers its fully
+    // percent-encoded form without permitting an unbounded name decode.
     const MAXIMUM_ENCODED_NAME_BYTES: usize = "representation".len() * 3;
     const MAXIMUM_ENCODED_VALUE_BYTES: usize = 128 * 3;
 
@@ -1549,14 +1552,16 @@ fn representation_parameter(query: Option<&str>) -> Result<Option<String>, Probl
             continue;
         }
         let name = decode_bounded_query_component(raw_name, MAXIMUM_ENCODED_NAME_BYTES)?;
-        if name != "representation" {
-            continue;
+        match name.as_str() {
+            "representation" => return Err(ProblemCode::AccessProfileInvalid),
+            "accessProfile" => {}
+            _ => continue,
         }
         if requested.is_some()
             || raw_value.len() > MAXIMUM_ENCODED_VALUE_BYTES
             || raw_value.contains('=')
         {
-            return Err(ProblemCode::RepresentationInvalid);
+            return Err(ProblemCode::AccessProfileInvalid);
         }
         requested = Some(decode_bounded_query_component(
             raw_value,
@@ -1571,15 +1576,15 @@ fn decode_bounded_query_component(
     maximum_encoded_bytes: usize,
 ) -> Result<String, ProblemCode> {
     if raw.len() > maximum_encoded_bytes || !valid_percent_encoding(raw.as_bytes()) {
-        return Err(ProblemCode::RepresentationInvalid);
+        return Err(ProblemCode::AccessProfileInvalid);
     }
     url::form_urlencoded::parse(raw.as_bytes())
         .next()
         .map(|(value, _)| value.into_owned())
-        .ok_or(ProblemCode::RepresentationInvalid)
+        .ok_or(ProblemCode::AccessProfileInvalid)
 }
 
-fn valid_representation_identifier(value: &str) -> bool {
+fn valid_access_profile_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && !value.starts_with('-')
@@ -1611,7 +1616,7 @@ fn prepare_list(
         if cursors.len() != 1
             || parameters
                 .iter()
-                .any(|(name, _)| name != "cursor" && name != "representation")
+                .any(|(name, _)| name != "cursor" && name != "accessProfile")
         {
             return Err(ProblemCode::CursorInvalid);
         }
@@ -1636,7 +1641,7 @@ fn prepare_list(
         validate_selected_inventory(
             resource,
             operation,
-            &access.representation,
+            &access.access_profile,
             &payload.selected_fields,
         )?;
         let current_source_revision = service
@@ -1695,7 +1700,7 @@ fn prepare_list(
                     return Err(ProblemCode::FieldsInvalid);
                 }
             }
-            "representation" => {}
+            "accessProfile" => {}
             _ if declared.contains(name.as_str()) => {
                 if raw_filters.insert(name, value).is_some() {
                     return Err(ProblemCode::InvalidFilter);
@@ -1729,7 +1734,7 @@ fn prepare_list(
     let selected_fields = fields_from_text(
         resource,
         operation,
-        &access.representation,
+        &access.access_profile,
         fields_text.as_deref(),
     )?;
     Ok(PreparedList {
@@ -1743,28 +1748,28 @@ fn prepare_list(
 fn selected_fields(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     query: Option<&str>,
 ) -> Result<Vec<String>, ProblemCode> {
     let parameters = parse_query(query)?;
     if parameters
         .iter()
-        .any(|(name, _)| name != "fields" && name != "representation")
+        .any(|(name, _)| name != "fields" && name != "accessProfile")
     {
         return Err(ProblemCode::ConsultationInvalidRequest);
     }
     let fields = one_parameter(&parameters, "fields")?;
-    fields_from_text(resource, operation, representation, fields)
+    fields_from_text(resource, operation, access_profile, fields)
 }
 
 fn fields_from_text(
     resource: &CompiledResource,
     _operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     text: Option<&str>,
 ) -> Result<Vec<String>, ProblemCode> {
     let Some(text) = text else {
-        return Ok(representation.selectable_properties.clone());
+        return Ok(access_profile.selectable_properties.clone());
     };
     if text.is_empty() || text.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return Err(ProblemCode::FieldsInvalid);
@@ -1776,7 +1781,7 @@ fn fields_from_text(
     {
         return Err(ProblemCode::FieldsInvalid);
     }
-    let allowed = representation
+    let allowed = access_profile
         .selectable_properties
         .iter()
         .map(String::as_str)
@@ -1790,7 +1795,7 @@ fn fields_from_text(
     }) {
         return Err(ProblemCode::FieldsInvalid);
     }
-    Ok(representation
+    Ok(access_profile
         .selectable_properties
         .iter()
         .filter(|field| requested.contains(&field.as_str()))
@@ -1801,14 +1806,14 @@ fn fields_from_text(
 fn validate_selected_inventory(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     fields: &[String],
 ) -> Result<(), ProblemCode> {
     if fields.is_empty() {
         return Err(ProblemCode::CursorInvalid);
     }
     let text = fields.join(",");
-    let canonical = fields_from_text(resource, operation, representation, Some(&text))
+    let canonical = fields_from_text(resource, operation, access_profile, Some(&text))
         .map_err(|_| ProblemCode::CursorInvalid)?;
     if canonical != fields {
         return Err(ProblemCode::CursorInvalid);
@@ -2005,7 +2010,7 @@ enum RecordError {
 fn record_value(
     service: &RelayService,
     resource: &CompiledResource,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     row: &ResultRow,
     selected: &[String],
 ) -> Result<Value, RecordError> {
@@ -2031,9 +2036,9 @@ fn record_value(
     {
         return Err(RecordError::InvalidCore);
     }
-    // Validate the complete selected representation before requester field
+    // Validate the complete selected access profile before requester field
     // minimization. Narrowing disclosure never lowers its processing floor.
-    let properties = representation
+    let properties = access_profile
         .selectable_properties
         .iter()
         .map(|name| {
@@ -2094,8 +2099,8 @@ fn record_value(
         "recordIdentifier": record_identifier,
         "revisionIdentifier": revision,
         "lifecycleState": lifecycle,
-        "schemaReference": representation.schema_reference,
-        "semanticModelReference": representation.semantic_model_reference,
+        "schemaReference": access_profile.schema_reference,
+        "semanticModelReference": access_profile.semantic_model_reference,
         "authorityIdentifier": service.registry.authority_identifier,
         "recordedAt": recorded_at,
         "domainData": domain,
@@ -2164,25 +2169,25 @@ fn record_meta(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     selected: &[String],
     source_revision: &SourceRevision,
 ) -> Value {
     let pattern = operation_pattern(&operation.kind);
     json!({
         "operationIdentifier": operation.identifier,
-        "representation": representation.id,
+        "accessProfile": access_profile.id,
         "family": "consultation",
         "pattern": pattern,
-        "disclosureProfile": representation.disclosure_profile,
+        "disclosureProfile": access_profile.disclosure_profile,
         "contractRevision": service.registry.contract_revision,
         "sourceRevision": source_revision_value(source_revision),
         "selectedFields": selected,
         "links": {
             "self": operation_href(service, resource, operation),
-            "context": representation.context_reference,
-            "schema": representation.schema_reference,
-            "semanticModel": representation.semantic_model_reference,
+            "context": access_profile.context_reference,
+            "schema": access_profile.schema_reference,
+            "semanticModel": access_profile.semantic_model_reference,
         }
     })
 }
@@ -2201,7 +2206,7 @@ fn source_revision_value(source: &SourceRevision) -> Value {
 fn apply_json_ld(
     service: &RelayService,
     resource: &CompiledResource,
-    selected: &CompiledRepresentation,
+    selected: &CompiledAccessProfile,
     representation: ResponseFormat,
     document: &mut Value,
 ) {
@@ -2394,9 +2399,9 @@ async fn terminal_problem(
     code.response(trace)
 }
 
-fn cacheable(representation: &CompiledRepresentation, source: &SourceRevision) -> bool {
-    matches!(representation.access, CompiledAccess::Public)
-        && representation.processing_handling == Handling::Public
+fn cacheable(access_profile: &CompiledAccessProfile, source: &SourceRevision) -> bool {
+    matches!(access_profile.access, CompiledAccess::Public)
+        && access_profile.processing_handling == Handling::Public
         && matches!(source, SourceRevision::Snapshot(_))
 }
 
@@ -2408,9 +2413,7 @@ fn negotiate(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
     let mut json = None;
     let mut json_ld = None;
     for value in headers.get_all(ACCEPT) {
-        let value = value
-            .to_str()
-            .map_err(|_| ProblemCode::UnsupportedRepresentation)?;
+        let value = value.to_str().map_err(|_| ProblemCode::UnsupportedFormat)?;
         for item in value.split(',') {
             let mut parts = item.trim().split(';');
             let media = parts.next().unwrap_or_default().trim();
@@ -2434,7 +2437,7 @@ fn negotiate(headers: &HeaderMap) -> Result<ResponseFormat, ProblemCode> {
     let json = json.map_or(0, |(_, quality)| quality);
     let json_ld = json_ld.map_or(0, |(_, quality)| quality);
     match (json, json_ld) {
-        (0, 0) => Err(ProblemCode::UnsupportedRepresentation),
+        (0, 0) => Err(ProblemCode::UnsupportedFormat),
         (json, json_ld) if json_ld > json => Ok(ResponseFormat::JsonLd),
         _ => Ok(ResponseFormat::Json),
     }
@@ -2573,13 +2576,13 @@ fn cursor_template(
     let field_json = serde_json::to_vec(selected_fields).map_err(|_| ProblemCode::CursorInvalid)?;
     let order_json =
         serde_json::to_vec(&operation.query.order_by).map_err(|_| ProblemCode::CursorInvalid)?;
-    let transform_json = serde_json::to_vec(&access.representation.transform_inventory)
+    let transform_json = serde_json::to_vec(&access.access_profile.transform_inventory)
         .map_err(|_| ProblemCode::CursorInvalid)?;
     let authorization_material = access
         .principal
         .as_ref()
         .map(|principal| {
-            principal.authorization_material(&access.representation.access, &access.authorization)
+            principal.authorization_material(&access.access_profile.access, &access.authorization)
         })
         .unwrap_or_else(|| b"anonymous".to_vec());
     Ok(CursorPayload::new(
@@ -2588,8 +2591,8 @@ fn cursor_template(
         source_revision.to_owned(),
         operation.identifier.clone(),
         CursorBindings {
-            representation: access.representation.id.clone(),
-            disclosure_profile: access.representation.disclosure_profile.clone(),
+            access_profile: access.access_profile.id.clone(),
+            disclosure_profile: access.access_profile.disclosure_profile.clone(),
             transforms_digest: key
                 .binding_digest(b"transforms", &transform_json)
                 .map_err(|_| ProblemCode::CursorInvalid)?,
@@ -2612,7 +2615,7 @@ fn cursor_template(
 
 fn metadata_cursor_template(
     service: &RelayService,
-    visible: &[(&CompiledResource, Vec<VisibleRepresentation<'_>>)],
+    visible: &[(&CompiledResource, Vec<VisibleAccessProfile<'_>>)],
 ) -> Result<CursorPayload, ProblemCode> {
     let key = service
         .cursor_key
@@ -2625,8 +2628,8 @@ fn metadata_cursor_template(
                 resource.id.as_str(),
                 operations
                     .iter()
-                    .map(|(operation, representation)| {
-                        (operation.identifier.as_str(), representation.id.as_str())
+                    .map(|(operation, access_profile)| {
+                        (operation.identifier.as_str(), access_profile.id.as_str())
                     })
                     .collect::<Vec<_>>(),
             )
@@ -2640,7 +2643,7 @@ fn metadata_cursor_template(
         format!("metadata:{}", service.registry.contract_revision),
         "registry.resources".to_owned(),
         CursorBindings {
-            representation: "metadata".to_owned(),
+            access_profile: "metadata".to_owned(),
             disclosure_profile: "metadata".to_owned(),
             transforms_digest: key
                 .binding_digest(b"metadata-transforms", b"none")
@@ -2664,7 +2667,7 @@ fn metadata_cursor_template(
 
 fn metadata_next_cursor(
     service: &RelayService,
-    visible: &[(&CompiledResource, Vec<VisibleRepresentation<'_>>)],
+    visible: &[(&CompiledResource, Vec<VisibleAccessProfile<'_>>)],
     page_size: usize,
     last_resource_identifier: &str,
 ) -> Result<String, ProblemCode> {
@@ -2730,7 +2733,7 @@ fn find_operation_by_id<'a>(
 async fn visible_resources<'a>(
     service: &'a RelayService,
     principal: Option<&Principal>,
-) -> Result<Vec<(&'a CompiledResource, Vec<VisibleRepresentation<'a>>)>, ProblemCode> {
+) -> Result<Vec<(&'a CompiledResource, Vec<VisibleAccessProfile<'a>>)>, ProblemCode> {
     if service.registry.metadata_visibility.resources == Visibility::OperatorOnly {
         return Err(ProblemCode::ResourceNotFound);
     }
@@ -2753,7 +2756,7 @@ async fn visible_operations<'a>(
     service: &'a RelayService,
     resource: &'a CompiledResource,
     principal: Option<&Principal>,
-) -> Result<Vec<VisibleRepresentation<'a>>, ProblemCode> {
+) -> Result<Vec<VisibleAccessProfile<'a>>, ProblemCode> {
     match service.registry.metadata_visibility.resources {
         Visibility::OperatorOnly => Ok(Vec::new()),
         Visibility::Public => Ok(resource
@@ -2761,12 +2764,12 @@ async fn visible_operations<'a>(
             .iter()
             .flat_map(|operation| {
                 operation
-                    .representations
+                    .access_profiles
                     .iter()
-                    .filter(|representation| {
-                        matches!(representation.access, CompiledAccess::Public)
+                    .filter(|access_profile| {
+                        matches!(access_profile.access, CompiledAccess::Public)
                     })
-                    .map(move |representation| (operation, representation))
+                    .map(move |access_profile| (operation, access_profile))
             })
             .collect()),
         Visibility::OperationBound => {
@@ -2780,13 +2783,13 @@ async fn visible_operations<'a>(
                 .iter()
                 .flat_map(|operation| {
                     operation
-                        .representations
+                        .access_profiles
                         .iter()
-                        .filter_map(move |representation| {
+                        .filter_map(move |access_profile| {
                             authenticator
-                                .authorize(&representation.access, Some(principal))
+                                .authorize(&access_profile.access, Some(principal))
                                 .is_ok()
-                                .then_some((operation, representation))
+                                .then_some((operation, access_profile))
                         })
                 })
                 .collect())
@@ -2802,20 +2805,20 @@ fn protected_artifact(artifact: &GeneratedArtifact) -> bool {
     artifact.visibility == Visibility::OperationBound
 }
 
-type VisibleRepresentation<'a> = (&'a CompiledOperation, &'a CompiledRepresentation);
+type VisibleAccessProfile<'a> = (&'a CompiledOperation, &'a CompiledAccessProfile);
 
 fn resource_document(
     service: &RelayService,
     resource: &CompiledResource,
-    operations: &[VisibleRepresentation<'_>],
+    operations: &[VisibleAccessProfile<'_>],
 ) -> Value {
     let enumeration = if operations
         .iter()
         .any(|(operation, _)| matches!(operation.kind, OperationKind::List))
     {
-        if operations.iter().any(|(operation, representation)| {
+        if operations.iter().any(|(operation, access_profile)| {
             matches!(operation.kind, OperationKind::List)
-                && matches!(representation.access, CompiledAccess::Public)
+                && matches!(access_profile.access, CompiledAccess::Public)
         }) {
             "public"
         } else {
@@ -2830,7 +2833,7 @@ fn resource_document(
         "description": resource.description,
         "semanticClass": resource.semantic_class,
         "enumerationPosture": enumeration,
-        "capabilities": operations.iter().map(|(operation, representation)| capability(service, resource, operation, representation)).collect::<Vec<_>>(),
+        "capabilities": operations.iter().map(|(operation, access_profile)| capability(service, resource, operation, access_profile)).collect::<Vec<_>>(),
         "links": {
             "self": absolute(&service.registry.base_uri, &format!("/v2/resources/{}", resource.id)),
         }
@@ -2841,19 +2844,23 @@ fn capability(
     service: &RelayService,
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> Value {
     let mut document = json!({
         "family": "consultation",
         "pattern": operation_pattern(&operation.kind),
         "resourceIdentifier": resource.id,
         "operationIdentifier": operation.identifier,
-        "representation": representation.id,
-        "defaultRepresentation": operation.default_representation == representation.id,
-        "disclosureProfile": representation.disclosure_profile,
-        "schemaReference": representation.schema_reference,
-        "semanticModelReference": representation.semantic_model_reference,
-        "contextReference": representation.context_reference,
+        "accessProfileIdentifier": access_profile.id,
+        "isDefault": operation.default_access_profile == access_profile.id,
+        "disclosureProfile": access_profile.disclosure_profile,
+        "schemaReference": access_profile.schema_reference,
+        "semanticModelReference": access_profile.semantic_model_reference,
+        "contextReference": access_profile.context_reference,
+        "wireFormats": [
+            {"id": "json", "mediaType": "application/json", "formatProfiles": []},
+            {"id": "json-ld", "mediaType": "application/ld+json", "formatProfiles": []},
+        ],
         "href": match &operation.kind {
             OperationKind::List => format!("/v2/resources/{}/records", resource.id),
             OperationKind::Read => format!("/v2/resources/{}/records/{{recordIdentifier}}", resource.id),
@@ -2861,9 +2868,9 @@ fn capability(
         }
     });
     let stem = format!(
-        "{}--representation-{}",
+        "{}--access-profile-{}",
         operation_artifact_stem(&resource.id, &operation.kind),
-        representation.id
+        access_profile.id
     );
     let object = document
         .as_object_mut()
@@ -2872,7 +2879,7 @@ fn capability(
         object.insert(
             "classificationReference".into(),
             Value::String(sibling_artifact_reference(
-                &representation.schema_reference,
+                &access_profile.schema_reference,
                 &format!("{stem}-classifications"),
             )),
         );
@@ -2881,7 +2888,7 @@ fn capability(
         object.insert(
             "processingReference".into(),
             Value::String(sibling_artifact_reference(
-                &representation.schema_reference,
+                &access_profile.schema_reference,
                 &format!("{stem}-processing"),
             )),
         );
@@ -3102,14 +3109,14 @@ mod tests {
             let value = format!("application/json;q={zero}");
             assert_eq!(
                 negotiate(&headers(ACCEPT, &[&value])),
-                Err(ProblemCode::UnsupportedRepresentation)
+                Err(ProblemCode::UnsupportedFormat)
             );
         }
         for malformed in ["q", "q=", "q=.5", "q=1.1", "q=0.0000", "q=0.5;q=0.4"] {
             let value = format!("application/json;{malformed}");
             assert_eq!(
                 negotiate(&headers(ACCEPT, &[&value])),
-                Err(ProblemCode::UnsupportedRepresentation)
+                Err(ProblemCode::UnsupportedFormat)
             );
         }
     }
@@ -3177,30 +3184,38 @@ mod tests {
     }
 
     #[test]
-    fn representation_selection_scans_only_bounded_components() {
+    fn access_profile_selection_scans_only_bounded_components() {
         let padding = "x".repeat(20_000);
-        let query = format!("padding={padding}&representation=caseworker");
+        let query = format!("padding={padding}&accessProfile=caseworker");
         assert_eq!(
-            representation_parameter(Some(&query)).expect("selector extracts"),
+            access_profile_parameter(Some(&query)).expect("selector extracts"),
             Some("caseworker".into())
         );
         assert_eq!(
-            representation_parameter(Some("%72epresentation=limited"))
+            access_profile_parameter(Some("%61ccessProfile=limited"))
                 .expect("encoded selector extracts"),
             Some("limited".into())
         );
         assert_eq!(
-            representation_parameter(Some("%=ignored&representation=limited"))
+            access_profile_parameter(Some("%=ignored&accessProfile=limited"))
                 .expect("malformed unrelated name is deferred"),
             Some("limited".into())
         );
         assert_eq!(
-            representation_parameter(Some("representation=limited&representation=caseworker")),
-            Err(ProblemCode::RepresentationInvalid)
+            access_profile_parameter(Some("accessProfile=limited&accessProfile=caseworker")),
+            Err(ProblemCode::AccessProfileInvalid)
         );
         assert_eq!(
-            representation_parameter(Some("representation=limited=caseworker")),
-            Err(ProblemCode::RepresentationInvalid)
+            access_profile_parameter(Some("accessProfile=limited=caseworker")),
+            Err(ProblemCode::AccessProfileInvalid)
+        );
+        assert_eq!(
+            access_profile_parameter(Some("representation=legacy")),
+            Err(ProblemCode::AccessProfileInvalid)
+        );
+        assert_eq!(
+            access_profile_parameter(Some("%72%65%70%72%65%73%65%6e%74%61%74%69%6f%6e=legacy")),
+            Err(ProblemCode::AccessProfileInvalid)
         );
     }
 }

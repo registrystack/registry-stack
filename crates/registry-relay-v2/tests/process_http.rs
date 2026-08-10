@@ -189,15 +189,15 @@ fn make_business_project_public_only(project: &Path, source: &Path) {
     )
     .expect("business contract becomes a value");
     for pointer in [
-        "/resources/0/operations/list/representations",
-        "/resources/0/operations/read/representations",
+        "/resources/0/operations/list/accessProfiles",
+        "/resources/0/operations/read/accessProfiles",
     ] {
         value
             .pointer_mut(pointer)
             .and_then(Value::as_object_mut)
-            .expect("business representation map")
+            .expect("business access profile map")
             .remove("registrar")
-            .expect("registrar representation exists");
+            .expect("registrar access profile exists");
     }
     fs::write(
         &contract_path,

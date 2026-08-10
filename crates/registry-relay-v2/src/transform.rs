@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Pure, closed transforms for compiled Relay representations.
+//! Pure, closed transforms for compiled Relay access profiles.
 
 use chrono::{DateTime, NaiveDate};
 use registry_platform_sqlite::Value;

@@ -143,18 +143,18 @@ pub fn compile_fixture_plan(
             );
         }
         if let Some(operation) = operation {
-            let representation_identifier = step
+            let access_profile_identifier = step
                 .request
                 .query
-                .get("representation")
+                .get("accessProfile")
                 .and_then(Value::as_str)
-                .unwrap_or(&operation.default_representation);
+                .unwrap_or(&operation.default_access_profile);
             let protected = operation
-                .representations
+                .access_profiles
                 .iter()
-                .find(|representation| representation.id == representation_identifier)
-                .is_some_and(|representation| {
-                    matches!(representation.access, CompiledAccess::Protected { .. })
+                .find(|access_profile| access_profile.id == access_profile_identifier)
+                .is_some_and(|access_profile| {
+                    matches!(access_profile.access, CompiledAccess::Protected { .. })
                 });
             if protected && step.expect.status == 200 && step.authorization_fixture.is_none() {
                 diagnostic(
@@ -995,6 +995,49 @@ steps:
         assert!(diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "fixture.domain_value_mismatch"));
+    }
+
+    #[test]
+    fn json_and_json_ld_record_mismatch_keeps_the_wire_representation_code() {
+        let yaml = r#"
+schemaVersion: relay.registrystack.org/http-journey/v1alpha1
+registry: urn:example:registry
+authorizations: {}
+steps:
+  - id: jsonld
+    request: {method: GET, path: /health}
+    expect: {status: 200, recordsEquivalentTo: json}
+"#;
+        let journey = parse_journey(yaml).expect("fixture parses");
+        let step = &journey.steps[0];
+        let headers = http::HeaderMap::new();
+        let previous = json!({"data": {"recordIdentifier": "record-1"}});
+        let current = json!({"data": {"recordIdentifier": "record-2"}});
+        let observations = BTreeMap::from([(
+            "json".into(),
+            FixtureObservation {
+                document: Some(previous),
+                etag: None,
+            },
+        )]);
+        let mut diagnostics = Vec::new();
+
+        assert!(!assert_expectations(
+            step,
+            &ObservedResponse {
+                status: StatusCode::OK,
+                headers: &headers,
+                body: b"",
+                document: Some(&current),
+                code: None,
+            },
+            &mut BTreeMap::new(),
+            &observations,
+            0,
+            &mut diagnostics,
+        ));
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "fixture.representation_mismatch");
     }
 
     #[test]

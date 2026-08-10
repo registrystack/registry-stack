@@ -115,8 +115,8 @@ resources:
             selectors:
               caseReference: {sourceColumn: case_reference, type: string, minimumBytes: 8, maximumBytes: 96}
               personReference: {sourceColumn: person_reference, type: string, minimumBytes: 8, maximumBytes: 96}
-          defaultRepresentation: limited
-          representations:
+          defaultAccessProfile: limited
+          accessProfiles:
             limited:
               access:
                 scope: registry:social-assistance:limited

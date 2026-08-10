@@ -107,8 +107,8 @@ resources:
             selectors:
               registrationNumber: {sourceColumn: registration_number, type: string, minimumBytes: 12, maximumBytes: 96}
               eventType: {sourceColumn: event_type, type: controlled-code, codelist: codelists/event-types.yaml}
-          defaultRepresentation: public
-          representations:
+          defaultAccessProfile: public
+          accessProfiles:
             public: {access: public, disclosureProfile: public}
     processingDescriptions:
       - id: public-consultation

@@ -21,7 +21,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::auth::RowAuthority;
 use crate::contract::{DataType, SourceProfile};
 use crate::model::{
-    CompiledOperation, CompiledRegistry, CompiledRepresentation, CompiledResource, OperationKind,
+    CompiledAccessProfile, CompiledOperation, CompiledRegistry, CompiledResource, OperationKind,
 };
 
 const MAXIMUM_CELL_BYTES: usize = 1024 * 1024;
@@ -95,14 +95,14 @@ pub enum SqliteRuntimeError {
 struct OperationExecutor {
     statement: Arc<ReadOnlyStatement>,
     operation: CompiledOperation,
-    representation: CompiledRepresentation,
+    access_profile: CompiledAccessProfile,
     source_revision: SourceRevision,
     list_identifier_count_column: Option<String>,
 }
 
 struct OperationInventory {
     source_revision: SourceRevision,
-    representations: BTreeMap<String, OperationExecutor>,
+    access_profiles: BTreeMap<String, OperationExecutor>,
 }
 
 #[derive(Clone)]
@@ -179,26 +179,26 @@ impl SqliteRuntime {
                     .iter()
                     .find(|source| source.id == operation.query.source)
                     .ok_or(SqliteRuntimeError::MissingSource)?;
-                let mut representations = BTreeMap::new();
-                for representation in &operation.representations {
+                let mut access_profiles = BTreeMap::new();
+                for access_profile in &operation.access_profiles {
                     let PreparedStatementContract {
                         contract,
                         list_identifier_count_column,
                     } = statement_contract(
                         resource,
                         operation,
-                        representation,
+                        access_profile,
                         &limits,
                         &source.expected_schema_fingerprint,
                     )?;
                     let statement = ReadOnlyStatement::open(profile.clone(), contract)?;
-                    if representations
+                    if access_profiles
                         .insert(
-                            representation.id.clone(),
+                            access_profile.id.clone(),
                             OperationExecutor {
                                 statement: Arc::new(statement),
                                 operation: operation.clone(),
-                                representation: representation.clone(),
+                                access_profile: access_profile.clone(),
                                 source_revision: source_revision.clone(),
                                 list_identifier_count_column,
                             },
@@ -208,13 +208,13 @@ impl SqliteRuntime {
                         return Err(SqliteRuntimeError::InvalidPlan);
                     }
                 }
-                if representations.is_empty()
+                if access_profiles.is_empty()
                     || operations
                         .insert(
                             operation.identifier.clone(),
                             OperationInventory {
                                 source_revision: source_revision.clone(),
-                                representations,
+                                access_profiles,
                             },
                         )
                         .is_some()
@@ -271,16 +271,16 @@ impl SqliteRuntime {
     pub async fn execute(
         &self,
         operation: &str,
-        representation: &str,
+        access_profile: &str,
         query: OperationQuery,
     ) -> Result<OperationResult, SqliteRuntimeError> {
         let executor = self
             .operations
             .get(operation)
-            .and_then(|inventory| inventory.representations.get(representation))
+            .and_then(|inventory| inventory.access_profiles.get(access_profile))
             .ok_or(SqliteRuntimeError::UnknownOperation)?;
         let permit = self.acquire().await?;
-        let values = bind_operation_values(&executor.operation, &executor.representation, query)?;
+        let values = bind_operation_values(&executor.operation, &executor.access_profile, query)?;
         let result = executor.statement.execute(&values).await;
         drop(permit);
         let mut rows = result?.rows;
@@ -313,11 +313,11 @@ struct PreparedStatementContract {
 fn statement_contract(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     limits: &SqliteRuntimeLimits,
     expected_schema_fingerprint: &str,
 ) -> Result<PreparedStatementContract, SqliteRuntimeError> {
-    let result_columns = result_columns(operation, representation);
+    let result_columns = result_columns(operation, access_profile);
     let mut columns = result_columns
         .iter()
         .map(|column| {
@@ -340,7 +340,7 @@ fn statement_contract(
         OperationKind::List => list_sql(
             resource,
             operation,
-            representation,
+            access_profile,
             &result_columns,
             list_identifier_count_column
                 .as_deref()
@@ -350,12 +350,12 @@ fn statement_contract(
         OperationKind::Read => read_sql(
             resource,
             operation,
-            representation,
+            access_profile,
             &result_columns,
             &mut parameters,
         ),
         OperationKind::Lookup { .. } => {
-            lookup_sql(operation, representation, &result_columns, &mut parameters)
+            lookup_sql(operation, access_profile, &result_columns, &mut parameters)
         }
     };
     let maximum_rows = match &operation.kind {
@@ -382,8 +382,8 @@ fn statement_contract(
                 maximum_statement_steps: MAXIMUM_STATEMENT_STEPS,
                 timeout: limits.request_timeout,
                 // Aggregate process concurrency is owned above. Each fixed
-                // representation has one connection, and compilation bounds the
-                // Registry-wide representation executor inventory.
+                // access profile has one connection, and compilation bounds the
+                // Registry-wide access profile executor inventory.
                 concurrency: 1,
             },
             schema: Some(SchemaBinding {
@@ -398,9 +398,9 @@ fn statement_contract(
 
 fn result_columns(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
 ) -> Vec<String> {
-    let mut columns = representation.projected_columns.clone();
+    let mut columns = access_profile.projected_columns.clone();
     for column in &operation.query.order_by {
         if !columns.contains(column) {
             columns.push(column.clone());
@@ -462,7 +462,7 @@ fn data_type(value: DataType) -> ColumnType {
 fn list_sql(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     columns: &[String],
     identifier_count_column: &str,
     parameters: &mut Vec<ParameterContract>,
@@ -489,7 +489,7 @@ fn list_sql(
             exact_equality_predicate(&filter.source_column, &value, filter.data_type)
         ));
     }
-    add_row_authority(representation, parameters, &mut scope_predicates);
+    add_row_authority(access_profile, parameters, &mut scope_predicates);
     parameters.push(parameter("cursor_present"));
     let keyset = keyset_predicate(&order, parameters);
     let cursor_predicate = format!(":cursor_present = 0 OR ({keyset})");
@@ -537,7 +537,7 @@ fn collision_free_identifier_count_column(columns: &[String]) -> String {
 fn read_sql(
     resource: &CompiledResource,
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     columns: &[String],
     parameters: &mut Vec<ParameterContract>,
 ) -> String {
@@ -547,7 +547,7 @@ fn read_sql(
         "record_identifier",
         DataType::String,
     )];
-    add_row_authority(representation, parameters, &mut predicates);
+    add_row_authority(access_profile, parameters, &mut predicates);
     format!(
         "SELECT {} FROM {} WHERE {} LIMIT 2",
         select_list(columns),
@@ -558,7 +558,7 @@ fn read_sql(
 
 fn lookup_sql(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     columns: &[String],
     parameters: &mut Vec<ParameterContract>,
 ) -> String {
@@ -572,7 +572,7 @@ fn lookup_sql(
             selector.data_type,
         ));
     }
-    add_row_authority(representation, parameters, &mut predicates);
+    add_row_authority(access_profile, parameters, &mut predicates);
     format!(
         "SELECT {} FROM {} WHERE {} LIMIT 2",
         select_list(columns),
@@ -582,14 +582,14 @@ fn lookup_sql(
 }
 
 fn add_row_authority(
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     parameters: &mut Vec<ParameterContract>,
     predicates: &mut Vec<String>,
 ) {
     if let crate::model::CompiledAccess::Protected {
         row_binding: Some(binding),
         ..
-    } = &representation.access
+    } = &access_profile.access
     {
         parameters.push(parameter("row_authority"));
         predicates.push(exact_equality_predicate(
@@ -707,7 +707,7 @@ fn quote_identifier(value: &str) -> String {
 
 fn bind_operation_values(
     operation: &CompiledOperation,
-    representation: &CompiledRepresentation,
+    access_profile: &CompiledAccessProfile,
     query: OperationQuery,
 ) -> Result<BTreeMap<String, Value>, SqliteRuntimeError> {
     let mut values = BTreeMap::new();
@@ -784,7 +784,7 @@ fn bind_operation_values(
     if let crate::model::CompiledAccess::Protected {
         row_binding: Some(binding),
         ..
-    } = &representation.access
+    } = &access_profile.access
     {
         let row = query.row_authority.ok_or(SqliteRuntimeError::InvalidPlan)?;
         if row.source_column != binding.source_column {
@@ -825,7 +825,7 @@ mod tests {
         )
         .expect("fixture materializes");
 
-        let mut protected = representation();
+        let mut protected = access_profile();
         protected.access = CompiledAccess::Protected {
             scope: "registry:read".into(),
             purpose: None,
@@ -876,7 +876,7 @@ mod tests {
         let mut parameters = Vec::new();
         let integer_sql = lookup_sql(
             &integer_operation,
-            &integer_operation.representations[0],
+            &integer_operation.access_profiles[0],
             &["id".into()],
             &mut parameters,
         );
@@ -910,8 +910,8 @@ mod tests {
     #[test]
     fn generated_read_and_filter_predicates_use_declared_equality_families() {
         let resource = resource();
-        let mut representation = representation();
-        representation.access = CompiledAccess::Protected {
+        let mut access_profile = access_profile();
+        access_profile.access = CompiledAccess::Protected {
             scope: "registry:read".into(),
             purpose: None,
             row_binding: Some(CompiledRowBinding {
@@ -927,8 +927,8 @@ mod tests {
                 family: CapabilityFamily::Consultation,
                 pattern: ConsultationPattern::Retrieve,
                 kind: OperationKind::Read,
-                default_representation: representation.id.clone(),
-                representations: vec![representation.clone()],
+                default_access_profile: access_profile.id.clone(),
+                access_profiles: vec![access_profile.clone()],
                 query: QueryPlan {
                     source: "source".into(),
                     view: "records".into(),
@@ -940,7 +940,7 @@ mod tests {
                     maximum_request_body_bytes: None,
                 },
             },
-            &representation,
+            &access_profile,
             &["id".into()],
             &mut read_parameters,
         );
@@ -967,7 +967,7 @@ mod tests {
         let list = list_sql(
             &resource,
             &list,
-            &representation,
+            &access_profile,
             &["id".into()],
             "__relay_record_identifier_count",
             &mut list_parameters,
@@ -1056,12 +1056,12 @@ mod tests {
 
         let resource = resource();
         let operation = list_operation();
-        let representation = representation();
+        let access_profile = access_profile();
         let mut parameters = Vec::new();
         let sql = list_sql(
             &resource,
             &operation,
-            &representation,
+            &access_profile,
             &["id".into()],
             "__relay_record_identifier_count",
             &mut parameters,
@@ -1215,8 +1215,8 @@ mod tests {
             family: CapabilityFamily::Consultation,
             pattern: ConsultationPattern::List,
             kind: OperationKind::List,
-            default_representation: "default".into(),
-            representations: vec![representation()],
+            default_access_profile: "default".into(),
+            access_profiles: vec![access_profile()],
             query: QueryPlan {
                 source: "source".into(),
                 view: "records".into(),
@@ -1236,7 +1236,7 @@ mod tests {
     fn lookup_operation(
         source_column: &str,
         data_type: DataType,
-        representation: CompiledRepresentation,
+        access_profile: CompiledAccessProfile,
     ) -> CompiledOperation {
         CompiledOperation {
             identifier: "record.lookup.by-key".into(),
@@ -1245,8 +1245,8 @@ mod tests {
             kind: OperationKind::Lookup {
                 name: "by-key".into(),
             },
-            default_representation: representation.id.clone(),
-            representations: vec![representation],
+            default_access_profile: access_profile.id.clone(),
+            access_profiles: vec![access_profile],
             query: QueryPlan {
                 source: "source".into(),
                 view: "records".into(),
@@ -1328,8 +1328,8 @@ mod tests {
             .collect()
     }
 
-    fn representation() -> CompiledRepresentation {
-        CompiledRepresentation {
+    fn access_profile() -> CompiledAccessProfile {
+        CompiledAccessProfile {
             id: "default".into(),
             access: CompiledAccess::Public,
             disclosure_profile: "default".into(),
