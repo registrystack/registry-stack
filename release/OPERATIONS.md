@@ -9,7 +9,7 @@ The active path uses one release PR, one private candidate built from protected
 `main`, one annotated tag, and one publication dispatch from protected `main`.
 Publication promotes the candidate bytes and image manifests without rebuilding
 them. A normal release should need less than 15 minutes of operator time and
-about one hour elapsed, dominated by the candidate build.
+less than one hour elapsed, dominated by the candidate build.
 
 ## Prerequisites
 
@@ -20,9 +20,45 @@ Start release preparation when:
   `main`.
 - The release version, GitHub Release destination, and final image tags are
   unused.
+- Each final GHCR package is public and grants this repository's Actions
+  workflow write access.
 
 The scheduled release canary is useful maintenance telemetry, but it is not a
 Beta release prerequisite.
+
+For the first release under a new image package name, provision the package
+once before requesting the candidate. GitHub creates a first-published
+container package as private, so publish a clearly non-release bootstrap
+artifact without putting a token on the command line:
+
+```sh
+bootstrap_dir="$(mktemp -d)"
+printf 'Registry Stack Relay package bootstrap\n' \
+  > "${bootstrap_dir}/bootstrap.txt"
+printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
+  | oras login ghcr.io \
+      --username "${GHCR_BOOTSTRAP_USER:?set the PAT owner}" \
+      --password-stdin
+oras push \
+  --artifact-type application/vnd.registrystack.package-bootstrap.v1 \
+  --annotation \
+    org.opencontainers.image.source=https://github.com/registrystack/registry-stack \
+  ghcr.io/registrystack/relay:bootstrap \
+  "${bootstrap_dir}/bootstrap.txt:text/plain"
+```
+
+In the organization package settings, change only `relay` to public and grant
+`registrystack/registry-stack` Actions access with Write. Verify the resulting
+metadata before candidate dispatch:
+
+```sh
+gh api /orgs/registrystack/packages/container/relay \
+  --jq '[.name,.package_type,.visibility]'
+```
+
+The result must be `["relay","container","public"]`. Keep the bootstrap
+version until the first real version is public, then remove only that bootstrap
+version. This is a package-identity setup step, not part of later releases.
 
 ## Prepare one release PR
 
@@ -38,8 +74,8 @@ release/scripts/registry-release prepare \
 ```
 
 Review and commit the version, lockfile, changelog, release-note, manifest, and
-docs metadata changes reported by the planner. Do not mix release-workflow or
-release-tool implementation changes into this PR. Merge after the protected
+generated contract changes reported by the planner. Do not mix release-workflow
+or release-tool implementation changes into this PR. Merge after the protected
 checks pass. The merge commit is both the candidate source and future tag
 target. There is no finalization or closeout PR.
 
@@ -62,10 +98,10 @@ workflow revision and that revision has successful protected-main CI. The
 candidate workflow then:
 
 - Validates the release identity, manifests, pins, recipes, and destinations.
-- Builds the release payloads, docs archive, and OCI images once.
+- Builds the release payloads and OCI image once.
 - Publishes images only to private candidate packages.
 - Scans the exact candidate image digests and enforces the advisory decision.
-- Runs the release payload and docs journey checks.
+- Runs the release payload checks.
 - Seals a candidate manifest and bundle that remain promotable for seven days.
 - Attests the manifest and bundle after re-verifying their bytes.
 
@@ -79,7 +115,7 @@ release/scripts/registry-release verify-candidate \
 ```
 
 The command verifies the exact source and workflow ancestry, candidate
-attestations, bundle payload hashes, image digests, docs, SPDX SBOMs, scans, and
+attestations, bundle payload hashes, image digests, SPDX SBOMs, scans, and
 advisory verdict. For an initial publication it also requires the release tag,
 GitHub Release, and final image destinations to be unused.
 
@@ -116,11 +152,9 @@ Publication:
 3. Promotes each private image manifest to the final tag at the candidate
    digest. An absent tag is copied, an existing exact digest is accepted, and a
    mismatch stops publication.
-4. Adds the exact image lock, `SHA256SUMS`, and one keyless Sigstore bundle for
-   the checksum file.
+4. Adds `SHA256SUMS` and one keyless Sigstore bundle for the checksum file.
 5. Rechecks the full asset inventory, checksum signature, and image digests,
    then publishes a public, non-prerelease GitHub Release.
-6. Dispatches `docs-pages.yml` with the exact release tag and docs SHA-256.
 
 The candidate attestation and signed checksum chain are the Beta provenance
 model. Ordinary Beta publication does not generate a second generic SLSA
@@ -137,7 +171,6 @@ provenance asset or run the 1.0 release-lock and first-country finalizer.
 | Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then dispatch `release.yml` again with the same tag |
 | One final image tag already has the expected digest | Retry; publication accepts and re-verifies the exact digest |
 | A final image tag has a different digest, or a published asset differs | Stop and patch forward with a new version |
-| Docs dispatch or deployment fails after publication | Retry the docs workflow for the same authenticated archive |
 | Repeatability, canary, Scorecard, telemetry, hosted, or announcement failure | Record follow-up work; do not change the public release result |
 
 Never move a pushed tag, replace a published release asset, or overwrite a

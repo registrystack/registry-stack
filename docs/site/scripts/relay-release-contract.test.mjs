@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
 
@@ -119,7 +119,7 @@ test('included unstable OpenAPI formats publish machine-readable selectors', asy
   }
 });
 
-test('canonical Relay release, local image, and OpenAPI use the same feature set', async () => {
+test('Relay V1 local image and OpenAPI use the same feature set', async () => {
   const roster = await loadRoster();
   const canonicalFeatures = new Set(
     roster
@@ -168,22 +168,6 @@ test('canonical Relay release, local image, and OpenAPI use the same feature set
     dockerProfile,
     canonicalProfile,
     'the local production image must default to the canonical feature set',
-  );
-
-  const releaseRecipePath =
-    process.env.RELAY_RELEASE_WORKFLOW_PATH ?? 'release/scripts/build-release-binaries.sh';
-  const releaseRecipe = isAbsolute(releaseRecipePath)
-    ? await readFile(releaseRecipePath, 'utf8')
-    : await readRepo(releaseRecipePath);
-  assert.match(
-    releaseRecipe,
-    /relay_feature_profile=.*crates\/registry-relay\/canonical-release-features\.txt/,
-    'the release recipe must read the canonical Relay feature profile',
-  );
-  assert.match(
-    releaseRecipe,
-    /-p registry-relay \\\n\s+--no-default-features \\\n\s+--features "\$\{RELEASE_RELAY_FEATURES\}"/,
-    'the release recipe must select the canonical Relay feature profile exactly',
   );
 
   const openapiContract = await readRepo(

@@ -95,16 +95,45 @@ jobs:
           git -C source merge-base --is-ancestor \
             "${source_sha}" refs/remotes/origin/main
           mkdir -p published
+          release_manifest="registry-stack-${TAG}-release-manifest.json"
+          image_lock="registryctl-${TAG}-image-lock.json"
+          release_assets="$(
+            gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --json assets --jq '.assets[].name'
+          )"
+          image_metadata=""
+          image_metadata_kind=""
+          if grep -Fqx -- "${release_manifest}" <<<"${release_assets}"; then
+            image_metadata="${release_manifest}"
+            image_metadata_kind="release-manifest"
+          else
+            IFS=. read -r major minor patch <<<"${TAG#v}"
+            if ((major > 0 || minor > 16 || (minor == 16 && patch >= 3))); then
+              echo "${TAG} requires release asset ${release_manifest}" >&2
+              exit 1
+            fi
+            if ! grep -Fqx -- "${image_lock}" <<<"${release_assets}"; then
+              echo "${TAG} has neither ${release_manifest} nor ${image_lock}" >&2
+              exit 1
+            fi
+            image_metadata="${image_lock}"
+            image_metadata_kind="registryctl-image-lock"
+          fi
           gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
             --dir published \
             --pattern SHA256SUMS \
             --pattern "*-${TAG}-linux-amd64" \
-            --pattern "registryctl-${TAG}-image-lock.json"
+            --pattern "${image_metadata}"
+          test -s "published/${image_metadata}"
           (
             cd published
             sha256sum --check --strict --ignore-missing SHA256SUMS
           )
-          echo "source_sha=${source_sha}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "source_sha=${source_sha}"
+            echo "image_metadata=published/${image_metadata}"
+            echo "image_metadata_kind=${image_metadata_kind}"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Build canonical Linux payload from clean state
         env:
@@ -151,12 +180,15 @@ jobs:
               "evidencectl": "evidencectl",
               "evidence-oid4vci": "evidence-oid4vci",
               "mint": "mint",
+              "registry-manifest": "registry-manifest",
               "registry-manifest-cli": "registry-manifest",
               "registry-notary": "registry-notary",
               "registry-notary-cel-worker": "registry-notary-cel-worker",
               "registry-relay": "registry-relay",
               "registry-relay-rhai-worker": "registry-relay-rhai-worker",
               "registryctl": "registryctl",
+              "relay": "relay",
+              "relayctl": "relayctl",
           }
           for artifact, asset in sorted(binary_names.items()):
               if artifact in artifacts:
@@ -196,24 +228,40 @@ jobs:
       - name: Compare published image config and layers
         env:
           BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+          IMAGE_METADATA: ${{ steps.source.outputs.image_metadata }}
+          IMAGE_METADATA_KIND: ${{ steps.source.outputs.image_metadata_kind }}
           SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
           TAG: ${{ steps.release.outputs.tag }}
           VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          image_lock="published/registryctl-${TAG}-image-lock.json"
           mkdir -p proof/image-layouts
-          mapfile -t product_images < <(
-            jq -er '.images | keys[] | select(startswith("registry-"))' \
-              "${image_lock}"
-          )
-          for name in "${product_images[@]}"; do
-            published_ref="$(jq -er --arg name "${name}" '.images[$name]' "${image_lock}")"
+          image_rows="${RUNNER_TEMP}/repeatability-images.tsv"
+          case "${IMAGE_METADATA_KIND}" in
+            release-manifest)
+              jq -er '.images[] | [.name,.final_ref,.digest] | @tsv' \
+                "${IMAGE_METADATA}" > "${image_rows}"
+              ;;
+            registryctl-image-lock)
+              jq -er \
+                '.images | to_entries[] | select(.key | startswith("registry-")) | [.key,.value,(.value | split("@")[1])] | @tsv' \
+                "${IMAGE_METADATA}" > "${image_rows}"
+              ;;
+            *)
+              echo "unsupported repeatability image metadata kind: ${IMAGE_METADATA_KIND}" >&2
+              exit 1
+              ;;
+          esac
+          test -s "${image_rows}"
+          while IFS=$'\t' read -r name published_ref index_digest; do
+            test -n "${name}"
+            test -n "${published_ref}"
+            [[ "${index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
             published_layout="proof/image-layouts/${name}-published"
             rebuilt_layout="${GITHUB_WORKSPACE}/proof/image-layouts/${name}-rebuilt"
+            test "$(crane digest "${published_ref}")" = "${index_digest}"
             crane pull "${published_ref}" "${published_layout}" --format=oci
-            index_digest="${published_ref##*@}"
             index_blob="${published_layout}/blobs/sha256/${index_digest#sha256:}"
             test -f "${index_blob}"
             test "sha256:$(sha256sum "${index_blob}" | awk '{print $1}')" = \
@@ -232,7 +280,7 @@ jobs:
                 "${GITHUB_WORKSPACE}/proof/image-layouts/${name}.metadata.json"
             python3 verifier/release/scripts/compare-release-image-layouts.py \
               "${published_layout}" "${rebuilt_layout}"
-          done
+          done < "${image_rows}"
 
       - name: Record successful 30-day proof
         env:

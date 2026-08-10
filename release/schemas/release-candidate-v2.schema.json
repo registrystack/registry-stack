@@ -12,7 +12,6 @@
     "validity",
     "payloads",
     "images",
-    "docs",
     "sbom",
     "scans",
     "advisory",
@@ -32,7 +31,10 @@
       "properties": {
         "version": {
           "type": "string",
-          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+          "not": {
+            "pattern": "^0\\.(?:[0-9]|1[0-5])\\."
+          }
         },
         "release_id": {
           "type": "string",
@@ -149,10 +151,10 @@
         }
       }
     },
-    "docs": {
+    "sbom": {
       "$ref": "#/$defs/fileReference"
     },
-    "sbom": {
+    "docs": {
       "$ref": "#/$defs/fileReference"
     },
     "scans": {
@@ -199,6 +201,57 @@
       "$ref": "#/$defs/sizedFile"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "release": {
+            "properties": {
+              "version": {
+                "pattern": "^0\\.1[6-8]\\."
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": ["docs"],
+        "properties": {
+          "payloads": {
+            "contains": {
+              "type": "object",
+              "required": ["kind"],
+              "properties": {
+                "kind": {
+                  "const": "docs"
+                }
+              }
+            },
+            "minContains": 1,
+            "maxContains": 1
+          }
+        }
+      },
+      "else": {
+        "not": {
+          "required": ["docs"]
+        },
+        "properties": {
+          "payloads": {
+            "items": {
+              "properties": {
+                "kind": {
+                  "not": {
+                    "const": "docs"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "sha": {
       "type": "string",

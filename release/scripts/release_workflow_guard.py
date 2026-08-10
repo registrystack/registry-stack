@@ -74,6 +74,26 @@ def public_image_destination(final_ref: str, namespace: str) -> tuple[str, str]:
     return match.group("package"), match.group("tag")
 
 
+def require_package_visibility(
+    document: Any,
+    *,
+    package: str,
+    visibility: str,
+) -> None:
+    if visibility not in {"private", "public"}:
+        raise GuardError("expected package visibility must be private or public")
+    if not isinstance(document, dict):
+        raise GuardError("GitHub package metadata must be an object")
+    if document.get("name") != package:
+        raise GuardError(f"GitHub package {package!r} is absent or mismatched")
+    if document.get("package_type") != "container":
+        raise GuardError("GitHub package must be a container package")
+    if document.get("visibility") != visibility:
+        raise GuardError(
+            f"GitHub package {package!r} must be {visibility}"
+        )
+
+
 def package_versions(document: Any) -> list[dict[str, Any]]:
     if not isinstance(document, list) or any(
         not isinstance(page, list) for page in document
@@ -149,6 +169,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     destination.add_argument("--final-ref", required=True)
     destination.add_argument("--namespace", required=True)
 
+    package_visibility = subparsers.add_parser("require-package-visibility")
+    package_visibility.add_argument("--metadata", type=Path, required=True)
+    package_visibility.add_argument("--package", required=True)
+    package_visibility.add_argument(
+        "--visibility", choices=("private", "public"), required=True
+    )
+
     absent = subparsers.add_parser("require-image-tag-absent")
     absent.add_argument("--metadata", type=Path, required=True)
     absent.add_argument("--tag", required=True)
@@ -170,6 +197,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "\t".join(
                     public_image_destination(args.final_ref, args.namespace)
                 )
+            )
+        elif args.command == "require-package-visibility":
+            require_package_visibility(
+                read_json(args.metadata),
+                package=args.package,
+                visibility=args.visibility,
             )
         elif args.command == "require-image-tag-absent":
             require_image_tag_absent(

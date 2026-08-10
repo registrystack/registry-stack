@@ -140,6 +140,10 @@ Both return a successful response only after startup completed.
 Publish the API through the operator-controlled TLS proxy or ingress, not by exposing the private
 listener directly.
 
+The release image probes `http://127.0.0.1:8080/health` by default.
+When `server.bind` uses another port, set `RELAY_HEALTHCHECK_URL` to the loopback `/health` URL on
+that port. The `relay healthcheck` command validates the configured URL before making the request.
+
 ## Retain value-free audit evidence
 
 For every data operation, including anonymous public access, Relay persists an attempt event before

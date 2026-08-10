@@ -59,14 +59,12 @@ stack_dirty="$(dirty_count "${stack_root}")"
 require_cargo_repo "registry-stack" "${stack_root}"
 require_path "registry-platform crates" "${stack_root}/crates/registry-platform-authcommon"
 require_path "registry-manifest crates" "${stack_root}/crates/registry-manifest-core"
-require_path "registry-relay crate" "${stack_root}/crates/registry-relay"
 require_path "registry-relay-v2 crate" "${stack_root}/crates/registry-relay-v2"
 require_path "registry-relayctl crate" "${stack_root}/crates/registry-relayctl"
 require_path "registry-evidence crate" "${stack_root}/crates/registry-evidence"
 require_path "registry-evidencectl crate" "${stack_root}/crates/registry-evidencectl"
 require_path "registry-mint crate" "${stack_root}/crates/registry-mint"
 require_path "registry-evidence-oid4vci crate" "${stack_root}/crates/registry-evidence-oid4vci"
-require_path "registryctl crate" "${stack_root}/crates/registryctl"
 if [[ "${stack_git_root}" != "${stack_root}" ]]; then
 	echo "release source model failed: registry-stack source dir must be the monorepo root, got ${stack_root} inside ${stack_git_root}" >&2
 	exit 2

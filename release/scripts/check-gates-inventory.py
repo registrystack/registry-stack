@@ -456,6 +456,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "name: Reconcile exact staged draft before first public image write",
             "diff -u contract/expected-assets contract/actual-assets",
             "name: Reconcile exact image digests",
+            "require-package-visibility",
+            "--visibility public",
             "reconcile-image-tag",
             '--expected-digest "${digest}"',
             'if [[ "${state}" == absent ]]; then',
@@ -468,7 +470,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ".github/workflows/release.yml",
         (
             "finalize-assets:\n    name: Finalize the signed Beta asset closure",
-            "name: Render the final image lock",
+            "name: Clean retryable final additions and reverify exact staged assets",
             "name: Sign and upload the checksum closure",
             "cosign sign-blob --yes",
             "contract/final-upload-release.json",
@@ -476,7 +478,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "Release publication and authenticated docs dispatch",
+        "Exact Beta release publication",
         ".github/workflows/release.yml",
         (
             "name: Classify exact bound draft or published release",
@@ -484,7 +486,15 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "name: Publish immutable release",
             "-F draft=false",
             "-F prerelease=false",
-            "name: Dispatch authenticated docs promotion",
+        ),
+    ),
+    (
+        "Authenticated legacy docs retry dispatch",
+        ".github/workflows/release.yml",
+        (
+            "dispatch-docs:\n    name: Dispatch authenticated legacy docs promotion",
+            "if: needs.verify.outputs.docs_sha256 != ''",
+            "name: Dispatch authenticated legacy docs promotion",
             '-f "released_tag=${{ needs.verify.outputs.tag }}"',
             '-f "docs_sha256=${{ needs.verify.outputs.docs_sha256 }}"',
         ),
@@ -527,12 +537,11 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Single canonical candidate build",
         ".github/workflows/release-candidate.yml",
         (
-            "build-canonical:\n    name: Build Linux payload, private images, and docs once",
+            "build-canonical:\n    name: Build Linux payload and private images once",
             "name: Restore reusable Cargo cache",
             "restore-keys:",
             "name: Build canonical Linux payload once",
             "name: Build private candidate image layouts once",
-            "name: Package exact release docs archive",
         ),
     ),
     (
@@ -542,11 +551,11 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "name: Verify local image layouts before package credentials are used",
             "name: Publish exact layouts to private candidate packages",
             "--from-oci-layout",
-            "--jq .visibility",
-            ")\" = private",
+            "require-package-visibility",
+            "--visibility private",
             "name: Verify and scan exact candidate images",
             'scan_image \\\n              "${candidate_ref}"',
-            "check_advisory_baselines.py",
+            "check-advisory-baselines.py",
         ),
     ),
     (
@@ -587,7 +596,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "release/scripts/cleanup-release-candidates.py",
         (
             'CANDIDATE_PACKAGES = (\n    "registry-notary-candidate",\n'
-            '    "registry-relay-candidate",\n)',
+            '    "registry-relay-candidate",\n    "relay-candidate",\n)',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",
         ),
@@ -638,16 +647,16 @@ ORDERED_RELEASE_SECURITY_GATES = (
         "name: Publish immutable release",
     ),
     (
-        "Release publication before docs dispatch",
+        "Release publication before legacy docs dispatch",
         ".github/workflows/release.yml",
         "name: Publish immutable release",
-        "name: Dispatch authenticated docs promotion",
+        "name: Dispatch authenticated legacy docs promotion",
     ),
     (
         "Candidate validation before build",
         ".github/workflows/release-candidate.yml",
         "name: Validate manifests, pins, recipes, and scanner policy fixtures",
-        "build-canonical:\n    name: Build Linux payload, private images, and docs once",
+        "build-canonical:\n    name: Build Linux payload and private images once",
     ),
     (
         "Local layout verification before package credentials",
@@ -852,7 +861,6 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
         or "actions/cache@" not in build_a
         or build_a.count("name: Build canonical Linux payload once") != 1
         or build_a.count("name: Build private candidate image layouts once") != 1
-        or build_a.count("name: Package exact release docs archive") != 1
         or "actions/download-artifact@" in build_a
     ):
         return ["Candidate build job isolation"]

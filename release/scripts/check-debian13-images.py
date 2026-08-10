@@ -35,7 +35,7 @@ DISTROLESS_REPOSITORY = DISTROLESS_RUNTIME.split("@", 1)[0]
 DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
     Path("crates/registry-relay/Dockerfile.demo"),
-    Path("release/docker/Dockerfile.registry-relay"),
+    Path("release/docker/Dockerfile.relay"),
 )
 
 # Adopter and development images. They build from source like the per-product
@@ -63,8 +63,8 @@ PREPARATION_DOCKERFILES = DOCKERFILES[2:]
 RELAY_DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
     Path("crates/registry-relay/Dockerfile.demo"),
-    Path("release/docker/Dockerfile.registry-relay"),
 )
+RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
 
 FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
 STAGE_NAME_RE = re.compile(r"^FROM\s+\S+\s+AS\s+(\S+)", re.MULTILINE | re.IGNORECASE)
@@ -278,6 +278,45 @@ def check_repository(root: Path = ROOT) -> list[str]:
             'ENTRYPOINT ["/usr/local/bin/registry-relay"]',
             relative,
             "absolute Relay entrypoint",
+            failures,
+        )
+
+    for relative in RELAY_V2_DOCKERFILES:
+        text = texts[relative]
+        require(
+            text,
+            "/usr/local/bin/relay",
+            relative,
+            "Relay V2 binary",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            'ENTRYPOINT ["/usr/local/bin/relay"]',
+            relative,
+            "absolute Relay V2 entrypoint",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            'CMD ["serve", "--runtime", "/etc/relay/runtime.yaml"]',
+            relative,
+            "absolute Relay V2 runtime configuration binding",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            "ENV RELAY_HEALTHCHECK_URL=http://127.0.0.1:8080/health",
+            relative,
+            "safe configurable Relay V2 healthcheck default",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s '
+            '--retries=3 CMD ["/usr/local/bin/relay", "healthcheck"]',
+            relative,
+            "environment-aware Relay V2 healthcheck",
             failures,
         )
 

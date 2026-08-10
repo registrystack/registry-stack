@@ -666,13 +666,14 @@ class RegistryReleaseTest(TestCase):
             encoding="utf-8"
         )
         release_dockerfiles = [
-            "release/docker/Dockerfile.registry-relay",
+            "release/docker/Dockerfile.relay",
         ]
 
         for dockerfile in release_dockerfiles:
             self.assertIn("release/docker/Dockerfile.${name}", recipe)
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertIn("dist/image-bin", text)
+        self.assertFalse((ROOT / "release/docker/Dockerfile.registry-relay").exists())
         self.assertIn("release/scripts/build-release-image.sh", workflow)
 
     def test_release_builds_and_packages_evidence_oid4vci_on_every_platform(self) -> None:
@@ -1114,61 +1115,32 @@ class RegistryReleaseTest(TestCase):
             scan_body,
         )
         self.assertIn("now_epoch - db_built_epoch > 259200", scan_body)
+        self.assertIn("for name in relay; do", scan_body)
         self.assertIn(
-            "candidate/security/images/postgresql.digest",
+            "candidate/security/image-sbom/${name}.spdx.json",
+            scan_body,
+        )
+        self.assertIn("candidate/security/syft/${name}.syft.json", scan_body)
+        self.assertIn("candidate/security/grype/${name}.grype.json", scan_body)
+        self.assertIn(
+            "python3 release/scripts/check-advisory-baselines.py",
             scan_body,
         )
         self.assertIn(
-            "candidate/security/image-sbom/postgresql.spdx.json",
+            "--baseline products/relay-v2/security/advisory-baseline.json",
             scan_body,
         )
         self.assertIn(
-            "release/scripts/registry-release bind-spdx-subject",
+            "--syft-report candidate/security/syft/relay.syft.json",
             scan_body,
         )
-        self.assertIn('--digest-ref "${postgresql_ref}"', scan_body)
-        self.assertIn(
-            "candidate/security/syft/postgresql.syft.json",
-            scan_body,
-        )
-        self.assertIn(
-            "candidate/security/grype/postgresql.grype.json",
-            scan_body,
-        )
-        self.assertIn("candidate/security/rootfs/postgresql", scan_body)
-        self.assertIn('crane digest "${postgresql_ref}"', scan_body)
-        self.assertIn(
-            "python3 release/scripts/check_postgresql_advisory_policy.py",
-            scan_body,
-        )
-        self.assertIn(
-            "candidate/security/grype/postgresql.grype.json",
-            scan_body,
-        )
-        self.assertIn(
-            "--baseline release/security/postgresql-advisory-baseline.json",
-            scan_body,
-        )
-        self.assertIn(
-            "--syft-report candidate/security/syft/postgresql.syft.json",
-            scan_body,
-        )
-        self.assertIn(
-            "--rootfs candidate/security/rootfs/postgresql",
-            scan_body,
-        )
-        self.assertIn('--expected-image "${postgresql_ref}"', scan_body)
-        postgresql_ref_read = scan_body.index(
-            'postgresql_ref="$(tr -d \'\\n\' < release/registryctl-postgresql-image.ref)"'
-        )
-        expected_image = scan_body.index(
-            '--expected-image "${postgresql_ref}"'
-        )
-        self.assertLess(postgresql_ref_read, expected_image)
-        self.assertIn('"postgresql-runtime"', scan_body)
+        self.assertIn("--subject relay-image", scan_body)
+        self.assertIn('"relay-image"', scan_body)
+        self.assertNotIn("postgresql", scan_body.lower())
+        self.assertNotIn("registry-relay", scan_body)
         package_body = assemble[package_step:]
         self.assertIn(
-            "images image-sbom syft grype advisory-verdict.json",
+            "image-sbom syft grype advisory-verdict.json",
             package_body,
         )
         self.assertNotIn(
@@ -1176,7 +1148,100 @@ class RegistryReleaseTest(TestCase):
             package_body,
         )
 
-    def test_postgresql_scan_workflow_contract_detects_structural_mutations(
+    def test_candidate_workflow_uses_only_the_current_release_roster(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        canonical = workflow.split("\n  build-canonical:", 1)[1].split(
+            "\n  build-platforms:", 1
+        )[0]
+        binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+
+        for current in (
+            "relay-${{ needs.validate.outputs.tag }}-linux-amd64",
+            "relayctl-${{ needs.validate.outputs.tag }}-linux-amd64",
+            "for name in relay; do",
+            "-p registry-relayctl",
+        ):
+            self.assertIn(current, workflow)
+        self.assertIn("registry-manifest-${RELEASE_TAG}-linux-amd64", binary_recipe)
+        for retired in (
+            "-p registryctl ",
+            "for name in registry-relay; do",
+            "registry-relay-rhai-worker",
+            "registryctl-${{ needs.validate.outputs.tag }}-install.sh",
+            "registryctl-postgresql-image.ref",
+            "render-registryctl-image-lock",
+            "*-image-lock.json",
+            "check-registryctl-tutorials.sh",
+            "import-map-2026-06-24.yaml",
+        ):
+            self.assertNotIn(retired, workflow)
+        cache_key = next(
+            line.strip() for line in canonical.splitlines() if line.strip().startswith("key:")
+        )
+        self.assertIn("Cargo.lock", cache_key)
+        self.assertIn("--locked", workflow)
+        self.assertIn(
+            "GHCR package ${package} must be provisioned before release",
+            workflow,
+        )
+        self.assertIn("--package relay-candidate", workflow)
+        self.assertIn('elif [[ "${candidate_package_status}" != 404 ]]', workflow)
+        self.assertIn('elif [[ "${package_status}" != 404 ]]', workflow)
+        self.assertLess(
+            workflow.index('elif [[ "${package_status}" != 404 ]]'),
+            workflow.index("oras cp --from-oci-layout"),
+        )
+        self.assertIn("require-package-visibility", workflow)
+
+    def test_publication_omits_legacy_image_lock_from_v0_19(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        current_predicate = "if ((major > 0 || minor >= 19)); then"
+        legacy_predicate = "if ((major == 0 && minor < 19)); then"
+        self.assertEqual(2, workflow.count(current_predicate))
+        self.assertEqual(2, workflow.count(legacy_predicate))
+        self.assertIn("Current releases must not carry a legacy image lock", workflow)
+        self.assertIn(
+            "Render the historical registryctl image lock for pre-0.19 retries",
+            workflow,
+        )
+        promotion = workflow.split("\n  promote-images:", 1)[1].split(
+            "\n  finalize-assets:", 1
+        )[0]
+        self.assertIn("require-package-visibility", promotion)
+        self.assertIn("--visibility public", promotion)
+        self.assertNotIn("if ((minor >= 19)); then", workflow)
+        self.assertNotIn("if ((minor < 19)); then", workflow)
+        major, minor, _patch = (int(part) for part in "1.0.0".split("."))
+        self.assertTrue(major > 0 or minor >= 19)
+
+    def test_release_canary_exercises_the_current_image_contract(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-canary.yml").read_text(
+            encoding="utf-8"
+        )
+
+        for current in (
+            "_relay_v2_payload_inventory",
+            "payloads: $payloads[0]",
+            "ghcr.io/registrystack/relay-candidate@sha256:",
+            'name: "relay"',
+            '"relay-image"',
+        ):
+            self.assertIn(current, workflow)
+        for retired in (
+            "registry-relay",
+            "registryctl-",
+            "postgresql",
+        ):
+            self.assertNotIn(retired, workflow)
+
+    def test_relay_scan_workflow_contract_detects_structural_mutations(
         self,
     ) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
@@ -1189,11 +1254,10 @@ class RegistryReleaseTest(TestCase):
                 'grype "${image_ref}" -o json > "${report}"',
                 "Grype did not emit a complete scan report",
                 "now_epoch - db_built_epoch > 259200",
-                '[[ "$(crane digest "${postgresql_ref}")"'
-                ' != "${postgresql_digest}" ]]',
-                "python3 release/scripts/check_postgresql_advisory_policy.py",
-                '"postgresql-runtime"',
-                "images image-sbom syft grype advisory-verdict.json",
+                "python3 release/scripts/check-advisory-baselines.py",
+                "products/relay-v2/security/advisory-baseline.json",
+                '"relay-image"',
+                "image-sbom syft grype advisory-verdict.json",
             ):
                 self.assertIn(fragment, text)
 
@@ -1202,11 +1266,10 @@ class RegistryReleaseTest(TestCase):
             'grype "${image_ref}" -o json > "${report}"',
             "Grype did not emit a complete scan report",
             "now_epoch - db_built_epoch > 259200",
-            '[[ "$(crane digest "${postgresql_ref}")"'
-            ' != "${postgresql_digest}" ]]',
-            "python3 release/scripts/check_postgresql_advisory_policy.py",
-            '"postgresql-runtime"',
-            "images image-sbom syft grype advisory-verdict.json",
+            "python3 release/scripts/check-advisory-baselines.py",
+            "products/relay-v2/security/advisory-baseline.json",
+            '"relay-image"',
+            "image-sbom syft grype advisory-verdict.json",
         ):
             with self.subTest(fragment=fragment):
                 with self.assertRaises(AssertionError):
@@ -1436,34 +1499,38 @@ class RegistryReleaseTest(TestCase):
             (ROOT / "release/docker/Dockerfile.registry-notary-openfn-sidecar").exists()
         )
 
-    def test_relay_packaging_includes_dedicated_rhai_worker(self) -> None:
+    def test_release_packaging_uses_relay_v2_artifact_identities(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
         )
-        worker = "registry-relay-rhai-worker"
-
-        for dockerfile in (
-            "crates/registry-relay/Dockerfile",
-            "crates/registry-relay/Dockerfile.demo",
-            "release/docker/Dockerfile.registry-relay",
-        ):
-            text = (ROOT / dockerfile).read_text(encoding="utf-8")
-            self.assertIn(f"/usr/local/bin/{worker}", text)
-
-        self.assertIn(
-            f'"dist/bin/{worker}-${{RELEASE_TAG}}-linux-amd64"',
-            binary_recipe,
+        image_recipe = (ROOT / "release/scripts/build-release-image.sh").read_text(
+            encoding="utf-8"
         )
-        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
-        release_dockerfile = (
-            ROOT / "release/docker/Dockerfile.registry-relay"
-        ).read_text(encoding="utf-8")
+        release_dockerfile = (ROOT / "release/docker/Dockerfile.relay").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("-p registry-manifest-cli", binary_recipe)
+        self.assertIn("-p registry-relay-v2", binary_recipe)
+        self.assertIn("--bin relay", binary_recipe)
+        self.assertIn("--no-default-features", binary_recipe)
+        self.assertIn("-p registry-relayctl", binary_recipe)
+        for artifact in ("registry-manifest", "relay", "relayctl"):
+            self.assertIn(
+                f'"dist/bin/{artifact}-${{RELEASE_TAG}}-linux-amd64"',
+                binary_recipe,
+            )
+        self.assertNotIn("-p registryctl ", binary_recipe)
+        self.assertNotIn("-p registry-relay ", binary_recipe)
+        self.assertNotIn("registry-relay-rhai-worker", binary_recipe)
+        self.assertIn("cp target/release/relay dist/image-bin/relay", binary_recipe)
+        self.assertIn("relay)", image_recipe)
+        self.assertNotIn("registry-relay)", image_recipe)
         self.assertIn(
-            f"install -m 0755 /workspace/image-bin/{worker} "
-            f"/workspace/runtime-root/usr/local/bin/{worker}",
+            "install -m 0755 /workspace/image-bin/relay "
+            "/workspace/runtime-root/usr/local/bin/relay",
             release_dockerfile,
         )
-        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
     def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
@@ -1481,19 +1548,16 @@ class RegistryReleaseTest(TestCase):
     def test_release_product_images_preown_managed_audit_and_state_directories(
         self,
     ) -> None:
-        for product in ("relay",):
-            dockerfile = (
-                ROOT / f"release/docker/Dockerfile.registry-{product}"
-            ).read_text(encoding="utf-8")
-            self.assertIn(
-                "/workspace/runtime-root/var/lib/registry/audit", dockerfile
-            )
-            self.assertIn(
-                "/workspace/runtime-root/var/lib/registry/state", dockerfile
-            )
-            self.assertIn(
-                "/workspace/runtime-root/var/lib/registry \\", dockerfile
-            )
+        dockerfile = (ROOT / "release/docker/Dockerfile.relay").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("/workspace/runtime-root/var/lib/relay/audit", dockerfile)
+        self.assertIn("/workspace/runtime-root/var/lib/relay/data", dockerfile)
+        self.assertIn("/workspace/runtime-root/var/lib/relay \\", dockerfile)
+        self.assertIn(
+            "chmod 0700 /workspace/runtime-root/var/lib/relay/audit",
+            dockerfile,
+        )
 
     def legacy_release_workflow_publishes_cross_platform_registryctl_binaries(
         self,
@@ -2269,7 +2333,8 @@ class RegistryReleaseTest(TestCase):
 
         self.assertNotEqual(0, rejected.returncode)
         self.assertIn(
-            "artifact registryctl-image-lock is required for version 0.9.0 or later",
+            "artifact registryctl-image-lock is required for versions "
+            "0.9.0 through 0.18.x",
             rejected.stderr,
         )
         self.assertEqual(0, accepted.returncode, accepted.stderr)
@@ -2317,7 +2382,8 @@ class RegistryReleaseTest(TestCase):
 
         self.assertNotEqual(0, rejected.returncode)
         self.assertIn(
-            "artifact registryctl-installer is required for version 0.14.0 or later",
+            "artifact registryctl-installer is required for versions "
+            "0.14.0 through 0.18.x",
             rejected.stderr,
         )
         self.assertEqual(0, accepted.returncode, accepted.stderr)
@@ -2379,6 +2445,38 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual(0, accepted.returncode, accepted.stderr)
         self.assertNotEqual(0, rejected.returncode)
         self.assertIn("unexpected registry-notary", rejected.stderr)
+
+    def test_validate_requires_exact_v0_19_adopter_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(Path(tmp), version="0.19.0")
+            accepted = run_tool("validate", str(manifest))
+
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            del data["artifacts"]["relayctl"]
+            data["artifacts"]["registryctl"] = "0.19.0"
+            data["artifacts"]["registryctl-installer"] = "0.19.0"
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+            rejected = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("missing relayctl", rejected.stderr)
+        self.assertIn("unexpected registryctl", rejected.stderr)
+        self.assertIn("registryctl-installer", rejected.stderr)
+
+    def test_validate_v0_19_does_not_require_registryctl_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(Path(tmp), version="0.19.0")
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+
+            result = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("registryctl-image-lock", data["artifacts"])
+        self.assertNotIn("registryctl-installer", data["artifacts"])
+        self.assertNotIn("registry-docs", data["artifacts"])
 
     def test_beta_27_manifest_is_the_notary_free_current_inventory(self) -> None:
         manifest = ROOT / "release/manifests/registry-stack-beta-27.yaml"
@@ -2627,7 +2725,7 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("tag target must equal --source-sha", mismatch.stderr)
 
     def test_registryctl_image_lock_release_version_gate(self) -> None:
-        rejected = run_tool(
+        too_old = run_tool(
             "verify-registryctl-image-lock-release-version",
             "--version",
             "0.8.5",
@@ -2635,15 +2733,22 @@ class RegistryReleaseTest(TestCase):
         accepted = run_tool(
             "verify-registryctl-image-lock-release-version",
             "--version",
-            "0.9.0",
+            "0.18.0",
+        )
+        retired = run_tool(
+            "verify-registryctl-image-lock-release-version",
+            "--version",
+            "0.19.0",
         )
 
-        self.assertNotEqual(0, rejected.returncode)
-        self.assertIn("require version 0.9.0 or later", rejected.stderr)
+        self.assertNotEqual(0, too_old.returncode)
+        self.assertIn("require versions 0.9.0 through 0.18.x", too_old.stderr)
         self.assertEqual(0, accepted.returncode, accepted.stderr)
         self.assertIn(
-            "verified registryctl image lock release version 0.9.0", accepted.stdout
+            "verified registryctl image lock release version 0.18.0", accepted.stdout
         )
+        self.assertNotEqual(0, retired.returncode)
+        self.assertIn("retired starting with version 0.19.0", retired.stderr)
 
     def test_render_registryctl_image_lock_v2_includes_reviewed_postgresql(
         self,
@@ -2754,7 +2859,7 @@ class RegistryReleaseTest(TestCase):
             self.assertFalse(output.exists())
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("require version 0.9.0 or later", result.stderr)
+        self.assertIn("require versions 0.9.0 through 0.18.x", result.stderr)
 
     def test_verify_registryctl_binary_version_matches_manifest_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4152,14 +4257,27 @@ def write_manifest(
             "registry-notary": version,
             "registry-relay": version,
         }
+    if version_tuple >= (0, 19, 0):
+        artifacts = {
+            "registry-manifest": version,
+            "relay": version,
+            "relayctl": version,
+            "evidence": version,
+            "evidencectl": version,
+            "mint": version,
+            "evidence-oid4vci": version,
+            "evidencectl-installer": version,
+            "evidence-client-node": version,
+            "evidence-client-python": version,
+        }
     if include_registryctl_image_lock is None:
-        include_registryctl_image_lock = version_tuple >= (0, 9, 0)
+        include_registryctl_image_lock = (0, 9, 0) <= version_tuple < (0, 19, 0)
     if include_registryctl_image_lock:
         artifacts["registryctl-image-lock"] = version
     else:
         artifacts.pop("registryctl-image-lock", None)
     if include_registryctl_installer is None:
-        include_registryctl_installer = version_tuple >= (0, 14, 0)
+        include_registryctl_installer = (0, 14, 0) <= version_tuple < (0, 19, 0)
     if include_registryctl_installer:
         artifacts["registryctl-installer"] = version
     if include_evidence_toolset is None:

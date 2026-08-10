@@ -49,6 +49,9 @@ RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 LEGACY_IMAGE_NAMES = {"registry-notary", "registry-relay"}
 CURRENT_IMAGE_NAMES = {"registry-relay"}
 NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
+CANDIDATE_V2_MINIMUM_VERSION = (0, 16, 0)
+RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
+RELAY_V2_IMAGE_NAMES = {"relay"}
 ATTEMPT_ARTIFACT_PREFIXES = {
     "registry-stack-candidate-build-a",
     "registry-stack-candidate-macos-arm64",
@@ -86,21 +89,21 @@ V2_TOP_LEVEL_FIELDS = {
     "validity",
     "payloads",
     "images",
-    "docs",
     "sbom",
     "scans",
     "advisory",
     "bundle",
 }
+LEGACY_V2_TOP_LEVEL_FIELDS = V2_TOP_LEVEL_FIELDS | {"docs"}
 PAYLOAD_KINDS = {
     "binary",
     "client-package",
     "installer",
     "image-lock",
-    "docs",
     "sbom",
     "security-evidence",
 }
+LEGACY_V2_PAYLOAD_KINDS = PAYLOAD_KINDS | {"docs"}
 SECURITY_EVIDENCE_MAX_ARCHIVE_SIZE = 128 * 1024 * 1024
 SECURITY_EVIDENCE_MAX_ENTRY_SIZE = 64 * 1024 * 1024
 SECURITY_EVIDENCE_MAX_TOTAL_SIZE = 256 * 1024 * 1024
@@ -112,12 +115,14 @@ SECURITY_EVIDENCE_DIRECTORIES = {
     "grype",
 }
 SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
+    "grype/grype-db-status.json",
+    "advisory-verdict.json",
+}
+SECURITY_EVIDENCE_POSTGRESQL_REQUIRED_FILES = {
     "images/postgresql.digest",
     "image-sbom/postgresql.spdx.json",
     "syft/postgresql.syft.json",
     "grype/postgresql.grype.json",
-    "grype/grype-db-status.json",
-    "advisory-verdict.json",
 }
 SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
     f"{directory}/registry-relay.{suffix}.json"
@@ -126,7 +131,7 @@ SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
         ("syft", "syft"),
         ("grype", "grype"),
     )
-}
+} | SECURITY_EVIDENCE_POSTGRESQL_REQUIRED_FILES
 POSTGRESQL_DIGEST_REF = re.compile(
     r"^docker\.io/library/postgres@sha256:[0-9a-f]{64}$"
 )
@@ -138,16 +143,63 @@ class CandidateError(ValueError):
 
 def _candidate_image_names(version: str) -> set[str]:
     parsed = tuple(int(part) for part in version.split("."))
+    if parsed >= RELAY_V2_RELEASE_MINIMUM_VERSION:
+        return RELAY_V2_IMAGE_NAMES
     if parsed >= NOTARY_RETIREMENT_MINIMUM_VERSION:
         return CURRENT_IMAGE_NAMES
     return LEGACY_IMAGE_NAMES
+
+
+def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
+    tag = f"v{version}"
+    inventory = {
+        f"{name}-{tag}-linux-amd64": "binary"
+        for name in (
+            "registry-manifest",
+            "relay",
+            "relayctl",
+            "evidence",
+            "evidencectl",
+            "mint",
+            "evidence-oid4vci",
+        )
+    }
+    for platform in ("linux-arm64", "macos-arm64"):
+        for name in (
+            "relayctl",
+            "evidence",
+            "evidencectl",
+            "mint",
+            "evidence-oid4vci",
+        ):
+            inventory[f"{name}-{tag}-{platform}"] = "binary"
+    for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
+        inventory[f"evidence-client-node-{tag}-{platform}.tgz"] = "client-package"
+    for platform in ("linux_x86_64", "linux_aarch64", "macosx_11_0_arm64"):
+        inventory[
+            f"registry_evidence_client-{version}-cp310-abi3-{platform}.whl"
+        ] = "client-package"
+    inventory.update(
+        {
+            f"evidencectl-{tag}-install.sh": "installer",
+            "evidencectl-install.sh": "installer",
+            f"registry-stack-{tag}.sbom.spdx.json": "sbom",
+            f"registry-stack-{tag}-security-evidence.tar.gz": (
+                "security-evidence"
+            ),
+        }
+    )
+    return inventory
 
 
 def _security_evidence_required_files(
     product_image_names: Iterable[str],
 ) -> set[str]:
     required = set(SECURITY_EVIDENCE_COMMON_REQUIRED_FILES)
-    for image in product_image_names:
+    image_names = set(product_image_names)
+    if image_names != RELAY_V2_IMAGE_NAMES:
+        required.update(SECURITY_EVIDENCE_POSTGRESQL_REQUIRED_FILES)
+    for image in image_names:
         required.update(
             {
                 f"image-sbom/{image}.spdx.json",
@@ -762,8 +814,8 @@ def validate_security_evidence_archive(
     contents: dict[str, bytes] = {}
     total_size = 0
     member_count = 0
-    expected_top_level = SECURITY_EVIDENCE_DIRECTORIES | {
-        "advisory-verdict.json"
+    expected_top_level = {
+        PurePosixPath(name).parts[0] for name in required_files
     }
     try:
         with tarfile.open(path, mode="r:gz") as archive:
@@ -846,40 +898,41 @@ def validate_security_evidence_archive(
             f"unexpected={sorted(top_level - expected_top_level)!r}"
         )
 
-    try:
-        postgresql_ref = contents["images/postgresql.digest"].decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise CandidateError(
-            "security evidence PostgreSQL digest is not UTF-8 text"
-        ) from exc
-    canonical_postgresql_ref = postgresql_ref.removesuffix("\n")
-    if (
-        POSTGRESQL_DIGEST_REF.fullmatch(canonical_postgresql_ref) is None
-        or postgresql_ref != canonical_postgresql_ref + "\n"
-    ):
-        raise CandidateError(
-            "security evidence PostgreSQL digest is not canonical or immutable"
-        )
-    try:
-        reviewed_postgresql_ref = POSTGRESQL_REF_PATH.read_text(
-            encoding="utf-8"
-        )
-    except (OSError, UnicodeError) as exc:
-        raise CandidateError(
-            "cannot read the reviewed PostgreSQL release image reference"
-        ) from exc
-    if (
-        reviewed_postgresql_ref
-        != reviewed_postgresql_ref.removesuffix("\n") + "\n"
-        or canonical_postgresql_ref != reviewed_postgresql_ref.removesuffix("\n")
-    ):
-        raise CandidateError(
-            "security evidence PostgreSQL digest does not match the reviewed "
-            "release image reference"
-        )
-    postgresql_ref = canonical_postgresql_ref
-
-    expected_refs = {**product_image_refs, "postgresql": postgresql_ref}
+    expected_refs = dict(product_image_refs)
+    if set(product_image_refs) != RELAY_V2_IMAGE_NAMES:
+        try:
+            postgresql_ref = contents["images/postgresql.digest"].decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise CandidateError(
+                "security evidence PostgreSQL digest is not UTF-8 text"
+            ) from exc
+        canonical_postgresql_ref = postgresql_ref.removesuffix("\n")
+        if (
+            POSTGRESQL_DIGEST_REF.fullmatch(canonical_postgresql_ref) is None
+            or postgresql_ref != canonical_postgresql_ref + "\n"
+        ):
+            raise CandidateError(
+                "security evidence PostgreSQL digest is not canonical or immutable"
+            )
+        try:
+            reviewed_postgresql_ref = POSTGRESQL_REF_PATH.read_text(
+                encoding="utf-8"
+            )
+        except (OSError, UnicodeError) as exc:
+            raise CandidateError(
+                "cannot read the reviewed PostgreSQL release image reference"
+            ) from exc
+        if (
+            reviewed_postgresql_ref
+            != reviewed_postgresql_ref.removesuffix("\n") + "\n"
+            or canonical_postgresql_ref
+            != reviewed_postgresql_ref.removesuffix("\n")
+        ):
+            raise CandidateError(
+                "security evidence PostgreSQL digest does not match the reviewed "
+                "release image reference"
+            )
+        expected_refs["postgresql"] = canonical_postgresql_ref
     for image, expected_ref in expected_refs.items():
         spdx_name = f"image-sbom/{image}.spdx.json"
         spdx = _security_evidence_json(contents, spdx_name)
@@ -902,8 +955,8 @@ def validate_security_evidence_archive(
                 not isinstance(described, list)
                 or subject_id not in described
                 or len(subject_packages) != 1
-                or subject_packages[0].get("name") != postgresql_ref
-                or f"pkg:oci/postgresql@{postgresql_ref.rsplit('@', 1)[1]}"
+                or subject_packages[0].get("name") != expected_ref
+                or f"pkg:oci/postgresql@{expected_ref.rsplit('@', 1)[1]}"
                 not in json.dumps(subject_packages[0], sort_keys=True)
             ):
                 raise CandidateError(
@@ -934,7 +987,9 @@ def validate_security_evidence_archive(
         raise CandidateError("security evidence Grype database status is empty")
 
     advisory = _security_evidence_json(contents, "advisory-verdict.json")
-    expected_subjects = {"postgresql-runtime"}
+    expected_subjects: set[str] = set()
+    if set(product_image_refs) != RELAY_V2_IMAGE_NAMES:
+        expected_subjects.add("postgresql-runtime")
     expected_subjects.update(f"{name}-image" for name in product_image_refs)
     subjects = advisory.get("subjects")
     if (
@@ -983,7 +1038,26 @@ def validate_candidate_manifest(
             "current in-progress run verification requires trusted workflow-run metadata"
         )
 
-    manifest = require_object(document, "manifest", V2_TOP_LEVEL_FIELDS)
+    release_hint = document.get("release") if isinstance(document, dict) else None
+    version_hint = (
+        release_hint.get("version") if isinstance(release_hint, dict) else None
+    )
+    parsed_version_hint = (
+        tuple(int(part) for part in version_hint.split("."))
+        if isinstance(version_hint, str) and VERSION.fullmatch(version_hint)
+        else None
+    )
+    legacy_v2 = (
+        parsed_version_hint is not None
+        and CANDIDATE_V2_MINIMUM_VERSION
+        <= parsed_version_hint
+        < RELAY_V2_RELEASE_MINIMUM_VERSION
+    )
+    manifest = require_object(
+        document,
+        "manifest",
+        LEGACY_V2_TOP_LEVEL_FIELDS if legacy_v2 else V2_TOP_LEVEL_FIELDS,
+    )
     if manifest["schema_version"] != V2_SCHEMA_VERSION:
         raise CandidateError(
             f"manifest.schema_version must be {V2_SCHEMA_VERSION}"
@@ -999,6 +1073,11 @@ def validate_candidate_manifest(
     version = require_nonempty_string(release["version"], "release.version")
     if VERSION.fullmatch(version) is None:
         raise CandidateError("release.version must be canonical semantic version text")
+    release_version = tuple(int(part) for part in version.split("."))
+    if release_version < CANDIDATE_V2_MINIMUM_VERSION:
+        raise CandidateError(
+            "release candidate v2 requires version 0.16.0 or later"
+        )
     release_id = require_nonempty_string(release["release_id"], "release.release_id")
     if RELEASE_ID.fullmatch(release_id) is None:
         raise CandidateError("release.release_id is invalid")
@@ -1101,13 +1180,21 @@ def validate_candidate_manifest(
         )
         if Path(name).name != name:
             raise CandidateError(f"{label}.name must be a public asset basename")
-        if record["kind"] not in PAYLOAD_KINDS:
+        allowed_payload_kinds = (
+            LEGACY_V2_PAYLOAD_KINDS if legacy_v2 else PAYLOAD_KINDS
+        )
+        if record["kind"] not in allowed_payload_kinds:
             raise CandidateError(f"{label}.kind is unsupported")
         if name in files:
             raise CandidateError(f"candidate file name is duplicated: {name}")
         files[name] = (digest, record["size"])
         payload_by_name[name] = record
-    for singleton_kind in ("docs", "sbom", "security-evidence"):
+    singleton_kinds = (
+        ("docs", "sbom", "security-evidence")
+        if legacy_v2
+        else ("sbom", "security-evidence")
+    )
+    for singleton_kind in singleton_kinds:
         matches = [
             record for record in payloads if record["kind"] == singleton_kind
         ]
@@ -1128,6 +1215,30 @@ def validate_candidate_manifest(
             "security-evidence payload name must be "
             f"{expected_evidence_name}"
         )
+    if release_version >= RELAY_V2_RELEASE_MINIMUM_VERSION:
+        expected_payloads = _relay_v2_payload_inventory(version)
+        actual_payloads = {
+            record["name"]: record["kind"] for record in payloads
+        }
+        if actual_payloads != expected_payloads:
+            missing = sorted(set(expected_payloads) - set(actual_payloads))
+            unexpected = sorted(set(actual_payloads) - set(expected_payloads))
+            wrong_kind = sorted(
+                name
+                for name in set(actual_payloads) & set(expected_payloads)
+                if actual_payloads[name] != expected_payloads[name]
+            )
+            details = []
+            if missing:
+                details.append(f"missing {missing!r}")
+            if unexpected:
+                details.append(f"unexpected {unexpected!r}")
+            if wrong_kind:
+                details.append(f"wrong kind {wrong_kind!r}")
+            raise CandidateError(
+                "payload inventory for version 0.19.0 or later must be "
+                f"exactly the supported release set: {'; '.join(details)}"
+            )
 
     images = require_list(manifest["images"], "images")
     if not images:
@@ -1171,7 +1282,8 @@ def validate_candidate_manifest(
             f"image inventory must be exactly {sorted(expected_image_names)!r}"
         )
 
-    for kind in ("docs", "sbom"):
+    singleton_fields = ("docs", "sbom") if legacy_v2 else ("sbom",)
+    for kind in singleton_fields:
         record, name, digest = _validate_file_record(
             manifest[kind],
             kind,

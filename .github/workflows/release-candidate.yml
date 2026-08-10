@@ -131,7 +131,43 @@ jobs:
             echo "GitHub Release destination is not absent" >&2
             exit 1
           fi
-          for package in registry-relay; do
+          package=relay
+          package_metadata="${RUNNER_TEMP}/${package}-package.json"
+          if ! gh api \
+              "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
+              > "${package_metadata}"; then
+            echo "GHCR package ${package} must be provisioned before release" >&2
+            exit 1
+          fi
+          python3 release/scripts/release_workflow_guard.py \
+            require-package-visibility \
+            --metadata "${package_metadata}" \
+            --package "${package}" \
+            --visibility public
+          candidate_package_response="${RUNNER_TEMP}/relay-candidate-response"
+          if gh api --include --silent \
+              "/orgs/${IMAGE_NAMESPACE}/packages/container/relay-candidate" \
+              >"${candidate_package_response}" 2>&1; then
+            candidate_package_status=200
+          else
+            candidate_package_status="$(
+              python3 release/scripts/release_workflow_guard.py http-status \
+                --response "${candidate_package_response}"
+            )"
+          fi
+          if [[ "${candidate_package_status}" == 200 ]]; then
+            gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/relay-candidate" \
+              > "${RUNNER_TEMP}/relay-candidate-package.json"
+            python3 release/scripts/release_workflow_guard.py \
+              require-package-visibility \
+              --metadata "${RUNNER_TEMP}/relay-candidate-package.json" \
+              --package relay-candidate \
+              --visibility private
+          elif [[ "${candidate_package_status}" != 404 ]]; then
+            echo "Cannot prove relay-candidate is absent or private" >&2
+            exit 1
+          fi
+          for package in relay; do
             versions="${RUNNER_TEMP}/${package}-versions.json"
             gh api --paginate --slurp \
               "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
@@ -177,22 +213,16 @@ jobs:
           git checkout --detach "${{ steps.request.outputs.source_sha }}"
           release/scripts/registry-release validate \
             "${{ steps.request.outputs.manifest }}"
-          release/scripts/registry-release validate-docsets
-          release/scripts/registry-release audit \
-            release/manifests/import-map-2026-06-24.yaml
-          release/scripts/registry-release \
-            verify-registryctl-image-lock-release-version \
-            --version "${{ steps.request.outputs.version }}"
           cargo metadata --locked --format-version 1 >/dev/null
           REGISTRY_RELEASE_SOURCE_MODE=monorepo \
             release/scripts/check-release-source-model.sh
           release/scripts/check-debian13-images.py
 
   build-canonical:
-    name: Build Linux payload, private images, and docs once
+    name: Build Linux payload and private images once
     needs: validate
     runs-on: ubuntu-24.04
-    # Covers an uncached canonical compile plus image, docs, and journey work.
+    # Covers an uncached canonical compile plus image work.
     timeout-minutes: 90
     permissions:
       actions: read
@@ -222,9 +252,10 @@ jobs:
           set -euo pipefail
           release/scripts/build-release-binaries.sh \
             "${{ needs.validate.outputs.version }}"
-          release/scripts/registry-release verify-registryctl-binary-version \
-            "dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
-            --version "${{ needs.validate.outputs.version }}"
+          test "$("dist/bin/relay-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+            "relay ${{ needs.validate.outputs.version }}"
+          test "$("dist/bin/relayctl-${{ needs.validate.outputs.tag }}-linux-amd64" --version)" = \
+            "relayctl ${{ needs.validate.outputs.version }}"
 
       - name: Set up Docker Buildx
         id: buildx
@@ -238,7 +269,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/images
-          for name in registry-relay; do
+          for name in relay; do
             package="${name}-candidate"
             candidate="${REGISTRY}/${IMAGE_NAMESPACE}/${package}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             metadata="dist/images/${name}.metadata.json"
@@ -260,63 +291,6 @@ jobs:
               > "dist/images/${name}.digest"
           done
 
-      - name: Build exact release docs archive
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
-        with:
-          node-version: 22.12.0
-          cache: npm
-          cache-dependency-path: docs/site/package-lock.json
-
-      - name: Package exact release docs archive
-        working-directory: docs/site
-        env:
-          DOCS_ARCHIVE_OUTPUT: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
-          DOCS_DOCSET: ${{ needs.validate.outputs.tag }}
-        run: |
-          set -euo pipefail
-          npm ci
-          npm run build:archive
-          npm run archive:snapshot -- \
-            "${DOCS_DOCSET}" \
-            --output "${DOCS_ARCHIVE_OUTPUT}" \
-            --verify-lock
-
-      - name: Run exact candidate Registryctl against archived authoring journeys
-        shell: bash
-        env:
-          CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
-          REGISTRYCTL_BIN: ${{ github.workspace }}/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64
-          REGISTRYCTL_TUTORIAL_RUNTIME_MODE: authoring
-          REGISTRYCTL_RELEASED_DOCS_ARCHIVE: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
-          REGISTRYCTL_RELEASED_DOCS_ROOT: ${{ runner.temp }}/candidate-released-docs/version
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os
-          import runpy
-          from pathlib import Path
-
-          expected_root = Path(os.environ["REGISTRYCTL_RELEASED_DOCS_ROOT"])
-          extraction_root = expected_root.parent
-          if extraction_root.exists():
-              raise SystemExit(
-                  f"candidate docs extraction destination already exists: {extraction_root}"
-              )
-          release_form = runpy.run_path(
-              "release/scripts/first-country-release-form.py"
-          )
-          observed_root = release_form["extract_released_docs_archive"](
-              Path(os.environ["REGISTRYCTL_RELEASED_DOCS_ARCHIVE"]),
-              extraction_root,
-              tag=os.environ["CANDIDATE_TAG"],
-          )
-          if observed_root != expected_root:
-              raise SystemExit(
-                  f"candidate docs extracted to {observed_root}, expected {expected_root}"
-              )
-          PY
-          bash docs/site/scripts/check-registryctl-tutorials.sh
-
       - name: Stage canonical build products
         shell: bash
         run: |
@@ -325,9 +299,6 @@ jobs:
           cp -R dist/bin candidate-canonical/dist/bin
           cp -R dist/image-bin candidate-canonical/dist/image-bin
           cp -R dist/images candidate-canonical/dist/images
-          cp \
-            "${RUNNER_TEMP}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
-            candidate-canonical/
 
       - name: Upload canonical build products
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -338,7 +309,7 @@ jobs:
           retention-days: 2
 
   build-platforms:
-    name: Build registryctl ${{ matrix.asset }} once
+    name: Build relayctl ${{ matrix.asset }} once
     needs: validate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -372,16 +343,15 @@ jobs:
           rustup toolchain install 1.95.0 \
             --profile minimal --target "${{ matrix.target }}"
           cargo build --release --locked \
-            -p registryctl -p registry-evidence -p registry-evidencectl \
+            -p registry-relayctl -p registry-evidence -p registry-evidencectl \
             -p registry-mint -p registry-evidence-oid4vci \
             --target "${{ matrix.target }}"
           mkdir -p platform
-          asset="registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
-          cp "target/${{ matrix.target }}/release/registryctl" "platform/${asset}"
+          asset="relayctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+          cp "target/${{ matrix.target }}/release/relayctl" "platform/${asset}"
           chmod 0755 "platform/${asset}"
-          release/scripts/registry-release verify-registryctl-binary-version \
-            "platform/${asset}" \
-            --version "${{ needs.validate.outputs.version }}"
+          test "$("platform/${asset}" --version)" = \
+            "relayctl ${{ needs.validate.outputs.version }}"
           for evidence_binary in evidence evidencectl mint evidence-oid4vci; do
             asset="${evidence_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${evidence_binary}" \
@@ -621,20 +591,12 @@ jobs:
         run: |
           set -euo pipefail
           canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          for name in registry-relay; do
-            expected_label_args=()
-            if [[ "${name}" == registry-relay ]]; then
-              expected_label_args+=(
-                --expected-label
-                "org.registrystack.registry-relay.features=$(<crates/registry-relay/canonical-release-features.txt)"
-              )
-            fi
+          for name in relay; do
             python3 release/scripts/check-release-image-oci-labels.py \
               "oci-layout://${canonical}/dist/images/${name}.oci" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
               --revision "${{ needs.validate.outputs.source_sha }}" \
-              --version "${{ needs.validate.outputs.version }}" \
-              "${expected_label_args[@]}"
+              --version "${{ needs.validate.outputs.version }}"
           done
 
       - name: Publish exact layouts to private candidate packages
@@ -647,12 +609,32 @@ jobs:
           printf '%s' "${GH_TOKEN}" \
             | oras login "${REGISTRY}" \
                 --username "${GITHUB_ACTOR}" --password-stdin
-          for name in registry-relay; do
+          for name in relay; do
             package="${name}-candidate"
-            test "$(
+            package_metadata="${RUNNER_TEMP}/${package}-package.json"
+            package_response="${RUNNER_TEMP}/${package}-response"
+            if gh api --include --silent \
+                "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
+                >"${package_response}" 2>&1; then
+              package_status=200
+            else
+              package_status="$(
+                python3 release/scripts/release_workflow_guard.py http-status \
+                  --response "${package_response}"
+              )"
+            fi
+            if [[ "${package_status}" == 200 ]]; then
               gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
-                --jq .visibility
-            )" = private
+                > "${package_metadata}"
+              python3 release/scripts/release_workflow_guard.py \
+                require-package-visibility \
+                --metadata "${package_metadata}" \
+                --package "${package}" \
+                --visibility private
+            elif [[ "${package_status}" != 404 ]]; then
+              echo "Cannot prove ${package} is absent or private" >&2
+              exit 1
+            fi
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             candidate_tag="${REGISTRY}/${IMAGE_NAMESPACE}/${package}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -661,10 +643,13 @@ jobs:
               "${candidate_tag}"
             test "$(crane digest "${candidate_tag}")" = "${digest}"
             test "$(crane digest "${candidate_ref}")" = "${digest}"
-            test "$(
-              gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
-                --jq .visibility
-            )" = private
+            gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
+              > "${package_metadata}"
+            python3 release/scripts/release_workflow_guard.py \
+              require-package-visibility \
+              --metadata "${package_metadata}" \
+              --package "${package}" \
+              --visibility private
           done
 
       - name: Verify and scan exact candidate images
@@ -672,7 +657,7 @@ jobs:
         run: |
           set -euo pipefail
           canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p candidate/security/{images,image-sbom,syft,grype,rootfs}
+          mkdir -p candidate/security/{image-sbom,syft,grype}
           grype db update
           grype db status -o json \
             > candidate/security/grype/grype-db-status.json
@@ -740,7 +725,7 @@ jobs:
               exit 1
             fi
           }
-          for name in registry-relay; do
+          for name in relay; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             test "$(crane digest "${candidate_ref}")" = "${digest}"
@@ -758,54 +743,16 @@ jobs:
               "${candidate_ref}" \
               "candidate/security/grype/${name}.grype.json"
           done
-          postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
-          postgresql_digest="${postgresql_ref##*@}"
-          if [[ ! "${postgresql_ref}" =~ ^docker\.io/library/postgres@sha256:[0-9a-f]{64}$ ]] ||
-             [[ "$(crane digest "${postgresql_ref}")" != "${postgresql_digest}" ]]; then
-            echo "Reviewed PostgreSQL runtime is unavailable at its locked digest" >&2
-            exit 1
-          fi
-          printf '%s\n' "${postgresql_ref}" \
-            > candidate/security/images/postgresql.digest
-          crane manifest "${postgresql_ref}" \
-            > "${RUNNER_TEMP}/postgresql.index.json"
-          syft "${postgresql_ref}" \
-            -o "spdx-json=candidate/security/image-sbom/postgresql.spdx.json" \
-            -o "syft-json=candidate/security/syft/postgresql.syft.json"
-          release/scripts/registry-release bind-spdx-subject \
-            candidate/security/image-sbom/postgresql.spdx.json \
-            --image-name postgresql \
-            --digest-ref "${postgresql_ref}"
-          scan_image \
-            "${postgresql_ref}" \
-            candidate/security/grype/postgresql.grype.json
-          mkdir -p candidate/security/rootfs/postgresql
-          crane export "${postgresql_ref}" - \
-            | tar --extract --file=- \
-                --directory=candidate/security/rootfs/postgresql \
-                --no-same-owner --no-same-permissions
-          if find candidate/security/rootfs/postgresql \
-              \( -type b -o -type c -o -type p -o -type s \) \
-              -print -quit | grep -q .; then
-            echo "Exported PostgreSQL rootfs contains a forbidden special file" >&2
-            exit 1
-          fi
-          python3 crates/registry-relay/scripts/check_advisory_baselines.py \
-            grype candidate/security/grype/registry-relay.grype.json \
-            --syft-report candidate/security/syft/registry-relay.syft.json \
-            --subject registry-relay-image
-          python3 release/scripts/check_postgresql_advisory_policy.py \
-            candidate/security/grype/postgresql.grype.json \
-            --baseline release/security/postgresql-advisory-baseline.json \
-            --syft-report candidate/security/syft/postgresql.syft.json \
-            --rootfs candidate/security/rootfs/postgresql \
-            --expected-image "${postgresql_ref}"
+          python3 release/scripts/check-advisory-baselines.py \
+            grype candidate/security/grype/relay.grype.json \
+            --baseline products/relay-v2/security/advisory-baseline.json \
+            --syft-report candidate/security/syft/relay.syft.json \
+            --subject relay-image
           jq -n '{
             schema_version: "registry-stack.advisory-verdict.v2",
             verdict: "passed",
             subjects: [
-              "registry-relay-image",
-              "postgresql-runtime"
+              "relay-image"
             ]
           }' > candidate/security/advisory-verdict.json
 
@@ -841,11 +788,6 @@ jobs:
           diff -u \
             "${RUNNER_TEMP}/expected-client-assets" \
             "${RUNNER_TEMP}/actual-client-assets"
-          cp "${canonical}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
-            candidate/bundle-root/
-          installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
-          cp crates/registryctl/install.sh "candidate/bundle-root/${installer}"
-          chmod 0755 "candidate/bundle-root/${installer}"
           evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"
           awk -v version="${{ needs.validate.outputs.tag }}" '
             $0 == "default_version=\"\"" {
@@ -880,59 +822,24 @@ jobs:
               "${binary} ${{ needs.validate.outputs.version }}"
           done
           rm candidate/bundle-root/SHA256SUMS
-          for name in registry-relay; do
+          for name in relay; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             printf '%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}" \
               > "${RUNNER_TEMP}/${name}.release.digest"
           done
-          release/scripts/registry-release render-registryctl-image-lock \
-            "${{ needs.validate.outputs.manifest }}" \
-            --relay-digest "${RUNNER_TEMP}/registry-relay.release.digest" \
-            --postgresql-ref-file release/registryctl-postgresql-image.ref \
-            --tag-target "${{ needs.validate.outputs.source_sha }}" \
-            --source-sha "${{ needs.validate.outputs.source_sha }}" \
-            --output \
-              "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json"
           syft dir:candidate/bundle-root \
             -o "spdx-json=candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}.sbom.spdx.json"
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
             --numeric-owner -czf \
             "candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}-security-evidence.tar.gz" \
             -C candidate/security \
-              images image-sbom syft grype advisory-verdict.json
-          for name in registry-relay; do
+              image-sbom syft grype advisory-verdict.json
+          for name in relay; do
             cp "candidate/security/grype/${name}.grype.json" \
               candidate/bundle-root/
           done
           cp candidate/security/advisory-verdict.json candidate/bundle-root/
-          (
-            cd candidate/bundle-root
-            sha256sum \
-              "${installer}" \
-              "registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
-              "registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
-              > SHA256SUMS
-          )
-          major="${{ needs.validate.outputs.version }}"
-          major="${major%%.*}"
-          if ((major >= 1)); then
-            python3 release/scripts/registry_release_lock.py create-payload \
-              --version "${{ needs.validate.outputs.version }}" \
-              --manifest-source-ref "${{ needs.validate.outputs.source_sha }}" \
-              --tag-target "${{ needs.validate.outputs.source_sha }}" \
-              --asset-dir candidate/bundle-root \
-              --image-lock \
-                "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
-              --relay-image-index \
-                "${RUNNER_TEMP}/registry-relay.index.json" \
-              --postgresql-image-index \
-                "${RUNNER_TEMP}/postgresql.index.json" \
-              --output "${RUNNER_TEMP}/registry-release-lock.payload.json"
-            test -s "${RUNNER_TEMP}/registry-release-lock.payload.json"
-            rm "${RUNNER_TEMP}/registry-release-lock.payload.json"
-          fi
-          rm candidate/bundle-root/SHA256SUMS
 
       - name: Seal compact candidate manifest and bundle
         shell: bash
@@ -954,9 +861,7 @@ jobs:
               | while IFS= read -r -d '' file; do
                   name="$(basename "${file}")"
                   case "${name}" in
-                    registry-docs-*.tar.gz) kind=docs ;;
                     *.sbom.spdx.json) kind=sbom ;;
-                    *-image-lock.json) kind=image-lock ;;
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
                     evidence-client-node-*.tgz|registry_evidence_client-*.whl) kind=client-package ;;
@@ -971,7 +876,7 @@ jobs:
                 done | jq -s .
           )"
           images="$(
-            for name in registry-relay; do
+            for name in relay; do
               candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
               digest="${candidate_ref##*@}"
               jq -n \
@@ -983,7 +888,7 @@ jobs:
             done | jq -s .
           )"
           scans="$(
-            for name in registry-relay; do
+            for name in relay; do
               file="candidate/bundle-root/${name}.grype.json"
               jq -n \
                 --arg image "${name}" \
@@ -992,7 +897,6 @@ jobs:
                 '{image:$image,name:$name,sha256:$sha256,status:"passed"}'
             done | jq -s .
           )"
-          docs_name="registry-docs-${tag}.tar.gz"
           sbom_name="registry-stack-${tag}.sbom.spdx.json"
           advisory_name=advisory-verdict.json
           jq -n \
@@ -1008,8 +912,6 @@ jobs:
             --arg expires_at "${expires_at}" \
             --argjson payloads "${payloads}" \
             --argjson images "${images}" \
-            --arg docs_name "${docs_name}" \
-            --arg docs_sha "$(sha256sum "candidate/bundle-root/${docs_name}" | awk '{print $1}')" \
             --arg sbom_name "${sbom_name}" \
             --arg sbom_sha "$(sha256sum "candidate/bundle-root/${sbom_name}" | awk '{print $1}')" \
             --argjson scans "${scans}" \
@@ -1039,7 +941,6 @@ jobs:
               },
               payloads: $payloads,
               images: $images,
-              docs: {name:$docs_name,sha256:$docs_sha},
               sbom: {name:$sbom_name,sha256:$sbom_sha},
               scans: $scans,
               advisory: {

@@ -19,10 +19,6 @@ fi
 release_builder_image="${default_builder_image}"
 release_cargo_home="${RELEASE_CARGO_HOME:-${repo_root}/.cargo-home}"
 release_target_dir="${RELEASE_TARGET_DIR:-${repo_root}/target}"
-relay_feature_profile="${repo_root}/crates/registry-relay/canonical-release-features.txt"
-relay_release_features="$(<"${relay_feature_profile}")"
-sh "${repo_root}/crates/registry-relay/scripts/validate-feature-profile.sh" \
-  "${relay_release_features}"
 
 if [[ "${release_cargo_home}" != /* ]]; then
   release_cargo_home="${repo_root}/${release_cargo_home}"
@@ -54,31 +50,27 @@ docker run --rm \
   --env HOME=/workspace \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
-  --env RELEASE_RELAY_FEATURES="${relay_release_features}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
   "${release_builder_image}" \
   bash -c 'set -euo pipefail
     export RUSTFLAGS="${RELEASE_RUSTFLAGS}"
 
-    # Registryctl enables experimental Relay libraries for project authoring.
-    # Build it separately so Cargo cannot unify those features into the
-    # production Relay executable.
     cargo build --release --locked \
-      -p registryctl \
       -p registry-manifest-cli
-    cp target/release/registryctl "dist/bin/registryctl-${RELEASE_TAG}-linux-amd64"
     cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
 
-    REGISTRY_RELAY_FEATURES="${RELEASE_RELAY_FEATURES}" \
-      cargo build --release --locked \
-      -p registry-relay \
-      --no-default-features \
-      --features "${RELEASE_RELAY_FEATURES}"
-    python3 release/scripts/check-release-relay-features.py target/release/registry-relay
-    cp target/release/registry-relay "dist/bin/registry-relay-${RELEASE_TAG}-linux-amd64"
-    cp target/release/registry-relay-rhai-worker "dist/bin/registry-relay-rhai-worker-${RELEASE_TAG}-linux-amd64"
-    cp target/release/registry-relay dist/image-bin/registry-relay
-    cp target/release/registry-relay-rhai-worker dist/image-bin/registry-relay-rhai-worker
+    # Build and stage the production Relay before relayctl enables the separate
+    # authoring-only tooling feature on the Relay library dependency.
+    cargo build --release --locked \
+      -p registry-relay-v2 \
+      --bin relay \
+      --no-default-features
+    cp target/release/relay "dist/bin/relay-${RELEASE_TAG}-linux-amd64"
+    cp target/release/relay dist/image-bin/relay
+
+    cargo build --release --locked \
+      -p registry-relayctl
+    cp target/release/relayctl "dist/bin/relayctl-${RELEASE_TAG}-linux-amd64"
 
     cargo build --release --locked \
       -p registry-evidence \
@@ -93,16 +85,14 @@ docker run --rm \
 
 printf '%s\n' "${release_builder_image}" > "${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
 chmod 0755 \
-  "${repo_root}/dist/bin/registryctl-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/registry-manifest-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/registry-relay-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/registry-relay-rhai-worker-${tag}-linux-amd64" \
+  "${repo_root}/dist/bin/relay-${tag}-linux-amd64" \
+  "${repo_root}/dist/bin/relayctl-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/evidence-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/evidencectl-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/mint-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/evidence-oid4vci-${tag}-linux-amd64" \
-  "${repo_root}/dist/image-bin/registry-relay" \
-  "${repo_root}/dist/image-bin/registry-relay-rhai-worker"
+  "${repo_root}/dist/image-bin/relay"
 
 (
   cd -- "${repo_root}/dist/bin"
@@ -112,17 +102,15 @@ chmod 0755 \
     "mint-${tag}-linux-amd64" \
     "evidence-oid4vci-${tag}-linux-amd64" \
     "registry-manifest-${tag}-linux-amd64" \
-    "registry-relay-${tag}-linux-amd64" \
-    "registry-relay-rhai-worker-${tag}-linux-amd64" \
-    "registryctl-${tag}-linux-amd64" \
+    "relay-${tag}-linux-amd64" \
+    "relayctl-${tag}-linux-amd64" \
     > SHA256SUMS
 )
 (
   cd -- "${repo_root}/dist/image-bin"
   sha256sum -- \
     RELEASE_BUILDER_IMAGE \
-    registry-relay \
-    registry-relay-rhai-worker \
+    relay \
     > SHA256SUMS
 )
 
