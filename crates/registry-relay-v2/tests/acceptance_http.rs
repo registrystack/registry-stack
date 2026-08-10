@@ -1526,6 +1526,43 @@ fn validate_json_ld_graph(
     document: &Value,
     binding: &registry_relay_v2::artifacts::OperationArtifactBindings,
 ) {
+    let resource = harness
+        .service
+        .registry
+        .resources
+        .iter()
+        .find(|resource| {
+            resource
+                .operations
+                .iter()
+                .any(|operation| operation.identifier == binding.operation_identifier)
+        })
+        .expect("compiled operation belongs to one resource");
+    let representation = resource
+        .operations
+        .iter()
+        .find(|operation| operation.identifier == binding.operation_identifier)
+        .and_then(|operation| {
+            operation
+                .representations
+                .iter()
+                .find(|representation| representation.id == binding.representation_identifier)
+        })
+        .expect("compiled operation carries the selected representation");
+    assert_eq!(
+        document.get("@context").and_then(Value::as_str),
+        Some(representation.context_reference.as_str()),
+        "{project}/{} JSON-LD response must name the selected representation context",
+        step.id
+    );
+    assert_eq!(
+        document
+            .pointer("/meta/links/context")
+            .and_then(Value::as_str),
+        Some(representation.context_reference.as_str()),
+        "{project}/{} response metadata must name the selected representation context",
+        step.id
+    );
     let context_artifact = harness
         .service
         .artifacts
@@ -1557,29 +1594,6 @@ fn validate_json_ld_graph(
         step.id
     );
 
-    let resource = harness
-        .service
-        .registry
-        .resources
-        .iter()
-        .find(|resource| {
-            resource
-                .operations
-                .iter()
-                .any(|operation| operation.identifier == binding.operation_identifier)
-        })
-        .expect("compiled operation belongs to one resource");
-    let representation = resource
-        .operations
-        .iter()
-        .find(|operation| operation.identifier == binding.operation_identifier)
-        .and_then(|operation| {
-            operation
-                .representations
-                .iter()
-                .find(|representation| representation.id == binding.representation_identifier)
-        })
-        .expect("compiled operation carries the selected representation");
     let shacl = std::str::from_utf8(
         &harness
             .service
