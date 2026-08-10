@@ -27,6 +27,7 @@ projectFiles:
   - runtime.yaml
   - fixture.sql
   - expected-http.yaml
+  - governance/classification-review.yaml
 generatedFilesCommitted: false
 semanticHashSnapshotsCommitted: true
 generatedFilePolicy: Generated SQLite databases and runtime artifacts are built in temporary directories and are not tracked; reviewed semantic hashes and exposure metadata are committed.

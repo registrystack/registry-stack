@@ -486,21 +486,24 @@ fn validate_runtime_contract(
             .operations
             .list
             .iter()
-            .map(|operation| &operation.access)
-            .chain(
-                resource
-                    .operations
-                    .read
+            .flat_map(|operation| {
+                operation
+                    .representations
                     .iter()
-                    .map(|operation| &operation.access),
-            )
-            .chain(
-                resource
-                    .operations
-                    .lookups
+                    .map(|(_, item)| &item.access)
+            })
+            .chain(resource.operations.read.iter().flat_map(|operation| {
+                operation
+                    .representations
                     .iter()
-                    .map(|operation| &operation.access),
-            )
+                    .map(|(_, item)| &item.access)
+            }))
+            .chain(resource.operations.lookups.iter().flat_map(|operation| {
+                operation
+                    .representations
+                    .iter()
+                    .map(|(_, item)| &item.access)
+            }))
             .any(|access| matches!(access, AccessRule::Protected(_)))
     });
     if protected && runtime.authentication.issuer.is_none() {
@@ -1001,8 +1004,9 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
             RegistryContract::parse_yaml(&yaml).expect("generic contract")
         }
 
-        let protected =
-            contract("{read: {access: {scope: registry:record:read}, disclosureProfile: default}}");
+        let protected = contract(
+            "{read: {defaultRepresentation: default, representations: {default: {access: {scope: registry:record:read}, disclosureProfile: default}}}}",
+        );
         let protected_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18081'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
         )
@@ -1013,7 +1017,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         );
 
         let list = contract(
-            "{list: {access: public, disclosureProfile: default, filters: [], allowUnfiltered: true, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}}",
+            "{list: {defaultRepresentation: default, representations: {default: {access: public, disclosureProfile: default}}, filters: [], allowUnfiltered: true, orderBy: [id], pagination: {defaultPageSize: 10, maximumPageSize: 20}}}",
         );
         let list_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18082'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",
@@ -1025,7 +1029,7 @@ metadataVisibility: {service: public, resources: public, semantics: public, clas
         );
 
         let lookup = contract(
-            "{lookups: [{id: by-label, access: public, requestBody: {maximumBytes: 128, selectors: {label: {sourceColumn: label, type: string, minimumBytes: 1, maximumBytes: 32}}}, disclosureProfile: default}]}",
+            "{lookups: [{id: by-label, requestBody: {maximumBytes: 128, selectors: {label: {sourceColumn: label, type: string, minimumBytes: 1, maximumBytes: 32}}}, defaultRepresentation: default, representations: {default: {access: public, disclosureProfile: default}}}]}",
         );
         let mut lookup_runtime = RelayRuntime::parse_yaml(
             "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {bind: '127.0.0.1:18083'}\npackagePath: package\nsources: {records: {path: fixture.sqlite}}\nauthentication: {issuer: null}\naudit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/KEY}\nlimits: {requestTimeoutMilliseconds: 1000, concurrentQueries: 1}\n",

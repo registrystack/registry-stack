@@ -288,13 +288,13 @@ impl QuotaLimiter {
         }
     }
 
-    pub(crate) fn admit(&self, scope: &str) -> bool {
+    pub(crate) fn admit(&self, operation: &str) -> bool {
         let now = Instant::now();
         let mut states = self
             .states
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let state = states.entry(scope.to_owned()).or_insert(QuotaState {
+        let state = states.entry(operation.to_owned()).or_insert(QuotaState {
             tokens: self.burst,
             observed_at: now,
         });

@@ -13,16 +13,27 @@ use registry_platform_sqlite::{
     DatabaseProfile, SchemaObjectKind,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::artifacts::{generate_artifacts, ArtifactSet};
 use crate::audit::RelayAudit;
-use crate::compiler::{compile_contract_with_governed_files, GovernedFileSet};
-use crate::contract::{RegistryContract, RelayRuntime};
+use crate::compiler::{
+    classification_inventory_digest, compile_contract_with_governed_files, GovernedFileSet,
+};
+use crate::contract::{ClassificationReviewDocument, RegistryContract, RelayRuntime};
 use crate::cursor::CursorKey;
 use crate::diff::{diff_registries, ChangeImpactReport};
 use crate::fixtures::{
     execute_fixture_journey, fixture_authenticator, parse_journey, FixturePlanReport,
+};
+use crate::identification::{
+    classification_inventory_report, classification_review_starter, contextual_review_findings,
+    identify_contract, render_classification_inventory_report, render_classification_review_yaml,
+    render_contextual_review_findings, render_identification_report, render_representation_report,
+    representation_report, CLASSIFICATION_INVENTORY_REPORT_PATH,
+    CLASSIFICATION_REVIEW_STARTER_PATH, CONTEXTUAL_REVIEW_FINDINGS_PATH,
+    IDENTIFICATION_REPORT_PATH, REPRESENTATION_REPORT_PATH,
 };
 use crate::model::{
     CompileProfile, CompileReport, CompiledRegistry, Diagnostic, DiagnosticSeverity,
@@ -413,14 +424,59 @@ pub fn generate_project(options: &GenerateOptions) -> Result<ToolingReport, Tool
             ));
         }
     };
-    let registry = project.registry;
+    let CompiledProject {
+        contract,
+        registry,
+        observed,
+        ..
+    } = *project;
     let artifacts = generate_artifacts(&registry).map_err(|_| ToolingError::Generate)?;
+    let classification_digest =
+        classification_inventory_digest(&registry).map_err(|_| ToolingError::Generate)?;
+    let identification =
+        identify_contract(&contract, &observed).map_err(|_| ToolingError::Generate)?;
+    let inventory = classification_inventory_report(&registry, &classification_digest)
+        .map_err(|_| ToolingError::Generate)?;
+    let representations = representation_report(&registry, &classification_digest)
+        .map_err(|_| ToolingError::Generate)?;
+    let findings = contextual_review_findings(&registry, &classification_digest)
+        .map_err(|_| ToolingError::Generate)?;
+    let starter = classification_review_starter(&contract, &classification_digest, &identification)
+        .map_err(|_| ToolingError::Generate)?;
+    let authoring_outputs = [
+        (
+            "identification-report",
+            IDENTIFICATION_REPORT_PATH,
+            render_identification_report(&identification).map_err(|_| ToolingError::Generate)?,
+        ),
+        (
+            "classification-inventory",
+            CLASSIFICATION_INVENTORY_REPORT_PATH,
+            render_classification_inventory_report(&inventory)
+                .map_err(|_| ToolingError::Generate)?,
+        ),
+        (
+            "representation-report",
+            REPRESENTATION_REPORT_PATH,
+            render_representation_report(&representations).map_err(|_| ToolingError::Generate)?,
+        ),
+        (
+            "contextual-review-findings",
+            CONTEXTUAL_REVIEW_FINDINGS_PATH,
+            render_contextual_review_findings(&findings).map_err(|_| ToolingError::Generate)?,
+        ),
+        (
+            "classification-review-starter",
+            CLASSIFICATION_REVIEW_STARTER_PATH,
+            render_classification_review_yaml(&starter).map_err(|_| ToolingError::Generate)?,
+        ),
+    ];
     let output = options
         .output_dir
         .clone()
         .unwrap_or_else(|| options.project_root.join("generated"));
     write_artifacts(&output, &artifacts)?;
-    let generated = artifacts
+    let mut generated = artifacts
         .artifacts
         .iter()
         .map(|artifact| GeneratedFile {
@@ -428,7 +484,16 @@ pub fn generate_project(options: &GenerateOptions) -> Result<ToolingReport, Tool
             path: artifact.path.clone(),
             sha256: artifact.sha256.clone(),
         })
-        .collect();
+        .collect::<Vec<_>>();
+    for (id, path, content) in authoring_outputs {
+        write_generated_relative(&output, path, &content)?;
+        generated.push(GeneratedFile {
+            id: id.into(),
+            path: path.into(),
+            sha256: format!("sha256:{}", hex::encode(Sha256::digest(&content))),
+        });
+    }
+    generated.sort_by(|left, right| left.path.cmp(&right.path).then(left.id.cmp(&right.id)));
     Ok(ToolingReport::success(ToolingDetails::Generate {
         contract_revision: Some(registry.contract_revision),
         artifacts: generated,
@@ -453,6 +518,7 @@ pub fn test_project(options: &TestOptions) -> Result<ToolingReport, ToolingError
         contract,
         registry,
         runtime,
+        ..
     } = *project;
     let fixture_yaml = read_utf8(&options.project_root.join("expected-http.yaml"))?;
     let journey = match parse_journey(&fixture_yaml) {
@@ -709,6 +775,7 @@ struct CompiledProject {
     #[allow(dead_code)]
     runtime: Option<RelayRuntime>,
     registry: CompiledRegistry,
+    observed: Vec<crate::model::ObservedSourceSchema>,
 }
 
 fn compile_project(
@@ -767,6 +834,7 @@ fn compile_project(
                 contract,
                 runtime,
                 registry,
+                observed,
             })))
         }
         Ok(_) => Ok(ProjectCompilation::Refused(CompileReport { diagnostics })),
@@ -787,28 +855,46 @@ fn capture_governed_files(
     contract: &RegistryContract,
 ) -> Result<GovernedFileSet, ToolingError> {
     let mut references = BTreeSet::new();
-    references.insert(contract.registry.identifier_lifecycle_policy_ref.as_str());
-    references.insert(contract.classifications.provenance_ref.as_str());
+    references.insert(contract.registry.identifier_lifecycle_policy_ref.clone());
+    references.insert(contract.classifications.provenance_ref.clone());
     for alignment in &contract.semantics.alignments {
-        references.insert(alignment.profile_ref.as_str());
+        references.insert(alignment.profile_ref.clone());
     }
     for resource in &contract.resources {
-        references.insert(resource.record_context.lifecycle_state.codelist.as_str());
+        references.insert(resource.record_context.lifecycle_state.codelist.clone());
         for (_, property) in resource.properties.iter() {
             if let Some(codelist) = property.codelist.as_deref() {
-                references.insert(codelist);
+                references.insert(codelist.to_owned());
             }
         }
         for processing in &resource.processing_descriptions {
-            references.insert(processing.legal_basis_ref.as_str());
-            references.insert(processing.dpv_profile_ref.as_str());
+            references.insert(processing.legal_basis_ref.clone());
+            references.insert(processing.dpv_profile_ref.clone());
         }
     }
     let canonical_root = root.canonicalize().map_err(|_| ToolingError::Read)?;
+    let review_reference = contract.classifications.provenance_ref.as_str();
+    validate_relative(review_reference)?;
+    reject_existing_symlink_components(&canonical_root, Path::new(review_reference))?;
+    let review_path = canonical_root.join(review_reference);
+    if review_path.is_file() {
+        let review_bytes = fs::read(&review_path).map_err(|_| ToolingError::Read)?;
+        if review_bytes.len() <= 64 * 1024 {
+            if let Ok(review) =
+                serde_norway::from_slice::<ClassificationReviewDocument>(&review_bytes)
+            {
+                references.insert(review.rationale_ref);
+                if let Some(generated) = review.generated_identification {
+                    references.insert(generated.report_ref);
+                }
+            }
+        }
+    }
     let mut files = GovernedFileSet::new();
     for reference in references {
-        validate_relative(reference)?;
-        let candidate = canonical_root.join(reference);
+        validate_relative(&reference)?;
+        reject_existing_symlink_components(&canonical_root, Path::new(&reference))?;
+        let candidate = canonical_root.join(&reference);
         let Ok(metadata) = fs::symlink_metadata(&candidate) else {
             continue;
         };
@@ -820,7 +906,7 @@ fn capture_governed_files(
             return Err(ToolingError::UnsafePath);
         }
         files.insert(
-            reference.into(),
+            reference,
             fs::read(canonical).map_err(|_| ToolingError::Read)?,
         );
     }
@@ -870,21 +956,24 @@ fn validate_runtime(
             .operations
             .list
             .iter()
-            .map(|operation| &operation.access)
-            .chain(
-                resource
-                    .operations
-                    .read
+            .flat_map(|operation| {
+                operation
+                    .representations
                     .iter()
-                    .map(|operation| &operation.access),
-            )
-            .chain(
-                resource
-                    .operations
-                    .lookups
+                    .map(|(_, item)| &item.access)
+            })
+            .chain(resource.operations.read.iter().flat_map(|operation| {
+                operation
+                    .representations
                     .iter()
-                    .map(|operation| &operation.access),
-            )
+                    .map(|(_, item)| &item.access)
+            }))
+            .chain(resource.operations.lookups.iter().flat_map(|operation| {
+                operation
+                    .representations
+                    .iter()
+                    .map(|(_, item)| &item.access)
+            }))
             .any(|access| matches!(access, crate::contract::AccessRule::Protected(_)))
     });
     if protected && runtime.authentication.issuer.is_none() {
@@ -926,6 +1015,20 @@ fn write_artifacts(output: &Path, artifacts: &ArtifactSet) -> Result<(), Tooling
         fs::write(path, &artifact.content).map_err(|_| ToolingError::Write)?;
     }
     Ok(())
+}
+
+fn write_generated_relative(
+    output: &Path,
+    relative: &str,
+    content: &[u8],
+) -> Result<(), ToolingError> {
+    validate_relative(relative)?;
+    reject_existing_symlink_components(output, Path::new(relative))?;
+    let path = output.join(relative);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| ToolingError::Write)?;
+    }
+    fs::write(path, content).map_err(|_| ToolingError::Write)
 }
 
 fn reject_existing_symlink_components(root: &Path, relative: &Path) -> Result<(), ToolingError> {
@@ -1026,7 +1129,10 @@ resources:
       recordValue: {label: Record value, description: Unreviewed starter property, sourceColumn: record_value, type: string, sourceRequired: true, semanticTerm: "local:recordValue"}
     disclosureProfiles: {default: {properties: [recordValue]}}
     operations:
-      read: {access: {scope: "registry:record:read"}, disclosureProfile: default}
+      read:
+        defaultRepresentation: default
+        representations:
+          default: {access: {scope: "registry:record:read"}, disclosureProfile: default}
     processingDescriptions:
       - {id: consultation, operationRefs: [read], purpose: reviewed-consultation, recipientClass: authorized-client, legalBasisRef: governance/legal-basis.yaml, dpvProfileRef: governance/processing.dpv.yaml, safeguards: [property-minimization]}
 metadataVisibility: {service: public, resources: operation-bound, semantics: operation-bound, classifications: operator-only, processing: operation-bound}
@@ -1044,8 +1150,16 @@ limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 8}
 
 const STARTER_LIFECYCLE: &str =
     "status: suggested\npolicy: Identifiers are stable and are not reassigned after retirement.\n";
-const STARTER_CLASSIFICATION: &str =
-    "status: suggested\nreview: Institutional review is required before production packaging.\n";
+const STARTER_CLASSIFICATION: &str = r#"apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:registry
+classificationInventoryDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+method: manual
+reviewer: urn:example:authority
+reviewDate: pending-review
+status: suggested
+rationaleRef: governance/legal-basis.yaml
+"#;
 const STARTER_LEGAL_BASIS: &str = "status: suggested\nlegalBasis: Institutional review is required before production packaging.\n";
 const STARTER_PROCESSING: &str = "status: suggested\nprofile: https://w3id.org/dpv/2.3\n";
 const STARTER_CODELIST: &str =

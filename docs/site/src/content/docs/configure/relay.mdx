@@ -1,6 +1,6 @@
 ---
 title: Author a Registry Relay project
-description: Turn a reviewed SQLite view into a checked Registry contract, synthetic test journey, and sealed Relay package.
+description: Turn reviewed SQLite views into a checked Registry contract, governed representations, and a sealed Relay package.
 status: draft
 owner: registry-docs
 source_repos:
@@ -16,402 +16,176 @@ standards_referenced:
   - govstack-digital-registries
 ---
 
-Use `relayctl` to describe one institution-owned Registry, bind it to reviewed
-SQLite views, and produce a sealed package for Registry Relay. This guide is
-for the data publisher and technical implementer who can review the source
-schema, public meaning, access rules, and permitted disclosure together.
+Use `relayctl` to author one institution-owned Registry from reviewed SQLite views.
+The governed contract names the Registry, its mandatory Registry Core context, published properties,
+finite representations, access, and disclosure.
+The database remains a source binding, not an API model.
 
 ## When to use this
 
 Use this guide after the [synthetic Relay tutorial](../../tutorials/publish-governed-sqlite-registry/)
-works and the institution has selected an authoritative SQLite source. The
-result is a candidate package for operator review, not a running service.
+works and the Registry Authority has selected an authoritative SQLite source.
+The result is a deployment candidate for institutional and operator review, not a running service.
 
-Relay fits when callers need selected read-only Registry Records. Relay does
-not turn every table into an endpoint. The project must name each resource,
-operation, filter, public property, access rule, and semantic meaning that the
-institution intends to publish.
+Relay serves one Registry per process.
+A resource is a governed Record type in that Registry, not a SQLite table and not a second Registry.
 
 ## Before you start
 
-Prepare these inputs with the Registry Authority, the institution accountable
-for the Registry:
+Prepare a non-writable SQLite inspection copy, narrow reviewed views, a stable Registry identifier,
+the Authority and operational roles, and synthetic fixtures.
+Also agree which callers, purposes, row boundaries, fields, and representations each operation may
+use.
+Keep production Records, identifiers, credentials, and database files out of the project.
 
-- One SQLite database or a non-writable copy for structural inspection.
-- One or more narrow SQLite views that exclude internal columns and expose
-  stable record identifiers, revisions, lifecycle states, and recorded times.
-- The Registry's stable identifier, Authority, scope, and identifier lifecycle
-  policy.
-- The callers, purposes, fields, and filters each operation is allowed to use.
-- Synthetic Records that exercise the same shapes and controlled values as the
-  real source without copying production data.
-- `relayctl` on `PATH`.
+## Inspect structure before assigning meaning
 
-Read [semantics, classification, and disclosure](../../explanation/relay-semantics-and-disclosure/)
-before assigning public property names or handling levels.
-
-## Initialize the project
-
-Create the contract and governance starter files:
+Initialize the project, then inspect the source copy:
 
 ```sh
 relayctl init ./business-registry
+relayctl inspect ./business-inspection.sqlite --starters ./business-registry/inspection
 ```
 
-The report lists the files it created:
+`inspect` records only SQLite structure: objects, columns, declared types, nullability, key
+membership, and a schema fingerprint.
+It does not read row values.
+The starter and the generated identification candidates use that structure, authored roles,
+codelist bindings, and the embedded digest-pinned core rule pack.
+They are suggestions, never approved classification or publication truth.
 
-```json
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "initialized",
-    "files": [
-      "registry.yaml",
-      "runtime.yaml",
-      "governance/identifier-lifecycle.yaml",
-      "governance/classification-review.yaml",
-      "governance/legal-basis.yaml",
-      "governance/processing.dpv.yaml",
-      "codelists/record-lifecycle.yaml"
-    ]
-  }
-}
-```
+Copy only accepted view bindings and the schema fingerprint into `registry.yaml`.
+Unconfigured tables, columns, joins, expressions, and sort order remain unavailable to callers.
 
-The generated values are prompts for review, not accepted policy. Production
-checks refuse the project until you replace or approve every suggestion.
+## Keep Registry Core and published properties separate
 
-## Inspect the SQLite structure
+Every successful Record always carries the Registry Core context:
 
-Ask the source owner for a consistent, non-writable inspection copy of the
-database. Do not copy a database while another process is writing it. Then ask
-`relayctl` to record its structure without sampling row values:
+- `registryIdentifier` and `recordIdentifier`.
+- `revisionIdentifier`, `lifecycleState`, and source-owned `recordedAt`.
+- `authorityIdentifier`, `schemaReference`, and `semanticModelReference`.
+- `domainData`, containing only serializable published properties.
 
-```sh
-chmod a-w ./business-inspection.sqlite
-relayctl inspect ./business-inspection.sqlite \
-  --starters ./business-registry/inspection
-```
+Bind the Record identifier, revision, lifecycle, and recorded time to reviewed view columns.
+`recordedAt` is when the Authority recorded the revision, not Relay startup, snapshot, or response
+time.
+Declare a published property separately from its source column, even for a one-to-one binding.
+Its public name, type, semantic term, source requiredness, and output classification are part of
+the contract.
 
-The report includes tables, views, columns, declared SQLite types, nullability,
-key membership, and one schema fingerprint. The final detail identifies the
-generated starter:
+## Review classification as one governed input
 
-```json
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "schema-inspection",
-    "fingerprint": "sha256:<digest>",
-    "starter_file": "schema-starter.yaml"
-  }
-}
-```
+Every published property has an output classification.
+Every source-view column Relay processes also has a source-column classification, including hidden
+Registry Core, selector, filter, order, row-binding, and transform-input columns.
+Resource defaults reduce repetition, but compilation expands them to a complete effective
+classification.
 
-Use `inspection/schema-starter.yaml` as a review aid. Copy the accepted
-fingerprint, view names, and column bindings into `registry.yaml`; do not treat
-the starter as a classification or publication decision.
-
-Create or revise the source views before continuing. A view is the database
-boundary presented to Relay. It can exclude internal fields and normalize
-codes before the Registry contract assigns public names. Callers cannot choose
-tables, joins, expressions, source columns, or ordering at request time.
-
-## Identify the Registry
-
-Edit the generated `registry.yaml`. Replace the starter Registry identity with
-institutional values:
-
-```yaml
-registry:
-  registryIdentifier: urn:example:registry:registered-businesses
-  name: Registered business Registry
-  authority:
-    identifier: urn:example:institution:company-registrar
-    name: Company Registrar
-  operator:
-    identifier: urn:example:institution:digital-service-operator
-    name: Digital Service Operator
-  authoritativeScope: Legal business registrations in the declared jurisdiction
-  baseUri: https://business.example.invalid/registry/
-  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
-```
-
-One Relay process serves one Registry. Related resources can share it when
-they have the same Authority and authoritative scope. A resource is a governed
-Record type within the Registry, not a SQLite table and not another Registry.
-
-Keep the institutional roles separate in the contract. The Registry Authority
-is accountable for the Registry, the privacy controller determines processing
-responsibilities, the publisher approves publication, the operator runs the
-service, and the audit owner controls retained access evidence.
-
-## Bind one resource
-
-Each returned Record includes mandatory Registry and Record context: Registry
-identifier, stable Record identifier, revision, lifecycle state, Authority,
-recorded time, response schema, and semantic model. Bind the four source-backed
-values to the reviewed view:
-
-```yaml
-resources:
-  - id: registered-business
-    title: Registered business
-    semanticClass: local:RegisteredBusiness
-    source:
-      source: companies
-      view: relay_registered_businesses
-    recordContext:
-      recordIdentifier: {sourceColumn: registration_number}
-      revisionIdentifier: {sourceColumn: record_revision}
-      lifecycleState:
-        sourceColumn: lifecycle_state
-        codelist: codelists/record-lifecycle.yaml
-      recordedAt: {sourceColumn: recorded_at}
-```
-
-`recordedAt` is the time the Authority recorded that revision. It is not Relay
-startup time, snapshot time, or response time.
-
-Declare every published property separately from its SQLite column:
-
-```yaml
-    properties:
-      legalName:
-        sourceColumn: legal_name
-        type: string
-        sourceRequired: true
-        semanticTerm: local:legalName
-        label: Legal name
-        description: Registered legal name of the organisation.
-        classification:
-          privacy: potentially-personal
-          institutional: public-by-law
-          handling: public
-          status: reviewed
-```
-
-`legalName` is the stable API property. `legal_name` remains a local storage
-detail. `sourceRequired` checks the complete source Record, while the response
-schema still permits a caller to request fewer authorized domain properties.
-
-## Declare only the required operations
-
-An operation can retrieve one Record by identifier, list a deterministic
-collection, or perform a named exact lookup. Relay advertises those operations
-as capabilities in the GovStack Consultation family.
-
-This public business Registry needs list and retrieve:
-
-```yaml
-    disclosureProfiles:
-      public-register:
-        properties: [registrationNumber, legalName, registrationStatus]
-    operations:
-      list:
-        access: public
-        disclosureProfile: public-register
-        filters:
-          - name: status
-            property: registrationStatus
-            type: controlled-code
-        allowUnfiltered: true
-        orderBy: [registrationNumber]
-        pagination:
-          defaultPageSize: 25
-          maximumPageSize: 100
-      read:
-        access: public
-        disclosureProfile: public-register
-```
-
-List filters are named, typed equality parameters. Relay reserves `pageSize`,
-`cursor`, and `fields`. A caller cannot add an operator, sort, join, source
-column, or expression.
-
-Use a named exact lookup for sensitive selectors. The lookup defines its
-complete bounded request body, required scope, optional trusted purpose,
-optional verified-claim row boundary, and maximum of one result. A lookup-only
-resource publishes neither a collection route nor an identifier-read route.
-
-## Complete classification and semantics
-
-Classify every published property and every hidden column used for identifiers,
-revision, lifecycle, selectors, row boundaries, filtering, or ordering. The
-technical handling order is `public`, `internal`, `confidential`, and
-`restricted`. More restrictive data can narrow an operation but cannot widen
-one, and `restricted` data cannot appear in a list.
-
-Set one stable local vocabulary base in `registry.yaml`:
-
-```yaml
-semantics:
-  localVocabulary: https://business.example.invalid/vocabulary/
-```
-
-Relay generates a local vocabulary, JSON-LD context, JSON Schema, SHACL shape,
-and codelist schemas from the reviewed contract. Mappings to the European
-Commission Semantic Interoperability Community (SEMIC), PublicSchema,
-schema.org, or another external vocabulary are optional governed files. Relay
-does not infer equivalence between local and external terms.
-
-Bind each operation to its reviewed processing purpose, recipient class, legal
-basis reference, and safeguards. Classify service, resource, semantic,
-classification, and processing metadata as `public`, `operation-bound`, or
-`operator-only`. A caller who receives a Record must also be able to retrieve
-safe versions of the schema and semantic model linked from that Record.
-
-## Add synthetic HTTP journeys
-
-Create `fixture.sql` with synthetic Records that cover valid, invalid, absent,
-and boundary cases. Create `expected-http.yaml` with the requests and exact
-responses the project must preserve. Do not copy production Records, tokens, or
-identifiers into either file.
-
-For one public identifier-read operation, begin with this minimal journey and
-add cases for the rest of the contract:
-
-```yaml
-schemaVersion: relay.registrystack.org/http-journey/v1alpha1
-registry: urn:example:registry:registered-businesses
-authorizations: {}
-steps:
-  - id: identifier-read
-    request:
-      method: GET
-      path: /v2/resources/registered-business/records/BIZ-SYNTH-0001
-    expect:
-      status: 200
-      recordIdentifier: BIZ-SYNTH-0001
-```
-
-`fixture.sql` must create the reviewed view named in `registry.yaml` and insert
-a synthetic `BIZ-SYNTH-0001` Record with every required source value. Add at
-least one invalid row to prove source-shape refusal and one unresolved request
-that does not reveal whether a Record exists.
-
-The journey must cover every published operation, permitted filter, expected
-field subset, protected access rule, and safe refusal that matters to the
-Registry. `relayctl test` runs these requests through the Relay HTTP router
-against an isolated SQLite database built from `fixture.sql`.
-
-## Check and package the project
-
-Run the production check:
-
-```sh
-relayctl check ./business-registry --production
-```
-
-The report must identify `check`, production mode, and the accepted contract
-revision:
-
-```text
-relayctl check
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "check",
-    "production": true,
-    "contract_revision": "sha256:<digest>"
-  }
-}
-```
-
-Generate the artifacts:
+Generate the deterministic, value-free review inputs beneath `generated/`:
 
 ```sh
 relayctl generate ./business-registry
 ```
 
-The result identifies `generate`, the same contract revision, and an
-`artifacts` inventory. Now run the synthetic journey:
+The command writes:
+
+- `reports/identification-report.json`
+- `reports/classification-inventory.json`
+- `reports/representation-report.json`
+- `reports/contextual-review-findings.json`
+- `governance/classification-review-starter.yaml`
+
+The `classification-review.yaml` sidecar is strict and names the inventory it approves.
+Use `generated` when the review accepts an identification report, `imported` for reviewed material
+from another process, or `manual` for an institutional review without generated identification.
+Only generated review binds an accepted copied report and its rule-pack identity.
+
+```yaml
+apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:registered-businesses
+classificationInventoryDigest: sha256:<inventory-digest>
+method: manual
+reviewer: urn:example:institution:company-registrar
+reviewDate: 2026-08-10
+status: reviewed
+rationaleRef: governance/classification-review-rationale.md
+```
+
+Production compilation refuses a missing, non-reviewed, stale, or digest-mismatched sidecar.
+A relevant contract, schema, source-column, or classification change invalidates review.
+A rule-pack change matters only where that pack informed the review.
+
+## Define reviewed representations
+
+Each list, read, or named exact-lookup operation has a finite ordered map of named representations
+and exactly one `defaultRepresentation`.
+If an operation has any public representation, its default must also be public. This keeps omission
+truthful for anonymous callers and the generated public OpenAPI.
+Each representation selects one disclosure profile and one access rule.
+Its profile defines the maximum property set that can reach `domainData`.
+
+Callers may omit `representation` to select the declared default, or supply one named
+representation.
+Relay authorizes the supplied representation exactly as requested.
+An unknown representation, invalid bearer, or denial never falls back to the default or another
+representation.
+The `fields` parameter can only select a non-empty subset of the selected representation's public
+properties.
+It cannot add a property, select a source column, change a transform, weaken handling, or bypass
+an access or row boundary.
+Registry Core remains present.
+
+## Account for processing and disclosure
+
+Technical handling is ordered from `public` through `internal` and `confidential` to `restricted`.
+Processing handling is the most restrictive level across every column used to answer the request.
+Disclosure handling is the most restrictive level among the properties a representation can
+serialize.
+Compiler validity, audit context, cache eligibility, and source processing account for the
+processing level, even where the released representation is less restrictive.
+
+A public representation cannot transform a non-public source column.
+Instead, bind it to a reviewed pre-derived public SQLite view column.
+Classifications can restrict an operation, but cannot create a route, scope, purpose, consent,
+lawful basis, or row authority.
+
+Relay supports only two compiled, deterministic transforms:
+
+- `partial-string` emits the fixed Relay marker `***` and a configured bounded prefix or suffix.
+  A value no longer than the reveal length emits only `***`.
+- `date-precision` accepts a canonical `date` or `date-time` and emits a `year` or `year-month`
+  output property with its own type, semantic term, and classification.
+
+Invalid, noncanonical, oversized, or required missing transform input fails without releasing a
+value.
+Hashing, pseudonyms, encryption, regular-expression replacement, caller-defined masks or
+expressions, dynamic per-request masking, and a free-form policy engine are not supported.
+
+## Check, test, and package the complete revision
+
+Run the production gate, generate reviewable artifacts, and replay synthetic HTTP fixtures before
+handoff:
 
 ```sh
+relayctl check ./business-registry --production
+relayctl generate ./business-registry
 relayctl test ./business-registry
-```
-
-The test result identifies `test`, the same contract revision, and one
-`"passed": true` entry for every HTTP step. Any diagnostic or failed step
-stops the handoff.
-
-Before changing an approved project, keep its previous revision in a separate
-directory or worktree. Classify the proposed change:
-
-```sh
 relayctl diff ./approved-business-registry ./business-registry
-```
-
-Review any new property, weaker classification, broader operation, removed row
-boundary, expanded purpose or scope, changed source view, or semantic mapping.
-Git and CI provide the approval workflow. Relay does not include an
-administration or approval service.
-
-Each change has a class, impact, location, and stable description. For example,
-expanding a disclosure profile appears as:
-
-```json
-{
-  "class": "disclosure-expanded",
-  "impact": "widening",
-  "location": "resources.registered-business.operations.list.disclosureProfile",
-  "description": "the maximum disclosure property set expanded"
-}
-```
-
-After approval, create a new output directory:
-
-```sh
 relayctl package ./business-registry --output ./business-registry-package
 ```
 
-The package result has this stable shape:
-
-```text
-relayctl package
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "package",
-    "manifest": {
-      "packageRevision": "sha256:<package-digest>",
-      "contractRevision": "sha256:<contract-digest>",
-      "sourceSchemaFingerprints": {"companies": "sha256:<schema-digest>"}
-    }
-  }
-}
-```
-
-The complete report also records governed-file digests, generated artifacts,
-media types, and visibility. Give the package, matching source, and runtime
-bindings to the operator as one revisioned deployment candidate.
-
-## Verify the handoff
-
-Confirm that these statements are true before deployment:
-
-- `relayctl check --production`, `generate`, and `test` all report success for
-  the same contract revision.
-- The approved diff contains no unexplained disclosure, access, source, or
-  semantic change.
-- The package directory did not exist before packaging and is non-writable
-  after the handoff.
-- The operator has the matching SQLite source or approved live-source process,
-  but no production data is inside the package.
-
-Continue with [Operate Registry Relay](../../operate/relay/) to bind the package
-to deployment paths, authentication, audit, limits, and a listener.
+`check --production` and `package` refuse incomplete governance and unsafe package inputs.
+The package contains the contract's governed file closure and generated artifacts, but not SQLite
+data or fixtures.
+Relay loads one complete package at startup and does not merge, reload, overlay, or fall back to a
+different interpretation.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `relayctl inspect` refuses the database | The inspection copy is writable, unsafe, or reached through a symlink | Create a non-writable copy on a physical path and inspect that copy. |
-| `check --production` reports suggested governance | A generated starter was not institutionally reviewed | Replace or approve the starter and record `status: reviewed` in the governed file. |
-| The schema fingerprint changed | The SQLite structure no longer matches the contract | Review the database migration, update bindings intentionally, and rerun the complete change workflow. |
-| A field cannot be added to `fields` | The operation's disclosure profile does not include that public property | Add the property only after classification, semantic, processing, and disclosure review. |
-| Packaging refuses the output | The destination already exists | Choose a new revisioned directory. Packaging never overwrites an existing package. |
+| `inspect` refuses the source | The inspection database is unsafe or writable | Create a non-writable physical-path copy and retry. |
+| Production checking reports a review error | The sidecar is missing, not reviewed, stale, or does not match the inventory | Complete the institutional review and regenerate the affected report. |
+| A field is rejected | It is not in the selected representation | Review and change the governed representation, then repeat the full workflow. |
+| Packaging refuses the destination | The output directory exists or its closure is unsafe | Select a new empty revisioned directory. |

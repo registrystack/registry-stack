@@ -289,6 +289,16 @@ fn property_schema(registry: &CompiledRegistry, property: &CompiledProperty) -> 
         DataType::Integer => json!({"type": "integer"}),
         DataType::Date => json!({"type": "string", "format": "date"}),
         DataType::DateTime => json!({"type": "string", "format": "date-time"}),
+        DataType::Year => json!({
+            "type": "string",
+            "pattern": "^[0-9]{4}$",
+            "x-registry-datatype": "year"
+        }),
+        DataType::YearMonth => json!({
+            "type": "string",
+            "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+            "x-registry-datatype": "year-month"
+        }),
     }
 }
 
@@ -307,6 +317,8 @@ pub fn datatype_iri(data_type: DataType) -> &'static str {
         DataType::Integer => "http://www.w3.org/2001/XMLSchema#integer",
         DataType::Date => "http://www.w3.org/2001/XMLSchema#date",
         DataType::DateTime => "http://www.w3.org/2001/XMLSchema#dateTime",
+        DataType::Year => "http://www.w3.org/2001/XMLSchema#gYear",
+        DataType::YearMonth => "http://www.w3.org/2001/XMLSchema#gYearMonth",
     }
 }
 
@@ -357,6 +369,7 @@ mod tests {
                 label: "Name".into(),
                 description: "Name".into(),
                 source_column: "name".into(),
+                transform: None,
                 data_type: DataType::String,
                 codelist: None,
                 source_required: true,
@@ -403,6 +416,7 @@ mod tests {
             local_vocabulary: "https://example.invalid/vocab/".into(),
             semantic_alignments: Vec::new(),
             governed_files: Vec::new(),
+            classification_review: None,
             codelists: Vec::new(),
             sources: Vec::new(),
             resources: Vec::new(),

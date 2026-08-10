@@ -18,6 +18,8 @@ claim. The obsolete Digital Registries OpenAPI is not an input.
 | Consultation List | Deterministic list is compiled only when the resource declares `list`; pagination and filters are closed. |
 | Consultation Search | A named exact lookup is the only accepted search-shaped operation. It returns one governed Record or the unresolved outcome. |
 | Registry semantics | Every resource and property has a stable local semantic identity; JSON-LD, JSON Schema, and SHACL artifacts are compiler outputs. |
+| Governed representations | A compiled operation may expose only its finite reviewed representations, each with its own access, disclosure, semantic, schema, SHACL, JSON-LD, classification, and processing artifact. This is controlled publication, not content negotiation or dynamic ABAC. |
+| Data governance review | Schema-only identification supplies deterministic review evidence. Classification remains Registry Authority review metadata and constrains compilation; it never grants an entitlement or becomes a remote runtime policy. |
 | Capability discovery | The public and protected inventories are derived from compiled operations and their visibility. |
 | API description | One full OpenAPI 3.1 document is package-only and one deterministic public subset is exposed at `/openapi.json`. |
 | API error discipline | Relay uses RFC 9457 problems, stable Registry Stack codes, W3C Trace Context correlation, and value-free details. |
@@ -30,6 +32,9 @@ claim. The obsolete Digital Registries OpenAPI is not an input.
   retain their language metadata.
 - Registry Manifest, machine-readable GovStack alignment, DPV projection, and
   a GovStack linter remain future adopter-tooling projections.
+- Dynamic masking, generic tags, external PDP, value sampling, and a general
+  data-catalog integration remain outside this alignment. Only reviewed
+  `partial-string` and `date-precision` output properties are in scope.
 - A current SQLite source and its lifecycle policy do not prove that an
   institution has never reassigned an identifier.
 - Relay responses are unsigned. Portable signed minimum disclosure belongs to

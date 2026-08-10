@@ -13,7 +13,7 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
-const CURSOR_VERSION: u8 = 1;
+const CURSOR_VERSION: u8 = 2;
 const MAX_CURSOR_BYTES: usize = 8 * 1024;
 const MAC_BYTES: usize = 32;
 
@@ -28,6 +28,9 @@ pub struct CursorPayload {
     pub contract_revision: String,
     pub source_revision: String,
     pub operation: String,
+    pub representation: String,
+    pub disclosure_profile: String,
+    pub transforms_digest: String,
     pub filters_digest: String,
     pub selected_fields_digest: String,
     pub authorization_digest: String,
@@ -56,6 +59,9 @@ pub enum CursorValue {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CursorBindings {
+    pub representation: String,
+    pub disclosure_profile: String,
+    pub transforms_digest: String,
     pub filters_digest: String,
     pub selected_fields_digest: String,
     pub authorization_digest: String,
@@ -78,6 +84,9 @@ impl CursorPayload {
             contract_revision,
             source_revision,
             operation,
+            representation: bindings.representation,
+            disclosure_profile: bindings.disclosure_profile,
+            transforms_digest: bindings.transforms_digest,
             filters_digest: bindings.filters_digest,
             selected_fields_digest: bindings.selected_fields_digest,
             authorization_digest: bindings.authorization_digest,
@@ -207,6 +216,9 @@ pub fn require_same_request(
     if cursor.contract_revision != request.contract_revision
         || cursor.source_revision != request.source_revision
         || cursor.operation != request.operation
+        || cursor.representation != request.representation
+        || cursor.disclosure_profile != request.disclosure_profile
+        || cursor.transforms_digest != request.transforms_digest
         || cursor.filters_digest != request.filters_digest
         || cursor.selected_fields_digest != request.selected_fields_digest
         || cursor.authorization_digest != request.authorization_digest
@@ -236,6 +248,9 @@ mod tests {
             "sha256:source".to_owned(),
             "resource.list".to_owned(),
             CursorBindings {
+                representation: "public".to_owned(),
+                disclosure_profile: "public".to_owned(),
+                transforms_digest: "sha256:transforms".to_owned(),
                 filters_digest: "sha256:filters".to_owned(),
                 selected_fields_digest: "sha256:fields".to_owned(),
                 authorization_digest: "sha256:authorization".to_owned(),
@@ -272,5 +287,26 @@ mod tests {
             require_same_request(&payload(), &request),
             Err(CursorError::Mismatch)
         );
+    }
+
+    #[test]
+    fn cursor_cannot_cross_representation_disclosure_or_transform_contexts() {
+        let alterations: [fn(&mut CursorPayload); 3] = [
+            |payload: &mut CursorPayload| payload.representation = "caseworker".to_owned(),
+            |payload: &mut CursorPayload| {
+                payload.disclosure_profile = "caseworker".to_owned();
+            },
+            |payload: &mut CursorPayload| {
+                payload.transforms_digest = "sha256:other-transforms".to_owned();
+            },
+        ];
+        for alter in alterations {
+            let mut request = payload();
+            alter(&mut request);
+            assert_eq!(
+                require_same_request(&payload(), &request),
+                Err(CursorError::Mismatch)
+            );
+        }
     }
 }

@@ -10,30 +10,35 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::contract::{
-    AccessRule, AuthorityRowBinding, ClassificationPartial, DataType, Handling, RegistryContract,
-    ReviewStatus, SourceProfile,
+    AccessRule, AuthorityRowBinding, ClassificationPartial, DataType, DateInputType, DatePrecision,
+    Handling, IdentificationMethod, RegistryContract, RepresentationDefinition, ReviewStatus,
+    SourceProfile, TransformDefinition,
 };
 use crate::model::{
     CapabilityFamily, ColumnAccount, ColumnUse, CompileProfile, CompileReport, CompiledAccess,
-    CompiledCodelist, CompiledDisclosureProfile, CompiledFilter, CompiledGovernedFile,
-    CompiledMetadataVisibility, CompiledOperation, CompiledPagination, CompiledProperty,
-    CompiledPurpose, CompiledRecordContext, CompiledRegistry, CompiledResource, CompiledRowBinding,
-    CompiledSelector, CompiledSource, ConsultationPattern, Diagnostic, DiagnosticSeverity,
-    EffectiveClassification, ObservedSourceSchema, OperationKind, QueryPlan, RowAuthoritySource,
-    StarterColumn, StarterContract,
+    CompiledClassificationReview, CompiledCodelist, CompiledDisclosureProfile, CompiledFilter,
+    CompiledGeneratedIdentificationBinding, CompiledGovernedFile, CompiledMetadataVisibility,
+    CompiledOperation, CompiledPagination, CompiledProperty, CompiledPurpose,
+    CompiledRecordContext, CompiledRegistry, CompiledRepresentation, CompiledResource,
+    CompiledRowBinding, CompiledSelector, CompiledSource, CompiledTransform, ConsultationPattern,
+    Diagnostic, DiagnosticSeverity, EffectiveClassification, ObservedSourceSchema, OperationKind,
+    QueryPlan, RowAuthoritySource, StarterColumn, StarterContract,
 };
 
 const API_VERSION: &str = "relay.registrystack.org/v2alpha1";
-const RESERVED_PARAMETERS: [&str; 3] = ["pageSize", "cursor", "fields"];
+const RESERVED_PARAMETERS: [&str; 4] = ["pageSize", "cursor", "fields", "representation"];
 const MAXIMUM_RESOURCES: usize = 128;
 const MAXIMUM_PROPERTIES_PER_RESOURCE: usize = 128;
 const MAXIMUM_DISCLOSURE_PROFILES_PER_RESOURCE: usize = 64;
+const MAXIMUM_REPRESENTATIONS_PER_OPERATION: usize = 16;
+const MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY: usize = 128;
 const MAXIMUM_LIST_FILTERS: usize = 32;
 const MAXIMUM_LIST_ORDER_KEYS: usize = 32;
 const MAXIMUM_LIST_PAGE_SIZE: u32 = 1_000;
 const MAXIMUM_LOOKUP_REQUEST_BODY_BYTES: u32 = 1024 * 1024;
 const MAXIMUM_LOOKUP_SELECTORS: usize = 32;
 const MAXIMUM_SELECTOR_BYTES: u32 = 4 * 1024;
+const MAXIMUM_PARTIAL_STRING_CHARACTERS: u16 = 64;
 
 pub type GovernedFileSet = BTreeMap<String, Vec<u8>>;
 
@@ -61,6 +66,18 @@ pub fn compile_contract(
     let mut compiler = Compiler::new(contract, observed, profile);
     compiler.validate_top_level();
     let resources = compiler.compile_resources();
+    let representation_executors = resources
+        .iter()
+        .flat_map(|resource| &resource.operations)
+        .map(|operation| operation.representations.len())
+        .sum::<usize>();
+    if representation_executors > MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY {
+        compiler.error(
+            "representation.registry_bound_exceeded",
+            "resources",
+            "the compiled representation count exceeds the Registry runtime ceiling",
+        );
+    }
     compiler.validate_observed_source_closure();
 
     if compiler.report.has_errors() {
@@ -98,6 +115,7 @@ pub fn compile_contract(
         local_vocabulary: contract.semantics.local_vocabulary.clone(),
         semantic_alignments: contract.semantics.alignments.clone(),
         governed_files: Vec::new(),
+        classification_review: None,
         codelists: Vec::new(),
         sources: contract
             .sources
@@ -130,7 +148,8 @@ pub fn compile_contract_with_governed_files(
     files: &GovernedFileSet,
 ) -> Result<CompiledRegistry, CompileReport> {
     let mut registry = compile_contract(contract, observed, profile)?;
-    let (codelists, file_digests, report) = validate_governed_files(contract, files, profile);
+    let (codelists, file_digests, classification_review, report) =
+        validate_governed_files(contract, files, profile, &registry);
     if report.has_errors() {
         return Err(report);
     }
@@ -153,10 +172,11 @@ pub fn compile_contract_with_governed_files(
         }],
     })?;
     registry.codelists = codelists;
+    registry.classification_review = classification_review;
     registry.governed_files = file_digests
         .into_iter()
         .map(|(path, sha256)| CompiledGovernedFile {
-            roles: governed_file_roles(contract, &path),
+            roles: governed_file_roles(contract, registry.classification_review.as_ref(), &path),
             path,
             sha256,
         })
@@ -164,13 +184,26 @@ pub fn compile_contract_with_governed_files(
     Ok(registry)
 }
 
-fn governed_file_roles(contract: &RegistryContract, path: &str) -> Vec<String> {
+fn governed_file_roles(
+    contract: &RegistryContract,
+    review: Option<&CompiledClassificationReview>,
+    path: &str,
+) -> Vec<String> {
     let mut roles = Vec::new();
     if contract.registry.identifier_lifecycle_policy_ref == path {
         roles.push("identifier-lifecycle-policy".into());
     }
     if contract.classifications.provenance_ref == path {
         roles.push("classification-provenance".into());
+    }
+    if review.is_some_and(|review| review.rationale_ref == path) {
+        roles.push("classification-review-rationale".into());
+    }
+    if review
+        .and_then(|review| review.generated_identification.as_ref())
+        .is_some_and(|binding| binding.report_ref == path)
+    {
+        roles.push("identification-report".into());
     }
     for alignment in &contract.semantics.alignments {
         if alignment.profile_ref == path {
@@ -660,7 +693,7 @@ impl<'a> Compiler<'a> {
             }
 
             let mut property_names = HashSet::new();
-            let mut property_columns: HashMap<&str, (&str, EffectiveClassification)> =
+            let mut property_columns: HashMap<&str, Vec<(&str, EffectiveClassification, bool)>> =
                 HashMap::new();
             let mut properties = Vec::with_capacity(resource.properties.len());
             for (name, property) in resource.properties.iter() {
@@ -693,13 +726,6 @@ impl<'a> Compiler<'a> {
                         "property keys must be unique",
                     );
                 }
-                if property_columns.contains_key(property.source_column.as_str()) {
-                    self.error(
-                        "property.column_reused",
-                        &format!("{location}.sourceColumn"),
-                        "one source column cannot back more than one public property",
-                    );
-                }
                 if !column_exists(observed_columns.as_ref(), &property.source_column) {
                     self.error(
                         "property.column_unknown",
@@ -722,12 +748,18 @@ impl<'a> Compiler<'a> {
                         );
                     }
                 }
+                let transform = self.compile_transform(
+                    property.transform.as_ref(),
+                    property.data_type,
+                    &location,
+                );
                 if let Some(observed) = observed_view.and_then(|view| {
                     view.columns
                         .iter()
                         .find(|column| column.name == property.source_column)
                 }) {
-                    if !compatible_declared_type(property.data_type, &observed.declared_type) {
+                    let source_type = transform_source_type(transform.as_ref(), property.data_type);
+                    if !compatible_declared_type(source_type, &observed.declared_type) {
                         self.error(
                             "property.declared_type_incompatible",
                             &format!("{location}.type"),
@@ -772,15 +804,16 @@ impl<'a> Compiler<'a> {
                         property.semantic_term.clone()
                     }
                 };
-                property_columns.insert(
-                    property.source_column.as_str(),
-                    (name, classification.clone()),
-                );
+                property_columns
+                    .entry(property.source_column.as_str())
+                    .or_default()
+                    .push((name, classification.clone(), transform.is_some()));
                 properties.push(CompiledProperty {
                     name: name.to_owned(),
                     label: property.label.clone(),
                     description: property.description.clone(),
                     source_column: property.source_column.clone(),
+                    transform,
                     data_type: property.data_type,
                     codelist: property.codelist.clone(),
                     source_required: property.source_required,
@@ -918,6 +951,7 @@ impl<'a> Compiler<'a> {
                     resource,
                     &properties,
                     &disclosures,
+                    observed_view,
                     observed_columns.as_ref(),
                     &root,
                     list,
@@ -935,8 +969,8 @@ impl<'a> Compiler<'a> {
                     &root,
                     "read",
                     OperationKind::Read,
-                    &read.access,
-                    &read.disclosure_profile,
+                    &read.default_representation,
+                    &read.representations,
                 ) {
                     operations.push(operation);
                 }
@@ -1048,8 +1082,8 @@ impl<'a> Compiler<'a> {
                     OperationKind::Lookup {
                         name: lookup.id.clone(),
                     },
-                    &lookup.access,
-                    &lookup.disclosure_profile,
+                    &lookup.default_representation,
+                    &lookup.representations,
                 ) {
                     operation.identifier = format!("{}.lookup.{}", resource.id, lookup.id);
                     operation.query.selectors = selectors;
@@ -1150,26 +1184,40 @@ impl<'a> Compiler<'a> {
         root: &str,
         operation_location: &str,
         kind: OperationKind,
-        access: &AccessRule,
-        disclosure_name: &str,
+        default_representation: &str,
+        representation_definitions: &crate::contract::OrderedMap<RepresentationDefinition>,
     ) -> Option<CompiledOperation> {
         let location = if operation_location == "lookup" {
             root.to_owned()
         } else {
             format!("{root}.operations.{operation_location}")
         };
-        let disclosure = disclosures.iter().find(|item| item.id == disclosure_name);
-        let Some(disclosure) = disclosure else {
+        if representation_definitions.is_empty() {
             self.error(
-                "operation.disclosure_unknown",
-                &format!("{location}.disclosureProfile"),
-                "the operation names no disclosure profile",
+                "representation.none",
+                &format!("{location}.representations"),
+                "an operation must declare at least one finite representation",
             );
             return None;
-        };
-        let access = self.compile_access(access, observed_columns, &location)?;
-        validate_disclosure_access(&mut self.report, disclosure, &access, &location);
-        let projected_columns = projected_columns(resource, properties, &disclosure.properties);
+        }
+        if representation_definitions.len() > MAXIMUM_REPRESENTATIONS_PER_OPERATION {
+            self.error(
+                "representation.bound_exceeded",
+                &format!("{location}.representations"),
+                "the representation count exceeds the per-operation product ceiling",
+            );
+        }
+        if !valid_kebab_identifier(default_representation)
+            || representation_definitions
+                .get(default_representation)
+                .is_none()
+        {
+            self.error(
+                "representation.default_invalid",
+                &format!("{location}.defaultRepresentation"),
+                "the explicit default must name exactly one declared representation",
+            );
+        }
         let identifier = match &kind {
             OperationKind::Read => format!("{}.read", resource.id),
             OperationKind::List => format!("{}.list", resource.id),
@@ -1181,18 +1229,105 @@ impl<'a> Compiler<'a> {
             OperationKind::Lookup { .. } => ConsultationPattern::Search,
         };
         let artifact_stem = operation_artifact_stem(&resource.id, &kind);
+        let mut representations = Vec::with_capacity(representation_definitions.len());
+        for (representation_id, definition) in representation_definitions.iter() {
+            let representation_location = format!("{location}.representations.{representation_id}");
+            if !valid_kebab_identifier(representation_id) {
+                self.error(
+                    "representation.id_invalid",
+                    &representation_location,
+                    "representation identifiers must be URL-safe kebab case",
+                );
+            }
+            let Some(disclosure) = disclosures
+                .iter()
+                .find(|item| item.id == definition.disclosure_profile)
+            else {
+                self.error(
+                    "representation.disclosure_unknown",
+                    &format!("{representation_location}.disclosureProfile"),
+                    "the representation names no disclosure profile",
+                );
+                continue;
+            };
+            let Some(access) = self.compile_access(
+                &definition.access,
+                observed_columns,
+                &representation_location,
+            ) else {
+                continue;
+            };
+            validate_disclosure_access(
+                &mut self.report,
+                disclosure,
+                &access,
+                matches!(&kind, OperationKind::List),
+                &representation_location,
+            );
+            let representation_artifact_stem =
+                format!("{artifact_stem}--representation-{representation_id}");
+            representations.push(CompiledRepresentation {
+                id: representation_id.to_owned(),
+                access,
+                disclosure_profile: disclosure.id.clone(),
+                selectable_properties: disclosure.properties.clone(),
+                projected_columns: projected_columns(resource, properties, &disclosure.properties),
+                processing_handling: Handling::Public,
+                disclosure_handling: disclosure.maximum_handling,
+                transform_inventory: disclosure
+                    .properties
+                    .iter()
+                    .filter_map(|name| {
+                        properties
+                            .iter()
+                            .find(|property| property.name == *name)
+                            .and_then(|property| {
+                                property.transform.as_ref().map(|transform| {
+                                    format!("{}={}", property.name, transform.identifier())
+                                })
+                            })
+                    })
+                    .collect(),
+                schema_reference: artifact_url(
+                    &self.contract.registry.base_uri,
+                    &format!("{representation_artifact_stem}-schema"),
+                ),
+                semantic_model_reference: artifact_url(
+                    &self.contract.registry.base_uri,
+                    &format!("{representation_artifact_stem}-vocabulary"),
+                ),
+                context_reference: artifact_url(
+                    &self.contract.registry.base_uri,
+                    &format!("{representation_artifact_stem}-context"),
+                ),
+            });
+        }
+        if representations
+            .iter()
+            .any(|representation| matches!(representation.access, CompiledAccess::Public))
+            && representations
+                .iter()
+                .find(|representation| representation.id == default_representation)
+                .is_some_and(|representation| {
+                    !matches!(representation.access, CompiledAccess::Public)
+                })
+        {
+            self.error(
+                "representation.public_default_required",
+                &format!("{location}.defaultRepresentation"),
+                "an operation with a public representation must use a public default",
+            );
+        }
         Some(CompiledOperation {
             identifier,
             family: CapabilityFamily::Consultation,
             pattern,
             kind,
-            access,
-            disclosure_profile: disclosure.id.clone(),
-            selectable_properties: disclosure.properties.clone(),
+            default_representation: default_representation.to_owned(),
+            representations,
             query: QueryPlan {
                 source: resource.source.source.clone(),
                 view: resource.source.view.clone(),
-                projected_columns,
                 filters: Vec::new(),
                 selectors: Vec::new(),
                 order_by: Vec::new(),
@@ -1200,19 +1335,6 @@ impl<'a> Compiler<'a> {
                 pagination: None,
                 maximum_request_body_bytes: None,
             },
-            maximum_handling: disclosure.maximum_handling,
-            schema_reference: artifact_url(
-                &self.contract.registry.base_uri,
-                &format!("{artifact_stem}-schema"),
-            ),
-            semantic_model_reference: artifact_url(
-                &self.contract.registry.base_uri,
-                &format!("{artifact_stem}-vocabulary"),
-            ),
-            context_reference: artifact_url(
-                &self.contract.registry.base_uri,
-                &format!("{artifact_stem}-context"),
-            ),
         })
     }
 
@@ -1222,6 +1344,7 @@ impl<'a> Compiler<'a> {
         resource: &crate::contract::ResourceDefinition,
         properties: &[CompiledProperty],
         disclosures: &[CompiledDisclosureProfile],
+        observed_view: Option<&crate::model::ObservedView>,
         observed_columns: Option<&BTreeSet<&str>>,
         root: &str,
         list: &crate::contract::ListOperation,
@@ -1234,8 +1357,8 @@ impl<'a> Compiler<'a> {
             root,
             "list",
             OperationKind::List,
-            &list.access,
-            &list.disclosure_profile,
+            &list.default_representation,
+            &list.representations,
         )?;
         let location = format!("{root}.operations.list");
         if list.filters.len() > MAXIMUM_LIST_FILTERS {
@@ -1323,6 +1446,7 @@ impl<'a> Compiler<'a> {
             }
         }
         let mut order = HashSet::new();
+        let mut order_columns = HashSet::new();
         for property_name in &list.order_by {
             if !order.insert(property_name.as_str()) {
                 self.error(
@@ -1335,10 +1459,32 @@ impl<'a> Compiler<'a> {
                 .iter()
                 .find(|property| property.name == *property_name)
             {
-                Some(property) => operation
-                    .query
-                    .order_by
-                    .push(property.source_column.clone()),
+                Some(property) => {
+                    if !property.source_required {
+                        self.error(
+                            "list.order_property_optional",
+                            &format!("{location}.orderBy"),
+                            "fixed order properties must be required in the governed source contract",
+                        );
+                    }
+                    if !order_columns.insert(property.source_column.as_str()) {
+                        self.error(
+                            "list.order_column_duplicate",
+                            &format!("{location}.orderBy"),
+                            "fixed order properties must resolve to distinct source columns",
+                        );
+                    }
+                    self.validate_cursor_order_column(
+                        observed_view,
+                        &property.source_column,
+                        property.data_type,
+                        &format!("{location}.orderBy"),
+                    );
+                    operation
+                        .query
+                        .order_by
+                        .push(property.source_column.clone());
+                }
                 None => self.error(
                     "list.order_property_unknown",
                     &format!("{location}.orderBy"),
@@ -1347,8 +1493,27 @@ impl<'a> Compiler<'a> {
             }
         }
         let record_identifier = &resource.record_context.record_identifier.source_column;
-        if !operation.query.order_by.contains(record_identifier) {
-            operation.query.order_by.push(record_identifier.clone());
+        // The globally unique Registry Record identifier is always the final
+        // keyset component. Moving an explicitly authored occurrence to the
+        // end makes the order deterministic and guarantees a unique final
+        // tie-breaker rather than merely checking that it occurs somewhere.
+        operation
+            .query
+            .order_by
+            .retain(|column| column != record_identifier);
+        operation.query.order_by.push(record_identifier.clone());
+        self.validate_cursor_order_column(
+            observed_view,
+            record_identifier,
+            DataType::String,
+            &format!("{location}.orderBy"),
+        );
+        if operation.query.order_by.len() > MAXIMUM_LIST_ORDER_KEYS {
+            self.error(
+                "list.order_bound_exceeded",
+                &format!("{location}.orderBy"),
+                "fixed order keys plus the required record-identifier tie-breaker exceed the product ceiling",
+            );
         }
         operation.query.allow_unfiltered = list.allow_unfiltered;
         operation.query.pagination = Some(CompiledPagination {
@@ -1356,6 +1521,98 @@ impl<'a> Compiler<'a> {
             maximum_page_size: list.pagination.maximum_page_size,
         });
         Some(operation)
+    }
+
+    fn validate_cursor_order_column(
+        &mut self,
+        observed_view: Option<&crate::model::ObservedView>,
+        source_column: &str,
+        data_type: DataType,
+        location: &str,
+    ) {
+        let Some(observed) = observed_view.and_then(|view| {
+            view.columns
+                .iter()
+                .find(|column| column.name == source_column)
+        }) else {
+            return;
+        };
+        // SQLite does not preserve NOT NULL metadata through views: even a
+        // direct projection of a NOT NULL base-table column is reported as
+        // nullable by PRAGMA table_xinfo(view). The authored sourceRequired
+        // contract and runtime value validation therefore own null rejection;
+        // observed metadata still closes the declared scalar type here.
+        if !compatible_declared_type(data_type, &observed.declared_type) {
+            self.error(
+                "list.order_column_type_unsupported",
+                location,
+                "keyset order columns must have a reviewed SQLite declaration supported by the cursor scalar profile",
+            );
+        }
+    }
+
+    fn compile_transform(
+        &mut self,
+        definition: Option<&TransformDefinition>,
+        output_type: DataType,
+        location: &str,
+    ) -> Option<CompiledTransform> {
+        match definition? {
+            TransformDefinition::PartialString { reveal, characters } => {
+                if output_type != DataType::String {
+                    self.error(
+                        "transform.output_type_invalid",
+                        &format!("{location}.type"),
+                        "partial-string transforms must publish a string property",
+                    );
+                }
+                if !(1..=MAXIMUM_PARTIAL_STRING_CHARACTERS).contains(characters) {
+                    self.error(
+                        "transform.partial_string_characters_invalid",
+                        &format!("{location}.transform.characters"),
+                        "partial-string reveal length must be within the fixed product bound",
+                    );
+                }
+                let reveal_label = match reveal {
+                    crate::contract::PartialStringReveal::Prefix => "prefix",
+                    crate::contract::PartialStringReveal::Suffix => "suffix",
+                };
+                Some(CompiledTransform::PartialString {
+                    identifier: format!("partial-string:{reveal_label}:{characters}"),
+                    reveal: *reveal,
+                    characters: *characters,
+                })
+            }
+            TransformDefinition::DatePrecision {
+                source_type,
+                precision,
+            } => {
+                let expected_output = match precision {
+                    DatePrecision::Year => DataType::Year,
+                    DatePrecision::YearMonth => DataType::YearMonth,
+                };
+                if output_type != expected_output {
+                    self.error(
+                        "transform.output_type_invalid",
+                        &format!("{location}.type"),
+                        "date-precision output datatype must match the selected precision",
+                    );
+                }
+                let source_label = match source_type {
+                    DateInputType::Date => "date",
+                    DateInputType::DateTime => "date-time",
+                };
+                let precision_label = match precision {
+                    DatePrecision::Year => "year",
+                    DatePrecision::YearMonth => "year-month",
+                };
+                Some(CompiledTransform::DatePrecision {
+                    identifier: format!("date-precision:{source_label}:{precision_label}"),
+                    source_type: *source_type,
+                    precision: *precision,
+                })
+            }
+        }
     }
 
     fn compile_access(
@@ -1456,7 +1713,7 @@ impl<'a> Compiler<'a> {
         resource: &crate::contract::ResourceDefinition,
         properties: &[CompiledProperty],
         operations: &[CompiledOperation],
-        property_columns: &HashMap<&str, (&str, EffectiveClassification)>,
+        property_columns: &HashMap<&str, Vec<(&str, EffectiveClassification, bool)>>,
         core: &[(&str, ColumnUse); 4],
         observed_columns: Option<&BTreeSet<&str>>,
         root: &str,
@@ -1484,14 +1741,19 @@ impl<'a> Compiler<'a> {
                     .or_default()
                     .insert(ColumnUse::Selector(selector.name.clone()));
             }
-            if let CompiledAccess::Protected {
-                row_binding: Some(row_binding),
-                ..
-            } = &operation.access
-            {
-                uses.entry(&row_binding.source_column)
-                    .or_default()
-                    .insert(ColumnUse::RowBinding(operation.identifier.clone()));
+            for representation in &operation.representations {
+                if let CompiledAccess::Protected {
+                    row_binding: Some(row_binding),
+                    ..
+                } = &representation.access
+                {
+                    uses.entry(&row_binding.source_column).or_default().insert(
+                        ColumnUse::RowBinding(format!(
+                            "{}:{}",
+                            operation.identifier, representation.id
+                        )),
+                    );
+                }
             }
         }
         if let Some(columns) = observed_columns {
@@ -1518,14 +1780,42 @@ impl<'a> Compiler<'a> {
         let mut accounts = Vec::with_capacity(uses.len());
         for (column, column_uses) in uses {
             let source_override = resource.source_column_classifications.get(column);
-            let property_classification = property_columns.get(column).map(|(_, item)| item);
+            let property_bindings = property_columns.get(column);
+            let requires_explicit_review = property_bindings.is_some_and(|bindings| {
+                bindings.len() > 1 || bindings.iter().any(|(_, _, transformed)| *transformed)
+            });
+            if requires_explicit_review
+                && !source_override.is_some_and(explicit_reviewed_classification)
+            {
+                if self.profile == CompileProfile::Production {
+                    self.error(
+                        "classification.column_explicit_review_required",
+                        &format!("{root}.sourceColumnClassifications.{column}"),
+                        "a transformed or multiply-bound source column requires its own complete reviewed classification",
+                    );
+                } else {
+                    self.warning(
+                        "classification.column_explicit_review_required",
+                        &format!("{root}.sourceColumnClassifications.{column}"),
+                        "a transformed or multiply-bound source column still requires its own complete reviewed classification",
+                    );
+                }
+            }
+            let property_classification = property_bindings
+                .and_then(|bindings| bindings.first())
+                .map(|(_, item, _)| item);
             let classification = match property_classification {
-                Some(property) => effective_classification(
+                Some(property) if !requires_explicit_review => effective_classification(
                     self.contract,
                     &classification_to_partial(property),
                     source_override,
                 ),
                 None => effective_classification(
+                    self.contract,
+                    &resource.classification_defaults,
+                    source_override,
+                ),
+                Some(_) => effective_classification(
                     self.contract,
                     &resource.classification_defaults,
                     source_override,
@@ -1539,12 +1829,19 @@ impl<'a> Compiler<'a> {
                 );
                 continue;
             };
-            if let Some(property) = property_classification {
-                if classification.handling < property.handling {
+            if let Some(bindings) = property_bindings {
+                let strongest_direct = bindings
+                    .iter()
+                    .filter(|(_, _, transformed)| !*transformed)
+                    .map(|(_, item, _)| item.handling)
+                    .max();
+                if source_override.is_some_and(explicit_reviewed_classification)
+                    && strongest_direct.is_some_and(|handling| classification.handling < handling)
+                {
                     self.error(
                         "classification.column_weaker_than_property",
                         &format!("{root}.sourceColumnClassifications"),
-                        "a source-column override cannot weaken property handling",
+                        "a source-column classification cannot weaken a direct property handling floor",
                     );
                 }
             }
@@ -1568,36 +1865,6 @@ impl<'a> Compiler<'a> {
         root: &str,
     ) {
         for operation in operations {
-            let mut referenced = BTreeSet::new();
-            referenced.extend(operation.query.projected_columns.iter().map(String::as_str));
-            referenced.extend(
-                operation
-                    .query
-                    .filters
-                    .iter()
-                    .map(|filter| filter.source_column.as_str()),
-            );
-            referenced.extend(operation.query.order_by.iter().map(String::as_str));
-            referenced.extend(
-                operation
-                    .query
-                    .selectors
-                    .iter()
-                    .map(|selector| selector.source_column.as_str()),
-            );
-            if let CompiledAccess::Protected {
-                row_binding: Some(binding),
-                ..
-            } = &operation.access
-            {
-                referenced.insert(&binding.source_column);
-            }
-            operation.maximum_handling = columns
-                .iter()
-                .filter(|column| referenced.contains(column.column.as_str()))
-                .fold(operation.maximum_handling, |maximum, column| {
-                    maximum.max(column.classification.handling)
-                });
             let location = match &operation.kind {
                 OperationKind::List => format!("{root}.operations.list"),
                 OperationKind::Read => format!("{root}.operations.read"),
@@ -1605,23 +1872,57 @@ impl<'a> Compiler<'a> {
                     format!("{root}.operations.lookups.{name}")
                 }
             };
-            if operation.maximum_handling > Handling::Public
-                && matches!(operation.access, CompiledAccess::Public)
-            {
-                self.error(
-                    "access.public_nonpublic_forbidden",
-                    &location,
-                    "anonymous operations may process only public-handling reviewed columns",
+            for representation in &mut operation.representations {
+                let mut referenced = BTreeSet::new();
+                referenced.extend(representation.projected_columns.iter().map(String::as_str));
+                referenced.extend(
+                    operation
+                        .query
+                        .filters
+                        .iter()
+                        .map(|filter| filter.source_column.as_str()),
                 );
-            }
-            if operation.maximum_handling == Handling::Restricted
-                && matches!(&operation.kind, OperationKind::List)
-            {
-                self.error(
-                    "operation.restricted_list_forbidden",
-                    &location,
-                    "restricted reviewed data cannot be processed by a collection list",
+                referenced.extend(operation.query.order_by.iter().map(String::as_str));
+                referenced.extend(
+                    operation
+                        .query
+                        .selectors
+                        .iter()
+                        .map(|selector| selector.source_column.as_str()),
                 );
+                if let CompiledAccess::Protected {
+                    row_binding: Some(binding),
+                    ..
+                } = &representation.access
+                {
+                    referenced.insert(&binding.source_column);
+                }
+                representation.processing_handling = columns
+                    .iter()
+                    .filter(|column| referenced.contains(column.column.as_str()))
+                    .fold(Handling::Public, |maximum, column| {
+                        maximum.max(column.classification.handling)
+                    });
+                let representation_location =
+                    format!("{location}.representations.{}", representation.id);
+                if representation.processing_handling > Handling::Public
+                    && matches!(representation.access, CompiledAccess::Public)
+                {
+                    self.error(
+                        "access.public_nonpublic_forbidden",
+                        &representation_location,
+                        "anonymous representations may process only public-handling reviewed columns",
+                    );
+                }
+                if representation.processing_handling == Handling::Restricted
+                    && matches!(&operation.kind, OperationKind::List)
+                {
+                    self.error(
+                        "operation.restricted_list_forbidden",
+                        &representation_location,
+                        "restricted reviewed data cannot be processed by a collection list",
+                    );
+                }
             }
         }
     }
@@ -1630,14 +1931,17 @@ impl<'a> Compiler<'a> {
         &mut self,
         _resource: &crate::contract::ResourceDefinition,
         operations: &[CompiledOperation],
-        properties: &[CompiledProperty],
-        root: &str,
+        _properties: &[CompiledProperty],
+        _root: &str,
     ) {
         use crate::contract::Visibility;
 
-        let has_public = operations
-            .iter()
-            .any(|operation| matches!(operation.access, CompiledAccess::Public));
+        let has_public = operations.iter().any(|operation| {
+            operation
+                .representations
+                .iter()
+                .any(|representation| matches!(representation.access, CompiledAccess::Public))
+        });
         for (name, visibility) in [
             ("resources", self.contract.metadata_visibility.resources),
             ("semantics", self.contract.metadata_visibility.semantics),
@@ -1652,23 +1956,9 @@ impl<'a> Compiler<'a> {
                 );
             }
         }
-        let confidential = properties
-            .iter()
-            .any(|property| property.classification.handling >= Handling::Confidential);
-        if confidential && self.contract.metadata_visibility.classifications == Visibility::Public {
-            self.error(
-                "metadata.classification_visibility_invalid",
-                &format!("{root}.properties"),
-                "confidential or restricted properties forbid public classification metadata",
-            );
-        }
-        if confidential && self.contract.metadata_visibility.processing == Visibility::Public {
-            self.error(
-                "metadata.processing_visibility_invalid",
-                &format!("{root}.processingDescriptions"),
-                "confidential or restricted properties forbid public processing metadata",
-            );
-        }
+        // Classification and processing artifacts are projected per finite
+        // representation. A protected representation is operation-bound even
+        // when a public sibling permits public metadata for its own profile.
     }
 
     fn validate_processing(
@@ -1779,6 +2069,194 @@ fn revision<T: Serialize>(value: &T) -> Result<String, ()> {
     Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
 }
 
+/// Digest the non-circular inventory an institutional classification review
+/// accepts. Contract revisions, governed file bytes, and review metadata are
+/// deliberately absent; processed source columns, governed properties, query
+/// uses, and finite representation disclosures are present.
+pub fn classification_inventory_digest(
+    registry: &CompiledRegistry,
+) -> Result<String, CompileReport> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Inventory<'a> {
+        registry_identifier: &'a str,
+        sources: Vec<SourceInventory<'a>>,
+        resources: Vec<ResourceInventory<'a>>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SourceInventory<'a> {
+        id: &'a str,
+        profile: SourceProfile,
+        expected_schema_fingerprint: &'a str,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ResourceInventory<'a> {
+        id: &'a str,
+        source: &'a str,
+        view: &'a str,
+        record_context: RecordContextInventory<'a>,
+        properties: Vec<PropertyInventory<'a>>,
+        column_accounting: Vec<ColumnInventory<'a>>,
+        disclosure_profiles: Vec<DisclosureInventory<'a>>,
+        operations: Vec<OperationInventory<'a>>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RecordContextInventory<'a> {
+        record_identifier_column: &'a str,
+        revision_identifier_column: &'a str,
+        lifecycle_state_column: &'a str,
+        lifecycle_state_codelist: &'a str,
+        recorded_at_column: &'a str,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PropertyInventory<'a> {
+        name: &'a str,
+        source_column: &'a str,
+        transform: &'a Option<CompiledTransform>,
+        data_type: DataType,
+        codelist: &'a Option<String>,
+        source_required: bool,
+        semantic_iri: &'a str,
+        classification: &'a EffectiveClassification,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ColumnInventory<'a> {
+        column: &'a str,
+        uses: &'a [ColumnUse],
+        classification: &'a EffectiveClassification,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct DisclosureInventory<'a> {
+        id: &'a str,
+        properties: &'a [String],
+        maximum_handling: Handling,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct OperationInventory<'a> {
+        kind: &'a OperationKind,
+        default_representation: &'a str,
+        representations: Vec<RepresentationInventory<'a>>,
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RepresentationInventory<'a> {
+        id: &'a str,
+        access: &'a CompiledAccess,
+        disclosure_profile: &'a str,
+        selectable_properties: &'a [String],
+        projected_columns: &'a [String],
+        processing_handling: Handling,
+        disclosure_handling: Handling,
+        transform_inventory: &'a [String],
+    }
+
+    let inventory = Inventory {
+        registry_identifier: &registry.registry_identifier,
+        sources: registry
+            .sources
+            .iter()
+            .map(|source| SourceInventory {
+                id: &source.id,
+                profile: source.profile,
+                expected_schema_fingerprint: &source.expected_schema_fingerprint,
+            })
+            .collect(),
+        resources: registry
+            .resources
+            .iter()
+            .map(|resource| ResourceInventory {
+                id: &resource.id,
+                source: &resource.source,
+                view: &resource.view,
+                record_context: RecordContextInventory {
+                    record_identifier_column: &resource.record_context.record_identifier_column,
+                    revision_identifier_column: &resource.record_context.revision_identifier_column,
+                    lifecycle_state_column: &resource.record_context.lifecycle_state_column,
+                    lifecycle_state_codelist: &resource.record_context.lifecycle_state_codelist,
+                    recorded_at_column: &resource.record_context.recorded_at_column,
+                },
+                properties: resource
+                    .properties
+                    .iter()
+                    .map(|property| PropertyInventory {
+                        name: &property.name,
+                        source_column: &property.source_column,
+                        transform: &property.transform,
+                        data_type: property.data_type,
+                        codelist: &property.codelist,
+                        source_required: property.source_required,
+                        semantic_iri: &property.semantic_iri,
+                        classification: &property.classification,
+                    })
+                    .collect(),
+                column_accounting: resource
+                    .column_accounting
+                    .iter()
+                    .map(|column| ColumnInventory {
+                        column: &column.column,
+                        uses: &column.uses,
+                        classification: &column.classification,
+                    })
+                    .collect(),
+                disclosure_profiles: resource
+                    .disclosure_profiles
+                    .iter()
+                    .map(|disclosure| DisclosureInventory {
+                        id: &disclosure.id,
+                        properties: &disclosure.properties,
+                        maximum_handling: disclosure.maximum_handling,
+                    })
+                    .collect(),
+                operations: resource
+                    .operations
+                    .iter()
+                    .map(|operation| OperationInventory {
+                        kind: &operation.kind,
+                        default_representation: &operation.default_representation,
+                        representations: operation
+                            .representations
+                            .iter()
+                            .map(|representation| RepresentationInventory {
+                                id: &representation.id,
+                                access: &representation.access,
+                                disclosure_profile: &representation.disclosure_profile,
+                                selectable_properties: &representation.selectable_properties,
+                                projected_columns: &representation.projected_columns,
+                                processing_handling: representation.processing_handling,
+                                disclosure_handling: representation.disclosure_handling,
+                                transform_inventory: &representation.transform_inventory,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
+    revision(&inventory).map_err(|()| CompileReport {
+        diagnostics: vec![Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: "classification.inventory_canonicalization_failed".into(),
+            location: "classifications.provenanceRef".into(),
+            message: "the classification inventory could not be canonicalized".into(),
+        }],
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct CodelistDocument {
@@ -1809,13 +2287,149 @@ struct SemanticMapping {
     relation: String,
 }
 
+fn parse_classification_review(
+    contract: &RegistryContract,
+    files: &GovernedFileSet,
+    profile: CompileProfile,
+    registry: &CompiledRegistry,
+    report: &mut CompileReport,
+) -> Option<CompiledClassificationReview> {
+    let path = &contract.classifications.provenance_ref;
+    let content = files.get(path)?;
+    let document = match crate::identification::parse_classification_review_yaml(content) {
+        Ok(document) => document,
+        Err(_) => {
+            review_diagnostic(
+                report,
+                profile,
+                "classification.review_invalid",
+                path,
+                "the classification review is not valid strict governed YAML",
+            );
+            return None;
+        }
+    };
+    let inventory_digest = match classification_inventory_digest(registry) {
+        Ok(digest) => digest,
+        Err(failure) => {
+            report.diagnostics.extend(failure.diagnostics);
+            return None;
+        }
+    };
+    let mut expected_bytes = None;
+    let expected_generated = if document.method == IdentificationMethod::Generated {
+        crate::identification::identify_contract(contract, &observed_schemas(registry))
+            .ok()
+            .and_then(|expected_report| {
+                let bytes =
+                    crate::identification::render_identification_report(&expected_report).ok()?;
+                let report_digest =
+                    crate::identification::identification_report_digest(&expected_report).ok()?;
+                let rule_pack = crate::identification::core_pack_reference().ok()?;
+                expected_bytes = Some(bytes);
+                Some(crate::contract::GeneratedIdentificationBinding {
+                    report_ref: crate::identification::REVIEWED_IDENTIFICATION_REPORT_PATH.into(),
+                    report_digest,
+                    rule_pack,
+                })
+            })
+    } else {
+        None
+    };
+    let expectation = crate::identification::ClassificationReviewExpectation {
+        registry_identifier: contract.registry.registry_identifier.clone(),
+        classification_inventory_digest: inventory_digest,
+        generated_identification: expected_generated,
+    };
+    let validation = crate::identification::validate_classification_review(&document, &expectation);
+    let mut accepted = validation.is_valid();
+    for diagnostic in validation.diagnostics {
+        review_diagnostic(
+            report,
+            profile,
+            &diagnostic.code,
+            &format!("{path}:{}", diagnostic.location),
+            &diagnostic.message,
+        );
+    }
+    if document.status == ReviewStatus::Reviewed
+        && document.method == IdentificationMethod::Generated
+    {
+        let actual = document
+            .generated_identification
+            .as_ref()
+            .and_then(|binding| files.get(&binding.report_ref));
+        if actual
+            .zip(expected_bytes.as_ref())
+            .is_none_or(|(actual, expected)| actual != expected)
+        {
+            accepted = false;
+            review_diagnostic(
+                report,
+                profile,
+                "classification.review_identification_report_mismatch",
+                path,
+                "the governed identification report bytes do not match independent recomputation",
+            );
+        }
+    }
+    let generated_identification = document.generated_identification.as_ref().map(|binding| {
+        CompiledGeneratedIdentificationBinding {
+            report_ref: binding.report_ref.clone(),
+            report_digest: binding.report_digest.clone(),
+            rule_pack_id: binding.rule_pack.id.clone(),
+            rule_pack_version: binding.rule_pack.version.clone(),
+            rule_pack_digest: binding.rule_pack.digest.clone(),
+        }
+    });
+    accepted.then_some(CompiledClassificationReview {
+        registry_identifier: document.registry_identifier,
+        classification_inventory_digest: document.classification_inventory_digest,
+        method: document.method,
+        reviewer: document.reviewer,
+        review_date: document.review_date,
+        status: document.status,
+        rationale_ref: document.rationale_ref,
+        generated_identification,
+    })
+}
+
+fn review_diagnostic(
+    report: &mut CompileReport,
+    profile: CompileProfile,
+    code: &str,
+    location: &str,
+    message: &str,
+) {
+    report.diagnostics.push(Diagnostic {
+        severity: if profile == CompileProfile::Production {
+            DiagnosticSeverity::Error
+        } else {
+            DiagnosticSeverity::Warning
+        },
+        code: code.into(),
+        location: location.into(),
+        message: message.into(),
+    });
+}
+
+fn observed_schemas(registry: &CompiledRegistry) -> Vec<ObservedSourceSchema> {
+    registry
+        .sources
+        .iter()
+        .filter_map(|source| source.observed_schema.clone())
+        .collect()
+}
+
 fn validate_governed_files(
     contract: &RegistryContract,
     files: &GovernedFileSet,
     profile: CompileProfile,
+    registry: &CompiledRegistry,
 ) -> (
     Vec<CompiledCodelist>,
     BTreeMap<String, String>,
+    Option<CompiledClassificationReview>,
     CompileReport,
 ) {
     let mut report = CompileReport {
@@ -1831,11 +2445,10 @@ fn validate_governed_files(
             location: "governed".into(),
             message: "the governed file closure exceeds its file or byte bound".into(),
         });
-        return (Vec::new(), BTreeMap::new(), report);
+        return (Vec::new(), BTreeMap::new(), None, report);
     }
     let mut codelist_paths = BTreeSet::new();
     let mut sidecar_paths = BTreeSet::new();
-    codelist_paths.insert(contract.registry.identifier_lifecycle_policy_ref.as_str());
     sidecar_paths.insert(contract.registry.identifier_lifecycle_policy_ref.as_str());
     sidecar_paths.insert(contract.classifications.provenance_ref.as_str());
     for alignment in &contract.semantics.alignments {
@@ -1853,8 +2466,24 @@ fn validate_governed_files(
             sidecar_paths.insert(processing.dpv_profile_ref.as_str());
         }
     }
-    // The lifecycle policy is a governance sidecar, not a codelist.
-    codelist_paths.remove(contract.registry.identifier_lifecycle_policy_ref.as_str());
+    if codelist_paths.contains(contract.registry.identifier_lifecycle_policy_ref.as_str()) {
+        report.diagnostics.push(Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            code: "contract.governed_file_role_collision".into(),
+            location: contract.registry.identifier_lifecycle_policy_ref.clone(),
+            message:
+                "one governed file cannot be both the identifier-lifecycle policy and a codelist"
+                    .into(),
+        });
+    }
+    let classification_review =
+        parse_classification_review(contract, files, profile, registry, &mut report);
+    if let Some(review) = &classification_review {
+        sidecar_paths.insert(review.rationale_ref.as_str());
+        if let Some(generated) = &review.generated_identification {
+            sidecar_paths.insert(generated.report_ref.as_str());
+        }
+    }
     let expected = sidecar_paths
         .iter()
         .chain(codelist_paths.iter())
@@ -1863,7 +2492,11 @@ fn validate_governed_files(
     for path in files.keys() {
         if !expected.contains(path.as_str()) {
             report.diagnostics.push(Diagnostic {
-                severity: DiagnosticSeverity::Error,
+                severity: if profile == CompileProfile::Authoring {
+                    DiagnosticSeverity::Warning
+                } else {
+                    DiagnosticSeverity::Error
+                },
                 code: "contract.governed_file_unknown".into(),
                 location: path.clone(),
                 message: "the governed closure contains an unreferenced file".into(),
@@ -1874,7 +2507,13 @@ fn validate_governed_files(
     for path in &expected {
         let Some(content) = files.get(*path) else {
             report.diagnostics.push(Diagnostic {
-                severity: DiagnosticSeverity::Error,
+                severity: if profile == CompileProfile::Authoring
+                    && *path == contract.classifications.provenance_ref
+                {
+                    DiagnosticSeverity::Warning
+                } else {
+                    DiagnosticSeverity::Error
+                },
                 code: "contract.governed_file_missing".into(),
                 location: (*path).into(),
                 message: "a referenced governed file is absent from the captured closure".into(),
@@ -1882,7 +2521,8 @@ fn validate_governed_files(
             continue;
         };
         file_digests.insert((*path).into(), digest(content));
-        if !codelist_paths.contains(path)
+        if *path != contract.classifications.provenance_ref
+            && !codelist_paths.contains(path)
             && !contract
                 .semantics
                 .alignments
@@ -2004,7 +2644,7 @@ fn validate_governed_files(
         }
     }
     codelists.sort_by(|left, right| left.path.cmp(&right.path));
-    (codelists, file_digests, report)
+    (codelists, file_digests, classification_review, report)
 }
 
 fn digest(content: &[u8]) -> String {
@@ -2051,10 +2691,24 @@ fn classification_to_partial(value: &EffectiveClassification) -> ClassificationP
     }
 }
 
+fn explicit_reviewed_classification(value: &ClassificationPartial) -> bool {
+    value
+        .privacy
+        .as_deref()
+        .is_some_and(|item| !item.trim().is_empty())
+        && value
+            .institutional
+            .as_deref()
+            .is_some_and(|item| !item.trim().is_empty())
+        && value.handling.is_some()
+        && value.status == Some(ReviewStatus::Reviewed)
+}
+
 fn validate_disclosure_access(
     report: &mut CompileReport,
     disclosure: &CompiledDisclosureProfile,
     access: &CompiledAccess,
+    is_list: bool,
     location: &str,
 ) {
     if disclosure.maximum_handling > Handling::Public && matches!(access, CompiledAccess::Public) {
@@ -2065,8 +2719,7 @@ fn validate_disclosure_access(
             message: "public operations may disclose only public handling data".into(),
         });
     }
-    if disclosure.maximum_handling == Handling::Restricted && location.ends_with("operations.list")
-    {
+    if disclosure.maximum_handling == Handling::Restricted && is_list {
         report.diagnostics.push(Diagnostic {
             severity: DiagnosticSeverity::Error,
             code: "disclosure.restricted_list_forbidden".into(),
@@ -2090,13 +2743,9 @@ fn projected_columns(
     ] {
         push_unique(&mut columns, column);
     }
-    // Full reviewed property projection is intentional: authoritative source
-    // validation precedes narrowing and serialization.
-    for property in properties {
-        push_unique(&mut columns, &property.source_column);
-    }
-    // Preserve the disclosure reference in the calculation so a future
-    // derived property cannot accidentally be omitted from the full plan.
+    // Only the selected finite representation may widen the Registry Core
+    // projection. This is what lets a public representation prove that it
+    // never processes a hidden non-public source column.
     for name in disclosure {
         if let Some(property) = properties.iter().find(|property| property.name == *name) {
             push_unique(&mut columns, &property.source_column);
@@ -2184,13 +2833,33 @@ fn compatible_declared_type(data_type: DataType, declared_type: &str) -> bool {
     let declared = declared_type.trim().to_ascii_uppercase();
     match data_type {
         DataType::Boolean | DataType::Integer => declared.contains("INT") || declared == "BOOLEAN",
-        DataType::String | DataType::Date | DataType::DateTime | DataType::ControlledCode => {
+        DataType::String
+        | DataType::Date
+        | DataType::DateTime
+        | DataType::Year
+        | DataType::YearMonth
+        | DataType::ControlledCode => {
             declared.contains("CHAR")
                 || declared.contains("CLOB")
                 || declared.contains("TEXT")
                 || declared == "DATE"
                 || declared == "DATETIME"
         }
+    }
+}
+
+fn transform_source_type(transform: Option<&CompiledTransform>, output_type: DataType) -> DataType {
+    match transform {
+        Some(CompiledTransform::PartialString { .. }) => DataType::String,
+        Some(CompiledTransform::DatePrecision {
+            source_type: DateInputType::Date,
+            ..
+        }) => DataType::Date,
+        Some(CompiledTransform::DatePrecision {
+            source_type: DateInputType::DateTime,
+            ..
+        }) => DataType::DateTime,
+        None => output_type,
     }
 }
 
@@ -2382,12 +3051,346 @@ pub(crate) mod tests {
         let second_artifacts = crate::artifacts::generate_artifacts(&second).expect("artifacts");
         assert_eq!(first_artifacts, second_artifacts);
         let operation = &first.resources[0].operations[0];
+        let representation = &operation.representations[0];
         let schema = first_artifacts
             .artifacts
             .iter()
-            .find(|artifact| operation.schema_reference.ends_with(&artifact.id))
+            .find(|artifact| representation.schema_reference.ends_with(&artifact.id))
             .expect("operation schema is mounted by its exact artifact identifier");
         assert_eq!(schema.visibility, crate::contract::Visibility::Public);
+    }
+
+    #[test]
+    fn identifier_lifecycle_policy_cannot_alias_a_referenced_codelist() {
+        let yaml = valid_contract().replace(
+            "lifecycleState: {sourceColumn: lifecycle, codelist: codelists/record-lifecycle.yaml}",
+            "lifecycleState: {sourceColumn: lifecycle, codelist: governance/identifier-lifecycle.yaml}",
+        );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+        let report = compile_contract_with_governed_files(
+            &contract,
+            &[observed_schema()],
+            CompileProfile::Production,
+            &governed_files_for(&contract),
+        )
+        .expect_err("one file cannot carry incompatible governed roles");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "contract.governed_file_role_collision"
+                && diagnostic.location == "governance/identifier-lifecycle.yaml"
+        }));
+    }
+
+    #[test]
+    fn every_referenced_property_codelist_must_be_in_the_governed_closure() {
+        let yaml = valid_contract().replace(
+            "type: string\n        sourceRequired: true",
+            "type: controlled-code\n        codelist: codelists/names.yaml\n        sourceRequired: true",
+        );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+        let report = compile_contract_with_governed_files(
+            &contract,
+            &[observed_schema()],
+            CompileProfile::Production,
+            &governed_files_for(&contract),
+        )
+        .expect_err("a referenced codelist cannot be absent");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "contract.governed_file_missing"
+                && diagnostic.location == "codelists/names.yaml"
+        }));
+    }
+
+    #[test]
+    fn list_order_ends_in_one_non_null_string_record_identifier() {
+        let yaml = valid_contract()
+            .replace(
+                "        semanticTerm: local:name\n    disclosureProfiles",
+                "        semanticTerm: local:name\n      recordId:\n        label: Record identifier\n        description: Stable record identifier\n        sourceColumn: id\n        type: string\n        sourceRequired: true\n        semanticTerm: local:recordId\n    disclosureProfiles",
+            )
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [recordId, name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
+        let compiled =
+            compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                .expect("cursor-safe list order");
+        assert_eq!(
+            compiled.resources[0].operations[0].query.order_by,
+            ["name", "id"]
+        );
+    }
+
+    #[test]
+    fn optional_and_unsupported_cursor_order_columns_are_refused() {
+        let yaml = valid_contract()
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let optional = yaml.replace(
+            "sourceColumn: name\n        type: string\n        sourceRequired: true",
+            "sourceColumn: name\n        type: string\n        sourceRequired: false",
+        );
+        let optional = RegistryContract::parse_yaml(&optional).expect("strict list contract");
+        let report = compile_contract(&optional, &[observed_schema()], CompileProfile::Production)
+            .expect_err("optional cursor order refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "list.order_property_optional"));
+
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
+        let mut unsupported = observed_schema();
+        unsupported.views[0]
+            .columns
+            .iter_mut()
+            .find(|column| column.name == "name")
+            .expect("name column")
+            .declared_type = "REAL".into();
+        let report = compile_contract(&contract, &[unsupported], CompileProfile::Production)
+            .expect_err("unsupported cursor scalar refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == "list.order_column_type_unsupported" }));
+    }
+
+    #[test]
+    fn sqlite_view_nullable_metadata_does_not_override_required_order_contract() {
+        let yaml = valid_contract()
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
+        let mut observed = observed_schema();
+        for column in &mut observed.views[0].columns {
+            column.nullable = true;
+        }
+        let compiled = compile_contract(&contract, &[observed], CompileProfile::Production)
+            .expect("SQLite view nullability cannot disprove the required source contract");
+        assert_eq!(
+            compiled.resources[0].operations[0].query.order_by,
+            ["name", "id"]
+        );
+    }
+
+    #[test]
+    fn required_record_identifier_tie_breaker_is_included_in_order_cap() {
+        let yaml = valid_contract()
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: []\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let base = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
+
+        let compile_with_authored_order = |count: usize| {
+            let mut value = serde_json::to_value(&base).expect("contract serializes");
+            let properties = value
+                .pointer_mut("/resources/0/properties")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("properties object");
+            let template = properties.get("name").expect("name property").clone();
+            let mut schema = observed_schema();
+            for index in 0..count {
+                let property_name = format!("sort{index}");
+                let column_name = format!("sort_{index}");
+                let mut property = template.clone();
+                property
+                    .as_object_mut()
+                    .expect("property object")
+                    .insert("sourceColumn".into(), serde_json::json!(column_name));
+                properties.insert(property_name, property);
+                schema.views[0].columns.push(crate::model::ObservedColumn {
+                    name: column_name,
+                    declared_type: "TEXT".into(),
+                    nullable: false,
+                    primary_key: false,
+                });
+            }
+            *value
+                .pointer_mut("/resources/0/operations/list/orderBy")
+                .expect("order array") = serde_json::Value::Array(
+                (0..count)
+                    .map(|index| serde_json::json!(format!("sort{index}")))
+                    .collect(),
+            );
+            let contract = serde_json::from_value::<RegistryContract>(value)
+                .expect("strict generated contract");
+            compile_contract(&contract, &[schema], CompileProfile::Production)
+        };
+
+        let at_cap = compile_with_authored_order(MAXIMUM_LIST_ORDER_KEYS - 1)
+            .expect("authored order plus tie-breaker fits the cap");
+        assert_eq!(
+            at_cap.resources[0].operations[0].query.order_by.len(),
+            MAXIMUM_LIST_ORDER_KEYS
+        );
+        let report = compile_with_authored_order(MAXIMUM_LIST_ORDER_KEYS)
+            .expect_err("the implicit tie-breaker cannot create cap plus one");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "list.order_bound_exceeded"));
+    }
+
+    #[test]
+    fn classification_inventory_excludes_presentation_and_runtime_tuning() {
+        let yaml = valid_contract()
+            .replace(
+                "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
+        let compiled =
+            compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                .expect("classification inventory compiles");
+        let baseline = classification_inventory_digest(&compiled).expect("baseline digest");
+
+        let mut presentation_only = compiled.clone();
+        presentation_only.registry_name = "Renamed registry".into();
+        presentation_only.resources[0].title = "Renamed resource".into();
+        presentation_only.resources[0].description = "Reworded description".into();
+        presentation_only.resources[0].properties[0].label = "Renamed property".into();
+        presentation_only.resources[0].properties[0].description = "Reworded property".into();
+        let operation = &mut presentation_only.resources[0].operations[0];
+        operation
+            .query
+            .pagination
+            .as_mut()
+            .expect("list pagination")
+            .maximum_page_size = 99;
+        operation.representations[0].schema_reference = "https://elsewhere.invalid/schema".into();
+        operation.representations[0].semantic_model_reference =
+            "https://elsewhere.invalid/vocabulary".into();
+        operation.representations[0].context_reference = "https://elsewhere.invalid/context".into();
+        assert_eq!(
+            classification_inventory_digest(&presentation_only).expect("narrow digest"),
+            baseline
+        );
+
+        let mut source_changed = compiled.clone();
+        source_changed.sources[0].expected_schema_fingerprint =
+            format!("sha256:{}", "b".repeat(64));
+        assert_ne!(
+            classification_inventory_digest(&source_changed).expect("source digest"),
+            baseline
+        );
+
+        let mut classification_changed = compiled.clone();
+        classification_changed.resources[0].properties[0]
+            .classification
+            .privacy = "identifying".into();
+        assert_ne!(
+            classification_inventory_digest(&classification_changed)
+                .expect("classification digest"),
+            baseline
+        );
+
+        let mut semantic_changed = compiled.clone();
+        semantic_changed.resources[0].properties[0].semantic_iri =
+            "https://example.invalid/changed-term".into();
+        assert_ne!(
+            classification_inventory_digest(&semantic_changed).expect("semantic digest"),
+            baseline
+        );
+
+        let mut transform_changed = compiled.clone();
+        transform_changed.resources[0].properties[0].transform =
+            Some(CompiledTransform::PartialString {
+                identifier: "partial-string:suffix:2".into(),
+                reveal: crate::contract::PartialStringReveal::Suffix,
+                characters: 2,
+            });
+        assert_ne!(
+            classification_inventory_digest(&transform_changed).expect("transform digest"),
+            baseline
+        );
+
+        let mut transform_inventory_changed = compiled.clone();
+        transform_inventory_changed.resources[0].operations[0].representations[0]
+            .transform_inventory
+            .push("partial-string:suffix:2".into());
+        assert_ne!(
+            classification_inventory_digest(&transform_inventory_changed)
+                .expect("transform inventory digest"),
+            baseline
+        );
+
+        let mut access_changed = compiled.clone();
+        access_changed.resources[0].operations[0].representations[0].access =
+            CompiledAccess::Protected {
+                scope: "registry:changed:read".into(),
+                purpose: None,
+                row_binding: None,
+            };
+        assert_ne!(
+            classification_inventory_digest(&access_changed).expect("access digest"),
+            baseline
+        );
+
+        let mut disclosure_changed = compiled;
+        disclosure_changed.resources[0].operations[0].representations[0].disclosure_handling =
+            Handling::Internal;
+        assert_ne!(
+            classification_inventory_digest(&disclosure_changed).expect("disclosure digest"),
+            baseline
+        );
+    }
+
+    #[test]
+    fn stale_review_fails_production_but_remains_an_authoring_finding() {
+        let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let mut governed = governed_files();
+        let review = String::from_utf8(
+            governed
+                .get("governance/classification-review.yaml")
+                .expect("review")
+                .clone(),
+        )
+        .expect("review text");
+        let review = review
+            .lines()
+            .map(|line| {
+                if line.starts_with("classificationInventoryDigest:") {
+                    "classificationInventoryDigest: sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        governed.insert(
+            "governance/classification-review.yaml".into(),
+            review.into_bytes(),
+        );
+        let production = compile_contract_with_governed_files(
+            &contract,
+            &[observed_schema()],
+            CompileProfile::Production,
+            &governed,
+        )
+        .expect_err("stale production review refused");
+        assert!(production
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "classification.review_inventory_stale"));
+
+        let authoring = compile_contract_with_governed_files(
+            &contract,
+            &[observed_schema()],
+            CompileProfile::Authoring,
+            &governed,
+        )
+        .expect("authoring remains usable");
+        assert!(authoring.classification_review.is_none());
     }
 
     #[test]
@@ -2412,11 +3415,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn classification_rationale_is_part_of_the_governed_artifact_closure() {
+        let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        let mut governed = governed_files();
+        governed.remove("governance/review-rationale");
+        let report = compile_contract_with_governed_files(
+            &contract,
+            &[observed_schema()],
+            CompileProfile::Production,
+            &governed,
+        )
+        .expect_err("missing review rationale refused");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "contract.governed_file_missing"
+                && diagnostic.location == "governance/review-rationale"
+        }));
+    }
+
+    #[test]
     fn governed_query_bounds_cannot_exceed_product_ceilings() {
         let oversized_list = valid_contract().replace(
-            "read:\n        access: public\n        disclosureProfile: public",
+            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
             &format!(
-                "list:\n        access: public\n        disclosureProfile: public\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {{defaultPageSize: 1, maximumPageSize: {}}}",
+                "list:\n        defaultRepresentation: public\n        representations:\n          public: {{access: public, disclosureProfile: public}}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {{defaultPageSize: 1, maximumPageSize: {}}}",
                 MAXIMUM_LIST_PAGE_SIZE + 1
             ),
         );
@@ -2434,9 +3455,9 @@ pub(crate) mod tests {
             .any(|item| item.code == "list.pagination_invalid"));
 
         let oversized_lookup = valid_contract().replace(
-            "read:\n        access: public\n        disclosureProfile: public",
+            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
             &format!(
-                "lookups:\n        - id: by-name\n          access: {{scope: registry:records:lookup}}\n          requestBody:\n            maximumBytes: {}\n            selectors:\n              name: {{sourceColumn: name, type: string, maximumBytes: 32}}\n          disclosureProfile: public",
+                "lookups:\n        - id: by-name\n          requestBody:\n            maximumBytes: {}\n            selectors:\n              name: {{sourceColumn: name, type: string, maximumBytes: 32}}\n          defaultRepresentation: public\n          representations:\n            public: {{access: {{scope: registry:records:lookup}}, disclosureProfile: public}}",
                 MAXIMUM_LOOKUP_REQUEST_BODY_BYTES + 1
             ),
         );
@@ -2512,9 +3533,44 @@ pub(crate) mod tests {
         }
         assert_refused(&parse_value(disclosures_value), "disclosure.bound_exceeded");
 
+        let mut representations_value = serde_json::to_value(&base).expect("contract serializes");
+        let representations = representations_value
+            .pointer_mut("/resources/0/operations/read/representations")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("representations object");
+        let representation = representations
+            .get("public")
+            .expect("public representation")
+            .clone();
+        for index in 1..=MAXIMUM_REPRESENTATIONS_PER_OPERATION {
+            representations.insert(format!("profile-{index}"), representation.clone());
+        }
+        assert_refused(
+            &parse_value(representations_value),
+            "representation.bound_exceeded",
+        );
+
+        let mut registry_representations_value =
+            serde_json::to_value(&base).expect("contract serializes");
+        let registry_representations = registry_representations_value
+            .pointer_mut("/resources/0/operations/read/representations")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("representations object");
+        let representation = registry_representations
+            .get("public")
+            .expect("public representation")
+            .clone();
+        for index in 1..=MAXIMUM_REPRESENTATION_EXECUTORS_PER_REGISTRY {
+            registry_representations.insert(format!("profile-{index}"), representation.clone());
+        }
+        assert_refused(
+            &parse_value(registry_representations_value),
+            "representation.registry_bound_exceeded",
+        );
+
         let list_yaml = valid_contract().replace(
-            "read:\n        access: public\n        disclosureProfile: public",
-            "list:\n        access: public\n        disclosureProfile: public\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 1}",
+            "read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "list:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name]\n        pagination: {defaultPageSize: 1, maximumPageSize: 1}",
         );
         let list_contract = RegistryContract::parse_yaml(&list_yaml).expect("strict list contract");
         let mut filters_value = serde_json::to_value(&list_contract).expect("contract serializes");
@@ -2540,6 +3596,149 @@ pub(crate) mod tests {
             .map(|_| serde_json::json!("name"))
             .collect();
         assert_refused(&parse_value(order_value), "list.order_bound_exceeded");
+    }
+
+    #[test]
+    fn an_operation_with_a_public_representation_requires_a_public_default() {
+        let contract = RegistryContract::parse_yaml(&valid_contract().replace(
+            "defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+            "defaultRepresentation: protected\n        representations:\n          public: {access: public, disclosureProfile: public}\n          protected: {access: {scope: registry:record:protected}, disclosureProfile: public}",
+        ))
+        .expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("a hidden protected default is refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "representation.public_default_required"));
+    }
+
+    #[test]
+    fn one_operation_compiles_finite_representations_with_distinct_handling() {
+        let contract = RegistryContract::parse_yaml(&governed_representations_contract())
+            .expect("strict representation contract");
+        let compiled =
+            compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                .expect("representations compile");
+        let resource = &compiled.resources[0];
+        assert_eq!(resource.operations.len(), 1);
+        let operation = &resource.operations[0];
+        assert_eq!(operation.identifier, "record.read");
+        assert_eq!(operation.default_representation, "limited");
+        assert_eq!(operation.representations.len(), 2);
+        let limited = &operation.representations[0];
+        let full = &operation.representations[1];
+        assert_eq!(limited.id, "limited");
+        assert_eq!(limited.disclosure_handling, Handling::Confidential);
+        assert_eq!(limited.processing_handling, Handling::Restricted);
+        assert_eq!(full.processing_handling, Handling::Restricted);
+        assert_eq!(
+            limited.transform_inventory,
+            ["maskedName=partial-string:suffix:4"]
+        );
+        assert_ne!(limited.schema_reference, full.schema_reference);
+        assert_eq!(
+            limited.projected_columns,
+            ["id", "revision", "lifecycle", "recorded_at", "name"]
+        );
+        assert!(resource
+            .properties
+            .iter()
+            .all(|property| property.source_required));
+        let account = resource
+            .column_accounting
+            .iter()
+            .find(|account| account.column == "name")
+            .expect("source account");
+        assert_eq!(account.classification.handling, Handling::Restricted);
+        assert!(account.uses.contains(&ColumnUse::Property("name".into())));
+        assert!(account
+            .uses
+            .contains(&ColumnUse::Property("maskedName".into())));
+    }
+
+    #[test]
+    fn transformed_and_multiply_bound_columns_require_explicit_review() {
+        let yaml = governed_representations_contract().replace(
+            "    sourceColumnClassifications:\n      name: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}\n",
+            "    sourceColumnClassifications: {}\n",
+        );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("implicit source classification is refused");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "classification.column_explicit_review_required"
+        }));
+    }
+
+    #[test]
+    fn representation_default_and_transform_parameters_fail_closed() {
+        let invalid_default = governed_representations_contract().replace(
+            "defaultRepresentation: limited",
+            "defaultRepresentation: absent",
+        );
+        let contract = RegistryContract::parse_yaml(&invalid_default).expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("unknown default refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "representation.default_invalid"));
+
+        for characters in [0, MAXIMUM_PARTIAL_STRING_CHARACTERS + 1] {
+            let yaml = governed_representations_contract()
+                .replace("characters: 4", &format!("characters: {characters}"));
+            let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+            let report =
+                compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                    .expect_err("out-of-profile transform refused");
+            assert!(report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "transform.partial_string_characters_invalid"
+            }));
+        }
+    }
+
+    #[test]
+    fn public_masked_representation_cannot_process_restricted_source() {
+        let yaml = governed_representations_contract()
+            .replace(
+                "classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}",
+                "classification: {privacy: partially-revealed-identifying, institutional: public, handling: public, status: reviewed}",
+            )
+            .replace(
+                "limited:\n            access: {scope: registry:records:limited}",
+                "limited:\n            access: public",
+            );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("public processing of restricted raw source refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "access.public_nonpublic_forbidden"));
+    }
+
+    #[test]
+    fn date_precision_is_typed_and_closed() {
+        let yaml = governed_representations_contract()
+            .replace("type: string\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: partial-string, reveal: suffix, characters: 4}", "type: year-month\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: date-precision, sourceType: date-time, precision: year-month}");
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict date transform");
+        let compiled =
+            compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                .expect("typed date precision compiles");
+        assert_eq!(
+            compiled.resources[0].properties[1].data_type,
+            DataType::YearMonth
+        );
+
+        let invalid = yaml.replace("type: year-month", "type: year");
+        let contract = RegistryContract::parse_yaml(&invalid).expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("precision/output mismatch refused");
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "transform.output_type_invalid"));
     }
 
     #[test]
@@ -2573,7 +3772,7 @@ pub(crate) mod tests {
             &contract,
             &[observed_schema()],
             CompileProfile::Production,
-            &governed_files(),
+            &governed_files_for(&contract),
         )
         .expect("protected row-bound compilation");
         let operation = &compiled.resources[0].operations[0];
@@ -2581,7 +3780,7 @@ pub(crate) mod tests {
         let CompiledAccess::Protected {
             row_binding: Some(binding),
             ..
-        } = &operation.access
+        } = &operation.representations[0].access
         else {
             panic!("row-bound protected access expected");
         };
@@ -2639,18 +3838,30 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn governed_files() -> GovernedFileSet {
-        [
+        let contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        governed_files_for(&contract)
+    }
+
+    fn governed_files_for(contract: &RegistryContract) -> GovernedFileSet {
+        let compiled = compile_contract(contract, &[observed_schema()], CompileProfile::Production)
+            .expect("inventory compiles");
+        let inventory_digest =
+            classification_inventory_digest(&compiled).expect("inventory digest");
+        let review = format!(
+            "apiVersion: relay.registrystack.org/classification-review/v1\nkind: ClassificationReview\nregistryIdentifier: urn:example:registry:records\nclassificationInventoryDigest: {inventory_digest}\nmethod: manual\nreviewer: urn:example:authority\nreviewDate: 2026-08-10\nstatus: reviewed\nrationaleRef: governance/review-rationale\n"
+        );
+        let mut files = [
             (
                 "governance/identifier-lifecycle.yaml",
                 "status: reviewed\npolicy: identifiers are not reassigned\n",
             ),
             (
-                "governance/classification-review.yaml",
-                "status: reviewed\nreviewer: registry-authority\n",
-            ),
-            (
                 "governance/legal-basis.yaml",
                 "status: reviewed\nbasis: statutory-publication\n",
+            ),
+            (
+                "governance/review-rationale",
+                "reviewed classification and representation design\n",
             ),
             (
                 "governance/processing.dpv.yaml",
@@ -2663,7 +3874,32 @@ pub(crate) mod tests {
         ]
         .into_iter()
         .map(|(path, content)| (path.into(), content.as_bytes().to_vec()))
-        .collect()
+        .collect::<GovernedFileSet>();
+        files.insert(
+            "governance/classification-review.yaml".into(),
+            review.into_bytes(),
+        );
+        files
+    }
+
+    fn governed_representations_contract() -> String {
+        valid_contract()
+            .replace(
+                "    sourceColumnClassifications: {}",
+                "    sourceColumnClassifications:\n      name: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}",
+            )
+            .replace(
+                "        semanticTerm: local:name\n    disclosureProfiles: {public: {properties: [name]}}",
+                "        semanticTerm: local:name\n        classification: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}\n      maskedName:\n        label: Masked name\n        description: Partially revealed Record name\n        sourceColumn: name\n        type: string\n        sourceRequired: true\n        semanticTerm: local:maskedName\n        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}\n        transform: {kind: partial-string, reveal: suffix, characters: 4}\n    disclosureProfiles:\n      limited: {properties: [maskedName]}\n      full: {properties: [name]}",
+            )
+            .replace(
+                "      read:\n        defaultRepresentation: public\n        representations:\n          public: {access: public, disclosureProfile: public}",
+                "      read:\n        defaultRepresentation: limited\n        representations:\n          limited:\n            access: {scope: registry:records:limited}\n            disclosureProfile: limited\n          full:\n            access: {scope: registry:records:full}\n            disclosureProfile: full",
+            )
+            .replace(
+                "metadataVisibility: {service: public, resources: public, semantics: public, classifications: public, processing: public}",
+                "metadataVisibility: {service: public, resources: operation-bound, semantics: operation-bound, classifications: operation-bound, processing: operation-bound}",
+            )
     }
 
     pub(crate) fn valid_contract() -> &'static str {
@@ -2712,8 +3948,9 @@ resources:
     disclosureProfiles: {public: {properties: [name]}}
     operations:
       read:
-        access: public
-        disclosureProfile: public
+        defaultRepresentation: public
+        representations:
+          public: {access: public, disclosureProfile: public}
     processingDescriptions:
       - id: statutory-publication
         operationRefs: [read]

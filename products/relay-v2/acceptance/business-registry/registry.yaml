@@ -39,12 +39,12 @@ classifications:
   privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
   institutional: {scheme: https://business.example.invalid/classification, version: "1"}
   handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
-  provenanceRef: governance/legal-basis.yaml
+  provenanceRef: governance/classification-review.yaml
 sources:
   companies:
     kind: sqlite
     profile: snapshot
-    expectedSchemaFingerprint: sha256:c978e36d7f0de71e8aa8245cdc8501ffdd760d87d9e6e0df97fd1228712361f1
+    expectedSchemaFingerprint: sha256:5f12cd971dfa9cafd98018bd8723f2c3902e7d96b3c57ecf5c20e4885eb806a8
 resources:
   - id: registered-business
     title: Registered business
@@ -59,6 +59,10 @@ resources:
       revisionIdentifier: {sourceColumn: record_revision}
       lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
       recordedAt: {sourceColumn: recorded_at}
+    sourceColumnClassifications:
+      public_legal_name: {privacy: potentially-personal, institutional: public-by-law, handling: public, status: reviewed}
+      registrar_legal_name: {privacy: potentially-personal, institutional: public-by-law, handling: confidential, status: reviewed}
+      registrar_note: {privacy: non-personal, institutional: internal, handling: confidential, status: reviewed}
     properties:
       registrationNumber:
         sourceColumn: registration_number
@@ -68,13 +72,29 @@ resources:
         label: Registration number
         description: Stable synthetic business registration number.
       legalName:
-        sourceColumn: legal_name
+        sourceColumn: public_legal_name
         type: string
         sourceRequired: true
         semanticTerm: local:legalName
         label: Legal name
         description: Registered legal name of the synthetic organisation.
         classification: {privacy: potentially-personal, institutional: public-by-law}
+      registrarLegalName:
+        sourceColumn: registrar_legal_name
+        type: string
+        sourceRequired: true
+        semanticTerm: local:registrarLegalName
+        label: Registrar legal name
+        description: Protected authoritative legal name for registrar work.
+        classification: {privacy: potentially-personal, institutional: public-by-law, handling: confidential, status: reviewed}
+      registrarNote:
+        sourceColumn: registrar_note
+        type: string
+        sourceRequired: true
+        semanticTerm: local:registrarNote
+        label: Registrar note
+        description: Protected synthetic registrar-only note.
+        classification: {privacy: non-personal, institutional: internal, handling: confidential, status: reviewed}
       registrationStatus:
         sourceColumn: registration_status
         type: controlled-code
@@ -102,10 +122,16 @@ resources:
     disclosureProfiles:
       public-register:
         properties: [registrationNumber, legalName, registrationStatus, legalForm, registeredJurisdiction]
+      registrar-register:
+        properties: [registrationNumber, registrarLegalName, registrarNote, registrationStatus, legalForm, registeredJurisdiction]
     operations:
       list:
-        access: public
-        disclosureProfile: public-register
+        defaultRepresentation: public-register
+        representations:
+          public-register: {access: public, disclosureProfile: public-register}
+          registrar:
+            access: {scope: registry:business:list-registrar}
+            disclosureProfile: registrar-register
         filters:
           - {name: status, property: registrationStatus, type: controlled-code}
           - {name: jurisdiction, property: registeredJurisdiction, type: controlled-code}
@@ -113,8 +139,12 @@ resources:
         orderBy: [registrationNumber]
         pagination: {defaultPageSize: 2, maximumPageSize: 4}
       read:
-        access: public
-        disclosureProfile: public-register
+        defaultRepresentation: public-register
+        representations:
+          public-register: {access: public, disclosureProfile: public-register}
+          registrar:
+            access: {scope: registry:business:read-registrar}
+            disclosureProfile: registrar-register
     processingDescriptions:
       - id: statutory-publication
         operationRefs: [list, read]

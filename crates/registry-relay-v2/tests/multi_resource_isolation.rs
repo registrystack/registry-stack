@@ -20,7 +20,10 @@ use registry_platform_testing::{
 use registry_relay_v2::artifacts::{generate_artifacts, ArtifactSet};
 use registry_relay_v2::audit::RelayAudit;
 use registry_relay_v2::auth::RelayAuthenticator;
-use registry_relay_v2::compiler::{compile_contract_with_governed_files, GovernedFileSet};
+use registry_relay_v2::compiler::{
+    classification_inventory_digest, compile_contract, compile_contract_with_governed_files,
+    GovernedFileSet,
+};
 use registry_relay_v2::contract::{RegistryContract, Visibility};
 use registry_relay_v2::model::{
     CompileProfile, CompiledAccess, CompiledRegistry, ObservedColumn, ObservedSourceSchema,
@@ -142,13 +145,17 @@ resources:
       public-view: {properties: [publicLabel]}
     operations:
       list:
-        access: public
-        disclosureProfile: public-view
+        defaultRepresentation: public
+        representations:
+          public: {access: public, disclosureProfile: public-view}
         filters: []
         allowUnfiltered: true
         orderBy: [publicIdentifier]
         pagination: {defaultPageSize: 1, maximumPageSize: 1}
-      read: {access: public, disclosureProfile: public-view}
+      read:
+        defaultRepresentation: public
+        representations:
+          public: {access: public, disclosureProfile: public-view}
     processingDescriptions: []
   - id: protected-unit
     title: Protected unit
@@ -183,32 +190,41 @@ resources:
       protected-view: {properties: [protectedLabel]}
     operations:
       list:
-        access:
-          scope: relay:protected:list
-          purpose: {claim: purpose, allowed: [bounded-read]}
-          authorityRowBinding: {claim: authority, sourceColumn: authority_key}
-        disclosureProfile: protected-view
+        defaultRepresentation: protected
+        representations:
+          protected:
+            access:
+              scope: relay:protected:list
+              purpose: {claim: purpose, allowed: [bounded-read]}
+              authorityRowBinding: {claim: authority, sourceColumn: authority_key}
+            disclosureProfile: protected-view
         filters: []
         allowUnfiltered: true
         orderBy: [protectedIdentifier]
         pagination: {defaultPageSize: 2, maximumPageSize: 2}
       read:
-        access:
-          scope: relay:protected:read
-          purpose: {claim: purpose, allowed: [bounded-read]}
-          authorityRowBinding: {claim: authority, sourceColumn: authority_key}
-        disclosureProfile: protected-view
+        defaultRepresentation: protected
+        representations:
+          protected:
+            access:
+              scope: relay:protected:read
+              purpose: {claim: purpose, allowed: [bounded-read]}
+              authorityRowBinding: {claim: authority, sourceColumn: authority_key}
+            disclosureProfile: protected-view
       lookups:
         - id: by-key
-          access:
-            scope: relay:protected:lookup
-            purpose: {claim: purpose, allowed: [bounded-read]}
-            authorityRowBinding: {claim: authority, sourceColumn: authority_key}
           requestBody:
             maximumBytes: 128
             selectors:
               lookupKey: {sourceColumn: lookup_key, type: string, minimumBytes: 1, maximumBytes: 32}
-          disclosureProfile: protected-view
+          defaultRepresentation: protected
+          representations:
+            protected:
+              access:
+                scope: relay:protected:lookup
+                purpose: {claim: purpose, allowed: [bounded-read]}
+                authorityRowBinding: {claim: authority, sourceColumn: authority_key}
+              disclosureProfile: protected-view
     processingDescriptions:
       - id: protected-consultation
         operationRefs: [list, read, lookup:by-key]
@@ -315,8 +331,13 @@ fn compiler_keeps_every_multi_resource_operation_boundary_local() {
         assert_eq!(list.identifier, format!("{resource_id}.list"));
         assert_eq!(list.query.source, SOURCE_ID);
         assert_eq!(list.query.view, view);
-        assert_eq!(list.disclosure_profile, disclosure);
-        assert_eq!(list.selectable_properties, [field]);
+        let representation = list
+            .representations
+            .iter()
+            .find(|representation| representation.id == list.default_representation)
+            .expect("default representation is compiled");
+        assert_eq!(representation.disclosure_profile, disclosure);
+        assert_eq!(representation.selectable_properties, [field]);
         assert_eq!(
             list.query
                 .pagination
@@ -325,7 +346,7 @@ fn compiler_keeps_every_multi_resource_operation_boundary_local() {
                 .maximum_page_size,
             page_maximum
         );
-        match (&list.access, scope, row_column) {
+        match (&representation.access, scope, row_column) {
             (CompiledAccess::Public, None, None) => {}
             (
                 CompiledAccess::Protected {
@@ -344,8 +365,10 @@ fn compiler_keeps_every_multi_resource_operation_boundary_local() {
             }
             boundary => panic!("unexpected compiled access boundary: {boundary:?}"),
         }
-        assert!(list.schema_reference.contains(resource_id));
-        assert!(list.semantic_model_reference.contains(resource_id));
+        assert!(representation.schema_reference.contains(resource_id));
+        assert!(representation
+            .semantic_model_reference
+            .contains(resource_id));
     }
 
     let protected = resource(&fixture.compiled, PROTECTED_RESOURCE);
@@ -829,6 +852,13 @@ fn compile_fixture() -> Fixture {
             })
             .collect(),
     }];
+    let inventory = compile_contract(&contract, &observed, CompileProfile::Production)
+        .expect("classification inventory compiles");
+    let inventory_digest =
+        classification_inventory_digest(&inventory).expect("classification inventory digests");
+    let review = format!(
+        "apiVersion: relay.registrystack.org/classification-review/v1\nkind: ClassificationReview\nregistryIdentifier: {REGISTRY_ID}\nclassificationInventoryDigest: {inventory_digest}\nmethod: manual\nreviewer: urn:example:institution:unit-authority\nreviewDate: 2026-08-10\nstatus: reviewed\nrationaleRef: governance/classification-review-rationale.md\n"
+    );
     let governed = GovernedFileSet::from([
         (
             "governance/identifier-lifecycle.yaml".into(),
@@ -836,7 +866,11 @@ fn compile_fixture() -> Fixture {
         ),
         (
             "governance/classification-provenance.yaml".into(),
-            b"kind: synthetic-provenance\n".to_vec(),
+            review.into_bytes(),
+        ),
+        (
+            "governance/classification-review-rationale.md".into(),
+            b"Synthetic multi-resource classification review.\n".to_vec(),
         ),
         (
             "codelists/lifecycle.yaml".into(),
@@ -1000,10 +1034,7 @@ async fn send(
         .await
         .expect("response reads");
     let document = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-        panic!(
-            "response is JSON ({status}): {error}; body={}",
-            String::from_utf8_lossy(&bytes)
-        )
+        panic!("response is JSON ({status}): {error}; response body withheld")
     });
     (status, document)
 }
@@ -1039,7 +1070,7 @@ async fn send_raw_body(
 }
 
 fn assert_problem(response: (StatusCode, Value), status: StatusCode, code: &str) {
-    assert_eq!(response.0, status, "problem body={}", response.1);
+    assert_eq!(response.0, status, "problem response body withheld");
     assert_eq!(response.1["code"], code);
     let text = response.1.to_string();
     for absent in ["PUBLIC-CANARY", "PROTECTED-CANARY", "lookup-a1", "zone-a"] {
@@ -1048,7 +1079,7 @@ fn assert_problem(response: (StatusCode, Value), status: StatusCode, code: &str)
 }
 
 fn assert_success(response: (StatusCode, Value)) -> Value {
-    assert_eq!(response.0, StatusCode::OK, "response body={}", response.1);
+    assert_eq!(response.0, StatusCode::OK, "response body withheld");
     response.1
 }
 

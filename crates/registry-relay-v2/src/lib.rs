@@ -11,6 +11,7 @@ pub mod cursor;
 pub mod diff;
 #[cfg(feature = "tooling")]
 pub mod fixtures;
+pub mod identification;
 pub mod model;
 pub mod package;
 pub mod problem;
@@ -21,7 +22,8 @@ pub mod sqlite_runtime;
 pub mod startup;
 #[cfg(feature = "tooling")]
 pub mod tooling;
+pub mod transform;
 
-pub use compiler::{compile, CompileError};
+pub use compiler::{classification_inventory_digest, compile, CompileError};
 pub use contract::{RegistryContract, RelayRuntime};
 pub use model::{CompileProfile, CompiledRegistry, ObservedSourceSchema};

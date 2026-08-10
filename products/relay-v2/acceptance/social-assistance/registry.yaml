@@ -34,12 +34,12 @@ classifications:
   privacy: {scheme: https://w3id.org/dpv, version: "2.3"}
   institutional: {scheme: https://social-registry.example.invalid/classification, version: "1"}
   handling: {scheme: https://id.registrystack.org/vocab/handling, version: "1"}
-  provenanceRef: governance/legal-basis.yaml
+  provenanceRef: governance/classification-review.yaml
 sources:
   assistance:
     kind: sqlite
     profile: live-read-only
-    expectedSchemaFingerprint: sha256:256b74415d1da84efee8fecd3c59e4cebbbc99f43d77e3aa8b75e17d3b3a71d1
+    expectedSchemaFingerprint: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
 resources:
   - id: assistance-enrolment
     title: Assistance enrolment
@@ -50,6 +50,8 @@ resources:
       view: relay_assistance_enrolments
     classificationDefaults: {privacy: sensitive-personal, institutional: restricted, handling: restricted, status: reviewed}
     sourceColumnClassifications:
+      enrolment_reference: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}
+      masked_enrolment_reference: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}
       case_reference: {privacy: identifying}
       person_reference: {privacy: identifying}
       service_area_code: {privacy: personal-context}
@@ -67,6 +69,15 @@ resources:
         label: Enrolment reference
         description: Stable synthetic enrolment reference.
         classification: {privacy: identifying}
+      maskedEnrolmentReference:
+        sourceColumn: masked_enrolment_reference
+        transform: {kind: partial-string, reveal: suffix, characters: 4}
+        type: string
+        sourceRequired: true
+        semanticTerm: local:maskedEnrolmentReference
+        label: Masked enrolment reference
+        description: Relay-owned partial-string view with only the final four Unicode scalars visible.
+        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}
       programmeCode:
         sourceColumn: programme_code
         type: controlled-code
@@ -92,25 +103,32 @@ resources:
         description: Last date on which the status is valid when bounded.
         classification: {privacy: personal}
     disclosureProfiles:
-      consultation:
+      limited:
+        properties: [maskedEnrolmentReference, enrolmentStatus, validThrough]
+      caseworker:
         properties: [enrolmentReference, programmeCode, enrolmentStatus, validThrough]
     operations:
       lookups:
         - id: by-case-and-person
-          access:
-            scope: registry:social-assistance:lookup
-            purpose:
-              claim: purpose
-              allowed: [benefit-delivery]
-            authorityRowBinding:
-              claim: service_area
-              sourceColumn: service_area_code
           requestBody:
             maximumBytes: 512
             selectors:
               caseReference: {sourceColumn: case_reference, type: string, minimumBytes: 8, maximumBytes: 96}
               personReference: {sourceColumn: person_reference, type: string, minimumBytes: 8, maximumBytes: 96}
-          disclosureProfile: consultation
+          defaultRepresentation: limited
+          representations:
+            limited:
+              access:
+                scope: registry:social-assistance:limited
+                purpose: {claim: purpose, allowed: [benefit-delivery]}
+                authorityRowBinding: {claim: service_area, sourceColumn: service_area_code}
+              disclosureProfile: limited
+            caseworker:
+              access:
+                scope: registry:social-assistance:caseworker
+                purpose: {claim: purpose, allowed: [benefit-delivery]}
+                authorityRowBinding: {claim: service_area, sourceColumn: service_area_code}
+              disclosureProfile: caseworker
     processingDescriptions:
       - id: benefit-delivery-consultation
         operationRefs: [lookup:by-case-and-person]

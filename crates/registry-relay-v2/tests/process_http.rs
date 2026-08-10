@@ -10,8 +10,15 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use registry_platform_sqlite::materialize_fixture;
-use registry_relay_v2::contract::RelayRuntime;
+use registry_platform_sqlite::{
+    inspect_schema, materialize_fixture, CapturedSnapshot, DatabaseProfile, InspectionLimits,
+    SchemaObjectKind,
+};
+use registry_relay_v2::compiler::{classification_inventory_digest, compile_contract};
+use registry_relay_v2::contract::{ClassificationReviewDocument, RegistryContract, RelayRuntime};
+use registry_relay_v2::model::{
+    CompileProfile, ObservedColumn, ObservedSourceSchema, ObservedView,
+};
 use registry_relay_v2::tooling::{package_project, PackageOptions};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
@@ -114,6 +121,7 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
         &fs::read_to_string(etc.join("fixture.sql")).expect("fixture SQL reads"),
     )
     .expect("fixture materializes");
+    make_business_project_public_only(&etc, &source);
 
     let package = data.join("business-registry-package");
     let runtime_path = etc.join("runtime.yaml");
@@ -126,6 +134,7 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
     drop(reservation);
     runtime.server.bind = address.to_string();
     runtime.package_path = package.to_string_lossy().into_owned();
+    runtime.authentication.issuer = None;
     let mut runtime_value = serde_json::to_value(&runtime).expect("runtime becomes a value");
     *runtime_value
         .pointer_mut("/sources/companies/path")
@@ -171,6 +180,89 @@ async fn built_relay_serves_a_sealed_package_over_real_tcp_and_shuts_down() {
         first, second,
         "the same sealed package and snapshot must serialize identically after restart"
     );
+}
+
+fn make_business_project_public_only(project: &Path, source: &Path) {
+    let contract_path = project.join("registry.yaml");
+    let mut value: Value = serde_norway::from_str(
+        &fs::read_to_string(&contract_path).expect("business contract reads"),
+    )
+    .expect("business contract becomes a value");
+    for pointer in [
+        "/resources/0/operations/list/representations",
+        "/resources/0/operations/read/representations",
+    ] {
+        value
+            .pointer_mut(pointer)
+            .and_then(Value::as_object_mut)
+            .expect("business representation map")
+            .remove("registrar")
+            .expect("registrar representation exists");
+    }
+    fs::write(
+        &contract_path,
+        serde_norway::to_string(&value).expect("public-only contract serializes"),
+    )
+    .expect("public-only contract writes");
+    let contract = RegistryContract::parse_yaml(
+        &fs::read_to_string(&contract_path).expect("public-only contract reads"),
+    )
+    .expect("public-only contract parses");
+
+    let captured = CapturedSnapshot::capture(source).expect("business snapshot captures");
+    let catalog = inspect_schema(
+        &DatabaseProfile::Snapshot(captured),
+        &InspectionLimits {
+            maximum_objects: 10_000,
+            maximum_sql_bytes: 8 * 1024 * 1024,
+            maximum_statement_steps: 1_000_000,
+            timeout: Duration::from_secs(5),
+        },
+    )
+    .expect("business schema inspects");
+    let source_id = contract
+        .sources
+        .keys()
+        .next()
+        .expect("one source")
+        .to_owned();
+    let observed = vec![ObservedSourceSchema {
+        source: source_id,
+        fingerprint: catalog.fingerprint,
+        views: catalog
+            .objects
+            .into_iter()
+            .filter(|object| object.kind == SchemaObjectKind::View)
+            .map(|object| ObservedView {
+                name: object.name,
+                columns: object
+                    .columns
+                    .into_iter()
+                    .map(|column| ObservedColumn {
+                        name: column.name,
+                        declared_type: column.declared_type,
+                        nullable: column.nullable,
+                        primary_key: column.primary_key,
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }];
+    let compiled = compile_contract(&contract, &observed, CompileProfile::Production)
+        .expect("public-only inventory compiles");
+    let inventory_digest =
+        classification_inventory_digest(&compiled).expect("public-only inventory digests");
+    let review_path = project.join(&contract.classifications.provenance_ref);
+    let mut review: ClassificationReviewDocument = serde_norway::from_str(
+        &fs::read_to_string(&review_path).expect("classification review reads"),
+    )
+    .expect("classification review parses");
+    review.classification_inventory_digest = inventory_digest;
+    fs::write(
+        review_path,
+        serde_norway::to_string(&review).expect("classification review serializes"),
+    )
+    .expect("classification review writes");
 }
 
 async fn serve_one_lifecycle(runtime: &Path, client: &Client, base: &str) -> Vec<u8> {

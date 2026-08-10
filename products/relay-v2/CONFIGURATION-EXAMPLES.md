@@ -1,7 +1,7 @@
 # Relay V2 Configuration Examples
 
 Status: Illustrative design probes
-Date: 2026-08-09
+Date: 2026-08-10
 Product direction: [Relay V2 Product Concept](CONCEPT.md)
 Acceptance boundary: [Relay V2 Definition of Done](DEFINITION-OF-DONE.md)
 
@@ -22,7 +22,7 @@ The intended boundaries are firmer than the syntax:
 - every Record has mandatory Registry Core bindings in addition to selectable domain properties;
 - `sourceRequired` governs complete source-Record validation, while the public representation schema permits any compiled selectable `domainData` subset;
 - external semantic alignment is optional and file-based, pinned, and reviewed;
-- every operation chooses a maximum disclosure profile, and the requester may only select fewer properties;
+- every operation declares one default and a finite ordered set of representations; an operation with any public representation uses a public default; access and disclosure belong to the representation, while the requester may only select fewer properties within the chosen representation;
 - token issuers assign authority, but they cannot enable an operation Relay did not compile;
 - family capabilities are derived from compiled operations, never duplicated in configuration;
 - none of these examples enables response signing.
@@ -130,6 +130,7 @@ resources:
       lifecycleState: {sourceColumn: lifecycle_state, codelist: codelists/record-lifecycle.yaml}
       recordedAt: {sourceColumn: recorded_at}
     sourceColumnClassifications:
+      enrolment_reference: {privacy: identifying, institutional: restricted, handling: restricted, status: reviewed}
       record_revision: {privacy: derived}
       lifecycle_state: {privacy: personal-context}
       recorded_at: {privacy: personal-context}
@@ -146,6 +147,15 @@ resources:
         sourceRequired: true
         semanticTerm: local:enrolmentReference
         classification: {privacy: identifying}
+      maskedEnrolmentReference:
+        label: Masked enrolment reference
+        description: Relay-owned partial-string view that exposes only the final four Unicode scalars
+        sourceColumn: enrolment_reference
+        transform: {kind: partial-string, reveal: suffix, characters: 4}
+        type: string
+        sourceRequired: true
+        semanticTerm: local:maskedEnrolmentReference
+        classification: {privacy: partially-revealed-identifying, institutional: confidential, handling: confidential, status: reviewed}
       programmeCode:
         label: Programme code
         description: Reviewed code for the assistance programme
@@ -192,26 +202,33 @@ resources:
         classification: {privacy: personal-context, institutional: internal}
 
     disclosureProfiles:
-      consultation:
+      limited:
+        properties: [maskedEnrolmentReference, enrolmentStatus, validThrough]
+      caseworker:
         properties: [enrolmentReference, programmeCode, enrolmentStatus, entitlementCategory, validThrough, serviceOfficeCode]
 
     operations:
       lookups:
         - id: by-case-and-person
-          access:
-            scope: registry:social-assistance:lookup
-            purpose:
-              claim: purpose
-              allowed: [benefit-delivery]
-            authorityRowBinding:
-              claim: service_area
-              sourceColumn: service_area_code
           requestBody:
             maximumBytes: 512
             selectors:
               caseReference: {sourceColumn: case_reference, type: string, minimumBytes: 8, maximumBytes: 96}
               personReference: {sourceColumn: person_reference, type: string, minimumBytes: 8, maximumBytes: 96}
-          disclosureProfile: consultation
+          defaultRepresentation: limited
+          representations:
+            limited:
+              access:
+                scope: registry:social-assistance:limited
+                purpose: {claim: purpose, allowed: [benefit-delivery]}
+                authorityRowBinding: {claim: service_area, sourceColumn: service_area_code}
+              disclosureProfile: limited
+            caseworker:
+              access:
+                scope: registry:social-assistance:caseworker
+                purpose: {claim: purpose, allowed: [benefit-delivery]}
+                authorityRowBinding: {claim: service_area, sourceColumn: service_area_code}
+              disclosureProfile: caseworker
 
     processingDescriptions:
       - id: benefit-delivery-consultation
@@ -344,11 +361,19 @@ resources:
       legalName:
         label: Legal name
         description: Current registered legal name of the business
-        sourceColumn: legal_name
+        sourceColumn: registrar_legal_name
         type: string
         sourceRequired: true
         semanticTerm: local:legalName
         classification: {privacy: potentially-personal, institutional: public-by-law}
+      registrarLegalName:
+        label: Registrar legal name
+        description: Protected authoritative legal name for registrar work
+        sourceColumn: legal_name
+        type: string
+        sourceRequired: true
+        semanticTerm: local:registrarLegalName
+        classification: {privacy: potentially-personal, institutional: public-by-law, handling: confidential, status: reviewed}
       registrationStatus:
         label: Registration status
         description: Current lifecycle status of the business registration
@@ -386,11 +411,15 @@ resources:
     disclosureProfiles:
       public-register:
         properties: [registrationNumber, legalName, registrationStatus, legalForm, registeredJurisdiction, registeredOfficeArea]
+      registrar-register:
+        properties: [registrationNumber, registrarLegalName, registrationStatus, legalForm, registeredJurisdiction]
 
     operations:
       list:
-        access: public
-        disclosureProfile: public-register
+        defaultRepresentation: public-register
+        representations:
+          public-register: {access: public, disclosureProfile: public-register}
+          registrar: {access: {scope: registry:business:list-registrar}, disclosureProfile: registrar-register}
         filters:
           - {name: status, property: registrationStatus, type: controlled-code}
           - {name: jurisdiction, property: registeredJurisdiction, type: controlled-code}
@@ -398,8 +427,10 @@ resources:
         orderBy: [registrationNumber]
         pagination: {defaultPageSize: 50, maximumPageSize: 200}
       read:
-        access: public
-        disclosureProfile: public-register
+        defaultRepresentation: public-register
+        representations:
+          public-register: {access: public, disclosureProfile: public-register}
+          registrar: {access: {scope: registry:business:read-registrar}, disclosureProfile: registrar-register}
 
     processingDescriptions:
       - id: statutory-publication
@@ -554,6 +585,15 @@ resources:
         sourceRequired: true
         semanticTerm: local:registrationDate
         classification: {privacy: personal}
+      registrationYear:
+        label: Registration year
+        description: Reviewed year-precision form of the registration date
+        sourceColumn: registration_date
+        transform: {kind: date-precision, sourceType: date, precision: year}
+        type: year
+        sourceRequired: true
+        semanticTerm: local:registrationYear
+        classification: {privacy: derived, institutional: confidential, handling: confidential, status: reviewed}
       registrationArea:
         label: Registration area
         description: Administrative area responsible for the registration
@@ -576,35 +616,41 @@ resources:
       registrar-record:
         properties: [eventReference, eventType, registrationStatus, registrationDate, registrationArea, certificateAvailable]
       verification-result:
-        properties: [eventReference, eventType, registrationStatus, certificateAvailable]
+        properties: [eventReference, eventType, registrationStatus, registrationDate, certificateAvailable]
+      supervisory-verification:
+        properties: [eventReference, eventType, registrationStatus, registrationYear, certificateAvailable]
 
     operations:
       read:
-        access:
-          scope: registry:civil-events:read
-          purpose:
-            claim: purpose
-            allowed: [civil-registration-administration]
-          authorityRowBinding:
-            claim: jurisdiction
-            sourceColumn: jurisdiction_code
-        disclosureProfile: registrar-record
+        defaultRepresentation: registrar
+        representations:
+          registrar:
+            access:
+              scope: registry:civil-events:read
+              purpose: {claim: purpose, allowed: [civil-registration-administration]}
+              authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+            disclosureProfile: registrar-record
       lookups:
         - id: verify-registration
-          access:
-            scope: registry:civil-events:lookup
-            purpose:
-              claim: purpose
-              allowed: [registration-verification]
-            authorityRowBinding:
-              claim: jurisdiction
-              sourceColumn: jurisdiction_code
           requestBody:
             maximumBytes: 384
             selectors:
               registrationNumber: {sourceColumn: registration_number, type: string, minimumBytes: 12, maximumBytes: 96}
               eventType: {sourceColumn: event_type, type: controlled-code, codelist: codelists/civil-event-types.yaml}
-          disclosureProfile: verification-result
+          defaultRepresentation: registrar-verification
+          representations:
+            registrar-verification:
+              access:
+                scope: registry:civil-events:lookup
+                purpose: {claim: purpose, allowed: [registration-verification]}
+                authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+              disclosureProfile: verification-result
+            supervisory:
+              access:
+                scope: registry:civil-events:supervisory
+                purpose: {claim: purpose, allowed: [registration-supervision]}
+                authorityRowBinding: {claim: jurisdiction, sourceColumn: jurisdiction_code}
+              disclosureProfile: supervisory-verification
 
     processingDescriptions:
       - id: registrar-administration
@@ -720,9 +766,8 @@ resources[].disclosureProfiles.*.properties[]
 resources[].id
 resources[].operations
 resources[].operations.list
-resources[].operations.list.access
 resources[].operations.list.allowUnfiltered
-resources[].operations.list.disclosureProfile
+resources[].operations.list.defaultRepresentation
 resources[].operations.list.filters
 resources[].operations.list.filters[]
 resources[].operations.list.filters[].name
@@ -733,19 +778,65 @@ resources[].operations.list.orderBy[]
 resources[].operations.list.pagination
 resources[].operations.list.pagination.defaultPageSize
 resources[].operations.list.pagination.maximumPageSize
+resources[].operations.list.representations
+resources[].operations.list.representations.public-register
+resources[].operations.list.representations.public-register.access
+resources[].operations.list.representations.public-register.disclosureProfile
+resources[].operations.list.representations.registrar
+resources[].operations.list.representations.registrar.access
+resources[].operations.list.representations.registrar.access.authorityRowBinding
+resources[].operations.list.representations.registrar.access.purpose
+resources[].operations.list.representations.registrar.access.scope
+resources[].operations.list.representations.registrar.disclosureProfile
 resources[].operations.lookups
 resources[].operations.lookups[]
-resources[].operations.lookups[].access
-resources[].operations.lookups[].access.authorityRowBinding
-resources[].operations.lookups[].access.authorityRowBinding.claim
-resources[].operations.lookups[].access.authorityRowBinding.sourceColumn
-resources[].operations.lookups[].access.purpose
-resources[].operations.lookups[].access.purpose.allowed
-resources[].operations.lookups[].access.purpose.allowed[]
-resources[].operations.lookups[].access.purpose.claim
-resources[].operations.lookups[].access.scope
-resources[].operations.lookups[].disclosureProfile
+resources[].operations.lookups[].defaultRepresentation
 resources[].operations.lookups[].id
+resources[].operations.lookups[].representations
+resources[].operations.lookups[].representations.caseworker
+resources[].operations.lookups[].representations.caseworker.access
+resources[].operations.lookups[].representations.caseworker.access.authorityRowBinding
+resources[].operations.lookups[].representations.caseworker.access.authorityRowBinding.claim
+resources[].operations.lookups[].representations.caseworker.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].representations.caseworker.access.purpose
+resources[].operations.lookups[].representations.caseworker.access.purpose.allowed
+resources[].operations.lookups[].representations.caseworker.access.purpose.allowed[]
+resources[].operations.lookups[].representations.caseworker.access.purpose.claim
+resources[].operations.lookups[].representations.caseworker.access.scope
+resources[].operations.lookups[].representations.caseworker.disclosureProfile
+resources[].operations.lookups[].representations.limited
+resources[].operations.lookups[].representations.limited.access
+resources[].operations.lookups[].representations.limited.access.authorityRowBinding
+resources[].operations.lookups[].representations.limited.access.authorityRowBinding.claim
+resources[].operations.lookups[].representations.limited.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].representations.limited.access.purpose
+resources[].operations.lookups[].representations.limited.access.purpose.allowed
+resources[].operations.lookups[].representations.limited.access.purpose.allowed[]
+resources[].operations.lookups[].representations.limited.access.purpose.claim
+resources[].operations.lookups[].representations.limited.access.scope
+resources[].operations.lookups[].representations.limited.disclosureProfile
+resources[].operations.lookups[].representations.registrar-verification
+resources[].operations.lookups[].representations.registrar-verification.access
+resources[].operations.lookups[].representations.registrar-verification.access.authorityRowBinding
+resources[].operations.lookups[].representations.registrar-verification.access.authorityRowBinding.claim
+resources[].operations.lookups[].representations.registrar-verification.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].representations.registrar-verification.access.purpose
+resources[].operations.lookups[].representations.registrar-verification.access.purpose.allowed
+resources[].operations.lookups[].representations.registrar-verification.access.purpose.allowed[]
+resources[].operations.lookups[].representations.registrar-verification.access.purpose.claim
+resources[].operations.lookups[].representations.registrar-verification.access.scope
+resources[].operations.lookups[].representations.registrar-verification.disclosureProfile
+resources[].operations.lookups[].representations.supervisory
+resources[].operations.lookups[].representations.supervisory.access
+resources[].operations.lookups[].representations.supervisory.access.authorityRowBinding
+resources[].operations.lookups[].representations.supervisory.access.authorityRowBinding.claim
+resources[].operations.lookups[].representations.supervisory.access.authorityRowBinding.sourceColumn
+resources[].operations.lookups[].representations.supervisory.access.purpose
+resources[].operations.lookups[].representations.supervisory.access.purpose.allowed
+resources[].operations.lookups[].representations.supervisory.access.purpose.allowed[]
+resources[].operations.lookups[].representations.supervisory.access.purpose.claim
+resources[].operations.lookups[].representations.supervisory.access.scope
+resources[].operations.lookups[].representations.supervisory.disclosureProfile
 resources[].operations.lookups[].requestBody
 resources[].operations.lookups[].requestBody.maximumBytes
 resources[].operations.lookups[].requestBody.selectors
@@ -756,16 +847,22 @@ resources[].operations.lookups[].requestBody.selectors.*.minimumBytes
 resources[].operations.lookups[].requestBody.selectors.*.sourceColumn
 resources[].operations.lookups[].requestBody.selectors.*.type
 resources[].operations.read
-resources[].operations.read.access
-resources[].operations.read.access.authorityRowBinding
-resources[].operations.read.access.authorityRowBinding.claim
-resources[].operations.read.access.authorityRowBinding.sourceColumn
-resources[].operations.read.access.purpose
-resources[].operations.read.access.purpose.allowed
-resources[].operations.read.access.purpose.allowed[]
-resources[].operations.read.access.purpose.claim
-resources[].operations.read.access.scope
-resources[].operations.read.disclosureProfile
+resources[].operations.read.defaultRepresentation
+resources[].operations.read.representations
+resources[].operations.read.representations.public-register
+resources[].operations.read.representations.public-register.access
+resources[].operations.read.representations.public-register.disclosureProfile
+resources[].operations.read.representations.registrar
+resources[].operations.read.representations.registrar.access
+resources[].operations.read.representations.registrar.access.authorityRowBinding
+resources[].operations.read.representations.registrar.access.authorityRowBinding.claim
+resources[].operations.read.representations.registrar.access.authorityRowBinding.sourceColumn
+resources[].operations.read.representations.registrar.access.purpose
+resources[].operations.read.representations.registrar.access.purpose.allowed
+resources[].operations.read.representations.registrar.access.purpose.allowed[]
+resources[].operations.read.representations.registrar.access.purpose.claim
+resources[].operations.read.representations.registrar.access.scope
+resources[].operations.read.representations.registrar.disclosureProfile
 resources[].processingDescriptions
 resources[].processingDescriptions[]
 resources[].processingDescriptions[].dpvProfileRef
@@ -790,6 +887,12 @@ resources[].properties.*.label
 resources[].properties.*.semanticTerm
 resources[].properties.*.sourceColumn
 resources[].properties.*.sourceRequired
+resources[].properties.*.transform
+resources[].properties.*.transform.characters
+resources[].properties.*.transform.kind
+resources[].properties.*.transform.precision
+resources[].properties.*.transform.reveal
+resources[].properties.*.transform.sourceType
 resources[].properties.*.type
 resources[].recordContext
 resources[].recordContext.lifecycleState
@@ -882,8 +985,8 @@ The three examples suggest a compact core model:
 registry contract
   -> source reference and reviewed view
   -> resource and published properties
-  -> compiled operations
-  -> maximum disclosure profile
+  -> compiled operation query shape
+  -> finite defaulted representations with access and disclosure
   -> optional requester property subset
   -> access constraints
   -> semantics, classification, and processing description
@@ -897,6 +1000,8 @@ The examples also freeze these boundaries:
 - `fields` is one comma-separated property syntax across list, read, and lookup;
 - a live source remains useful for read and lookup but is unversioned, `no-store`, and has no paginated list;
 - handling uses `public`, `internal`, `confidential`, and `restricted`, while purpose and row binding remain explicit constraints;
-- one maximum disclosure profile is compiled per operation, so different operations may differ but caller-dependent variants within one operation are deferred;
+- one explicit default and a finite ordered representation set is compiled per operation; requester `fields` only narrows the selected profile and caller-derived variants are deferred;
+- identification is schema-only and value-free; generated, imported, and manual classification review all bind the complete classification inventory before production compilation;
+- only `partial-string` with Relay's fixed `***` marker and `date-precision` to `year` or `year-month` are transform forms; every transform produces a distinct reviewed property;
 - Mint and external issuers use one strict Relay JWT access-token profile;
 - generated capabilities and a maintained alignment note describe the written draft standards without consuming their legacy OpenAPI or claiming conformance.
