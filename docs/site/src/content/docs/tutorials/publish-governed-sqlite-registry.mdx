@@ -115,28 +115,34 @@ not copied into the package.
 Compile the production checks before generating or serving anything:
 
 ```sh
-relayctl check "$project" --production
+relayctl check "$project" --production --explain
 ```
 
-After the command label, the report begins with a successful status and no
-diagnostics. This abridged excerpt omits the compiled configuration key paths
-at `details.configuration_key_paths`:
+The successful explanation is grouped by Registry resource and operation. Its exact digests follow
+your checkout, but the shape includes these sections:
 
-```json
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "check",
-    "contract_revision": "sha256:<digest>",
-    "production": true
-  }
-}
+```text
+relayctl check
+Registry: urn:example:registry:registered-businesses
+Contract revision: sha256:<digest>
+
+Resource: registered-premises
+
+  Operation: search:within-bbox  GET /v2/resources/registered-premises/searches/within-bbox  consultation/search
+    query capabilities:
+      point-bbox: available (point-bbox-search-operation); required
+    access profile: public-premises (default)
+    wire formats:
+      json: application/json
+      json-ld: application/ld+json
+      geojson: application/geo+json; format-profiles=rfc7946, jsonfg
 ```
 
 This is the first governed result. Production checks refuse unreviewed
 semantic or classification suggestions, missing or stale classification-review
-evidence, source-schema changes, and inconsistent access or disclosure rules.
+evidence, source-schema changes, and inconsistent access or disclosure rules. The explanation
+derives from the accepted compiled Registry and contains categorical reasons, not row, request,
+principal, token, or bbox values.
 
 Generate the public and operator artifacts:
 
@@ -191,8 +197,9 @@ Generated files include OpenAPI 3.1, JSON Schema, Shapes Constraint Language
 (SHACL), JSON for Linked Data (JSON-LD), codelist schemas, processing
 descriptions, capability discovery, and deterministic value-free reports under
 `generated/reports/` and `generated/governance/`. The reports distinguish
-source-column processing handling from output-property disclosure handling.
-They are review inputs, not automatic approvals.
+source-column processing handling from output-property disclosure handling. The canonical
+`generated/reports/operation-explanation.json` is the machine-readable form of the explanation
+shown by `check --explain`. They are review inputs, not automatic approvals.
 
 ## Seal the deployment package
 
@@ -240,10 +247,10 @@ The fixture expectation also requires complete Registry Core context and exactly
 domain properties. An unknown field, SQLite column, sort, or undeclared filter is a separate
 refusal case in the full journey and cannot change the compiled query.
 
-The contract also defines a protected `registrar` representation for the same read and list
-operations. The full fixture journey proves its distinct scope, no-store cache posture, a denied
-request, and an unknown representation. The unknown and scope-hidden cases use the same generic
-`404 resource.not_found` response. Relay authorizes the requested representation exactly and never
+The contract also defines protected `registrar` access profiles for read and list operations. The
+full fixture journey proves their distinct scopes, no-store cache posture, denied requests, and an
+unknown access profile. The unknown and scope-hidden cases use the same generic
+`404 resource.not_found` response. Relay authorizes the requested access profile exactly and never
 falls back to the public default.
 
 ## Verify the spatial response boundary
@@ -266,14 +273,20 @@ The report contains one successful step:
 }
 ```
 
-The request uses `Accept: application/geo+json`, `profile=jsonfg`, and a bounded CRS84 `bbox`.
-Those values select a wire format and a fixed query plan. The `public-premises` representation
-still supplies the access rule and maximum disclosure profile. The full journey also proves RFC
-7946 output, JSON and JSON-LD equivalence, field minimization to `geometry: null`, invalid bbox
-refusal, cursor binding, nonspatial negotiation refusal, and value-free coordinate failure.
+The request uses `Accept: application/geo+json`, `formatProfile=jsonfg`, and a bounded CRS84
+`bbox` on the named `within-bbox` search. `Accept` and `formatProfile` select serialization. The
+named search fixes the query shape, while the `public-premises` access profile supplies the access
+rule and maximum disclosure. The full journey also proves RFC 7946 output, JSON and JSON-LD
+equivalence, field minimization to `geometry: null`, invalid bbox refusal, cursor binding,
+nonspatial negotiation refusal, and value-free coordinate failure.
+
+The same resource deliberately gives list, read, and search independent access profiles. A client
+with only the protected list scope cannot call the named search, and a client with only the
+protected search scope cannot list. The bbox capability does not create another authorization
+plane.
 
 Starting the packaged service requires the configured token issuer to be reachable because the
-package contains protected representations, even when the request you plan to send is public.
+package contains protected access profiles, even when the request you plan to send is public.
 Continue with [Operate Registry Relay](../../operate/relay/) to bind a real institutional issuer,
 trusted paths, audit retention, and a private listener.
 
@@ -290,13 +303,13 @@ The cleanup commands print nothing when they succeed.
 
 ## What you built
 
-- One reviewed contract produced the API package, semantic artifacts, disclosure rules, and
-  capability inventory.
+- One reviewed contract produced the API package, semantic artifacts, access profiles, disclosure
+  rules, and capability inventory.
 - SQLite tables and columns did not become routes by convention.
 - Generated identification and classification material remained suggestions
   until the governed review accepted it.
 - The caller selected fewer properties but could not select more.
-- The Point used the same operation access and disclosure boundary in JSON,
+- The Point used the same access-profile and disclosure boundary in JSON,
   JSON-LD, RFC 7946 GeoJSON, and JSON-FG.
 - Mandatory Registry and Record context remained present in every result.
 - The shared Relay router verified the public, protected, and refusal behavior against synthetic
@@ -319,4 +332,4 @@ The cleanup commands print nothing when they succeed.
 | --- | --- | --- |
 | `cargo build` cannot find a package | The command is outside the Registry Stack root or the checkout predates Relay | Return to the source root and confirm that `crates/registry-relay-v2` exists. |
 | Relay refuses a path containing `/tmp` | On macOS, `/tmp` is a symlink | Keep the `pwd -P` assignment so the runtime receives the physical path. |
-| `relayctl check` returns diagnostics | A governed input or SQLite schema does not match the reviewed contract | Read the diagnostic identifiers, fix the authored input, and run `check --production` again. |
+| `relayctl check` returns diagnostics | A governed input or SQLite schema does not match the reviewed contract | Read the diagnostic identifiers, fix the authored input, and run `check --production --explain` again. |
