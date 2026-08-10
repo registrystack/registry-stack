@@ -574,6 +574,53 @@
               }
             }
           },
+          "403": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "catalogRefused": {
+                    "summary": "The authenticated Evidence catalog was refused",
+                    "value": {
+                      "error": "invalid_credential_request",
+                      "error_description": "the credential source refused this request"
+                    }
+                  }
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "enum": [
+                            "invalid_credential_request"
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Backing Evidence refused authenticated catalog discovery",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "408": {
             "content": {
               "application/json": {
@@ -1083,6 +1130,53 @@
               "WWW-Authenticate": {
                 "schema": {
                   "const": "Bearer",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "catalogRefused": {
+                    "summary": "The authenticated Evidence catalog was refused",
+                    "value": {
+                      "error": "invalid_credential_request",
+                      "error_description": "the credential source refused this request"
+                    }
+                  }
+                },
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Problem"
+                    },
+                    {
+                      "properties": {
+                        "error": {
+                          "enum": [
+                            "invalid_credential_request"
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Backing Evidence refused authenticated catalog discovery",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "schema": {
+                  "const": "no-cache",
                   "type": "string"
                 }
               }

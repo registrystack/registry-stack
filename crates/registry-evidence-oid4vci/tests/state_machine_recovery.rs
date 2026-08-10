@@ -13,7 +13,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axum::http::StatusCode;
+use axum::{body::Bytes, http::StatusCode};
 use axum_test::{TestResponse, TestServer};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
@@ -386,6 +386,13 @@ fn error_code(response: &TestResponse) -> String {
 }
 
 fn assert_closed_error(response: &TestResponse, expected: &str, forbidden: &[&str]) {
+    assert_eq!(
+        response
+            .header("content-type")
+            .to_str()
+            .expect("the content type is ASCII"),
+        "application/json"
+    );
     let body: Value = response.json();
     let object = body.as_object().expect("the protocol error is an object");
     assert_eq!(object.len(), 2, "a refusal has only the two OAuth members");
@@ -401,6 +408,21 @@ fn assert_closed_error(response: &TestResponse, expected: &str, forbidden: &[&st
             "a refusal rendered request or state material"
         );
     }
+}
+
+fn assert_exact_problem(
+    response: &TestResponse,
+    status: StatusCode,
+    error: &str,
+    description: &str,
+    forbidden: &[&str],
+) {
+    assert_eq!(response.status_code(), status);
+    assert_closed_error(response, error, forbidden);
+    assert_eq!(
+        response.json::<Value>(),
+        json!({"error": error, "error_description": description})
+    );
 }
 
 #[tokio::test]
@@ -498,6 +520,137 @@ async fn a_recognized_token_is_claimed_before_every_later_validation_failure() {
         harness.issuer.call_count(),
         0,
         "no Evidence request or release audit follows a validation refusal"
+    );
+}
+
+#[tokio::test]
+async fn invalid_utf8_is_refused_inside_the_authorization_and_claim_boundaries() {
+    const BODY_CANARY: &str = "invalid-utf8-request-canary";
+    let invalid_body = || Bytes::from_static(b"invalid-utf8-request-canary:\xff");
+    let harness = harness(loaded_config());
+
+    let unauthorized_offer = harness
+        .server
+        .post(OFFERS_PATH)
+        .content_type("application/json")
+        .bytes(invalid_body())
+        .await;
+    assert_exact_problem(
+        &unauthorized_offer,
+        StatusCode::UNAUTHORIZED,
+        "invalid_token",
+        "a bearer access token is required",
+        &[BODY_CANARY],
+    );
+
+    let authorized_offer = harness
+        .server
+        .post(OFFERS_PATH)
+        .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+        .content_type("application/json")
+        .bytes(invalid_body())
+        .await;
+    assert_exact_problem(
+        &authorized_offer,
+        StatusCode::BAD_REQUEST,
+        "invalid_request",
+        "the offer request is not a document this service accepts",
+        &[BODY_CANARY, CONFIGURATION_ID, SELECTOR_VALUE],
+    );
+
+    let invalid_nonce = harness
+        .server
+        .post(NONCE_PATH)
+        .content_type("application/json")
+        .bytes(invalid_body())
+        .await;
+    assert_exact_problem(
+        &invalid_nonce,
+        StatusCode::BAD_REQUEST,
+        "invalid_request",
+        "the nonce request must be empty",
+        &[BODY_CANARY],
+    );
+
+    let token = access_token(&harness.server).await;
+    let nonce = minted_nonce(&harness.server).await;
+    let accepted = credential_body(vec![proof_jwt(&private_jwk(), &nonce)]);
+    let invalid_credential = harness
+        .server
+        .post(CREDENTIAL_PATH)
+        .add_header("authorization", format!("Bearer {token}"))
+        .content_type("application/json")
+        .bytes(invalid_body())
+        .await;
+    assert_exact_problem(
+        &invalid_credential,
+        StatusCode::BAD_REQUEST,
+        "invalid_credential_request",
+        "the credential request is not a document this service accepts",
+        &[
+            BODY_CANARY,
+            &token,
+            &nonce,
+            CONFIGURATION_ID,
+            SELECTOR_VALUE,
+        ],
+    );
+
+    let retry = harness
+        .server
+        .post(CREDENTIAL_PATH)
+        .add_header("authorization", format!("Bearer {token}"))
+        .json(&accepted)
+        .await;
+    assert_exact_problem(
+        &retry,
+        StatusCode::UNAUTHORIZED,
+        "invalid_token",
+        "the access token cannot be used",
+        &[&token, &nonce, CONFIGURATION_ID, SELECTOR_VALUE],
+    );
+    assert_eq!(
+        harness.issuer.call_count(),
+        0,
+        "no invalid UTF-8 path or spent-token retry reaches Evidence"
+    );
+}
+
+#[tokio::test]
+async fn raw_body_extraction_keeps_the_framework_payload_limit() {
+    let mut config = loaded_config();
+    config.listener.maximum_request_bytes = 8;
+    let harness = harness(config);
+    let oversized = Bytes::from_static(b"123456789");
+
+    for path in [OFFERS_PATH, NONCE_PATH, CREDENTIAL_PATH] {
+        let response = harness
+            .server
+            .post(path)
+            .add_header("authorization", format!("Bearer {OFFER_TOKEN}"))
+            .content_type("application/json")
+            .bytes(oversized.clone())
+            .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "{path}"
+        );
+        assert_eq!(
+            response.header("content-type").to_str().expect("ASCII"),
+            "text/plain; charset=utf-8",
+            "{path}"
+        );
+        assert_eq!(
+            response.text(),
+            "Failed to buffer the request body: length limit exceeded",
+            "{path}"
+        );
+    }
+    assert_eq!(
+        harness.issuer.call_count(),
+        0,
+        "a framework body-limit refusal never reaches Evidence"
     );
 }
 

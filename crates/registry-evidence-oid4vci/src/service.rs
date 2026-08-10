@@ -34,7 +34,7 @@ use std::{
 };
 
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, Form, State},
     http::{
         header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA, WWW_AUTHENTICATE},
@@ -443,7 +443,7 @@ struct OfferRequest {
 async fn create_offer(
     State(service): State<Arc<DeliveryService>>,
     headers: HeaderMap,
-    body: String,
+    body: Bytes,
 ) -> Response {
     let _authorized = match authorize_offer(&service, &headers).await {
         Ok(authorized) => authorized,
@@ -455,7 +455,14 @@ async fn create_offer(
         }
     };
 
-    let Ok(request) = serde_json::from_str::<OfferRequest>(&body) else {
+    let Ok(body) = std::str::from_utf8(&body) else {
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "the offer request is not a document this service accepts",
+        );
+    };
+    let Ok(request) = serde_json::from_str::<OfferRequest>(body) else {
         return problem(
             StatusCode::BAD_REQUEST,
             "invalid_request",
@@ -617,7 +624,14 @@ async fn token(
 /// challenge rather than a second authorization: it is a keyed tag over its own
 /// expiry, and a proof echoing it is bounded by the single-use access token the
 /// credential request must also present.
-async fn nonce(State(service): State<Arc<DeliveryService>>, body: String) -> Response {
+async fn nonce(State(service): State<Arc<DeliveryService>>, body: Bytes) -> Response {
+    let Ok(body) = std::str::from_utf8(&body) else {
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "the nonce request must be empty",
+        );
+    };
     let body = body.trim();
     let carries_fields = match serde_json::from_str::<serde_json::Map<String, Value>>(body) {
         Ok(document) => !document.is_empty(),
@@ -659,7 +673,7 @@ struct CredentialProofs {
 async fn credential(
     State(service): State<Arc<DeliveryService>>,
     headers: HeaderMap,
-    body: String,
+    body: Bytes,
 ) -> Response {
     let Some(access_token) = bearer_credential(&headers) else {
         return unauthorized("a bearer access token is required");
@@ -680,7 +694,15 @@ async fn credential(
         .metrics
         .record_store_entries(service.store.maximum_keyspace_len());
 
-    let Ok(request) = serde_json::from_str::<CredentialRequest>(&body) else {
+    let Ok(body) = std::str::from_utf8(&body) else {
+        service.metrics.record_outcome(Outcome::ProofRefused);
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "invalid_credential_request",
+            "the credential request is not a document this service accepts",
+        );
+    };
+    let Ok(request) = serde_json::from_str::<CredentialRequest>(body) else {
         service.metrics.record_outcome(Outcome::ProofRefused);
         return problem(
             StatusCode::BAD_REQUEST,

@@ -34,6 +34,7 @@ pub fn openapi_document() -> Value {
                 "summary": "Discover the frozen wallet-delivery profile",
                 "responses": {
                     "200": json_response("Credential issuer metadata", "CredentialIssuerMetadata"),
+                    "403": catalog_refusal_response(),
                     "408": problem_response("The configured request deadline elapsed"),
                     "503": problem_response("Backing Evidence discovery is unavailable")
                 }
@@ -65,6 +66,7 @@ pub fn openapi_document() -> Value {
                     "201": json_response("Credential offer", "OfferResponse"),
                     "400": problem_response("The offer request is outside the published catalog"),
                     "401": bearer_problem_response("The offer bearer token is missing or refused"),
+                    "403": catalog_refusal_response(),
                     "408": problem_response("The configured request deadline elapsed"),
                     "413": framework_response("The request body exceeds the configured byte limit"),
                     "503": problem_response("Authorization, Evidence discovery, or bounded state is unavailable")
@@ -225,6 +227,31 @@ fn credential_bad_request_response() -> Value {
             "value": {
                 "error": "credential_request_denied",
                 "error_description": "this credential request cannot be completed"
+            }
+        }
+    });
+    response
+}
+
+fn catalog_refusal_response() -> Value {
+    let mut response = problem_response("Backing Evidence refused authenticated catalog discovery");
+    response["content"]["application/json"]["schema"] = json!({
+        "allOf": [
+            {"$ref": "#/components/schemas/Problem"},
+            {
+                "type": "object",
+                "properties": {
+                    "error": {"enum": ["invalid_credential_request"]}
+                }
+            }
+        ]
+    });
+    response["content"]["application/json"]["examples"] = json!({
+        "catalogRefused": {
+            "summary": "The authenticated Evidence catalog was refused",
+            "value": {
+                "error": "invalid_credential_request",
+                "error_description": "the credential source refused this request"
             }
         }
     });
@@ -504,6 +531,37 @@ mod tests {
                 document["paths"][path]["post"]["responses"]["401"]["headers"]["WWW-Authenticate"]
                     ["schema"]["const"],
                 "Bearer",
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_refusal_is_value_free_on_every_path_that_reads_discovery() {
+        let document = openapi_document();
+        for path in [ISSUER_METADATA_PATH, OFFERS_PATH] {
+            let operation = if path == ISSUER_METADATA_PATH {
+                &document["paths"][path]["get"]
+            } else {
+                &document["paths"][path]["post"]
+            };
+            let refusal = &operation["responses"]["403"];
+            assert_eq!(
+                refusal["description"],
+                "Backing Evidence refused authenticated catalog discovery"
+            );
+            assert_eq!(
+                refusal["content"]["application/json"]["schema"]["allOf"][1]["properties"]["error"]
+                    ["enum"],
+                json!(["invalid_credential_request"]),
+                "{path}"
+            );
+            assert_eq!(
+                refusal["content"]["application/json"]["examples"]["catalogRefused"]["value"],
+                json!({
+                    "error": "invalid_credential_request",
+                    "error_description": "the credential source refused this request"
+                }),
                 "{path}"
             );
         }

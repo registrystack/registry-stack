@@ -81,9 +81,9 @@ impl MetricsListenerConfig {
                 address.is_loopback() || address.is_private() || address.is_link_local()
             }
             IpAddr::V6(address) => {
-                address.is_loopback()
-                    || address.is_unique_local()
-                    || address.is_unicast_link_local()
+                // `IpAddr` carries no interface scope, so accepting fe80::/10
+                // here would admit an unscoped link-local binding.
+                address.is_loopback() || address.is_unique_local()
             }
         };
         if !is_private || address.is_unspecified() || address.is_multicast() {
@@ -1029,6 +1029,47 @@ store:
             assert!(
                 matches!(load_from(&refused), Err(ConfigError::Invalid(_))),
                 "metrics accepted {listener}"
+            );
+        }
+    }
+
+    #[test]
+    fn metrics_accept_loopback_unique_local_and_current_ipv4_private_addresses() {
+        for address in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.0.1",
+            "169.254.1.1",
+            "::1",
+            "fc00::1",
+            "fdff:ffff::1",
+        ] {
+            let configured = VALID.replace(
+                "listener: {address: 127.0.0.1, port: 8090}",
+                &format!(
+                    "listener: {{address: 127.0.0.1, port: 8090}}\nmetricsListener: {{address: \"{address}\", port: 9090}}"
+                ),
+            );
+            assert!(load_from(&configured).is_ok(), "metrics refused {address}");
+        }
+    }
+
+    #[test]
+    fn unscoped_ipv6_unicast_link_local_metrics_addresses_are_refused() {
+        for address in ["fe80::1", "febf:ffff::1"] {
+            let configured = VALID.replace(
+                "listener: {address: 127.0.0.1, port: 8090}",
+                &format!(
+                    "listener: {{address: 127.0.0.1, port: 8090}}\nmetricsListener: {{address: \"{address}\", port: 9090}}"
+                ),
+            );
+            assert_eq!(
+                load_from(&configured),
+                Err(ConfigError::Invalid(
+                    "the metrics listener must bind a loopback or private address"
+                )),
+                "metrics accepted {address}"
             );
         }
     }

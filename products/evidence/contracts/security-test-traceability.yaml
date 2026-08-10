@@ -410,6 +410,7 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/store.rs, name: a_redeemed_pre_authorized_code_is_refused_on_reuse}
       - {file: crates/registry-evidence-oid4vci/src/store.rs, name: a_claimed_access_token_is_refused_on_reuse}
       - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: a_recognized_token_is_claimed_before_every_later_validation_failure}
+      - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: invalid_utf8_is_refused_inside_the_authorization_and_claim_boundaries}
       - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: concurrent_code_and_token_claims_allow_one_issuance_per_generation}
       - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: offer_saturation_fails_closed_without_evicting_a_live_exchange}
       - {file: crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs, name: token_saturation_does_not_spend_the_offer_that_could_not_be_exchanged}
@@ -484,5 +485,6 @@ entries:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: operational_logs_omit_deployment_and_offer_canaries}
       - {file: crates/registry-evidence-oid4vci/src/observability.rs, name: the_metrics_listener_serves_only_metrics}
       - {file: crates/registry-evidence-oid4vci/src/config.rs, name: metrics_are_absent_by_default_and_the_optional_listener_is_private_and_distinct}
+      - {file: crates/registry-evidence-oid4vci/src/config.rs, name: unscoped_ipv6_unicast_link_local_metrics_addresses_are_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_configured_private_metrics_listener_serves_beside_the_delivery_listener}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: serve_revalidates_the_metrics_listener_before_any_socket_is_bound}
