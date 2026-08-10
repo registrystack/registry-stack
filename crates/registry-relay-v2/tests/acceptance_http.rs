@@ -529,6 +529,48 @@ async fn probe_responses_preserve_one_request_trace_context() {
 }
 
 #[tokio::test]
+async fn wrong_method_uses_the_traced_problem_boundary() {
+    const TRACE_ID: &str = "44444444444444444444444444444444";
+
+    let harness = ProjectHarness::open("business-registry").await;
+    let traceparent = format!("00-{TRACE_ID}-0123456789abcdef-01");
+    let response = harness
+        .app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2")
+                .header("traceparent", &traceparent)
+                .body(Body::empty())
+                .expect("wrong-method request builds"),
+        )
+        .await
+        .expect("router responds");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.headers().get(CONTENT_TYPE),
+        Some(&HeaderValue::from_static("application/problem+json"))
+    );
+    assert_eq!(
+        response.headers().get(CACHE_CONTROL),
+        Some(&HeaderValue::from_static("no-store"))
+    );
+    assert_eq!(
+        response.headers().get("traceparent"),
+        Some(&traceparent.parse().expect("traceparent is valid"))
+    );
+
+    let body = to_bytes(response.into_body(), 1024)
+        .await
+        .expect("method problem reads");
+    let document: Value = serde_json::from_slice(&body).expect("method problem is JSON");
+    assert_eq!(document["status"], 404);
+    assert_eq!(document["code"], "resource.not_found");
+    assert_eq!(document["traceId"], TRACE_ID);
+}
+
+#[tokio::test]
 async fn readiness_fails_value_free_for_missing_replaced_and_drifted_sources() {
     for project in ["business-registry", "social-assistance"] {
         let harness = ProjectHarness::open(project).await;

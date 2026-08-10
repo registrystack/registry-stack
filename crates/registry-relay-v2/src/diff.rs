@@ -1083,21 +1083,26 @@ fn diff_pagination(
         (Some(before), Some(after)) if before != after => {
             let expanded = after.maximum_page_size > before.maximum_page_size
                 || after.default_page_size > before.default_page_size;
-            push(
-                changes,
-                if expanded {
-                    ChangeClass::PaginationExpanded
-                } else {
-                    ChangeClass::PaginationNarrowed
-                },
-                if expanded {
-                    ChangeImpact::Widening
-                } else {
-                    ChangeImpact::Narrowing
-                },
-                format!("{location}.pagination"),
-                "collection pagination bounds changed",
-            );
+            let narrowed = after.maximum_page_size < before.maximum_page_size
+                || after.default_page_size < before.default_page_size;
+            if expanded {
+                push(
+                    changes,
+                    ChangeClass::PaginationExpanded,
+                    ChangeImpact::Widening,
+                    format!("{location}.pagination"),
+                    "one or more collection pagination bounds expanded",
+                );
+            }
+            if narrowed {
+                push(
+                    changes,
+                    ChangeClass::PaginationNarrowed,
+                    ChangeImpact::Narrowing,
+                    format!("{location}.pagination"),
+                    "one or more collection pagination bounds narrowed",
+                );
+            }
         }
         (None, Some(_)) => push(
             changes,
@@ -1831,6 +1836,42 @@ mod tests {
                 "missing {class:?}"
             );
         }
+    }
+
+    #[test]
+    fn mixed_pagination_bound_changes_report_both_impacts() {
+        let mut previous = compiled();
+        previous.resources[0].operations[0].query.pagination =
+            Some(crate::model::CompiledPagination {
+                default_page_size: 5,
+                maximum_page_size: 10,
+            });
+        let mut current = previous.clone();
+        current.resources[0].operations[0].query.pagination =
+            Some(crate::model::CompiledPagination {
+                default_page_size: 6,
+                maximum_page_size: 9,
+            });
+
+        let pagination_changes = diff_registries(&previous, &current)
+            .changes
+            .into_iter()
+            .filter(|change| {
+                matches!(
+                    change.class,
+                    ChangeClass::PaginationExpanded | ChangeClass::PaginationNarrowed
+                )
+            })
+            .map(|change| (change.class, change.impact))
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            pagination_changes,
+            BTreeSet::from([
+                (ChangeClass::PaginationExpanded, ChangeImpact::Widening),
+                (ChangeClass::PaginationNarrowed, ChangeImpact::Narrowing),
+            ])
+        );
     }
 
     #[test]

@@ -276,7 +276,7 @@ projects:
       size: 6470
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:00c77486c2bab24b084f250483fc6bc03c78c6f526d4f4a32e850a7d69eed3f7
+    packageRevision: sha256:dbef3dd6922ce9b5482b7d87f5e23591080cdde80ed5e0c564d6a074deadc943
     contractRevision: sha256:369c247ec65709907d7c33104231429fb786d46992d90b9192edc0730dd7896e
     sourceSchemaFingerprints:
       companies: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
@@ -936,14 +936,14 @@ projects:
       mediaType: application/yaml
       operationIdentifier: null
       path: generated/openapi.full.yaml
-      sha256: sha256:71f2c164a1cfe333491449c0a324bf129689725c0f25f9d8bac00ff67ad43543
+      sha256: sha256:52d50455d414f281598c8f75d72a0c7e007c1c4c569e84a3427f524e4a376822
       visibility: operator-only
     - accessBinding: null
       id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
-      sha256: sha256:8da1c575316b06dd004f050d14d5996a1e09618195395092de92da7894dae125
+      sha256: sha256:acbca47131498f287d5f947e55728e544253eaf89cf6810b4ab10db78595ebf6
       visibility: public
     governedFiles:
     - generated: false

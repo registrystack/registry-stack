@@ -803,7 +803,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
             if has_geojson {
                 parameters.push(json!({
                     "name": "formatProfile", "in": "query", "required": false,
-                    "schema": {"type": "string", "enum": ["rfc7946", "jsonfg"], "default": "rfc7946"},
+                    "schema": {"type": "string", "enum": ["rfc7946", "jsonfg"]},
                     "description": "GeoJSON response profile; valid only when application/geo+json is selected"
                 }));
             }
@@ -2110,9 +2110,27 @@ mod tests {
         assert_eq!(bbox["required"], false);
         assert_eq!(bbox["x-registry-required-on-first-page"], true);
         assert_eq!(bbox["x-registry-mutually-exclusive-with"], "cursor");
-        assert!(operation["responses"]["200"]["content"]
-            .get("application/geo+json")
-            .is_some());
+        let format_profile = operation["parameters"]
+            .as_array()
+            .expect("parameters")
+            .iter()
+            .find(|parameter| parameter["name"] == "formatProfile")
+            .expect("formatProfile parameter");
+        assert_eq!(format_profile["required"], false);
+        assert_eq!(
+            format_profile["schema"],
+            json!({"type": "string", "enum": ["rfc7946", "jsonfg"]})
+        );
+        let response_content = operation["responses"]["200"]["content"]
+            .as_object()
+            .expect("response media types");
+        for media_type in [
+            "application/json",
+            "application/ld+json",
+            "application/geo+json",
+        ] {
+            assert!(response_content.contains_key(media_type));
+        }
     }
 
     #[test]

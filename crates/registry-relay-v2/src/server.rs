@@ -152,6 +152,7 @@ pub fn router(service: Arc<RelayService>) -> Router {
             get(crate::sdmx_http::structure),
         )
         .fallback(crate::api::not_found)
+        .method_not_allowed_fallback(crate::api::not_found)
         .with_state(service)
         .layer(
             TraceLayer::new_for_http()
