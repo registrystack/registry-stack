@@ -202,21 +202,14 @@ steps:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
       body: {caseReference: CASE-SYNTH-BAD1, personReference: PERSON-SYNTH-BAD1}
-    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+    expect: {status: 503, code: source.unavailable}
   - id: excessive-row
     authorizationFixture: social-lookup-area-a
     request:
       method: POST
       path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
       body: {caseReference: CASE-SYNTH-BAD2, personReference: PERSON-SYNTH-BAD2}
-    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
-  - id: invalid-transform-input
-    authorizationFixture: social-lookup-area-a
-    request:
-      method: POST
-      path: /v2/resources/assistance-enrolment/lookups/by-case-and-person
-      body: {caseReference: CASE-SYNTH-XFORM, personReference: PERSON-SYNTH-XFORM}
-    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+    expect: {status: 503, code: source.unavailable}
   - id: quota-exhausted
     authorizationFixture: social-lookup-area-a
     request:

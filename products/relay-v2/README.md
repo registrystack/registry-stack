@@ -41,7 +41,6 @@ Run the focused product gates from the repository root:
 
 ```bash
 products/relay-v2/scripts/check-contracts.sh
-products/relay-v2/scripts/check-generated.sh
 products/relay-v2/scripts/test-http.sh
 ```
 

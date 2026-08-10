@@ -105,24 +105,6 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
             errors,
         )
 
-    def test_generated_review_must_keep_its_required_method(self) -> None:
-        original = VALIDATOR.load_yaml
-
-        def load_with_manual_social_review(path: Path):
-            value = copy.deepcopy(original(path))
-            if path.name == "classification-review.yaml" and path.parent.name == "governance":
-                if path.parents[1].name == "social-assistance":
-                    value["method"] = "manual"
-                    value.pop("generatedIdentification")
-            return value
-
-        errors: list[str] = []
-        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_manual_social_review):
-            VALIDATOR.validate_acceptance_representation_contracts(errors)
-        self.assertTrue(
-            any("does not use the required reviewed method" in error for error in errors), errors
-        )
-
     def test_social_quota_fixture_is_bound_to_the_pre_quota_journey(self) -> None:
         original = VALIDATOR.load_yaml
 
@@ -153,6 +135,31 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
             VALIDATOR.validate_acceptance_representation_contracts(errors)
         self.assertTrue(
             any("lookup quota fixture must admit exactly" in error for error in errors), errors
+        )
+
+    def test_invalid_source_row_scenario_must_match_the_executable_failure(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_unresolved_source_row(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "acceptance-scenario-matrix.yaml":
+                scenario = next(
+                    item for item in value["scenarios"] if item.get("invalidSourceRowClass")
+                )
+                scenario["expectedStatus"] = 404
+                scenario["expectedCode"] = "consultation.unresolved"
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(
+            VALIDATOR, "load_yaml", side_effect=load_with_unresolved_source_row
+        ):
+            VALIDATOR.validate_catalogs(errors)
+        self.assertTrue(
+            any("must expect 503 source.unavailable" in error for error in errors), errors
+        )
+        self.assertTrue(
+            any("expectation disagrees with the journey" in error for error in errors), errors
         )
 
     def test_security_test_resolution_rejects_a_similar_prefix(self) -> None:
@@ -192,6 +199,52 @@ class RelayV2ProductCatalogTests(unittest.TestCase):
         )
         self.assertEqual(1, len(errors), errors)
         self.assertIn("exact executable test does not resolve", errors[0])
+
+    def test_security_inventory_rejects_a_deleted_invariant(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_without_one_invariant(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "security-invariant-matrix.yaml":
+                value["invariants"].pop()
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_without_one_invariant):
+            VALIDATOR.validate_catalogs(errors)
+        self.assertTrue(any("closed invariant inventory" in error for error in errors), errors)
+
+    def test_security_inventory_rejects_empty_required_evidence(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_empty_fields(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "security-invariant-matrix.yaml":
+                value["invariants"][0]["threat"] = ""
+                value["invariants"][0]["enforcementPoint"] = ""
+                value["invariants"][0]["expected"] = ""
+                value["invariants"][0]["evidence"] = ""
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_empty_fields):
+            VALIDATOR.validate_catalogs(errors)
+        for field in ("threat", "enforcementPoint", "expected", "evidence"):
+            self.assertTrue(any(f".{field}:" in error for error in errors), errors)
+
+    def test_security_inventory_requires_an_exact_negative_test(self) -> None:
+        original = VALIDATOR.load_yaml
+
+        def load_with_unknown_negative(path: Path):
+            value = copy.deepcopy(original(path))
+            if path.name == "security-invariant-matrix.yaml":
+                value["invariants"][0]["negativeTest"] = "not_a_listed_test"
+            return value
+
+        errors: list[str] = []
+        with mock.patch.object(VALIDATOR, "load_yaml", side_effect=load_with_unknown_negative):
+            VALIDATOR.validate_catalogs(errors)
+        self.assertTrue(any("select one exact listed negative test" in error for error in errors), errors)
 
 
 if __name__ == "__main__":

@@ -23,9 +23,8 @@ scenarios:
   - {id: social-no-match, project: social-assistance, journeyStep: no-match, assertion: A missing lookup has the unresolved outcome.}
   - {id: social-ambiguous, project: social-assistance, journeyStep: ambiguous, assertion: An ambiguous lookup has the unresolved outcome.}
   - {id: social-hidden, project: social-assistance, journeyStep: row-hidden, assertion: A row outside the caller binding has the unresolved outcome.}
-  - {id: social-invalid, project: social-assistance, journeyStep: invalid-row, invalidSourceRowClass: missing-required, assertion: An invalid selected row has the unresolved outcome.}
-  - {id: social-excessive, project: social-assistance, journeyStep: excessive-row, invalidSourceRowClass: excessive-size, assertion: An excessively large source value fails closed as unresolved.}
-  - {id: social-invalid-transform, project: social-assistance, journeyStep: invalid-transform-input, invalidSourceRowClass: excessive-size, assertion: An oversized partial-string source fails closed as unresolved.}
+  - {id: social-invalid, project: social-assistance, journeyStep: invalid-row, invalidSourceRowClass: missing-required, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid selected row fails closed as a source failure.}
+  - {id: social-excessive, project: social-assistance, journeyStep: excessive-row, invalidSourceRowClass: excessive-size, expectedStatus: 503, expectedCode: source.unavailable, assertion: An excessively large source value fails closed as a source failure.}
   - {id: social-quota, project: social-assistance, journeyStep: quota-exhausted, assertion: The named lookup fails closed after its compiled-operation quota is exhausted.}
   - {id: business-discovery, project: business-registry, journeyStep: registry-discovery, assertion: Discovery derives only the public Consultation capabilities.}
   - {id: business-first-page, project: business-registry, journeyStep: first-page, assertion: The snapshot list is paginated and has a cursor.}
@@ -48,7 +47,7 @@ scenarios:
   - {id: business-filter-rejection, project: business-registry, journeyStep: unknown-filter, assertion: An undeclared filter fails before source access.}
   - {id: business-sort-rejection, project: business-registry, journeyStep: arbitrary-sort, assertion: Callers cannot choose source ordering.}
   - {id: business-operator-rejection, project: business-registry, journeyStep: unsupported-filter-operator, assertion: Callers cannot add an operator to a declared direct filter.}
-  - {id: business-invalid, project: business-registry, journeyStep: invalid-source-row, invalidSourceRowClass: wrong-type, assertion: An invalid source row is not released.}
+  - {id: business-invalid, project: business-registry, journeyStep: invalid-source-row, invalidSourceRowClass: wrong-type, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid source row fails closed and is not released.}
   - {id: civil-discovery, project: civil-event, journeyStep: registry-discovery, assertion: Discovery derives retrieve and constrained search only.}
   - {id: civil-read, project: civil-event, journeyStep: registrar-read, assertion: The registrar scope receives its narrower requested representation.}
   - {id: civil-read-default, project: civil-event, journeyStep: registrar-read-default, assertion: The default representation contains exactly the compiled disclosure profile.}
@@ -70,6 +69,5 @@ scenarios:
   - {id: civil-hidden, project: civil-event, journeyStep: jurisdiction-hidden, assertion: A row outside the jurisdiction binding has the unresolved outcome.}
   - {id: civil-no-match, project: civil-event, journeyStep: no-match, assertion: A missing civil-event lookup has the unresolved outcome.}
   - {id: civil-ambiguous, project: civil-event, journeyStep: ambiguous, assertion: An ambiguous lookup has the unresolved outcome.}
-  - {id: civil-invalid, project: civil-event, journeyStep: invalid-row, invalidSourceRowClass: unexpected-value, assertion: An invalid source row has the unresolved outcome.}
-  - {id: civil-invalid-transform, project: civil-event, journeyStep: invalid-transform-input, invalidSourceRowClass: unexpected-value, assertion: A noncanonical date-precision source fails closed as unresolved.}
+  - {id: civil-invalid, project: civil-event, journeyStep: invalid-row, invalidSourceRowClass: unexpected-value, expectedStatus: 503, expectedCode: source.unavailable, assertion: An invalid source row fails closed as a source failure.}
   - {id: civil-quota, project: civil-event, journeyStep: quota-exhausted, assertion: A distinct named lookup has its own bounded quota and value-free refusal.}

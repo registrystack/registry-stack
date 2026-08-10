@@ -852,6 +852,12 @@ projects:
     governedFiles:
     - generated: false
       mediaType: application/yaml
+      path: governed/codelists/civil-event-selector-types.yaml
+      sha256: sha256:b50078dbd85a1aef52a98394578e8d4b8e3132833f9e5d785b0f60854d0d53c6
+      size: 92
+      visibility: operator-only
+    - generated: false
+      mediaType: application/yaml
       path: governed/codelists/civil-event-types.yaml
       sha256: sha256:3a7f08db1c4b675c93f33cc85ac51506d67c276d400003a10a5669073225060f
       size: 83

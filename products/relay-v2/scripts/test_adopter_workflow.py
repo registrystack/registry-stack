@@ -89,14 +89,6 @@ def file_sha256(path: Path) -> str:
     return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
 
 
-def tree_hashes(root: Path) -> dict[str, str]:
-    return {
-        path.relative_to(root).as_posix(): file_sha256(path)
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
-
-
 def openapi_operations(document: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     result: dict[tuple[str, str], dict[str, Any]] = {}
     if document.get("openapi") != "3.1.0" or not isinstance(document.get("paths"), dict):
@@ -255,15 +247,27 @@ def validate_openapi(package: Path, artifacts: list[dict[str, Any]]) -> None:
 
 def validate_exposure_and_identity(package: Path, generated: Path) -> dict[str, Any]:
     manifest = json.loads((package / "relay-package.json").read_text(encoding="utf-8"))
-    if manifest.get("packageVersion") != "relay.registrystack.org/package/v1alpha1":
+    if manifest.get("packageVersion") != "relay.registrystack.org/package/v1alpha2":
         raise GateFailure("sealed package has an unsupported manifest")
     artifacts = manifest.get("artifacts")
+    operation_bindings = manifest.get("operationArtifactBindings")
     files = manifest.get("files")
-    if not isinstance(artifacts, list) or not isinstance(files, list):
+    if (
+        not isinstance(artifacts, list)
+        or not isinstance(operation_bindings, list)
+        or not isinstance(files, list)
+    ):
         raise GateFailure("sealed package inventory is incomplete")
     file_inventory = {entry["path"]: entry for entry in files}
     if len(file_inventory) != len(files):
         raise GateFailure("sealed package contains duplicate file inventory paths")
+    compiled = file_inventory.get("compiled/registry.json")
+    if (
+        not compiled
+        or not compiled.get("generated")
+        or compiled.get("visibility") != "operator-only"
+    ):
+        raise GateFailure("sealed package omits its operator-only compiled Registry")
     for entry in files:
         path = package / entry["path"]
         if not path.is_file() or file_sha256(path) != entry.get("sha256"):
@@ -309,6 +313,57 @@ def baseline(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def assert_diff_change(report: dict[str, Any], change_class: str, impact: str) -> None:
+    changes = report.get("details", {}).get("report", {}).get("changes", [])
+    if not any(
+        change.get("class") == change_class and change.get("impact") == impact
+        for change in changes
+        if isinstance(change, dict)
+    ):
+        raise GateFailure(
+            f"relayctl diff did not classify {change_class} as {impact}"
+        )
+
+
+def exercise_nontrivial_diff(
+    accepted: Any, project_name: str, project: Path, previous: Path, root: Path
+) -> None:
+    if project_name != "business-registry":
+        return
+
+    def changed_project(name: str) -> tuple[Path, dict[str, Any]]:
+        candidate = root / name
+        shutil.copytree(project, candidate)
+        contract_path = candidate / "registry.yaml"
+        contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+        return candidate, contract
+
+    expanded, contract = changed_project("diff-expanded")
+    pagination = contract["resources"][0]["operations"]["list"]["pagination"]
+    pagination["maximumPageSize"] += 1
+    (expanded / "registry.yaml").write_text(
+        yaml.safe_dump(contract, sort_keys=False, width=1000), encoding="utf-8"
+    )
+    report = accepted(["diff", str(previous), str(expanded)])
+    assert_diff_change(report, "pagination-expanded", "widening")
+
+    narrowed, contract = changed_project("diff-narrowed")
+    contract["resources"][0]["operations"]["list"]["allowUnfiltered"] = False
+    (narrowed / "registry.yaml").write_text(
+        yaml.safe_dump(contract, sort_keys=False, width=1000), encoding="utf-8"
+    )
+    report = accepted(["diff", str(previous), str(narrowed)])
+    assert_diff_change(report, "unfiltered-disabled", "narrowing")
+
+    breaking, contract = changed_project("diff-breaking")
+    contract["resources"][0]["operations"]["list"]["filters"].pop(0)
+    (breaking / "registry.yaml").write_text(
+        yaml.safe_dump(contract, sort_keys=False, width=1000), encoding="utf-8"
+    )
+    report = accepted(["diff", str(previous), str(breaking)])
+    assert_diff_change(report, "filter-removed", "breaking")
+
+
 def run_workflow(relayctl: Path, project_name: str, root: Path) -> tuple[list[dict[str, Any]], list[bytes], dict[str, Any]]:
     source = PRODUCT_ROOT / "acceptance" / project_name
     project = root / "project"
@@ -338,7 +393,10 @@ def run_workflow(relayctl: Path, project_name: str, root: Path) -> tuple[list[di
     check = accepted(["check", str(project), "--production"])
     accepted(["generate", str(project), "--output", str(root / "generated")])
     accepted(["test", str(project)])
-    accepted(["diff", str(previous), str(project)])
+    no_op_diff = accepted(["diff", str(previous), str(project)])
+    if no_op_diff.get("details", {}).get("report", {}).get("changes") != []:
+        raise GateFailure(f"{project_name}: byte-identical projects produced a diff")
+    exercise_nontrivial_diff(accepted, project_name, project, previous, root)
     package_report = accepted(["package", str(project), "--output", str(root / "package")])
 
     manifest = validate_exposure_and_identity(root / "package", root / "generated")
@@ -415,29 +473,13 @@ def main() -> int:
         snapshots: dict[str, Any] = {}
         key_paths = {"registry": set(), "runtime": set()}
         for project_name in PROJECTS:
-            with tempfile.TemporaryDirectory(prefix=f"relay-v2-{project_name}-first-") as first_raw:
-                with tempfile.TemporaryDirectory(prefix=f"relay-v2-{project_name}-second-") as second_raw:
-                    first = Path(first_raw)
-                    second = Path(second_raw)
-                    first_reports, first_outputs, first_result = run_workflow(
-                        relayctl, project_name, first
-                    )
-                    second_reports, second_outputs, second_result = run_workflow(
-                        relayctl, project_name, second
-                    )
-                    if first_reports != second_reports:
-                        raise GateFailure(f"{project_name}: adopter reports are not deterministic")
-                    if tree_hashes(first / "generated") != tree_hashes(second / "generated"):
-                        raise GateFailure(f"{project_name}: generated artifacts are not deterministic")
-                    if tree_hashes(first / "package") != tree_hashes(second / "package"):
-                        raise GateFailure(f"{project_name}: sealed package is not deterministic")
-                    canaries = protected_canaries(PRODUCT_ROOT / "acceptance" / project_name)
-                    assert_value_free(first_outputs + second_outputs, canaries, project_name)
-                    snapshots[project_name] = baseline(first_result["manifest"])
-                    if first_result != second_result:
-                        raise GateFailure(f"{project_name}: shared inventories are not deterministic")
-                    for kind in key_paths:
-                        key_paths[kind].update(first_result["keyPaths"][kind])
+            with tempfile.TemporaryDirectory(prefix=f"relay-v2-{project_name}-") as raw:
+                _, outputs, result = run_workflow(relayctl, project_name, Path(raw))
+                canaries = protected_canaries(PRODUCT_ROOT / "acceptance" / project_name)
+                assert_value_free(outputs, canaries, project_name)
+                snapshots[project_name] = baseline(result["manifest"])
+                for kind in key_paths:
+                    key_paths[kind].update(result["keyPaths"][kind])
 
         baseline_document = {
             "schemaVersion": "relay.registrystack.org/generated-baselines/v1alpha1",

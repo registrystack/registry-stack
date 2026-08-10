@@ -21,7 +21,7 @@ The concise promise is:
 
 > Give Relay an authoritative SQLite database and a registry contract. Relay produces a protected registry API whose meaning, disclosure, authorization, provenance, and documentation agree by construction.
 
-Relay V2 follows the method that made Evidence tractable: a narrow product boundary, startup-compiled trusted artifacts, deterministic runtime behavior, explicit security invariants, coequal acceptance fixtures, and generated contracts checked for drift.
+Relay V2 follows the method that made Evidence tractable: a narrow product boundary, sealed compiler-produced artifacts, deterministic runtime behavior, explicit security invariants, coequal acceptance fixtures, and generated contracts checked for drift.
 
 ## What the product accepts and produces
 
@@ -85,8 +85,9 @@ technical operator.
 
 A Relay resource is a governed Record type or collection within that Registry,
 not a table and not a second Registry. It has a stable identity, semantic class,
-identifier strategy, declared properties, a reviewed source view, an enumeration
-posture, a disclosure profile, and an access rule.
+identifier strategy, declared properties, a reviewed source view, compiled
+operations, disclosure profiles, and access rules. Its enumeration posture is
+derived from those compiled operations rather than authored separately.
 
 The source schema and public schema are deliberately separate. One table may support several resources, several tables may feed one reviewed view, and unconfigured database objects remain invisible.
 
@@ -359,12 +360,13 @@ naturally idempotent bounded consultation and returns at most one Record.
 
 Lists use `pageSize`, `cursor`, and the envelope
 `{items, pageInfo: {nextCursor}, meta}`. `nextCursor` is nullable. Ordering is
-contract-defined with the Record identifier as a unique tie-breaker. The opaque
-authenticated cursor binds the contract and source revisions, operation,
-selected representation and disclosure profile, transform inventory, filters,
+contract-defined with the Record identifier as a unique tie-breaker. The
+client-opaque authenticated-encrypted cursor binds the contract and source
+revisions, operation, selected representation and disclosure profile, filters,
 order, selected fields, authorization context, and expiry. Every page is
-reauthorized. Callers cannot choose an order or replay a cursor across
-representations.
+reauthorized. Encryption prevents its filter and keyset-order state from
+bypassing field minimization. Callers treat it as an uninterpreted continuation
+token and cannot choose an order or replay a cursor across representations.
 
 Single-record reads and resolved lookups use `{data, meta}`. `data` contains
 the Registry Core context and `domainData`. `fields` is a documented Relay
@@ -410,19 +412,26 @@ does not adopt draft GovStack BB codes or problem namespaces. V2 accepts W3C
 Trace Context; every Problem `traceId` is the effective valid or server-created
 trace ID as 32 lowercase hexadecimal characters. Caller-supplied `tracestate`
 is never propagated because Relay cannot establish that vendor state is
-value-free. Unknown,
-hidden, ambiguous, and unsafe lookup outcomes use the same `404` status,
-problem code, fixed detail, schema, cache and security headers, differing only
-in independently generated trace correlation. Problems never echo selectors,
-identifiers, source values, SQL, paths, tokens, or policy internals.
+value-free. Unknown, hidden, and ambiguous lookup outcomes use the same `404`
+status, problem code, fixed detail, schema, cache and security headers,
+differing only in independently generated trace correlation. A selected
+malformed source Record fails closed as `503 source.unavailable`. Problems
+never echo selectors, identifiers, source values, SQL, paths, tokens, or policy
+internals.
 
-### Explicit enumeration posture
+### Derived enumeration posture
 
-Every resource declares one orthogonal enumeration posture:
+Every resource has one enumeration posture derived from its compiled list
+operation:
 
 - `public` requires a public list operation;
 - `protected` requires a scope-protected list operation;
 - `none` forbids a list operation.
+
+The compiler validates these operation combinations. Discovery reports the
+posture visible to the current caller, so a protected list appears as `none` to
+a caller who cannot see that capability. This caller-relative view does not
+change the resource's compiled maximum or create an additional policy input.
 
 Read and named exact-lookup operations are declared independently with their
 own access rules and disclosure profiles. This lets a resource expose protected
@@ -492,9 +501,18 @@ Operator-only artifacts stay in the sealed package and CLI and are never
 mounted. Semantic transparency must not accidentally publish sensitive schema,
 selector, classification, or processing details.
 
-Exact lookup returns a stable unresolved outcome for no match, ambiguous match, a record hidden by policy, or a source record that cannot safely be disclosed. Syntactically invalid requests receive a bounded public error without echoing values. Relay never skips, coerces, or partially releases an invalid selected source record to keep a response successful.
+Exact lookup returns a stable unresolved outcome for no match, ambiguous match,
+or a Record hidden by policy. A selected malformed source Record fails as
+`source.unavailable`. Syntactically invalid requests receive a bounded public
+error without echoing values. Relay never skips, coerces, or partially releases
+an invalid selected source Record to keep a response successful.
 
-A complete contract revision is compiled, validated, and activated atomically at startup. Relay never mixes revisions, falls back to a previous interpretation silently, or hot-reloads a partially valid contract.
+`relayctl package` compiles and validates a complete contract revision and seals
+the compiled Registry plus every artifact digest. Startup verifies that closed
+package, recompiles the captured inputs to require exact equality with the
+packaged runtime plan, and activates the packaged artifacts without regenerating
+them. Relay never mixes revisions, falls back to a previous interpretation
+silently, or hot-reloads a partially valid contract.
 
 ### SQLite source profiles
 
@@ -657,7 +675,7 @@ Relay keeps its product semantics:
 
 Other Evidence work should be reused as method before it is reused as code:
 
-- atomic startup capture and compilation;
+- atomic sealed-package verification and activation;
 - closed artifact sets and deterministic revisions;
 - value-free adopter diagnostics;
 - fixed public problem classes;
@@ -679,8 +697,8 @@ The first coherent Relay V2 release should contain:
 4. generated Consultation capability discovery and a concise Digital Registries alignment note;
 5. generated local semantics, JSON-LD, JSON Schema, SHACL, full packaged OpenAPI, and safe public OpenAPI;
 6. property classification with provenance and the `public`, `internal`, `confidential`, and `restricted` handling levels;
-7. explicit public, protected, or absent enumeration with independently compiled list, read, and named-lookup operations;
-8. `pageSize` and opaque-cursor lists, direct predefined equality filters, and safe caller selection of fewer properties than the operation profile;
+7. derived public, protected, or absent enumeration with independently compiled list, read, and named-lookup operations;
+8. `pageSize` and client-opaque integrity-protected cursor lists, direct predefined equality filters, and safe caller selection of fewer properties than the operation profile;
 9. strict OAuth JWT access-token verification, operation scopes, trusted purpose, optional authority row binding, and an optional conforming Mint issuer;
 10. snapshot and live read-only SQLite profiles, including useful unversioned live read and lookup deployments;
 11. deterministic disclosure plans, bounded queries, stable `404` lookup outcomes, atomic activation, and Registry Stack problems;

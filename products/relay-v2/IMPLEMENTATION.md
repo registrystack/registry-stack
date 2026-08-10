@@ -130,6 +130,7 @@ with:
 relay-package.json
 registry.yaml
 governed/...
+compiled/registry.json
 generated/openapi.full.yaml
 generated/openapi.public.json
 generated/artifacts/...
@@ -137,8 +138,10 @@ generated/artifacts/...
 
 `relay-package.json` is canonical JSON containing `packageVersion`,
 `packageRevision`, `contractRevision`, the expected SQLite schema fingerprint,
-the generated-artifact inventory, and for every relative regular file its path,
-size, SHA-256 digest, media type, visibility, and generated/authored status.
+the generated-artifact inventory and operation bindings, and for every relative
+regular file its path, size, SHA-256 digest, media type, visibility, and
+generated/authored status. `compiled/registry.json` is the canonical compiled
+runtime plan produced by the shared compiler.
 References cannot escape the directory and symlinks are rejected. The runtime
 file, sealed package tree, and their ancestry must be owned by root or the
 Relay service user and must not be writable by another account; only a
@@ -151,9 +154,13 @@ authoring project or loose contract file.
 
 The complete governed file closure is captured into memory with file count,
 size, path, symlink, and permission bounds before parsing. Canonical typed
-inputs produce `contractRevision`. Compilation is atomic and startup-only.
-There is no hot reload, partial activation, overlay, fallback, or remote
-vocabulary fetch.
+inputs produce `contractRevision`. Compilation and artifact generation are
+atomic packaging operations. Startup verifies canonical compiled bytes, source
+schema bindings, governed-file and artifact digests, and operation-artifact
+bindings. It recompiles the captured inputs solely to require exact equality
+with the packaged runtime plan, then activates the packaged artifacts without
+regenerating them. There is no hot reload, partial activation, overlay,
+fallback, or remote vocabulary fetch.
 
 Registry Manifest projection is deferred portability tooling. Source columns,
 access rules, scopes, disclosure, classifications, processing constraints, and
@@ -380,10 +387,11 @@ only, non-personal, unique, and cannot be named `pageSize`, `cursor`, or
 explicitly declares whether the empty subset is allowed with `allowUnfiltered`.
 `pageSize` is bounded by the operation default and maximum. Ordering is fixed
 with `recordIdentifier` as the unique tie-breaker.
-The opaque authenticated cursor binds contract and source revisions, operation,
+The client-opaque authenticated-encrypted cursor binds contract and source revisions, operation,
 filters, order, fields, authorization-relevant context, and expiry. Every page
-is reauthorized. A caller cannot sort, name a source column, add an operator, or
-traverse an uncompiled page.
+is reauthorized. Authenticated encryption prevents filters and keyset-order
+values from bypassing field minimization. A caller cannot sort, name a source
+column, add an operator, or traverse an uncompiled page.
 
 The first page accepts `pageSize`, `fields`, and declared filters. A
 continuation request supplies exactly one `cursor` parameter and
@@ -438,12 +446,14 @@ is exactly the effective W3C trace ID as 32 lowercase hexadecimal characters.
 Caller-supplied `tracestate` is never propagated because Relay cannot establish
 that vendor state is value-free. Audit and server logs use the same trace ID.
 
-No match, ambiguity, policy-hidden record, unknown or protected identifier, and
-invalid selected source row return the same `404` problem and headers. Only
-independently generated trace correlation may differ. Malformed requests,
-credentials, insufficient authority, unsupported representation, body size,
-quota, internal failure, source failure, and audit failure use stable separate
-Registry Stack codes without reflecting input values. Problems are `no-store`.
+No match, ambiguity, policy-hidden record, and unknown or protected identifier
+return the same `404` problem and headers. Only independently generated trace
+correlation may differ. An invalid selected source row is an authoritative
+source failure and returns the value-free `503 source.unavailable` problem.
+Malformed requests, credentials, insufficient authority, unsupported
+representation, body size, quota, internal failure, source failure, and audit
+failure use stable separate Registry Stack codes without reflecting input
+values. Problems are `no-store`.
 `401` includes `WWW-Authenticate`; Relay-owned `429` includes a coarse
 `Retry-After`. Version one does not freeze a successful-response `RateLimit`
 header contract.
@@ -471,10 +481,11 @@ error array is emitted.
 | Malformed, expired, stale, or differently bound cursor | 400 | `query.cursor_invalid` | `cursor is invalid for this query` |
 | Missing credential on a protected operation | 401 | `auth.missing_credential` | `a bearer access token is required` |
 | Invalid credential | 401 | `auth.invalid_credential` | `bearer access token validation failed` |
-| Insufficient scope, purpose, or row authority | 403 | `consultation.denied` | `the consultation is not permitted` |
+| Valid credential without the operation scope | 404 | `resource.not_found` | `the requested resource was not found` |
+| Insufficient purpose or row authority after scope selection | 403 | `consultation.denied` | `the consultation is not permitted` |
 | Unknown or visibility-hidden resource or artifact | 404 | `resource.not_found` | `the requested resource was not found` |
 | Unknown or unavailable requested representation | 404 | `representation.not_found` | `the requested representation was not found` |
-| Unknown, hidden, ambiguous, or unsafe Record outcome | 404 | `consultation.unresolved` | `the requested record was not resolved` |
+| Unknown, hidden, ambiguous, or policy-hidden Record outcome | 404 | `consultation.unresolved` | `the requested record was not resolved` |
 | Unsupported response `Accept` | 406 | `representation.unsupported` | `the requested representation is not supported` |
 | Request body too large | 413 | `internal.payload_too_large` | `request body exceeds the configured limit` |
 | Request URI too long | 414 | `internal.uri_too_long` | `request URI exceeds the configured limit` |
@@ -696,8 +707,8 @@ contract and generic source/gate inventory may prepare that work without
 claiming a historic release published Relay V2. This is a release ownership
 boundary, not unfinished runtime behavior.
 
-Gate: the runtime acceptance revision passes its focused source, image-contract,
-and gate-inventory checks. The owning future release train runs release
+Gate: the runtime acceptance revision passes its focused source and
+gate-inventory checks. The owning future release train runs release
 validation, source-model, reproducibility, SBOM, and provenance checks when it
 publishes the artifacts.
 

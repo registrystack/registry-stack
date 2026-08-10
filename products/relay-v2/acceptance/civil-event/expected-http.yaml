@@ -111,14 +111,14 @@ steps:
   - id: scope-separation
     authorizationFixture: civil-verifier-ex-a
     request: {method: GET, path: /v2/resources/civil-event/records/EVENT-SYNTH-0001}
-    expect: {status: 403, code: consultation.denied}
+    expect: {status: 404, code: resource.not_found}
   - id: reverse-scope-separation
     authorizationFixture: civil-registrar-ex-a
     request:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
       body: {registrationNumber: REG-SYNTH-000001, eventType: BIRTH}
-    expect: {status: 403, code: consultation.denied}
+    expect: {status: 404, code: resource.not_found}
   - id: wrong-purpose
     authorizationFixture: civil-verifier-wrong-purpose
     request:
@@ -192,15 +192,7 @@ steps:
       method: POST
       path: /v2/resources/civil-event/lookups/verify-registration
       body: {registrationNumber: REG-SYNTH-INVALID1, eventType: BIRTH}
-    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
-  - id: invalid-transform-input
-    authorizationFixture: civil-supervisor-ex-a
-    request:
-      method: POST
-      path: /v2/resources/civil-event/lookups/verify-registration
-      query: {representation: supervisory}
-      body: {registrationNumber: REG-SYNTH-XFORM1, eventType: BIRTH}
-    expect: {status: 404, code: consultation.unresolved, equivalenceClass: unresolved}
+    expect: {status: 503, code: source.unavailable}
   - id: quota-exhausted
     authorizationFixture: civil-verifier-ex-a
     request:

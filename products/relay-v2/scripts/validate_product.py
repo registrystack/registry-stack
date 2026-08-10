@@ -29,6 +29,30 @@ INVALID_SOURCE_ROW_CLASSES = {
     "unexpected-value",
     "excessive-size",
 }
+SECURITY_INVARIANT_IDS = {
+    "sec-contract-runtime-separation",
+    "sec-package-activation-integrity",
+    "sec-one-registry-boundary",
+    "sec-sqlite-read-only",
+    "sec-sqlite-connection-recovery",
+    "sec-token-profile-closed",
+    "sec-resource-existence-concealment",
+    "sec-operation-confinement",
+    "sec-operation-quota",
+    "sec-trusted-context",
+    "sec-disclosure-monotonic",
+    "sec-lookup-non-enumeration",
+    "sec-malformed-row-atomicity",
+    "sec-reference-visibility",
+    "sec-audit-release-gate",
+    "sec-audit-correlation-and-minimization",
+    "sec-cursor-integrity",
+    "sec-source-truthfulness",
+    "sec-value-free-diagnostics",
+    "sec-value-free-operational-logs",
+    "sec-value-free-trace-context",
+    "sec-unsigned-family-boundary",
+}
 SIMPLE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 RUST_TEST = re.compile(
@@ -93,8 +117,8 @@ def executable_test_resolves(reference: Any, label: str, errors: list[str]) -> N
         errors.append(f"{label}: exact executable test does not resolve: {raw_path}::{name}")
 
 
-def journey_steps(errors: list[str]) -> dict[str, set[str]]:
-    result: dict[str, set[str]] = {}
+def journey_steps(errors: list[str]) -> dict[str, dict[str, tuple[Any, Any]]]:
+    result: dict[str, dict[str, tuple[Any, Any]]] = {}
     for project_name in PROJECTS:
         project = PRODUCT_ROOT / "acceptance" / project_name
         for required in (
@@ -110,7 +134,7 @@ def journey_steps(errors: list[str]) -> dict[str, set[str]]:
         authorizations = mapping(
             journey.get("authorizations"), f"{project_name} journey authorizations", errors
         )
-        identifiers: set[str] = set()
+        identifiers: dict[str, tuple[Any, Any]] = {}
         for index, raw in enumerate(
             sequence(journey.get("steps"), f"{project_name} journey steps", errors)
         ):
@@ -119,7 +143,10 @@ def journey_steps(errors: list[str]) -> dict[str, set[str]]:
             if not isinstance(identifier, str) or not identifier or identifier in identifiers:
                 errors.append(f"{project_name}: journey step ids must be unique and non-empty")
                 continue
-            identifiers.add(identifier)
+            expectation = mapping(
+                step.get("expect"), f"{project_name} journey step[{index}].expect", errors
+            )
+            identifiers[identifier] = (expectation.get("status"), expectation.get("code"))
             authorization = step.get("authorizationFixture")
             if authorization is not None and authorization not in authorizations:
                 errors.append(
@@ -372,7 +399,7 @@ def validate_catalogs(errors: list[str]) -> None:
         scenario = mapping(raw, f"scenario[{index}]", errors)
         expected_keys = {"id", "project", "journeyStep", "assertion"}
         if "invalidSourceRowClass" in scenario:
-            expected_keys.add("invalidSourceRowClass")
+            expected_keys.update({"invalidSourceRowClass", "expectedStatus", "expectedCode"})
         require_exact_keys(scenario, expected_keys, f"scenario[{index}]", errors)
         identifier = scenario.get("id")
         project = scenario.get("project")
@@ -381,7 +408,7 @@ def validate_catalogs(errors: list[str]) -> None:
             errors.append(f"scenario[{index}]: id must be unique and non-empty")
         else:
             scenario_ids.add(identifier)
-        if project not in steps or step not in steps.get(project, set()):
+        if project not in steps or step not in steps.get(project, {}):
             errors.append(f"scenario[{index}]: does not resolve to an exact journey step")
         elif isinstance(step, str):
             covered[project].add(step)
@@ -391,8 +418,24 @@ def validate_catalogs(errors: list[str]) -> None:
                 errors.append(f"scenario[{index}]: unknown invalid source-row class")
             elif project in invalid_classes:
                 invalid_classes[project].add(invalid_class)
+            if (
+                scenario.get("expectedStatus") != 503
+                or scenario.get("expectedCode") != "source.unavailable"
+            ):
+                errors.append(
+                    f"scenario[{index}]: an invalid source row must expect 503 source.unavailable"
+                )
+            if project in steps and isinstance(step, str):
+                journey_status, journey_code = steps[project].get(step, (None, None))
+                if (
+                    scenario.get("expectedStatus"),
+                    scenario.get("expectedCode"),
+                ) != (journey_status, journey_code):
+                    errors.append(
+                        f"scenario[{index}]: invalid source-row expectation disagrees with the journey"
+                    )
     for project in PROJECTS:
-        if covered[project] != steps[project]:
+        if covered[project] != set(steps[project]):
             errors.append(f"scenario matrix: {project} journey coverage is not exact")
         if not invalid_classes[project]:
             errors.append(f"{project}: at least one invalid source-row refusal is required")
@@ -408,6 +451,16 @@ def validate_catalogs(errors: list[str]) -> None:
         "security invariant matrix",
         errors,
     )
+    require_exact_keys(
+        matrix,
+        {"schemaVersion", "product", "status", "invariants"},
+        "security invariant matrix",
+        errors,
+    )
+    if matrix.get("schemaVersion") != "relay.registrystack.org/security-invariants/v1alpha1":
+        errors.append("security invariant matrix: schemaVersion is not supported")
+    if matrix.get("product") != "relay-v2" or matrix.get("status") != "enforced":
+        errors.append("security invariant matrix: product and enforced status are fixed")
     invariant_ids: set[str] = set()
     for index, raw in enumerate(
         sequence(matrix.get("invariants"), "security invariants", errors)
@@ -419,9 +472,9 @@ def validate_catalogs(errors: list[str]) -> None:
                 "id",
                 "threat",
                 "enforcementPoint",
-                "negativeCase",
                 "expected",
                 "evidence",
+                "negativeTest",
                 "tests",
             },
             f"security invariant[{index}]",
@@ -432,17 +485,35 @@ def validate_catalogs(errors: list[str]) -> None:
             errors.append(f"security invariant[{index}]: id must be unique and non-empty")
         else:
             invariant_ids.add(identifier)
+        for field in ("threat", "enforcementPoint", "expected", "evidence"):
+            value = invariant.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(
+                    f"security invariant[{index}].{field}: a non-empty value is required"
+                )
         tests = sequence(invariant.get("tests"), f"security invariant[{index}].tests", errors)
         if not tests:
             errors.append(f"security invariant[{index}]: exact executable tests are required")
+        test_names: set[str] = set()
         for test_index, test in enumerate(tests):
             executable_test_resolves(
                 test, f"security invariant[{index}].tests[{test_index}]", errors
             )
+            if isinstance(test, dict) and isinstance(test.get("name"), str):
+                test_names.add(test["name"])
+        negative_test = invariant.get("negativeTest")
+        if (
+            not isinstance(negative_test, str)
+            or not SIMPLE_IDENTIFIER.fullmatch(negative_test)
+            or negative_test not in test_names
+        ):
+            errors.append(
+                f"security invariant[{index}].negativeTest: must select one exact listed negative test"
+            )
         if any(str(value).strip().lower() in {"todo", "tbd"} for value in invariant.values()):
             errors.append(f"security invariant[{index}]: placeholder value is prohibited")
-    if len(invariant_ids) < 10:
-        errors.append("security invariant matrix: expected at least ten concrete invariants")
+    if invariant_ids != SECURITY_INVARIANT_IDS:
+        errors.append("security invariant matrix: the closed invariant inventory is incomplete")
 
     baselines = mapping(
         load_yaml(PRODUCT_ROOT / "contracts/generated-baselines.yaml"),

@@ -8,7 +8,8 @@ forbidden='social[-_ ]?assistance|business[-_ ]?registry|civil[-_ ]?event|crvs|b
 
 if rg -i -l "$forbidden" \
   "$PRODUCT_DIR/../../crates/registry-relay-v2/src" \
-  "$PRODUCT_DIR/../../crates/registry-relayctl/src" >/dev/null; then
+  "$PRODUCT_DIR/../../crates/registry-relayctl/src" \
+  "$PRODUCT_DIR/../../crates/registry-platform-sqlite/src" >/dev/null; then
   echo "relay-v2 source-neutrality: acceptance-domain term in Relay V2 production source" >&2
   exit 1
 fi

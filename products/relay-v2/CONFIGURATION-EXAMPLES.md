@@ -15,7 +15,7 @@ portability tooling, not a Version one runtime input.
 
 The intended boundaries are firmer than the syntax:
 
-- `RegistryContract` is governed, versioned, compiled at startup, and cannot be overridden by runtime configuration;
+- `RegistryContract` is governed, versioned, compiled and sealed by `relayctl package`, verified at startup, and cannot be overridden by runtime configuration;
 - `RelayRuntime` binds deployment-local paths, listeners, token issuers, and audit storage without changing resources, operations, disclosure, or semantics;
 - SQLite views and columns are source bindings, while resources and properties are the public model;
 - one contract describes one Registry; each resource is a Record type within it;
@@ -274,7 +274,8 @@ What this example must prove:
 - selectors and the hidden `service_area_code` never become public properties;
 - selecting `enrolmentStatus,validThrough` returns less than the authorized default without changing authorization;
 - a useful local vocabulary, JSON-LD context, JSON Schema, and SHACL starter are generated without any external vocabulary mapping;
-- no match, ambiguity, a hidden row, and an invalid source record return the same `404` problem except for trace correlation;
+- no match, ambiguity, and a hidden row return the same `404` problem except for trace
+  correlation, while an invalid selected source Record fails closed as `503 source.unavailable`;
 - mandatory Registry Core context remains present and capability discovery derives only constrained `consultation.search`.
 
 ## Example 2: public business registry
@@ -466,7 +467,7 @@ What this example must prove:
 
 - public means explicitly compiled public access, not absence of a global authentication setting;
 - filters appear as direct camelCase parameters such as `status=ACTIVE`, and accept only the named property, datatype, codelist, and exact-equality operator;
-- pagination uses `pageSize`, an opaque `cursor`, and `items` with nullable `pageInfo.nextCursor`, while publisher-declared stable ordering prevents arbitrary sorting;
+- pagination uses `pageSize`, a client-opaque authenticated-encrypted `cursor`, and `items` with nullable `pageInfo.nextCursor`, while publisher-declared stable ordering prevents arbitrary sorting; encryption prevents filter and keyset-order values from bypassing field minimization;
 - a requested subset such as `registrationNumber,legalName,registrationStatus` has its own correct ETag and JSON-LD representation;
 - the captured snapshot digest and schema fingerprint make responses reproducible and strongly cacheable by revision;
 - capability discovery derives `consultation.list` and `consultation.retrieve` and no other family pattern.

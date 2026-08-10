@@ -144,7 +144,7 @@ resources:
             maximumBytes: 384
             selectors:
               registrationNumber: {sourceColumn: registration_number, type: string, minimumBytes: 12, maximumBytes: 96}
-              eventType: {sourceColumn: event_type, type: controlled-code, codelist: codelists/civil-event-types.yaml}
+              eventType: {sourceColumn: event_type, type: controlled-code, codelist: codelists/civil-event-selector-types.yaml}
           defaultRepresentation: registrar-verification
           representations:
             registrar-verification:
