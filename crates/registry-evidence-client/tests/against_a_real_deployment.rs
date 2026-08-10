@@ -79,6 +79,13 @@ const ES256_CLIENT_KEY_ID: &str = "client-suite-client-key-es256";
 /// refresh margin case needs a margin wider than a whole credential's life.
 const ISSUED_TOKEN_LIFETIME_SECONDS: i64 = 60;
 
+/// Serialize the narrow handoff from a held ephemeral port to a real service.
+///
+/// The services under test have to know their configured port before binding it.
+/// Without this guard, another parallel case in this test binary can reserve the
+/// just-released port before the spawned service reaches `bind`.
+static LOOPBACK_PORT_HANDOFF: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Prefix the runtime gives every published subject binding.
 const BINDING_PREFIX: &str = "urn:evidence:subject:v1_";
 
@@ -1040,6 +1047,7 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
     );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let served = Arc::clone(&runtime);
+    let port_handoff = LOOPBACK_PORT_HANDOFF.lock().await;
     drop(reservation);
     let server = tokio::spawn(async move {
         server::serve(served, async {
@@ -1069,6 +1077,7 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
         &deployment.server,
     )
     .await;
+    drop(port_handoff);
     deployment
 }
 
@@ -1302,6 +1311,7 @@ clients:
             .expect("the staged issuer loads"),
     );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let port_handoff = LOOPBACK_PORT_HANDOFF.lock().await;
     drop(reservation);
     let server = tokio::spawn(async move {
         mint_server::serve(service, async {
@@ -1326,6 +1336,7 @@ clients:
         &issuer.server,
     )
     .await;
+    drop(port_handoff);
     issuer
 }
 
