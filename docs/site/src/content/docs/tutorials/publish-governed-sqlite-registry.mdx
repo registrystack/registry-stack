@@ -262,7 +262,8 @@ bounded bbox query. Replay its JSON-FG fixture:
 relayctl test "$project" --fixture premises-feature-collection-jsonfg
 ```
 
-The report contains one successful step:
+The report first runs `premises-first-page`, the declared record-equivalence prerequisite, then the
+selected JSON-FG step. Both pass. The selected step is:
 
 ```json
 {
