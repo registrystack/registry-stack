@@ -92,6 +92,7 @@ base64 = { version = "0.22" }
 bytes = { version = "1" }
 calamine = { version = "0.36" }
 cel = { version = "0.13" }
+chacha20poly1305 = { version = "0.10" }
 chrono = { version = "0.4" }
 chrono-tz = { version = "0.10.4" }
 clap = { version = "4", features = ["derive", "env"] }

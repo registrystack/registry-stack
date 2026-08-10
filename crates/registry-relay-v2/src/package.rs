@@ -10,14 +10,20 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::artifacts::{generate_artifacts, ArtifactSet, GeneratedArtifact};
-use crate::compiler::{compile_contract_with_governed_files, GovernedFileSet};
+use crate::artifacts::{ArtifactSet, GeneratedArtifact, OperationArtifactBindings};
+use crate::compiler::{
+    compile_contract_with_governed_files, referenced_governed_files, GovernedFileSet,
+};
 use crate::contract::{RegistryContract, Visibility};
 use crate::model::{
     CompileProfile, CompiledClassificationReview, CompiledRegistry, ObservedSourceSchema,
 };
 
-const PACKAGE_VERSION: &str = "relay.registrystack.org/package/v1alpha1";
+#[cfg(test)]
+use crate::artifacts::generate_artifacts;
+
+const PACKAGE_VERSION: &str = "relay.registrystack.org/package/v1alpha2";
+const COMPILED_REGISTRY_PATH: &str = "compiled/registry.json";
 const MAX_AUTHORED_FILES: usize = 256;
 const MAX_AUTHORED_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_PACKAGE_FILES: usize = 1_024;
@@ -33,6 +39,7 @@ pub struct PackageManifest {
     pub source_schema_fingerprints: BTreeMap<String, String>,
     pub source_schemas: BTreeMap<String, ObservedSourceSchema>,
     pub artifacts: Vec<PackageArtifact>,
+    pub operation_artifact_bindings: Vec<OperationArtifactBindings>,
     pub files: Vec<PackageFile>,
 }
 
@@ -102,8 +109,16 @@ pub fn build_package(
         contract,
         compiled.classification_review.as_ref(),
     )?;
-    let mut files = Vec::new();
     let registry_bytes = read_regular(&project_root.join("registry.yaml"))?;
+    let packaged_contract = RegistryContract::parse_yaml(
+        std::str::from_utf8(&registry_bytes).map_err(|_| PackageError::Verification)?,
+    )
+    .map_err(|_| PackageError::Verification)?;
+    if packaged_contract != *contract {
+        return Err(PackageError::Verification);
+    }
+    validate_build_inputs(contract, compiled, artifacts, &authored)?;
+    let mut files = Vec::new();
     files.push(file_entry(
         "registry.yaml",
         &registry_bytes,
@@ -120,6 +135,17 @@ pub fn build_package(
             false,
         ));
     }
+    let compiled_bytes = canonicalize_json(
+        &serde_json::to_value(compiled).map_err(|_| PackageError::CanonicalJson)?,
+    )
+    .map_err(|_| PackageError::CanonicalJson)?;
+    files.push(file_entry(
+        COMPILED_REGISTRY_PATH,
+        &compiled_bytes,
+        "application/json",
+        Visibility::OperatorOnly,
+        true,
+    ));
     for artifact in &artifacts.artifacts {
         files.push(file_entry(
             &format!("generated/{}", artifact.path),
@@ -171,6 +197,7 @@ pub fn build_package(
         source_schema_fingerprints: &source_schema_fingerprints,
         source_schemas: &source_schemas,
         artifacts: &packaged_artifacts,
+        operation_artifact_bindings: &artifacts.operation_bindings,
         files: &files,
     };
     let manifest_value = serde_json::to_value(unsigned).map_err(|_| PackageError::CanonicalJson)?;
@@ -184,6 +211,7 @@ pub fn build_package(
         source_schema_fingerprints,
         source_schemas,
         artifacts: packaged_artifacts,
+        operation_artifact_bindings: artifacts.operation_bindings.clone(),
         files,
     };
     let final_manifest = canonicalize_json(
@@ -197,6 +225,7 @@ pub fn build_package(
         for (relative, content) in &authored {
             write_new_file(&output_dir.join("governed").join(relative), content)?;
         }
+        write_new_file(&output_dir.join(COMPILED_REGISTRY_PATH), &compiled_bytes)?;
         for artifact in &artifacts.artifacts {
             write_generated(output_dir, artifact)?;
         }
@@ -210,6 +239,80 @@ pub fn build_package(
     }
     harden_package_permissions(output_dir)?;
     Ok(manifest)
+}
+
+fn validate_build_inputs(
+    contract: &RegistryContract,
+    compiled: &CompiledRegistry,
+    artifacts: &ArtifactSet,
+    governed: &GovernedFileSet,
+) -> Result<(), PackageError> {
+    if artifacts.contract_revision != compiled.contract_revision
+        || compiled.contract_id != contract.metadata.id
+        || compiled.contract_version != contract.metadata.version
+        || compiled.registry_identifier != contract.registry.registry_identifier
+    {
+        return Err(PackageError::Verification);
+    }
+    let observed = compiled
+        .sources
+        .iter()
+        .map(|source| {
+            source
+                .observed_schema
+                .clone()
+                .ok_or(PackageError::Verification)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    verify_compiled_derivation(contract, compiled, governed, &observed)?;
+    let operation_identifiers = compiled
+        .resources
+        .iter()
+        .flat_map(|resource| resource.operations.iter())
+        .map(|operation| operation.identifier.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut artifact_ids = BTreeSet::new();
+    let mut artifact_paths = BTreeSet::new();
+    for artifact in &artifacts.artifacts {
+        validate_relative(&artifact.path)?;
+        if !artifact_ids.insert(artifact.id.as_str())
+            || !artifact_paths.insert(artifact.path.as_str())
+            || artifact.sha256 != digest(&artifact.content)
+            || artifact
+                .operation_identifier
+                .as_deref()
+                .is_some_and(|identifier| !operation_identifiers.contains(identifier))
+        {
+            return Err(PackageError::Verification);
+        }
+    }
+    if !valid_operation_artifact_bindings(
+        &artifacts.operation_bindings,
+        &operation_identifiers,
+        &artifact_paths,
+    ) {
+        return Err(PackageError::Verification);
+    }
+    Ok(())
+}
+
+fn verify_compiled_derivation(
+    contract: &RegistryContract,
+    compiled: &CompiledRegistry,
+    governed: &GovernedFileSet,
+    observed: &[ObservedSourceSchema],
+) -> Result<(), PackageError> {
+    let reproduced = compile_contract_with_governed_files(
+        contract,
+        observed,
+        CompileProfile::Production,
+        governed,
+    )
+    .map_err(|_| PackageError::Verification)?;
+    if reproduced != *compiled {
+        return Err(PackageError::Verification);
+    }
+    Ok(())
 }
 
 /// Load and verify a sealed package before any listener, issuer, audit sink,
@@ -250,6 +353,7 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
         source_schema_fingerprints: &manifest.source_schema_fingerprints,
         source_schemas: &manifest.source_schemas,
         artifacts: &manifest.artifacts,
+        operation_artifact_bindings: &manifest.operation_artifact_bindings,
         files: &manifest.files,
     };
     let unsigned_bytes = canonicalize_json(
@@ -318,13 +422,6 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
         std::str::from_utf8(contract_bytes).map_err(|_| PackageError::Verification)?;
     let contract =
         RegistryContract::parse_yaml(contract_text).map_err(|_| PackageError::Verification)?;
-    let governed = loaded
-        .iter()
-        .filter_map(|(path, content)| {
-            path.strip_prefix("governed/")
-                .map(|relative| (relative.to_owned(), content.clone()))
-        })
-        .collect::<GovernedFileSet>();
     if manifest.source_schemas.keys().collect::<BTreeSet<_>>()
         != manifest
             .source_schema_fingerprints
@@ -336,19 +433,42 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
     {
         return Err(PackageError::Verification);
     }
-    let observed = manifest
-        .source_schemas
-        .values()
-        .cloned()
+
+    let compiled_entry = manifest
+        .files
+        .iter()
+        .filter(|entry| entry.path == COMPILED_REGISTRY_PATH)
         .collect::<Vec<_>>();
-    let registry = compile_contract_with_governed_files(
-        &contract,
-        &observed,
-        CompileProfile::Production,
-        &governed,
+    if compiled_entry.len() != 1
+        || !compiled_entry[0].generated
+        || compiled_entry[0].visibility != Visibility::OperatorOnly
+        || compiled_entry[0].media_type != "application/json"
+    {
+        return Err(PackageError::Verification);
+    }
+    let compiled_bytes = loaded
+        .get(COMPILED_REGISTRY_PATH)
+        .ok_or(PackageError::Verification)?;
+    let compiled_value: serde_json::Value =
+        serde_json::from_slice(compiled_bytes).map_err(|_| PackageError::Verification)?;
+    if canonicalize_json(&compiled_value).map_err(|_| PackageError::CanonicalJson)?
+        != *compiled_bytes
+    {
+        return Err(PackageError::Verification);
+    }
+    let registry: CompiledRegistry =
+        serde_json::from_value(compiled_value).map_err(|_| PackageError::Verification)?;
+    let reproduced_compiled = canonicalize_json(
+        &serde_json::to_value(&registry).map_err(|_| PackageError::CanonicalJson)?,
     )
-    .map_err(|_| PackageError::Verification)?;
+    .map_err(|_| PackageError::CanonicalJson)?;
+    if reproduced_compiled != *compiled_bytes {
+        return Err(PackageError::Verification);
+    }
     if registry.contract_revision != manifest.contract_revision
+        || registry.contract_id != contract.metadata.id
+        || registry.contract_version != contract.metadata.version
+        || registry.registry_identifier != contract.registry.registry_identifier
         || registry
             .sources
             .iter()
@@ -364,35 +484,109 @@ pub fn load_package(package_path: &Path) -> Result<VerifiedPackage, PackageError
         return Err(PackageError::Verification);
     }
 
-    let regenerated = generate_artifacts(&registry).map_err(|_| PackageError::Verification)?;
-    let expected_artifacts = regenerated
-        .artifacts
+    let governed = loaded
         .iter()
-        .map(|artifact| PackageArtifact {
+        .filter_map(|(path, content)| {
+            path.strip_prefix("governed/")
+                .map(|relative| (relative.to_owned(), content.clone()))
+        })
+        .collect::<GovernedFileSet>();
+    let observed = manifest
+        .source_schemas
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    verify_compiled_derivation(&contract, &registry, &governed, &observed)?;
+
+    let governed_paths = registry
+        .governed_files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let loaded_governed_paths = loaded
+        .keys()
+        .filter_map(|path| path.strip_prefix("governed/"))
+        .collect::<BTreeSet<_>>();
+    if governed_paths != loaded_governed_paths
+        || registry.governed_files.iter().any(|file| {
+            loaded
+                .get(&format!("governed/{}", file.path))
+                .is_none_or(|content| digest(content) != file.sha256)
+        })
+    {
+        return Err(PackageError::Verification);
+    }
+
+    let operation_identifiers = registry
+        .resources
+        .iter()
+        .flat_map(|resource| resource.operations.iter())
+        .map(|operation| operation.identifier.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut artifact_ids = BTreeSet::new();
+    let mut artifact_paths = BTreeSet::new();
+    let mut generated_artifacts = Vec::with_capacity(manifest.artifacts.len());
+    for artifact in &manifest.artifacts {
+        let relative_path = artifact
+            .path
+            .strip_prefix("generated/")
+            .ok_or(PackageError::Verification)?;
+        if relative_path.is_empty()
+            || !artifact_ids.insert(artifact.id.as_str())
+            || !artifact_paths.insert(relative_path)
+            || artifact
+                .operation_identifier
+                .as_deref()
+                .is_some_and(|identifier| !operation_identifiers.contains(identifier))
+        {
+            return Err(PackageError::Verification);
+        }
+        let file_entries = manifest
+            .files
+            .iter()
+            .filter(|entry| entry.path == artifact.path)
+            .collect::<Vec<_>>();
+        if file_entries.len() != 1
+            || !file_entries[0].generated
+            || file_entries[0].media_type != artifact.media_type
+            || file_entries[0].visibility != artifact.visibility
+            || file_entries[0].sha256 != artifact.sha256
+        {
+            return Err(PackageError::Verification);
+        }
+        let content = loaded
+            .get(&artifact.path)
+            .ok_or(PackageError::Verification)?
+            .clone();
+        generated_artifacts.push(GeneratedArtifact {
             id: artifact.id.clone(),
-            path: format!("generated/{}", artifact.path),
+            path: relative_path.to_owned(),
             media_type: artifact.media_type.clone(),
             visibility: artifact.visibility,
             operation_identifier: artifact.operation_identifier.clone(),
             representation_identifier: artifact.representation_identifier.clone(),
             sha256: artifact.sha256.clone(),
-        })
-        .collect::<Vec<_>>();
-    if expected_artifacts != manifest.artifacts {
+            content,
+        });
+    }
+    let loaded_generated_paths = loaded
+        .keys()
+        .filter_map(|path| path.strip_prefix("generated/"))
+        .collect::<BTreeSet<_>>();
+    if artifact_paths != loaded_generated_paths
+        || !valid_operation_artifact_bindings(
+            &manifest.operation_artifact_bindings,
+            &operation_identifiers,
+            &artifact_paths,
+        )
+    {
         return Err(PackageError::Verification);
     }
-    let mut artifacts = regenerated;
-    for artifact in &mut artifacts.artifacts {
-        let packaged_path = format!("generated/{}", artifact.path);
-        let packaged = loaded
-            .get(&packaged_path)
-            .ok_or(PackageError::Verification)?;
-        if packaged != &artifact.content {
-            return Err(PackageError::Verification);
-        }
-        // Retain bytes read from the sealed package after reproducing them.
-        artifact.content.clone_from(packaged);
-    }
+    let artifacts = ArtifactSet {
+        contract_revision: registry.contract_revision.clone(),
+        artifacts: generated_artifacts,
+        operation_bindings: manifest.operation_artifact_bindings.clone(),
+    };
     Ok(VerifiedPackage {
         manifest,
         contract,
@@ -409,7 +603,34 @@ struct UnsignedManifest<'a> {
     source_schema_fingerprints: &'a BTreeMap<String, String>,
     source_schemas: &'a BTreeMap<String, ObservedSourceSchema>,
     artifacts: &'a [PackageArtifact],
+    operation_artifact_bindings: &'a [OperationArtifactBindings],
     files: &'a [PackageFile],
+}
+
+fn valid_operation_artifact_bindings(
+    bindings: &[OperationArtifactBindings],
+    operation_identifiers: &BTreeSet<&str>,
+    artifact_paths: &BTreeSet<&str>,
+) -> bool {
+    let mut bound_operations = BTreeSet::new();
+    for binding in bindings {
+        if !operation_identifiers.contains(binding.operation_identifier.as_str())
+            || !bound_operations.insert(binding.operation_identifier.as_str())
+            || [
+                binding.vocabulary_path.as_str(),
+                binding.context_path.as_str(),
+                binding.representation_schema_path.as_str(),
+                binding.representation_shacl_path.as_str(),
+                binding.classification_path.as_str(),
+                binding.processing_path.as_str(),
+            ]
+            .iter()
+            .any(|path| !artifact_paths.contains(path))
+        {
+            return false;
+        }
+    }
+    bound_operations == *operation_identifiers
 }
 
 fn capture_governed_closure(
@@ -417,28 +638,11 @@ fn capture_governed_closure(
     contract: &RegistryContract,
     review: Option<&CompiledClassificationReview>,
 ) -> Result<BTreeMap<String, Vec<u8>>, PackageError> {
-    let mut references = BTreeSet::new();
-    references.insert(contract.registry.identifier_lifecycle_policy_ref.as_str());
-    references.insert(contract.classifications.provenance_ref.as_str());
+    let mut references = referenced_governed_files(contract);
     if let Some(review) = review {
         references.insert(review.rationale_ref.as_str());
         if let Some(generated) = &review.generated_identification {
             references.insert(generated.report_ref.as_str());
-        }
-    }
-    for alignment in &contract.semantics.alignments {
-        references.insert(alignment.profile_ref.as_str());
-    }
-    for resource in &contract.resources {
-        references.insert(resource.record_context.lifecycle_state.codelist.as_str());
-        for (_, property) in resource.properties.iter() {
-            if let Some(codelist) = property.codelist.as_deref() {
-                references.insert(codelist);
-            }
-        }
-        for processing in &resource.processing_descriptions {
-            references.insert(processing.legal_basis_ref.as_str());
-            references.insert(processing.dpv_profile_ref.as_str());
         }
     }
     if references.len() > MAX_AUTHORED_FILES {
@@ -849,6 +1053,30 @@ mod tests {
         )
         .expect("compiled Registry");
         let artifacts = generate_artifacts(&registry).expect("artifacts");
+        let mut mismatched_artifacts = artifacts.clone();
+        mismatched_artifacts.contract_revision = "sha256:mismatched".into();
+        assert!(matches!(
+            build_package(
+                &project,
+                &temporary.path().join("rejected-package"),
+                &contract,
+                &registry,
+                &mismatched_artifacts,
+            ),
+            Err(PackageError::Verification)
+        ));
+        let mut mismatched_registry = registry.clone();
+        mismatched_registry.registry_name = "Different Registry semantics".into();
+        assert!(matches!(
+            build_package(
+                &project,
+                &temporary.path().join("rejected-compiled-registry"),
+                &contract,
+                &mismatched_registry,
+                &artifacts,
+            ),
+            Err(PackageError::Verification)
+        ));
         let output = temporary.path().join("package");
         let manifest = build_package(&project, &output, &contract, &registry, &artifacts)
             .expect("sealed package");
@@ -859,6 +1087,21 @@ mod tests {
         let verified = load_package(&resolved_output).expect("verified package");
         assert_eq!(verified.manifest, manifest);
         assert_eq!(verified.registry, registry);
+        assert_eq!(verified.artifacts, artifacts);
+        assert!(manifest
+            .files
+            .iter()
+            .any(|file| file.path == COMPILED_REGISTRY_PATH));
+        assert_eq!(
+            manifest.operation_artifact_bindings,
+            artifacts.operation_bindings
+        );
+
+        let compiled_path = output.join(COMPILED_REGISTRY_PATH);
+        let compiled_bytes = fs::read(&compiled_path).expect("compiled Registry bytes");
+        fs::write(&compiled_path, b"{}").expect("tamper compiled Registry");
+        assert!(load_package(&resolved_output).is_err());
+        fs::write(&compiled_path, compiled_bytes).expect("restore compiled Registry");
 
         let artifact = &manifest.artifacts[0];
         fs::write(output.join(&artifact.path), b"tampered").expect("tamper fixture");

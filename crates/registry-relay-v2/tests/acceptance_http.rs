@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::{to_bytes, Body};
@@ -141,6 +141,7 @@ struct ProjectHarness {
 struct ControlledAuditSink {
     fail_on_write: usize,
     writes: AtomicUsize,
+    records: Mutex<Vec<Value>>,
 }
 
 impl ControlledAuditSink {
@@ -148,23 +149,32 @@ impl ControlledAuditSink {
         Self {
             fail_on_write,
             writes: AtomicUsize::new(0),
+            records: Mutex::new(Vec::new()),
         }
     }
 
     fn writes(&self) -> usize {
         self.writes.load(Ordering::SeqCst)
     }
+
+    fn values(&self) -> Vec<Value> {
+        self.records.lock().expect("audit records lock").clone()
+    }
 }
 
 #[async_trait::async_trait]
 impl AuditSink for ControlledAuditSink {
-    async fn write(&self, _envelope: &AuditEnvelope) -> Result<(), AuditError> {
+    async fn write(&self, envelope: &AuditEnvelope) -> Result<(), AuditError> {
         let write = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
         if write == self.fail_on_write {
             return Err(AuditError::Io(std::io::Error::other(
                 "controlled audit failure",
             )));
         }
+        self.records
+            .lock()
+            .expect("audit records lock")
+            .push(envelope.record.clone());
         Ok(())
     }
 
@@ -285,6 +295,129 @@ async fn all_three_registry_http_journeys_use_the_real_router() {
         if let Some(idp) = harness.idp.take() {
             idp.stop().await;
         }
+    }
+}
+
+#[tokio::test]
+async fn business_list_with_a_late_malformed_row_fails_atomically() {
+    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
+    let harness = ProjectHarness::open_with_audit(
+        "business-registry",
+        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+    )
+    .await;
+    let response = harness
+        .app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/resources/registered-business/records?jurisdiction=EX-B&pageSize=4")
+                .body(Body::empty())
+                .expect("business list request builds"),
+        )
+        .await
+        .expect("router responds");
+    let body = response_body(response, StatusCode::SERVICE_UNAVAILABLE).await;
+    assert_eq!(body["code"], "source.unavailable");
+
+    let response_wire = serde_json::to_string(&body).expect("problem response serializes");
+    for hidden in [
+        "BIZ-SYNTH-0002",
+        "BIZ-SYNTH-0004",
+        "BIZ-SYNTH-BAD1",
+        "Synthetic River Trading Ltd",
+        "Fixture Market Cooperative",
+        "Invalid Fixture Enterprise",
+        "not-a-date-time",
+    ] {
+        assert!(
+            !response_wire.contains(hidden),
+            "source values must not escape the failed page"
+        );
+    }
+
+    let records = sink.values();
+    assert_eq!(records.len(), 2, "attempt and source-failed terminal audit");
+    assert_eq!(records[0]["phase"], "attempt");
+    assert!(records[0].get("outcome").is_none());
+    assert_eq!(records[1]["phase"], "terminal");
+    assert_eq!(records[1]["outcome"], "source-failed");
+    assert_eq!(records[0]["operationId"], records[1]["operationId"]);
+    let audit_wire = serde_json::to_string(&records).expect("audit records serialize");
+    for hidden in [
+        "BIZ-SYNTH-0002",
+        "BIZ-SYNTH-0004",
+        "BIZ-SYNTH-BAD1",
+        "Synthetic River Trading Ltd",
+        "Fixture Market Cooperative",
+        "Invalid Fixture Enterprise",
+        "not-a-date-time",
+    ] {
+        assert!(
+            !audit_wire.contains(hidden),
+            "source values must not escape through audit"
+        );
+    }
+}
+
+#[tokio::test]
+async fn malformed_disclosed_property_type_and_requiredness_fail_closed() {
+    let original = fs::read_to_string(project_root("business-registry").join("fixture.sql"))
+        .expect("business fixture reads");
+    let valid_recorded_at = original.replacen(
+        "'not-a-date-time', 'Invalid Fixture Enterprise'",
+        "'2026-06-05T08:00:00Z', 'Invalid Fixture Enterprise'",
+        1,
+    );
+    assert_ne!(valid_recorded_at, original);
+
+    let wrong_type = valid_recorded_at.replacen(") STRICT;", ");", 1).replacen(
+        "'Invalid Fixture Enterprise'",
+        "X'FF'",
+        1,
+    );
+    let missing_required = valid_recorded_at
+        .replacen("legal_name TEXT NOT NULL", "legal_name TEXT", 1)
+        .replacen("'Invalid Fixture Enterprise'", "NULL", 1);
+
+    for (case, fixture_sql) in [
+        ("wrong property type", wrong_type),
+        ("missing required property", missing_required),
+    ] {
+        let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
+        let harness = ProjectHarness::open_with_fixture_sql(
+            "business-registry",
+            fixture_sql,
+            Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+            true,
+        )
+        .await;
+        let response = harness
+            .app
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/resources/registered-business/records/BIZ-SYNTH-BAD1")
+                    .body(Body::empty())
+                    .expect("business read request builds"),
+            )
+            .await
+            .expect("router responds");
+        let body = response_body(response, StatusCode::SERVICE_UNAVAILABLE).await;
+        assert_eq!(body["code"], "source.unavailable", "{case}");
+        let response_wire = serde_json::to_string(&body).expect("problem response serializes");
+        assert!(!response_wire.contains("BIZ-SYNTH-BAD1"), "{case}");
+        assert!(
+            !response_wire.contains("Invalid Fixture Enterprise"),
+            "{case}"
+        );
+
+        let records = sink.values();
+        assert_eq!(records.len(), 2, "{case}: attempt and terminal audit");
+        assert_eq!(records[0]["phase"], "attempt", "{case}");
+        assert_eq!(records[1]["phase"], "terminal", "{case}");
+        assert_eq!(records[1]["outcome"], "source-failed", "{case}");
+        let audit_wire = serde_json::to_string(&records).expect("audit records serialize");
+        assert!(!audit_wire.contains("BIZ-SYNTH-BAD1"), "{case}");
+        assert!(!audit_wire.contains("Invalid Fixture Enterprise"), "{case}");
     }
 }
 
@@ -769,14 +902,23 @@ async fn operation_bound_metadata_is_no_store_and_links_only_visible_artifacts()
 async fn invalid_bearer_on_unknown_data_routes_is_audited_fail_closed() {
     let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
     let harness = ProjectHarness::open_with_audit(
-        "business-registry",
+        "civil-event",
         Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
     )
     .await;
     for (method, uri) in [
         (Method::GET, "/v2/resources/unknown/records"),
+        (Method::GET, "/v2/resources/civil-event/records"),
         (Method::GET, "/v2/resources/unknown/records/record"),
+        (
+            Method::GET,
+            "/v2/resources/civil-event/records/EVENT-SYNTH-0001",
+        ),
         (Method::POST, "/v2/resources/unknown/lookups/unknown"),
+        (
+            Method::POST,
+            "/v2/resources/civil-event/lookups/verify-registration",
+        ),
     ] {
         let response = harness
             .app
@@ -800,13 +942,28 @@ async fn invalid_bearer_on_unknown_data_routes_is_audited_fail_closed() {
     }
     assert_eq!(
         sink.writes(),
-        3,
+        6,
         "each invalid credential is refused in audit"
     );
+    let records = sink.values();
+    assert_eq!(records.len(), 6);
+    for record in &records {
+        assert_eq!(record["phase"], "refusal");
+        assert_eq!(record["outcome"], "invalid-credential");
+        assert_eq!(record["principalKind"], "unknown");
+        assert!(record.get("resourceIdentifier").is_none());
+        assert!(record.get("operationIdentifier").is_none());
+        assert!(record.get("accessRuleRevision").is_none());
+        assert_eq!(record["selectedProperties"], json!([]));
+    }
+    let audit_wire = serde_json::to_string(&records).expect("audit serializes");
+    for hidden in ["EVENT-SYNTH-0001", "verify-registration", "malformed"] {
+        assert!(!audit_wire.contains(hidden));
+    }
 
     let failing_sink = Arc::new(ControlledAuditSink::new(1));
     let harness = ProjectHarness::open_with_audit(
-        "business-registry",
+        "civil-event",
         Some(Arc::clone(&failing_sink) as Arc<dyn AuditSink>),
     )
     .await;
@@ -815,7 +972,7 @@ async fn invalid_bearer_on_unknown_data_routes_is_audited_fail_closed() {
             .app
             .oneshot(
                 Request::builder()
-                    .uri("/v2/resources/unknown/records")
+                    .uri("/v2/resources/civil-event/records/EVENT-SYNTH-0001")
                     .header(AUTHORIZATION, "Bearer malformed")
                     .body(Body::empty())
                     .expect("unknown request builds"),
@@ -827,6 +984,159 @@ async fn invalid_bearer_on_unknown_data_routes_is_audited_fail_closed() {
     )
     .await;
     assert_eq!(failing_sink.writes(), 1);
+}
+
+#[tokio::test]
+async fn insufficient_scope_and_unknown_data_surfaces_are_indistinguishable() {
+    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
+    let harness = ProjectHarness::open_with_audit(
+        "civil-event",
+        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+    )
+    .await;
+    let journey: Journey = serde_norway::from_slice(
+        &fs::read(project_root("civil-event").join("expected-http.yaml")).expect("journey reads"),
+    )
+    .expect("journey parses");
+    let read_fixture = journey
+        .authorizations
+        .get("civil-registrar-ex-a")
+        .expect("read fixture resolves");
+    let lookup_fixture = journey
+        .authorizations
+        .get("civil-verifier-ex-a")
+        .expect("lookup fixture resolves");
+    let read_token = harness.token("civil-registrar-ex-a", read_fixture);
+    let lookup_token = harness.token("civil-verifier-ex-a", lookup_fixture);
+
+    for (token, method, known, unknown) in [
+        (
+            lookup_token.as_str(),
+            Method::GET,
+            "/v2/resources/civil-event/records/EVENT-SYNTH-0001",
+            "/v2/resources/unknown/records/EVENT-SYNTH-0001",
+        ),
+        (
+            read_token.as_str(),
+            Method::POST,
+            "/v2/resources/civil-event/lookups/verify-registration",
+            "/v2/resources/civil-event/lookups/unknown",
+        ),
+        (
+            lookup_token.as_str(),
+            Method::GET,
+            "/v2/resources/civil-event/records",
+            "/v2/resources/unknown/records",
+        ),
+    ] {
+        let mut normalized = None;
+        for uri in [known, unknown] {
+            let response = harness
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method.clone())
+                        .uri(uri)
+                        .header(AUTHORIZATION, format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .expect("data request builds"),
+                )
+                .await
+                .expect("router responds");
+            let mut body = response_body(response, StatusCode::NOT_FOUND).await;
+            assert_eq!(body["code"], "resource.not_found");
+            body.as_object_mut()
+                .expect("problem object")
+                .remove("traceId");
+            if let Some(expected) = &normalized {
+                assert_eq!(&body, expected);
+            } else {
+                normalized = Some(body);
+            }
+        }
+    }
+
+    let padding = "x".repeat(20_000);
+    let oversized_known = format!("/v2/resources/civil-event/records?padding={padding}");
+    let oversized_unknown = format!("/v2/resources/unknown/records?padding={padding}");
+    let mut normalized = None;
+    for uri in [&oversized_known, &oversized_unknown] {
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header(AUTHORIZATION, format!("Bearer {lookup_token}"))
+                    .body(Body::empty())
+                    .expect("oversized list request builds"),
+            )
+            .await
+            .expect("router responds");
+        let mut body = response_body(response, StatusCode::NOT_FOUND).await;
+        assert_eq!(body["code"], "resource.not_found");
+        body.as_object_mut()
+            .expect("problem object")
+            .remove("traceId");
+        if let Some(expected) = &normalized {
+            assert_eq!(&body, expected);
+        } else {
+            normalized = Some(body);
+        }
+    }
+
+    let records = sink.values();
+    assert_eq!(records.len(), 8);
+    for record in &records {
+        assert_eq!(record["phase"], "refusal");
+        assert_eq!(record["outcome"], "not-found");
+        assert_eq!(record["principalKind"], "authenticated");
+        assert!(record.get("resourceIdentifier").is_none());
+        assert!(record.get("operationIdentifier").is_none());
+        assert!(record.get("accessRuleRevision").is_none());
+        assert_eq!(record["selectedProperties"], json!([]));
+    }
+    let audit_wire = serde_json::to_string(&records).expect("audit serializes");
+    for hidden in ["EVENT-SYNTH-0001", "verify-registration"] {
+        assert!(!audit_wire.contains(hidden));
+    }
+}
+
+#[tokio::test]
+async fn list_uri_refusal_uses_the_resolved_access_context() {
+    let sink = Arc::new(ControlledAuditSink::new(usize::MAX));
+    let harness = ProjectHarness::open_with_audit(
+        "business-registry",
+        Some(Arc::clone(&sink) as Arc<dyn AuditSink>),
+    )
+    .await;
+    let padding = "x".repeat(20_000);
+    let response = harness
+        .app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v2/resources/registered-business/records?padding={padding}"
+                ))
+                .body(Body::empty())
+                .expect("oversized business list request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_problem_code(response, StatusCode::URI_TOO_LONG, "internal.uri_too_long").await;
+
+    let records = sink.values();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["phase"], "refusal");
+    assert_eq!(records[0]["outcome"], "invalid-request");
+    assert_eq!(records[0]["principalKind"], "anonymous");
+    assert_eq!(records[0]["resourceIdentifier"], "registered-business");
+    assert_eq!(
+        records[0]["operationIdentifier"],
+        "registered-business.list"
+    );
+    assert_eq!(records[0]["selectedProperties"], json!([]));
 }
 
 #[tokio::test]
@@ -1113,21 +1423,26 @@ impl ProjectHarness {
 
     async fn open_with_audit(project: &str, sink: Option<Arc<dyn AuditSink>>) -> Self {
         let root = project_root(project);
-        let contract = RegistryContract::parse_yaml(
-            &fs::read_to_string(root.join("registry.yaml")).expect("contract reads"),
-        )
-        .expect("contract parses");
+        let fixture_sql = fs::read_to_string(root.join("fixture.sql")).expect("fixture SQL reads");
+        Self::open_with_fixture_sql(project, fixture_sql, sink, false).await
+    }
+
+    async fn open_with_fixture_sql(
+        project: &str,
+        fixture_sql: String,
+        sink: Option<Arc<dyn AuditSink>>,
+        accept_fixture_fingerprint: bool,
+    ) -> Self {
+        let root = project_root(project);
+        let contract_yaml = fs::read_to_string(root.join("registry.yaml")).expect("contract reads");
+        let mut contract = RegistryContract::parse_yaml(&contract_yaml).expect("contract parses");
         let runtime = RelayRuntime::parse_yaml(
             &fs::read_to_string(root.join("runtime.yaml")).expect("runtime reads"),
         )
         .expect("runtime parses");
         let temp = tempfile::tempdir().expect("temporary project creates");
         let database = temp.path().join("fixture.sqlite");
-        materialize_fixture(
-            &database,
-            &fs::read_to_string(root.join("fixture.sql")).expect("fixture SQL reads"),
-        )
-        .expect("fixture materializes");
+        materialize_fixture(&database, &fixture_sql).expect("fixture materializes");
 
         let captured = CapturedSnapshot::capture(&database).expect("fixture captures");
         let catalog = inspect_schema(
@@ -1147,6 +1462,19 @@ impl ProjectHarness {
             .next()
             .expect("one source")
             .to_owned();
+        if accept_fixture_fingerprint {
+            let governed_fingerprint = contract
+                .sources
+                .get(&source_id)
+                .expect("fixture source resolves")
+                .expected_schema_fingerprint
+                .clone();
+            let governed_yaml =
+                contract_yaml.replacen(&governed_fingerprint, &observed_fingerprint, 1);
+            assert_ne!(governed_yaml, contract_yaml, "source fingerprint rewrites");
+            contract = RegistryContract::parse_yaml(&governed_yaml)
+                .expect("fixture-governed contract parses");
+        }
         let observed = vec![ObservedSourceSchema {
             source: source_id.clone(),
             fingerprint: catalog.fingerprint,
@@ -1541,6 +1869,13 @@ fn governed_files(root: &Path, contract: &RegistryContract) -> GovernedFileSet {
         for (_, property) in resource.properties.iter() {
             if let Some(path) = &property.codelist {
                 paths.insert(path.clone());
+            }
+        }
+        for lookup in &resource.operations.lookups {
+            for (_, selector) in lookup.request_body.selectors.iter() {
+                if let Some(path) = &selector.codelist {
+                    paths.insert(path.clone());
+                }
             }
         }
         for processing in &resource.processing_descriptions {

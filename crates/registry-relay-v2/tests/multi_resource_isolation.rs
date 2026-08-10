@@ -571,8 +571,8 @@ async fn real_router_keeps_related_public_and_protected_resources_isolated() {
             "00000000000000000000000000000003",
         )
         .await,
-        StatusCode::FORBIDDEN,
-        "consultation.denied",
+        StatusCode::NOT_FOUND,
+        "resource.not_found",
     );
     assert_problem(
         send(

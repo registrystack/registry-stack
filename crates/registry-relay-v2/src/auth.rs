@@ -10,6 +10,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use http::header::AUTHORIZATION;
 use http::HeaderMap;
+use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_oidc::{Audience, TokenVerifier, VerifiedToken};
 use serde::de::{self, DeserializeSeed as _, Visitor};
 use serde_json::{Map, Value};
@@ -358,12 +359,7 @@ pub fn bearer_token(headers: &HeaderMap) -> Result<Option<&str>, AuthenticationE
         return Err(AuthenticationError::Malformed);
     }
     let value = first.to_str().map_err(|_| AuthenticationError::Malformed)?;
-    let token = value
-        .strip_prefix("Bearer ")
-        .ok_or(AuthenticationError::Malformed)?;
-    if token.is_empty() || token.bytes().any(|byte| byte.is_ascii_whitespace()) {
-        return Err(AuthenticationError::Malformed);
-    }
+    let token = parse_bearer_token(value).map_err(|_| AuthenticationError::Malformed)?;
     Ok(Some(token))
 }
 
@@ -586,6 +582,13 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, "Basic abc".parse().expect("header"));
         assert_eq!(bearer_token(&headers), Err(AuthenticationError::Malformed));
+    }
+
+    #[test]
+    fn bearer_scheme_is_ascii_case_insensitive() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, "bEaReR abc".parse().expect("header"));
+        assert_eq!(bearer_token(&headers), Ok(Some("abc")));
     }
 
     #[test]

@@ -24,13 +24,16 @@ tooling = ["dep:tempfile", "registry-platform-sqlite/fixture"]
 axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
+chacha20poly1305.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 clap.workspace = true
+getrandom.workspace = true
 hex.workspace = true
 hmac.workspace = true
 http.workspace = true
 jsonwebtoken.workspace = true
 registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true

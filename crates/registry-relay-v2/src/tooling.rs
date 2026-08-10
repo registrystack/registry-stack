@@ -19,7 +19,8 @@ use thiserror::Error;
 use crate::artifacts::{generate_artifacts, ArtifactSet};
 use crate::audit::RelayAudit;
 use crate::compiler::{
-    classification_inventory_digest, compile_contract_with_governed_files, GovernedFileSet,
+    classification_inventory_digest, compile_contract_with_governed_files,
+    referenced_governed_files, GovernedFileSet,
 };
 use crate::contract::{ClassificationReviewDocument, RegistryContract, RelayRuntime};
 use crate::cursor::CursorKey;
@@ -854,24 +855,10 @@ fn capture_governed_files(
     root: &Path,
     contract: &RegistryContract,
 ) -> Result<GovernedFileSet, ToolingError> {
-    let mut references = BTreeSet::new();
-    references.insert(contract.registry.identifier_lifecycle_policy_ref.clone());
-    references.insert(contract.classifications.provenance_ref.clone());
-    for alignment in &contract.semantics.alignments {
-        references.insert(alignment.profile_ref.clone());
-    }
-    for resource in &contract.resources {
-        references.insert(resource.record_context.lifecycle_state.codelist.clone());
-        for (_, property) in resource.properties.iter() {
-            if let Some(codelist) = property.codelist.as_deref() {
-                references.insert(codelist.to_owned());
-            }
-        }
-        for processing in &resource.processing_descriptions {
-            references.insert(processing.legal_basis_ref.clone());
-            references.insert(processing.dpv_profile_ref.clone());
-        }
-    }
+    let mut references = referenced_governed_files(contract)
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
     let canonical_root = root.canonicalize().map_err(|_| ToolingError::Read)?;
     let review_reference = contract.classifications.provenance_ref.as_str();
     validate_relative(review_reference)?;

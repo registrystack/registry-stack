@@ -42,6 +42,35 @@ const MAXIMUM_PARTIAL_STRING_CHARACTERS: u16 = 64;
 
 pub type GovernedFileSet = BTreeMap<String, Vec<u8>>;
 
+pub(crate) fn referenced_governed_files(contract: &RegistryContract) -> BTreeSet<&str> {
+    let mut references = BTreeSet::new();
+    references.insert(contract.registry.identifier_lifecycle_policy_ref.as_str());
+    references.insert(contract.classifications.provenance_ref.as_str());
+    for alignment in &contract.semantics.alignments {
+        references.insert(alignment.profile_ref.as_str());
+    }
+    for resource in &contract.resources {
+        references.insert(resource.record_context.lifecycle_state.codelist.as_str());
+        for (_, property) in resource.properties.iter() {
+            if let Some(codelist) = property.codelist.as_deref() {
+                references.insert(codelist);
+            }
+        }
+        for lookup in &resource.operations.lookups {
+            for (_, selector) in lookup.request_body.selectors.iter() {
+                if let Some(codelist) = selector.codelist.as_deref() {
+                    references.insert(codelist);
+                }
+            }
+        }
+        for processing in &resource.processing_descriptions {
+            references.insert(processing.legal_basis_ref.as_str());
+            references.insert(processing.dpv_profile_ref.as_str());
+        }
+    }
+    references
+}
+
 pub fn compile_yaml(
     yaml: &str,
     observed: &[ObservedSourceSchema],
@@ -217,6 +246,16 @@ fn governed_file_roles(
         for (property, definition) in resource.properties.iter() {
             if definition.codelist.as_deref() == Some(path) {
                 roles.push(format!("codelist:{}:{property}", resource.id));
+            }
+        }
+        for lookup in &resource.operations.lookups {
+            for (selector, definition) in lookup.request_body.selectors.iter() {
+                if definition.codelist.as_deref() == Some(path) {
+                    roles.push(format!(
+                        "codelist:{}:lookup:{}:{selector}",
+                        resource.id, lookup.id
+                    ));
+                }
             }
         }
         for processing in &resource.processing_descriptions {
@@ -1467,6 +1506,13 @@ impl<'a> Compiler<'a> {
                             "fixed order properties must be required in the governed source contract",
                         );
                     }
+                    if !cursor_order_type_supported(property.data_type) {
+                        self.error(
+                            "list.order_property_type_unsupported",
+                            &format!("{location}.orderBy"),
+                            "fixed order properties must use a cursor-supported string, integer, or boolean value shape",
+                        );
+                    }
                     if !order_columns.insert(property.source_column.as_str()) {
                         self.error(
                             "list.order_column_duplicate",
@@ -1537,10 +1583,10 @@ impl<'a> Compiler<'a> {
         }) else {
             return;
         };
-        // SQLite does not preserve NOT NULL metadata through views: even a
+        // SQLite does not preserve NOT NULL metadata through views. Even a
         // direct projection of a NOT NULL base-table column is reported as
         // nullable by PRAGMA table_xinfo(view). The authored sourceRequired
-        // contract and runtime value validation therefore own null rejection;
+        // contract and runtime source-row validation own null rejection;
         // observed metadata still closes the declared scalar type here.
         if !compatible_declared_type(data_type, &observed.declared_type) {
             self.error(
@@ -1548,70 +1594,6 @@ impl<'a> Compiler<'a> {
                 location,
                 "keyset order columns must have a reviewed SQLite declaration supported by the cursor scalar profile",
             );
-        }
-    }
-
-    fn compile_transform(
-        &mut self,
-        definition: Option<&TransformDefinition>,
-        output_type: DataType,
-        location: &str,
-    ) -> Option<CompiledTransform> {
-        match definition? {
-            TransformDefinition::PartialString { reveal, characters } => {
-                if output_type != DataType::String {
-                    self.error(
-                        "transform.output_type_invalid",
-                        &format!("{location}.type"),
-                        "partial-string transforms must publish a string property",
-                    );
-                }
-                if !(1..=MAXIMUM_PARTIAL_STRING_CHARACTERS).contains(characters) {
-                    self.error(
-                        "transform.partial_string_characters_invalid",
-                        &format!("{location}.transform.characters"),
-                        "partial-string reveal length must be within the fixed product bound",
-                    );
-                }
-                let reveal_label = match reveal {
-                    crate::contract::PartialStringReveal::Prefix => "prefix",
-                    crate::contract::PartialStringReveal::Suffix => "suffix",
-                };
-                Some(CompiledTransform::PartialString {
-                    identifier: format!("partial-string:{reveal_label}:{characters}"),
-                    reveal: *reveal,
-                    characters: *characters,
-                })
-            }
-            TransformDefinition::DatePrecision {
-                source_type,
-                precision,
-            } => {
-                let expected_output = match precision {
-                    DatePrecision::Year => DataType::Year,
-                    DatePrecision::YearMonth => DataType::YearMonth,
-                };
-                if output_type != expected_output {
-                    self.error(
-                        "transform.output_type_invalid",
-                        &format!("{location}.type"),
-                        "date-precision output datatype must match the selected precision",
-                    );
-                }
-                let source_label = match source_type {
-                    DateInputType::Date => "date",
-                    DateInputType::DateTime => "date-time",
-                };
-                let precision_label = match precision {
-                    DatePrecision::Year => "year",
-                    DatePrecision::YearMonth => "year-month",
-                };
-                Some(CompiledTransform::DatePrecision {
-                    identifier: format!("date-precision:{source_label}:{precision_label}"),
-                    source_type: *source_type,
-                    precision: *precision,
-                })
-            }
         }
     }
 
@@ -2461,6 +2443,13 @@ fn validate_governed_files(
                 codelist_paths.insert(codelist);
             }
         }
+        for lookup in &resource.operations.lookups {
+            for (_, selector) in lookup.request_body.selectors.iter() {
+                if let Some(codelist) = selector.codelist.as_deref() {
+                    codelist_paths.insert(codelist);
+                }
+            }
+        }
         for processing in &resource.processing_descriptions {
             sidecar_paths.insert(processing.legal_basis_ref.as_str());
             sidecar_paths.insert(processing.dpv_profile_ref.as_str());
@@ -2848,19 +2837,16 @@ fn compatible_declared_type(data_type: DataType, declared_type: &str) -> bool {
     }
 }
 
-fn transform_source_type(transform: Option<&CompiledTransform>, output_type: DataType) -> DataType {
-    match transform {
-        Some(CompiledTransform::PartialString { .. }) => DataType::String,
-        Some(CompiledTransform::DatePrecision {
-            source_type: DateInputType::Date,
-            ..
-        }) => DataType::Date,
-        Some(CompiledTransform::DatePrecision {
-            source_type: DateInputType::DateTime,
-            ..
-        }) => DataType::DateTime,
-        None => output_type,
-    }
+fn cursor_order_type_supported(data_type: DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::String
+            | DataType::ControlledCode
+            | DataType::Date
+            | DataType::DateTime
+            | DataType::Integer
+            | DataType::Boolean
+    )
 }
 
 fn validate_observed_schema(

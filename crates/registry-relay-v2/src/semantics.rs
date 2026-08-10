@@ -124,17 +124,9 @@ fn record_schema(
     schema_reference: &str,
     semantic_model_reference: &str,
 ) -> Value {
-    let lifecycle_values = registry
-        .codelists
-        .iter()
-        .find(|item| item.path == resource.record_context.lifecycle_state_codelist)
-        .map(|item| item.values.clone())
-        .unwrap_or_default();
-    let lifecycle_schema = if lifecycle_values.is_empty() {
-        json!({"type": "string", "minLength": 1})
-    } else {
-        json!({"type": "string", "enum": lifecycle_values})
-    };
+    let lifecycle_values =
+        &require_codelist(registry, &resource.record_context.lifecycle_state_codelist).values;
+    let lifecycle_schema = json!({"type": "string", "enum": lifecycle_values});
     let mut domain_properties = Map::new();
     let mut domain_required = Vec::new();
     for property in selected_properties(resource, selected) {
@@ -207,6 +199,9 @@ fn shacl(
     selected: &[String],
     full: bool,
 ) -> String {
+    let lifecycle_values =
+        &require_codelist(registry, &resource.record_context.lifecycle_state_codelist).values;
+    let lifecycle_constraint = shacl_in(lifecycle_values);
     let mut output = format!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n<{}shapes/{}> a sh:NodeShape ;\n  sh:targetClass <{}> ;\n  sh:closed true",
         registry.local_vocabulary, resource.id, resource.semantic_class
@@ -236,27 +231,28 @@ fn shacl(
         ),
         ("recordedAt", "http://www.w3.org/2001/XMLSchema#dateTime"),
     ] {
+        let controlled_values = if path == "lifecycleState" {
+            lifecycle_constraint.as_str()
+        } else {
+            ""
+        };
         output.push_str(&format!(
-            " ;\n  sh:property [ sh:path <https://id.registrystack.org/vocab/core/{path}> ; sh:datatype <{datatype}> ; sh:minCount 1 ; sh:maxCount 1 ]"
+            " ;\n  sh:property [ sh:path <https://id.registrystack.org/vocab/core/{path}> ; sh:datatype <{datatype}>{controlled_values} ; sh:minCount 1 ; sh:maxCount 1 ]"
         ));
     }
     for property in selected_properties(resource, selected) {
-        let controlled_values = property
-            .codelist
-            .as_deref()
-            .and_then(|path| registry.codelists.iter().find(|item| item.path == path))
-            .map(|codelist| {
-                format!(
-                    " ; sh:in ( {} )",
-                    codelist
-                        .values
-                        .iter()
-                        .map(|value| format!("\"{}\"", turtle_escape(value)))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
-            })
-            .unwrap_or_default();
+        let controlled_values = match property.data_type {
+            DataType::ControlledCode => {
+                let path = property.codelist.as_deref().unwrap_or_else(|| {
+                    panic!(
+                        "compiled semantics invariant: controlled property {} has no codelist",
+                        property.name
+                    )
+                });
+                shacl_in(&require_codelist(registry, path).values)
+            }
+            _ => String::new(),
+        };
         output.push_str(&format!(
             " ;\n  sh:property [ sh:path <{}> ; sh:datatype <{}>{} ; sh:minCount {} ; sh:maxCount 1 ]",
             property.semantic_iri,
@@ -273,17 +269,14 @@ fn property_schema(registry: &CompiledRegistry, property: &CompiledProperty) -> 
     match property.data_type {
         DataType::String => json!({"type": "string"}),
         DataType::ControlledCode => {
-            let values = property
-                .codelist
-                .as_deref()
-                .and_then(|path| registry.codelists.iter().find(|item| item.path == path))
-                .map(|codelist| codelist.values.clone())
-                .unwrap_or_default();
-            if values.is_empty() {
-                json!({"type": "string", "x-registry-codelist": property.codelist})
-            } else {
-                json!({"type": "string", "enum": values, "x-registry-codelist": property.codelist})
-            }
+            let path = property.codelist.as_deref().unwrap_or_else(|| {
+                panic!(
+                    "compiled semantics invariant: controlled property {} has no codelist",
+                    property.name
+                )
+            });
+            let values = &require_codelist(registry, path).values;
+            json!({"type": "string", "enum": values, "x-registry-codelist": path})
         }
         DataType::Boolean => json!({"type": "boolean"}),
         DataType::Integer => json!({"type": "integer"}),
@@ -300,6 +293,30 @@ fn property_schema(registry: &CompiledRegistry, property: &CompiledProperty) -> 
             "x-registry-datatype": "year-month"
         }),
     }
+}
+
+fn require_codelist<'a>(
+    registry: &'a CompiledRegistry,
+    path: &str,
+) -> &'a crate::model::CompiledCodelist {
+    registry
+        .codelists
+        .iter()
+        .find(|item| item.path == path)
+        .unwrap_or_else(|| {
+            panic!("compiled semantics invariant: referenced codelist {path} is missing")
+        })
+}
+
+fn shacl_in(values: &[String]) -> String {
+    format!(
+        " ; sh:in ( {} )",
+        values
+            .iter()
+            .map(|value| format!("\"{}\"", turtle_escape(value)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
 }
 
 fn turtle_escape(value: &str) -> String {
@@ -342,6 +359,59 @@ mod tests {
         let context = json_ld_context(&registry(), &resource(), &["name".into()]);
         assert!(context["@context"]["meta"].is_null());
         assert_eq!(context["@context"]["name"]["@nest"], "domainData");
+    }
+
+    #[test]
+    #[should_panic(expected = "referenced codelist state.yaml is missing")]
+    fn schema_generation_refuses_a_missing_lifecycle_codelist() {
+        let _ = full_record_schema(&registry(), &resource());
+    }
+
+    #[test]
+    #[should_panic(expected = "referenced codelist codes.yaml is missing")]
+    fn schema_generation_refuses_a_missing_property_codelist() {
+        let mut registry = registry();
+        registry.codelists.push(codelist("state.yaml", &["ACTIVE"]));
+        let mut resource = resource();
+        resource.properties[0].data_type = DataType::ControlledCode;
+        resource.properties[0].codelist = Some("codes.yaml".into());
+        let _ = full_record_schema(&registry, &resource);
+    }
+
+    #[test]
+    fn schemas_and_shacl_emit_every_compiled_codelist_constraint() {
+        let mut registry = registry();
+        registry
+            .codelists
+            .push(codelist("state.yaml", &["ACTIVE", "RETIRED"]));
+        registry
+            .codelists
+            .push(codelist("codes.yaml", &["ONE", "TWO"]));
+        let mut resource = resource();
+        resource.properties[0].data_type = DataType::ControlledCode;
+        resource.properties[0].codelist = Some("codes.yaml".into());
+
+        let schema = full_record_schema(&registry, &resource);
+        assert_eq!(
+            schema["properties"]["lifecycleState"]["enum"],
+            json!(["ACTIVE", "RETIRED"])
+        );
+        assert_eq!(
+            schema["properties"]["domainData"]["properties"]["name"]["enum"],
+            json!(["ONE", "TWO"])
+        );
+        let shacl = full_record_shacl(&registry, &resource);
+        assert!(shacl.contains("sh:in ( \"ACTIVE\" \"RETIRED\" )"));
+        assert!(shacl.contains("sh:in ( \"ONE\" \"TWO\" )"));
+    }
+
+    fn codelist(path: &str, values: &[&str]) -> crate::model::CompiledCodelist {
+        crate::model::CompiledCodelist {
+            path: path.into(),
+            id: path.into(),
+            version: "1".into(),
+            values: values.iter().map(|value| (*value).into()).collect(),
+        }
     }
 
     fn resource() -> CompiledResource {

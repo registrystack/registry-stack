@@ -389,17 +389,26 @@ pub async fn record_list(
     uri: Uri,
 ) -> Response<Body> {
     let trace = TraceContext::from_headers(&headers);
+    let principal = match authenticate_data_request(&service, &headers, &trace).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let Some((resource, operation)) = find_operation(&service, &resource_id, |kind| {
         matches!(kind, OperationKind::List)
     }) else {
-        return unknown_data_route(&service, &headers, &trace, OperationClass::List).await;
+        return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::List)
+            .await;
+    };
+    let access = match access_operation(&service, resource, operation, principal, &trace).await {
+        Ok(value) => value,
+        Err(response) => return response,
     };
     if !uri_within_bound(&uri) {
         return refuse_known(
             &service,
             resource,
             operation,
-            None,
+            Some(&access),
             AuditOutcome::InvalidRequest,
             ProblemCode::UriTooLong,
             &trace,
@@ -411,7 +420,7 @@ pub async fn record_list(
         resource,
         operation,
         uri.query(),
-        &headers,
+        principal,
         &trace,
     )
     .await
@@ -549,16 +558,7 @@ pub async fn record_list(
             &result.source_revision,
         ) {
             Ok(value) => Some(value),
-            Err(_) => {
-                return terminal_problem(
-                    &service.audit,
-                    &audit,
-                    AuditOutcome::InternalFailed,
-                    ProblemCode::Internal,
-                    &trace,
-                )
-                .await
-            }
+            Err(_) => return source_shape_failure(&service.audit, &audit, &trace).await,
         }
     } else {
         None
@@ -601,10 +601,28 @@ pub async fn record_read(
     uri: Uri,
 ) -> Response<Body> {
     let trace = TraceContext::from_headers(&headers);
+    let principal = match authenticate_data_request(&service, &headers, &trace).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let Some((resource, operation)) = find_operation(&service, &resource_id, |kind| {
         matches!(kind, OperationKind::Read)
     }) else {
-        return unknown_data_route(&service, &headers, &trace, OperationClass::Read).await;
+        return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::Read)
+            .await;
+    };
+    let access = match access_operation(
+        &service,
+        resource,
+        operation,
+        uri.query(),
+        principal,
+        &trace,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
     };
     if !uri_within_bound(&uri) {
         return refuse_known(
@@ -669,13 +687,30 @@ pub async fn record_lookup(
     request: Request<Body>,
 ) -> Response<Body> {
     let trace = TraceContext::from_headers(request.headers());
+    let principal = match authenticate_data_request(&service, request.headers(), &trace).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
     let Some((resource, operation)) = find_operation(
         &service,
         &resource_id,
         |kind| matches!(kind, OperationKind::Lookup { name } if name == &lookup_id),
     ) else {
-        return unknown_data_route(&service, request.headers(), &trace, OperationClass::Lookup)
+        return unknown_data_route(&service, principal.as_ref(), &trace, OperationClass::Lookup)
             .await;
+    };
+    let access = match access_operation(
+        &service,
+        resource,
+        operation,
+        request.uri().query(),
+        principal,
+        &trace,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(response) => return response,
     };
     if !uri_within_bound(request.uri()) {
         return refuse_known(
@@ -969,16 +1004,6 @@ async fn single_operation(
     ) {
         Ok(value) => value,
         Err(RecordError::InvalidSource | RecordError::InvalidCore) => {
-            if matches!(operation.kind, OperationKind::Lookup { .. }) {
-                return terminal_problem(
-                    &service.audit,
-                    &audit,
-                    AuditOutcome::Unresolved,
-                    ProblemCode::ConsultationUnresolved,
-                    trace,
-                )
-                .await;
-            }
             return source_shape_failure(&service.audit, &audit, trace).await;
         }
     };
@@ -1017,24 +1042,9 @@ async fn access_operation(
     resource: &CompiledResource,
     operation: &CompiledOperation,
     query: Option<&str>,
-    headers: &HeaderMap,
+    principal: Option<Principal>,
     trace: &TraceContext,
 ) -> Result<Access, Response<Body>> {
-    let principal = match optional_principal(service, headers).await {
-        Ok(value) => value,
-        Err(code) => {
-            return Err(refuse_before_representation(
-                service,
-                resource,
-                operation,
-                PrincipalKind::Unknown,
-                AuditOutcome::InvalidCredential,
-                code,
-                trace,
-            )
-            .await);
-        }
-    };
     let selected = match select_representation(operation, query) {
         Ok(value) => value,
         Err(code) => {
@@ -1073,6 +1083,16 @@ async fn access_operation(
             representation: representation.clone(),
         }),
         Err(error) => {
+            if error == AuthorizationError::ScopeDenied {
+                return Err(refuse_unknown(
+                    service,
+                    PrincipalKind::Authenticated,
+                    AuditOutcome::NotFound,
+                    ProblemCode::ResourceNotFound,
+                    trace,
+                )
+                .await);
+            }
             let (code, outcome) = match error {
                 AuthorizationError::AuthenticationRequired => (
                     ProblemCode::MissingCredential,
@@ -1103,6 +1123,24 @@ async fn access_operation(
             )
             .await)
         }
+    }
+}
+
+async fn authenticate_data_request(
+    service: &RelayService,
+    headers: &HeaderMap,
+    trace: &TraceContext,
+) -> Result<Option<Principal>, Response<Body>> {
+    match optional_principal(service, headers).await {
+        Ok(principal) => Ok(principal),
+        Err(code) => Err(refuse_unknown(
+            service,
+            PrincipalKind::Unknown,
+            AuditOutcome::InvalidCredential,
+            code,
+            trace,
+        )
+        .await),
     }
 }
 
@@ -1149,25 +1187,10 @@ enum OperationClass {
 
 async fn unknown_data_route(
     service: &RelayService,
-    headers: &HeaderMap,
+    principal: Option<&Principal>,
     trace: &TraceContext,
     class: OperationClass,
 ) -> Response<Body> {
-    let principal = match optional_principal(service, headers).await {
-        Ok(value) => value,
-        Err(code) => {
-            let audit = unknown_audit_context(service, trace, PrincipalKind::Unknown);
-            if service
-                .audit
-                .refusal(&audit, AuditOutcome::InvalidCredential)
-                .await
-                .is_err()
-            {
-                return ProblemCode::AuditUnavailable.response(trace);
-            }
-            return code.response(trace);
-        }
-    };
     let protected = service.registry.resources.iter().any(|resource| {
         resource.operations.iter().any(|operation| {
             class_matches(&operation.kind, class)
@@ -1177,35 +1200,27 @@ async fn unknown_data_route(
         })
     });
     if protected && principal.is_none() {
-        let audit = unknown_audit_context(service, trace, PrincipalKind::Unknown);
-        if service
-            .audit
-            .refusal(&audit, AuditOutcome::MissingCredential)
-            .await
-            .is_err()
-        {
-            return ProblemCode::AuditUnavailable.response(trace);
-        }
-        return ProblemCode::MissingCredential.response(trace);
+        return refuse_unknown(
+            service,
+            PrincipalKind::Unknown,
+            AuditOutcome::MissingCredential,
+            ProblemCode::MissingCredential,
+            trace,
+        )
+        .await;
     }
-    let audit = unknown_audit_context(
+    refuse_unknown(
         service,
-        trace,
         if principal.is_some() {
             PrincipalKind::Authenticated
         } else {
             PrincipalKind::Anonymous
         },
-    );
-    if service
-        .audit
-        .refusal(&audit, AuditOutcome::NotFound)
-        .await
-        .is_err()
-    {
-        return ProblemCode::AuditUnavailable.response(trace);
-    }
-    ProblemCode::ResourceNotFound.response(trace)
+        AuditOutcome::NotFound,
+        ProblemCode::ResourceNotFound,
+        trace,
+    )
+    .await
 }
 
 fn class_matches(kind: &OperationKind, class: OperationClass) -> bool {
@@ -1215,6 +1230,20 @@ fn class_matches(kind: &OperationKind, class: OperationClass) -> bool {
             | (OperationKind::Read, OperationClass::Read)
             | (OperationKind::Lookup { .. }, OperationClass::Lookup)
     )
+}
+
+async fn refuse_unknown(
+    service: &RelayService,
+    principal_kind: PrincipalKind,
+    outcome: AuditOutcome,
+    code: ProblemCode,
+    trace: &TraceContext,
+) -> Response<Body> {
+    let audit = unknown_audit_context(service, trace, principal_kind);
+    if service.audit.refusal(&audit, outcome).await.is_err() {
+        return ProblemCode::AuditUnavailable.response(trace);
+    }
+    code.response(trace)
 }
 
 async fn refuse_known(

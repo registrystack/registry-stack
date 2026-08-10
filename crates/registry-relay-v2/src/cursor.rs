@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Opaque, integrity-protected keyset cursors.
+//! Client-opaque, confidential and integrity-protected keyset cursors.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -7,6 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use chacha20poly1305::aead::{Aead, KeyInit as _, Payload};
+use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -15,7 +17,11 @@ use zeroize::Zeroizing;
 
 const CURSOR_VERSION: u8 = 2;
 const MAX_CURSOR_BYTES: usize = 8 * 1024;
-const MAC_BYTES: usize = 32;
+const KEY_BYTES: usize = 32;
+const NONCE_BYTES: usize = 24;
+const TAG_BYTES: usize = 16;
+const ENVELOPE_OVERHEAD: usize = 1 + NONCE_BYTES + TAG_BYTES;
+const CURSOR_AAD: &[u8] = b"registry-relay-v2-cursor-v2";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -115,15 +121,20 @@ impl CursorPayload {
     }
 }
 
-/// Cursor HMAC key. `Debug` intentionally cannot expose key material.
-pub struct CursorKey(Zeroizing<Vec<u8>>);
+/// Cursor protection key. `Debug` intentionally cannot expose key material.
+pub struct CursorKey(Zeroizing<[u8; KEY_BYTES]>);
 
 impl CursorKey {
     pub fn new(bytes: Vec<u8>) -> Result<Self, CursorError> {
-        if bytes.len() < MAC_BYTES {
+        if bytes.len() < KEY_BYTES {
             return Err(CursorError::Configuration);
         }
-        Ok(Self(Zeroizing::new(bytes)))
+        let bytes = Zeroizing::new(bytes);
+        let mut derivation =
+            HmacSha256::new_from_slice(bytes.as_slice()).map_err(|_| CursorError::Configuration)?;
+        derivation.update(b"registry-relay-v2-cursor-key-v2");
+        let derived: [u8; KEY_BYTES] = derivation.finalize().into_bytes().into();
+        Ok(Self(Zeroizing::new(derived)))
     }
 
     /// Domain-separated binding used for authorization and query-context
@@ -154,7 +165,7 @@ pub enum CursorError {
     Configuration,
     #[error("cursor is malformed")]
     Malformed,
-    #[error("cursor signature is invalid")]
+    #[error("cursor protection is invalid")]
     Integrity,
     #[error("cursor is expired")]
     Expired,
@@ -163,17 +174,28 @@ pub enum CursorError {
 }
 
 pub fn encode(key: &CursorKey, payload: &CursorPayload) -> Result<String, CursorError> {
-    let encoded = serde_json::to_vec(payload).map_err(|_| CursorError::Malformed)?;
-    if encoded.is_empty() || encoded.len() > MAX_CURSOR_BYTES {
+    let plaintext = serde_json::to_vec(payload).map_err(|_| CursorError::Malformed)?;
+    if plaintext.is_empty() || plaintext.len() > MAX_CURSOR_BYTES {
         return Err(CursorError::Malformed);
     }
-    let mut mac =
-        HmacSha256::new_from_slice(key.0.as_slice()).map_err(|_| CursorError::Configuration)?;
-    mac.update(&encoded);
-    let signature = mac.finalize().into_bytes();
-    let mut envelope = Vec::with_capacity(encoded.len() + MAC_BYTES);
-    envelope.extend_from_slice(&encoded);
-    envelope.extend_from_slice(&signature);
+    let cipher = XChaCha20Poly1305::new_from_slice(key.0.as_slice())
+        .map_err(|_| CursorError::Configuration)?;
+    let mut nonce = [0_u8; NONCE_BYTES];
+    getrandom::fill(&mut nonce).map_err(|_| CursorError::Configuration)?;
+    let nonce_value = XNonce::from(nonce);
+    let ciphertext = cipher
+        .encrypt(
+            &nonce_value,
+            Payload {
+                msg: plaintext.as_slice(),
+                aad: CURSOR_AAD,
+            },
+        )
+        .map_err(|_| CursorError::Configuration)?;
+    let mut envelope = Vec::with_capacity(1 + nonce.len() + ciphertext.len());
+    envelope.push(CURSOR_VERSION);
+    envelope.extend_from_slice(&nonce);
+    envelope.extend_from_slice(&ciphertext);
     Ok(URL_SAFE_NO_PAD.encode(envelope))
 }
 
@@ -182,23 +204,34 @@ pub fn decode(
     encoded: &str,
     now_unix_seconds: u64,
 ) -> Result<CursorPayload, CursorError> {
-    if encoded.is_empty() || encoded.len() > MAX_CURSOR_BYTES * 2 {
+    if encoded.is_empty() || encoded.len() > (MAX_CURSOR_BYTES + ENVELOPE_OVERHEAD) * 2 {
         return Err(CursorError::Malformed);
     }
     let envelope = URL_SAFE_NO_PAD
         .decode(encoded)
         .map_err(|_| CursorError::Malformed)?;
-    if envelope.len() <= MAC_BYTES || envelope.len() > MAX_CURSOR_BYTES + MAC_BYTES {
+    if envelope.len() <= ENVELOPE_OVERHEAD
+        || envelope.len() > MAX_CURSOR_BYTES + ENVELOPE_OVERHEAD
+        || envelope[0] != CURSOR_VERSION
+    {
         return Err(CursorError::Malformed);
     }
-    let (payload_bytes, supplied_signature) = envelope.split_at(envelope.len() - MAC_BYTES);
-    let mut mac =
-        HmacSha256::new_from_slice(key.0.as_slice()).map_err(|_| CursorError::Configuration)?;
-    mac.update(payload_bytes);
-    mac.verify_slice(supplied_signature)
+    let (nonce, ciphertext) = envelope[1..].split_at(NONCE_BYTES);
+    let nonce: [u8; NONCE_BYTES] = nonce.try_into().map_err(|_| CursorError::Malformed)?;
+    let nonce = XNonce::from(nonce);
+    let cipher = XChaCha20Poly1305::new_from_slice(key.0.as_slice())
+        .map_err(|_| CursorError::Configuration)?;
+    let payload_bytes = cipher
+        .decrypt(
+            &nonce,
+            Payload {
+                msg: ciphertext,
+                aad: CURSOR_AAD,
+            },
+        )
         .map_err(|_| CursorError::Integrity)?;
     let payload: CursorPayload =
-        serde_json::from_slice(payload_bytes).map_err(|_| CursorError::Malformed)?;
+        serde_json::from_slice(&payload_bytes).map_err(|_| CursorError::Malformed)?;
     if payload.version != CURSOR_VERSION {
         return Err(CursorError::Malformed);
     }
@@ -261,18 +294,39 @@ mod tests {
     }
 
     #[test]
-    fn cursor_is_opaque_and_refuses_tampering() {
+    fn cursor_conceals_order_values_and_refuses_tampering() {
         let key = CursorKey::new(vec![7; 32]).expect("key is sufficient");
-        let encoded = encode(&key, &payload()).expect("cursor encodes");
-        assert!(!encoded.contains("record-1"));
-        let mut tampered = encoded.into_bytes();
-        let final_byte = tampered.len() - 1;
-        tampered[final_byte] = if tampered[final_byte] == b'A' {
-            b'B'
-        } else {
-            b'A'
-        };
-        let tampered = String::from_utf8(tampered).expect("cursor stays text");
+        let mut protected = payload();
+        protected.last_record_identifier = "protected-record-id-canary".to_owned();
+        protected.filters.insert(
+            "status".to_owned(),
+            CursorValue::String("protected-filter-value-canary".to_owned()),
+        );
+        protected.selected_fields = vec!["omitted-field-name-canary".to_owned()];
+        protected.last_order_values = vec![CursorValue::String(
+            "protected-order-value-canary".to_owned(),
+        )];
+        let encoded = encode(&key, &protected).expect("cursor encodes");
+        let mut envelope = URL_SAFE_NO_PAD
+            .decode(&encoded)
+            .expect("cursor is base64url");
+        for canary in [
+            b"protected-record-id-canary".as_slice(),
+            b"protected-filter-value-canary".as_slice(),
+            b"omitted-field-name-canary".as_slice(),
+            b"protected-order-value-canary".as_slice(),
+        ] {
+            assert!(!envelope
+                .windows(canary.len())
+                .any(|window| window == canary));
+        }
+        assert_eq!(
+            decode(&key, &encoded, 1).expect("cursor decrypts"),
+            protected
+        );
+        let final_byte = envelope.len() - 1;
+        envelope[final_byte] ^= 1;
+        let tampered = URL_SAFE_NO_PAD.encode(envelope);
         assert!(matches!(
             decode(&key, &tampered, 1),
             Err(CursorError::Integrity) | Err(CursorError::Malformed)
@@ -280,13 +334,50 @@ mod tests {
     }
 
     #[test]
-    fn cursor_cannot_cross_authorization_or_filter_contexts() {
+    fn encrypting_the_same_cursor_twice_uses_distinct_nonces() {
+        let key = CursorKey::new(vec![7; 32]).expect("key is sufficient");
+        let first = encode(&key, &payload()).expect("first cursor encodes");
+        let second = encode(&key, &payload()).expect("second cursor encodes");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn cursor_refuses_every_mismatched_request_binding_and_expiry() {
+        let expected = payload();
+        let mut mismatches = Vec::new();
+
         let mut request = payload();
-        request.authorization_digest = "sha256:other".to_owned();
-        assert_eq!(
-            require_same_request(&payload(), &request),
-            Err(CursorError::Mismatch)
-        );
+        request.contract_revision = "sha256:other-contract".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.source_revision = "sha256:other-source".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.operation = "other.list".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.filters_digest = "sha256:other-filters".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.selected_fields_digest = "sha256:other-fields".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.authorization_digest = "sha256:other-authorization".to_owned();
+        mismatches.push(request);
+        let mut request = payload();
+        request.order_digest = "sha256:other-order".to_owned();
+        mismatches.push(request);
+
+        for request in mismatches {
+            assert_eq!(
+                require_same_request(&expected, &request),
+                Err(CursorError::Mismatch)
+            );
+        }
+
+        let key = CursorKey::new(vec![7; 32]).expect("key is sufficient");
+        let encoded = encode(&key, &expected).expect("cursor encodes");
+        assert_eq!(decode(&key, &encoded, 100), Err(CursorError::Expired));
     }
 
     #[test]
