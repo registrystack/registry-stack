@@ -2,7 +2,7 @@ schemaVersion: relay.registrystack.org/generated-baselines/v1alpha1
 product: relay-v2
 projects:
   social-assistance:
-    packageRevision: sha256:bb39e792cbe09e374e5e8fd3ebb468af64b99838158a273a6f48163b0179ae99
+    packageRevision: sha256:a6519a6ec76ff4cc8339ed403862560bba3c35d07752bfa085101c703a7e245a
     contractRevision: sha256:0fd06f53b937afbb0252715010ff222c4cb8817a6c62648a2a72ac4d35eae282
     sourceSchemaFingerprints:
       assistance: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
@@ -12,7 +12,7 @@ projects:
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-caseworker.capability.json
       representationIdentifier: caseworker
-      sha256: sha256:1d67b9dace04ce6f30dc845de42fc6f56574f5ff28eda76c55defe46bc1fabcd
+      sha256: sha256:763de965984dc3117c85654e2d9de5b9bb5c4011fc2a540757f8081e6b412248
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-caseworker-classifications
       mediaType: application/json
@@ -40,7 +40,7 @@ projects:
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-caseworker.schema.json
       representationIdentifier: caseworker
-      sha256: sha256:c16f484f5255903f91f86fac25a81d5e7cbcf07ada0a5da1fa3b97c2c5b649cd
+      sha256: sha256:512f7fe48b92cb64c6ebf02ec98d691bf3bf99325e5054cc698877de208b83ac
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-caseworker-shacl
       mediaType: text/turtle
@@ -61,7 +61,7 @@ projects:
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-limited.capability.json
       representationIdentifier: limited
-      sha256: sha256:4f8f10720a121ab9d7355bf214ac03d19c3024312a07e7a079935acaa1c76565
+      sha256: sha256:6c36ec82ecd8017eff4f595d867e4402592136ae83f56ae0d2d885de5ddeb829
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-limited-classifications
       mediaType: application/json
@@ -89,7 +89,7 @@ projects:
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--representation-limited.schema.json
       representationIdentifier: limited
-      sha256: sha256:728f6d4fdc24e33ccad2d36c17d7c403ed5927c93fbbc62578ed13b990c7c6a2
+      sha256: sha256:337b6b3af0e49e483dd64d316e64f34a838fefa651b4a2c8c6c2f466261882d4
       visibility: operation-bound
     - id: assistance-enrolment--lookup-by-case-and-person--representation-limited-shacl
       mediaType: text/turtle
@@ -138,7 +138,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/assistance-enrolment.full.schema.json
       representationIdentifier: null
-      sha256: sha256:4c669711db0b989ac58e1a36ec52afedd05fe2726f7439c0f204fcb0050bb79d
+      sha256: sha256:18f211d02cd62bb62ec0cb1893bb8633551c377119c4a84ff66956968df350ad
       visibility: operator-only
     - id: assistance-enrolment-full-shacl
       mediaType: text/turtle
@@ -173,7 +173,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
       representationIdentifier: null
-      sha256: sha256:fba819496d80b2583a996f16f8629c01452011bec2cb9819b6b0327214380b29
+      sha256: sha256:37fb9c96f4d3f95ddce5d68a47b3b0bbcb897c7f58724f0d924869c4c4c22a2b
       visibility: operator-only
     - id: capability-inventory
       mediaType: application/json
@@ -187,14 +187,14 @@ projects:
       operationIdentifier: null
       path: generated/openapi.full.yaml
       representationIdentifier: null
-      sha256: sha256:b7ea4f0e0c1d392b05e8862dbec696d5ced4439d184dc9c9c9b83af3ee842d5b
+      sha256: sha256:2d66468777edc7c3ac11e1f3feaf31a5eb39ad0d3ccbadcbf9c11d912e02786a
       visibility: operator-only
     - id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
       representationIdentifier: null
-      sha256: sha256:b1a460e09d3d45200f82d9c5f44f5b7fdd2e04db4ee226e716b9104af4573ac8
+      sha256: sha256:77c5a6bc3ff07ed0bb612886c65f255b07f869f07b63915984027ef56c06c86e
       visibility: public
     governedFiles:
     - generated: false
@@ -252,7 +252,7 @@ projects:
       size: 6472
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:6bc260ff78b6600b4c6b019e00a79a41e604cb92adcb64142eb0a15c464ca52d
+    packageRevision: sha256:9a3065397b206e15fe9042e812b1d5befcc2bd2f705959f7ccd21e938b74f453
     contractRevision: sha256:6c4ea84a578cf589ffb851722830f90d7c241998d82ea419f7b823640cd056b5
     sourceSchemaFingerprints:
       companies: sha256:5f12cd971dfa9cafd98018bd8723f2c3902e7d96b3c57ecf5c20e4885eb806a8
@@ -269,14 +269,14 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
       representationIdentifier: null
-      sha256: sha256:fd531b5dc2fa73f708d17dde5edc02b35c56968247eab1e92dc5134efe65c950
+      sha256: sha256:79492f86a1932c364bf346ee119f18b33bfbd884265ae39a0d63fa8718ed69ad
       visibility: operator-only
     - id: capability-inventory
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.json
       representationIdentifier: null
-      sha256: sha256:34810616f877e3226d0b3d94fad2c1e412c54d94243e4665a09e98fbcd298785
+      sha256: sha256:0548efc3fcf465ac4810b1f5491eca7593142ed26b6df5c04c312b81e3706105
       visibility: public
     - id: registered-business--list--representation-public-register-classifications
       mediaType: application/json
@@ -304,7 +304,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/registered-business--list--representation-public-register.schema.json
       representationIdentifier: null
-      sha256: sha256:fc9ae1d572bad5863d99b302c6168807ecfbbb09f0977d075096357d60bf7d78
+      sha256: sha256:01ba9537923dc64cf85742b5bccc154fb66f481e952d863409a36170169b70a9
       visibility: public
     - id: registered-business--list--representation-public-register-shacl
       mediaType: text/turtle
@@ -325,7 +325,7 @@ projects:
       operationIdentifier: registered-business.list
       path: generated/artifacts/registered-business--list--representation-registrar.capability.json
       representationIdentifier: registrar
-      sha256: sha256:f102dc91767c0bff76e61dec2f8b948c230025b4b1eb7f2d6af343c2bda7c0a1
+      sha256: sha256:2bfe3b90328f6840f9bceb823202db81067d599101967f991b47296ca3981758
       visibility: operation-bound
     - id: registered-business--list--representation-registrar-classifications
       mediaType: application/json
@@ -353,7 +353,7 @@ projects:
       operationIdentifier: registered-business.list
       path: generated/artifacts/registered-business--list--representation-registrar.schema.json
       representationIdentifier: registrar
-      sha256: sha256:f2dc9e839f20415ad032c657744db091f732d2dc49133884f4d570a580b3fcc5
+      sha256: sha256:c8b4522d6c4dade6c2a5bb739b202418d96c6022f762c761a2292ceb2b9d9fd3
       visibility: operation-bound
     - id: registered-business--list--representation-registrar-shacl
       mediaType: text/turtle
@@ -395,7 +395,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/registered-business--read--representation-public-register.schema.json
       representationIdentifier: null
-      sha256: sha256:e57c261ade7808c2974aa86d0bd2d16ac10038b2fe2e0e3b08065099b0e7607c
+      sha256: sha256:1c541736496b27e575603285691a8f8969ad94efb99bacc2ed1e78935adcb4be
       visibility: public
     - id: registered-business--read--representation-public-register-shacl
       mediaType: text/turtle
@@ -416,7 +416,7 @@ projects:
       operationIdentifier: registered-business.read
       path: generated/artifacts/registered-business--read--representation-registrar.capability.json
       representationIdentifier: registrar
-      sha256: sha256:a96f07fbf9b61fed41e01b49d4e6bb5144e568bbbfec53cf9fd8f430c857d643
+      sha256: sha256:94fef41a029ff57a434b629e69b91f5b5144a1bfd718fe4c93badc88db15004e
       visibility: operation-bound
     - id: registered-business--read--representation-registrar-classifications
       mediaType: application/json
@@ -444,7 +444,7 @@ projects:
       operationIdentifier: registered-business.read
       path: generated/artifacts/registered-business--read--representation-registrar.schema.json
       representationIdentifier: registrar
-      sha256: sha256:aa6b7009b4a5aa191cce6c057b6a4f3ee7696768c7e21ff8a41802a2f3b44dba
+      sha256: sha256:2b8a5b6b21d32a23a1a9e90cd7aee79f8908ab69be43caf7e4262c735db852ae
       visibility: operation-bound
     - id: registered-business--read--representation-registrar-shacl
       mediaType: text/turtle
@@ -500,7 +500,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/registered-business.full.schema.json
       representationIdentifier: null
-      sha256: sha256:8266c4c05a0c304d255de8c69e78bac01b6d2ad86d540cde95e234ca775878fa
+      sha256: sha256:9060a19e21973052a9b738ef085426d1b404398c5a304e0d8cdc190951ee67ba
       visibility: operator-only
     - id: registered-business-full-shacl
       mediaType: text/turtle
@@ -528,14 +528,14 @@ projects:
       operationIdentifier: null
       path: generated/openapi.full.yaml
       representationIdentifier: null
-      sha256: sha256:f0f97d965af38fde18f51bdd9aff22199541ff64f51c9c10635fb43c137b4896
+      sha256: sha256:4f96b59ade761ceba95f83729c2fd7d2281f5cc91d5d8b65d7beb29aee8d226f
       visibility: operator-only
     - id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
       representationIdentifier: null
-      sha256: sha256:81707ee9bbf12e1ed50f126be4ccb07303decb986d66c2f8ff481c1eeec5a59e
+      sha256: sha256:6abec2de8fc182a7af35847604d9386661f9e66cf897c7c8e33b9e5f7739d0f7
       visibility: public
     governedFiles:
     - generated: false
@@ -599,7 +599,7 @@ projects:
       size: 7020
       visibility: operator-only
   civil-event:
-    packageRevision: sha256:1321aa211982705a63644c45435dc716aacf36b9f0a5872013202fb1985446c1
+    packageRevision: sha256:c9113b8f8aacdbbeea93714bb5675183ffba87f205c66847ad71639ab0a6e049
     contractRevision: sha256:44a3604af965eb51983e44c8cebbb2486cd0655bfe265ce8a47cef22c8f1246a
     sourceSchemaFingerprints:
       events: sha256:7f770d64cb19ec54caca2aa56378b13a43cd5edc206ff44b5fecc99ee9e63759
@@ -616,7 +616,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
       representationIdentifier: null
-      sha256: sha256:7ac021239eaf96b23637b3c0fb2606592272ecb46c79d72b2b4fdbf4213a0660
+      sha256: sha256:afcdc41c47f6c16f9c862e043d80ecaba28ffd290ddafeea7ad855742c9c7513
       visibility: operator-only
     - id: capability-inventory
       mediaType: application/json
@@ -630,7 +630,7 @@ projects:
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-registrar-verification.capability.json
       representationIdentifier: registrar-verification
-      sha256: sha256:f90a9e40f3c5c74fb6ac659a9d89526d2e9dfd1d2c43edfc28dba5b6d91014f7
+      sha256: sha256:00875a8d4026f70086261e9da066180bc033bb135b08aeddcf5eb3ea18f1052d
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-registrar-verification-classifications
       mediaType: application/json
@@ -658,7 +658,7 @@ projects:
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-registrar-verification.schema.json
       representationIdentifier: registrar-verification
-      sha256: sha256:9bfbfca6752f1cc81419c49bc2b2ccc9c23ce14a044500b6a6d071d409052bed
+      sha256: sha256:61682320ab19b6a83c7eb4d39f5ac75a35204eb9555d48bc0845b50e1f0f5e63
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-registrar-verification-shacl
       mediaType: text/turtle
@@ -679,7 +679,7 @@ projects:
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.capability.json
       representationIdentifier: supervisory
-      sha256: sha256:d5cc6a898eb258f73e9c83828f4dbae6e981c528658dfb23b8f87c70c21a0dd1
+      sha256: sha256:d17b75f274245b87bdf2c7735a21cadc44ebb5e9d377b7cf4e770a91825a18da
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-supervisory-classifications
       mediaType: application/json
@@ -707,7 +707,7 @@ projects:
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--representation-supervisory.schema.json
       representationIdentifier: supervisory
-      sha256: sha256:77cc2dab5ac1334a9bddedd486eb669925fe7064c7ab068622d6204b1992338c
+      sha256: sha256:81dd34e6da5f5904d291a593bbfd28c862dae6389da055689043d84e08567cab
       visibility: operation-bound
     - id: civil-event--lookup-verify-registration--representation-supervisory-shacl
       mediaType: text/turtle
@@ -728,7 +728,7 @@ projects:
       operationIdentifier: civil-event.read
       path: generated/artifacts/civil-event--read--representation-registrar.capability.json
       representationIdentifier: registrar
-      sha256: sha256:5c49bf297ff58f5e4e1cb2c7cc190471c1d56fb5ec4bfc42f5d62938245eb6a2
+      sha256: sha256:9a959f20a4ff3d08f25e18333028fa5ca2e73f64b3ad0c18c1dd5a7013de421e
       visibility: operation-bound
     - id: civil-event--read--representation-registrar-classifications
       mediaType: application/json
@@ -756,7 +756,7 @@ projects:
       operationIdentifier: civil-event.read
       path: generated/artifacts/civil-event--read--representation-registrar.schema.json
       representationIdentifier: registrar
-      sha256: sha256:bd423d35379df92607a77594e1befe474a62ba18c3860c3d1455ce1029f02558
+      sha256: sha256:b2e7b40922865e1959529328f68ef7fd5976bd6e353e00d811b7a35345c55764
       visibility: operation-bound
     - id: civil-event--read--representation-registrar-shacl
       mediaType: text/turtle
@@ -812,7 +812,7 @@ projects:
       operationIdentifier: null
       path: generated/artifacts/civil-event.full.schema.json
       representationIdentifier: null
-      sha256: sha256:8719ed7bf8ccb512b1da1a2ed33e70308a4f2e75d919d3b62d071ba6e76a8bbb
+      sha256: sha256:79c00b820f535c83c22d2c41d9619f80a3fdc8af08767a6d5dfef3d803da88dd
       visibility: operator-only
     - id: civil-event-full-shacl
       mediaType: text/turtle
@@ -840,14 +840,14 @@ projects:
       operationIdentifier: null
       path: generated/openapi.full.yaml
       representationIdentifier: null
-      sha256: sha256:04b9fc444ace2a9e3062f82fdf3e9cbd3d375422c109dd0c3bdd42fe7b8efdf4
+      sha256: sha256:5d6e1e5693afcec8221a6a77205ecb48bba58ea91e25b60db28cdf9658a80e58
       visibility: operator-only
     - id: openapi-public
       mediaType: application/json
       operationIdentifier: null
       path: generated/openapi.public.json
       representationIdentifier: null
-      sha256: sha256:2dc557335daf6824d9a037998ef20fa1efe835c877fb46feec1e3fd2d19ac392
+      sha256: sha256:a876498231e02cef4e85112b1e866dc7df00a2f2fbbd9bee6c128e65d198d31d
       visibility: public
     governedFiles:
     - generated: false

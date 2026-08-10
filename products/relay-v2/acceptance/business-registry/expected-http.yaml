@@ -20,10 +20,10 @@ steps:
     request:
       method: GET
       path: /v2/resources/registered-business/records
-      query: {pageSize: 2}
+      query: {jurisdiction: EX-A, pageSize: 1}
     expect:
       status: 200
-      itemCount: 2
+      itemCount: 1
       nextCursor: non-null
       registryCoreRequired: true
   - id: second-page
@@ -31,7 +31,7 @@ steps:
       method: GET
       path: /v2/resources/registered-business/records
       query: {cursor: "$nextCursor:first-page"}
-    expect: {status: 200, itemCount: 2, registryCoreRequired: true}
+    expect: {status: 200, itemCount: 1, registryCoreRequired: true}
   - id: terminal-page
     request:
       method: GET
