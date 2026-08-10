@@ -656,32 +656,49 @@ fn negotiate<T: Copy>(headers: &HeaderMap, offered: &[(&str, T)]) -> Option<T> {
     if headers.get_all(ACCEPT).iter().next().is_none() {
         return offered.first().map(|(_, representation)| *representation);
     }
-    let mut best: Option<(u16, T)> = None;
+    let mut ranges = Vec::new();
     for value in headers.get_all(ACCEPT) {
         let value = value.to_str().ok()?;
         for item in value.split(',') {
-            let range = parse_accept_item(item)?;
-            if range.quality == 0 {
-                continue;
-            }
-            let matched = if range.media_type == "*/*" && range.version.is_none() {
-                offered.first().map(|(_, representation)| *representation)
-            } else {
-                offered.iter().find_map(|(media_type, representation)| {
-                    let (expected_media_type, expected_version) = split_media_type(media_type)?;
-                    (range.media_type.eq_ignore_ascii_case(expected_media_type)
-                        && range.version.as_deref() == Some(expected_version))
-                    .then_some(*representation)
-                })
-            };
-            if let Some(representation) = matched {
-                if best.is_none_or(|(quality, _)| range.quality > quality) {
-                    best = Some((range.quality, representation));
-                }
-            }
+            ranges.push(parse_accept_item(item)?);
+        }
+    }
+
+    let mut best: Option<(u16, T)> = None;
+    for (media_type, representation) in offered {
+        let (expected_media_type, expected_version) = split_media_type(media_type)?;
+        let effective = ranges
+            .iter()
+            .filter_map(|range| {
+                accept_specificity(range, expected_media_type, expected_version)
+                    .map(|specificity| (specificity, range.quality))
+            })
+            .max_by_key(|(specificity, quality)| (*specificity, *quality));
+        let Some((_, quality)) = effective else {
+            continue;
+        };
+        if quality > 0 && best.is_none_or(|(best_quality, _)| quality > best_quality) {
+            best = Some((quality, *representation));
         }
     }
     best.map(|(_, representation)| representation)
+}
+
+fn accept_specificity(
+    range: &AcceptItem,
+    expected_media_type: &str,
+    expected_version: &str,
+) -> Option<u8> {
+    if range.media_type == "*/*" && range.version.is_none() {
+        return Some(0);
+    }
+    if !range.media_type.eq_ignore_ascii_case(expected_media_type) {
+        return None;
+    }
+    // A specific q=0 range is an exclusion for that SDMX media type even when
+    // it names another version. A positive range must still opt into the exact
+    // version Relay offers.
+    (range.quality == 0 || range.version.as_deref() == Some(expected_version)).then_some(1)
 }
 
 struct AcceptItem {
@@ -1216,6 +1233,20 @@ mod tests {
             HeaderValue::from_static("application/vnd.sdmx.data+json"),
         );
         assert_eq!(negotiate_data(&headers), None);
+
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("application/vnd.sdmx.data+json;version=2.0.0;q=0, */*;q=1"),
+        );
+        assert_eq!(negotiate_data(&headers), Some(DataRepresentation::Csv));
+
+        headers.insert(
+            ACCEPT,
+            HeaderValue::from_static(
+                "application/vnd.sdmx.structure+json;version=2.0.0;q=0, */*;q=1",
+            ),
+        );
+        assert!(!negotiate_structure(&headers));
     }
 
     #[test]
