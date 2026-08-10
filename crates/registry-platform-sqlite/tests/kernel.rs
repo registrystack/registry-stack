@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use registry_platform_sqlite::{
     inspect_schema, CapturedSnapshot, ColumnContract, ColumnType, DatabaseProfile,
@@ -346,6 +346,19 @@ fn snapshot_readiness_rehashes_the_exact_captured_bytes() {
     assert!(!error.to_string().contains("one"));
 }
 
+#[test]
+fn snapshot_readiness_honors_an_expired_absolute_deadline() {
+    let directory = TempDir::new().unwrap();
+    let path = database(&directory);
+    let snapshot = CapturedSnapshot::capture(&path).unwrap();
+
+    let error = snapshot
+        .verify_unchanged_before(Instant::now())
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TimeBudgetExceeded);
+    assert!(!error.to_string().contains(path.to_string_lossy().as_ref()));
+}
+
 #[tokio::test]
 async fn the_step_budget_interrupts_an_expensive_statement_and_the_pool_recovers() {
     let directory = TempDir::new().unwrap();
@@ -400,6 +413,40 @@ async fn the_time_budget_interrupts_an_expensive_statement_and_the_pool_recovers
     assert_eq!(recovered.rows[0]["id"], Value::String("1".to_owned()));
 }
 
+#[tokio::test]
+async fn caller_deadline_interrupts_the_engine_before_the_statement_limit() {
+    let directory = TempDir::new().unwrap();
+    let path = database(&directory);
+    let snapshot = CapturedSnapshot::capture(&path).unwrap();
+    let mut bounded = contract(
+        "WITH RECURSIVE counter(n) AS (\
+             SELECT 1 UNION ALL SELECT n + 1 FROM counter \
+             WHERE n < CASE WHEN :active = 1 THEN 50000000 ELSE 1 END\
+         ) SELECT printf('%d', COUNT(*)) AS id FROM counter WHERE :active = :active",
+    );
+    bounded.limits.maximum_statement_steps = 100_000_000;
+    bounded.limits.timeout = Duration::from_secs(1);
+    let statement = ReadOnlyStatement::open(DatabaseProfile::Snapshot(snapshot), bounded).unwrap();
+
+    let error = statement
+        .execute_before(
+            &BTreeMap::from([("active".to_owned(), Value::Integer(1))]),
+            Instant::now() + Duration::from_millis(25),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        ErrorKind::TimeBudgetExceeded | ErrorKind::Timeout
+    ));
+
+    let recovered = statement
+        .execute(&BTreeMap::from([("active".to_owned(), Value::Integer(0))]))
+        .await
+        .expect("the caller-bounded connection returns cleanly to the pool");
+    assert_eq!(recovered.rows[0]["id"], Value::String("1".to_owned()));
+}
+
 #[cfg(feature = "fixture")]
 #[tokio::test]
 async fn queue_time_is_bounded_and_admission_recovers() {
@@ -412,6 +459,35 @@ async fn queue_time_is_bounded_and_admission_recovers() {
     let held = statement.hold_all_permits_for_test().await.unwrap();
     let error = statement
         .execute(&BTreeMap::from([("active".to_owned(), Value::Integer(1))]))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Timeout);
+
+    drop(held);
+    let result = statement
+        .execute(&BTreeMap::from([("active".to_owned(), Value::Integer(1))]))
+        .await
+        .unwrap();
+    assert_eq!(result.rows.len(), 1);
+}
+
+#[cfg(feature = "fixture")]
+#[tokio::test]
+async fn caller_deadline_is_not_restarted_at_statement_admission() {
+    let directory = TempDir::new().unwrap();
+    let path = database(&directory);
+    let snapshot = CapturedSnapshot::capture(&path).unwrap();
+    let mut bounded = contract("SELECT id FROM records WHERE active = :active ORDER BY id");
+    bounded.limits.timeout = Duration::from_secs(1);
+    let statement = ReadOnlyStatement::open(DatabaseProfile::Snapshot(snapshot), bounded).unwrap();
+    let held = statement.hold_all_permits_for_test().await.unwrap();
+    let deadline = Instant::now() + Duration::from_millis(30);
+
+    let error = statement
+        .execute_before(
+            &BTreeMap::from([("active".to_owned(), Value::Integer(1))]),
+            deadline,
+        )
         .await
         .unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Timeout);

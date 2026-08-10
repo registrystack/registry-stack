@@ -84,7 +84,11 @@ impl CapturedSnapshot {
         self.verify_unchanged_until(None)
     }
 
-    pub(crate) fn verify_unchanged_before(&self, deadline: Instant) -> Result<(), SqliteError> {
+    /// Re-read the bound snapshot before an absolute deadline.
+    ///
+    /// This is the bounded form of [`Self::verify_unchanged`] for readiness
+    /// and other request-scoped checks.
+    pub fn verify_unchanged_before(&self, deadline: Instant) -> Result<(), SqliteError> {
         self.verify_unchanged_until(Some(deadline))
     }
 

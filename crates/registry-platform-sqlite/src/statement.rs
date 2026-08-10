@@ -326,8 +326,30 @@ impl ReadOnlyStatement {
         &self,
         values: &BTreeMap<String, Value>,
     ) -> Result<ResultSet, SqliteError> {
-        let bindings = bind_values(&self.plan.parameters, values)?;
         let deadline = deadline(self.plan.limits.timeout)?;
+        self.execute_until(values, deadline).await
+    }
+
+    /// Execute before a caller's absolute queue-and-engine deadline.
+    ///
+    /// The statement's configured timeout remains an upper bound, so a caller
+    /// may shorten but cannot extend the statement budget.
+    pub async fn execute_before(
+        &self,
+        values: &BTreeMap<String, Value>,
+        caller_deadline: Instant,
+    ) -> Result<ResultSet, SqliteError> {
+        let statement_deadline = deadline(self.plan.limits.timeout)?;
+        self.execute_until(values, caller_deadline.min(statement_deadline))
+            .await
+    }
+
+    async fn execute_until(
+        &self,
+        values: &BTreeMap<String, Value>,
+        deadline: Instant,
+    ) -> Result<ResultSet, SqliteError> {
+        let bindings = bind_values(&self.plan.parameters, values)?;
         let async_deadline = tokio::time::Instant::from_std(deadline);
         let permit = tokio::time::timeout_at(
             async_deadline,
