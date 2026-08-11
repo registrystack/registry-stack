@@ -1350,9 +1350,6 @@ fn compile_referenced_subjects(
     let authored = question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
     let mut compiled = Vec::with_capacity(authored.len());
     for subject in authored {
-        if subject.source.is_some() {
-            bail!("subject.source is available only to an inline OpenAPI operation");
-        }
         let selector_profile = match &subject.profile {
             Some(profile) => profile.clone(),
             None => referenced_selector_profile(source, &subject.role, &subject.selector)?,
@@ -4746,6 +4743,29 @@ uses under `authentication:` in sources/people.yaml",
                 serde_norway::from_str::<Value>(authentication).expect("posture")["authentication"],
             );
         }
+    }
+
+    #[test]
+    fn referenced_question_consumes_the_shared_subject_source_finding() {
+        let question = QUESTION
+            .replace(
+                "  selector: person_id\n",
+                "  selector: person_id\n  source: true\n",
+            )
+            .replace(
+                "source:\n  operation: getPerson\n  facts:\n    - name: date_of_birth\n      path: /date_of_birth\n      combine: exactly-one\n  collectionBounds: {}",
+                "source:\n  ref: people",
+            );
+        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a referenced source cannot use the inline source marker");
+
+        assert_eq!(
+            error.to_string(),
+            "subject.source is available only to an inline OpenAPI operation"
+        );
+        assert!(fixture.staging_is_empty());
     }
 
     #[test]
