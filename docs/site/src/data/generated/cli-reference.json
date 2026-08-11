@@ -1178,7 +1178,7 @@
               "invocation": "evidencectl source suggest",
               "about": "Suggest source configuration from an OpenAPI document",
               "long_about": null,
-              "usage": "evidencectl source suggest [OPTIONS]",
+              "usage": "evidencectl source suggest [OPTIONS] <--openapi <OPENAPI>|--project <PROJECT>>",
               "arguments": [],
               "options": [
                 {
@@ -1258,7 +1258,16 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "required_exactly_one",
+                  "when": null,
+                  "arguments": [
+                    "--openapi <OPENAPI>",
+                    "--project <PROJECT>"
+                  ]
+                }
+              ],
               "subcommands": []
             }
           ]

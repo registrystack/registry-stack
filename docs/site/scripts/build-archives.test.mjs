@@ -17,6 +17,7 @@ import { gzipSync } from 'node:zlib';
 
 import {
   buildDocsetArchive,
+  currentSourceGeneratedArtifacts,
   normalizePagefindGzipMetadata,
   readOptionalRegularFile,
   stagePinnedGeneratedArtifacts,
@@ -39,11 +40,8 @@ const archivedDocset = {
     },
   },
 };
-// The staging behavior is exercised through fixture paths rather than through
-// currentSourceGeneratedArtifacts, so it stays proven whether or not the site
-// currently ships a generated artifact that has to be pinned per docset.
 const stagedArtifactFixtures = Object.freeze([
-  'docs/site/src/data/generated/staged-fixture.json',
+  'docs/site/src/data/generated/staged-fixtures',
   'docs/site/public/generated/staged-fixture.v1.json',
 ]);
 
@@ -151,6 +149,7 @@ test('archive generation excludes current-source generators', async () => {
   }
   for (const script of [
     'generate-evidence-configuration.mjs',
+    'generate-cli-reference.mjs',
   ]) {
     assert.doesNotMatch(
       archiveGeneration,
@@ -165,6 +164,10 @@ test('archive generation excludes current-source generators', async () => {
     packageJson.scripts.build,
     /node scripts\/apply-archive-seo\.mjs dist/,
   );
+  assert.deepEqual(currentSourceGeneratedArtifacts, [
+    'docs/site/src/content/docs/reference/cli',
+    'docs/site/src/data/generated/cli-reference.json',
+  ]);
 });
 
 test('archive byte producers pin collation independently of the host locale', async () => {
@@ -208,7 +211,7 @@ test('candidate archive stages generated artifacts from the checked-out source',
 
   await restore();
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].slice(0, 5), ['ls-tree', '-rz', '--name-only', 'HEAD', '--']);
+  assert.deepEqual(calls[0].slice(0, 6), ['ls-tree', '-rz', '-r', '--name-only', 'HEAD', '--']);
 });
 
 test('an empty artifact list stages nothing instead of listing the whole tree', async () => {
@@ -437,8 +440,8 @@ test('archive output uses pinned generated artifacts and restores current files'
   const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-ref-'));
   t.after(() => rm(repoRoot, { recursive: true, force: true }));
   const siteRoot = resolve(repoRoot, 'docs/site');
-  const pinnedPath = stagedArtifactFixtures[0];
-  const absentAtReleasePath = stagedArtifactFixtures.at(-1);
+  const pinnedPath = `${stagedArtifactFixtures[0]}/pinned.json`;
+  const absentAtReleasePath = `${stagedArtifactFixtures[0]}/current-only.json`;
   const pinnedLocal = resolve(repoRoot, pinnedPath);
   const absentAtReleaseLocal = resolve(repoRoot, absentAtReleasePath);
 

@@ -22,8 +22,14 @@ This page is generated from the public Clap command tree. Hidden implementation 
 ## Usage
 
 ```text
-evidencectl source suggest [OPTIONS]
+evidencectl source suggest [OPTIONS] <--openapi <OPENAPI>|--project <PROJECT>>
 ```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | Exactly one of `--openapi <OPENAPI>`, `--project <PROJECT>` is required. |
 
 ## Options
 

@@ -612,6 +612,12 @@ mod tests {
             .iter()
             .any(|argument| argument.display == "--profile <PROFILE>" && argument.always_required));
 
+        let source_suggest = find_command(&catalog.binaries, "evidencectl source suggest");
+        assert!(source_suggest.constraints.iter().any(|constraint| {
+            constraint.kind == ConstraintKind::RequiredExactlyOne
+                && constraint.arguments == ["--openapi <OPENAPI>", "--project <PROJECT>"]
+        }));
+
         for (invocation, option) in [
             ("mint check", "--config <CONFIG>"),
             ("evidence-oid4vci check", "--config <CONFIG>"),
