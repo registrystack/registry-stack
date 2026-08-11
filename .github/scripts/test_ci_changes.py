@@ -712,7 +712,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs"])
         self.assertTrue(outputs["docs_archives"])
 
-    def test_docs_pages_is_exact_dispatch_only(self) -> None:
+    def test_docs_pages_deploys_main_and_accepts_optional_dispatch(self) -> None:
         workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
         trigger_block = workflow.split("\npermissions:", 1)[0].rstrip()
         self.assertEqual(
@@ -720,15 +720,18 @@ class CiChangesTest(unittest.TestCase):
             """name: Deploy RegistryStack Docs
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       released_tag:
-        description: Exact public Registry Stack release tag
-        required: true
+        description: Optional exact public docs-bearing release tag
+        required: false
         type: string
       docs_sha256:
-        description: SHA-256 of the released documentation archive
-        required: true
+        description: Optional SHA-256 of that released documentation archive
+        required: false
         type: string
 """.rstrip(),
         )
