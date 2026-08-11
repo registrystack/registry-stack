@@ -2478,6 +2478,26 @@ class RegistryReleaseTest(TestCase):
         self.assertNotIn("registryctl-installer", data["artifacts"])
         self.assertNotIn("registry-docs", data["artifacts"])
 
+    def test_relay_installer_joins_the_exact_inventory_after_v0_19_0(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            historical = write_manifest(root, version="0.19.0")
+            historical_result = run_tool("validate", str(historical))
+
+            current = write_manifest(root, version="0.19.1")
+            current_result = run_tool("validate", str(current))
+            data = yaml.safe_load(current.read_text(encoding="utf-8"))
+            del data["artifacts"]["relay-installer"]
+            current.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+            missing_result = run_tool("validate", str(current))
+
+        self.assertEqual(0, historical_result.returncode, historical_result.stderr)
+        self.assertEqual(0, current_result.returncode, current_result.stderr)
+        self.assertNotEqual(0, missing_result.returncode)
+        self.assertIn("missing relay-installer", missing_result.stderr)
+
     def test_beta_27_manifest_is_the_notary_free_current_inventory(self) -> None:
         manifest = ROOT / "release/manifests/registry-stack-beta-27.yaml"
         result = run_tool("validate", str(manifest))
@@ -4270,6 +4290,8 @@ def write_manifest(
             "evidence-client-node": version,
             "evidence-client-python": version,
         }
+        if version_tuple >= (0, 19, 1):
+            artifacts["relay-installer"] = version
     if include_registryctl_image_lock is None:
         include_registryctl_image_lock = (0, 9, 0) <= version_tuple < (0, 19, 0)
     if include_registryctl_image_lock:

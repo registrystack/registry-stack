@@ -1280,6 +1280,15 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.validate_candidate_manifest(docs_payload, now=self.now)
 
+    def test_relay_installer_payloads_begin_after_v0_19_0(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.19.0")
+        current = self.module._relay_v2_payload_inventory("0.19.1")
+
+        self.assertNotIn("relay-v0.19.0-install.sh", historical)
+        self.assertNotIn("relay-install.sh", historical)
+        self.assertEqual("installer", current["relay-v0.19.1-install.sh"])
+        self.assertEqual("installer", current["relay-install.sh"])
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

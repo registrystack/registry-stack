@@ -788,6 +788,40 @@ jobs:
           diff -u \
             "${RUNNER_TEMP}/expected-client-assets" \
             "${RUNNER_TEMP}/actual-client-assets"
+          version="${{ needs.validate.outputs.version }}"
+          IFS=. read -r relay_major relay_minor relay_patch <<< "${version}"
+          if (( relay_major > 0 || relay_minor > 19 ||
+                (relay_minor == 19 && relay_patch >= 1) )); then
+            relay_installer="relay-${{ needs.validate.outputs.tag }}-install.sh"
+            awk -v version="${{ needs.validate.outputs.tag }}" '
+              $0 == "default_version=\"\"" {
+                print "default_version=\"" version "\""
+                rendered = 1
+                next
+              }
+              { print }
+              END { if (!rendered) exit 1 }
+            ' crates/registry-relay-v2/install.sh \
+              > "candidate/bundle-root/${relay_installer}"
+            chmod 0755 "candidate/bundle-root/${relay_installer}"
+            cp "candidate/bundle-root/${relay_installer}" \
+              candidate/bundle-root/relay-install.sh
+            chmod 0755 candidate/bundle-root/relay-install.sh
+            (
+              cd candidate/bundle-root
+              sha256sum -- \
+                "relay-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                > SHA256SUMS
+            )
+            relay_install_dir="${RUNNER_TEMP}/candidate-relay-install"
+            RELAY_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
+            RELAY_INSTALL_DIR="${relay_install_dir}" \
+              bash "candidate/bundle-root/${relay_installer}"
+            observed="$("${relay_install_dir}/relay" --version)"
+            test "${observed}" = \
+              "relay ${{ needs.validate.outputs.version }}"
+            rm candidate/bundle-root/SHA256SUMS
+          fi
           evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"
           awk -v version="${{ needs.validate.outputs.tag }}" '
             $0 == "default_version=\"\"" {
