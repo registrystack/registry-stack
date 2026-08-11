@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import pathlib
 import sys
 import unittest
@@ -59,6 +60,47 @@ class DriftTest(unittest.TestCase):
         stub = class_members(self.classes["RelayClient"])
         live = set(vars(relay.RelayClient)) - {"__doc__", "__module__"}
         self.assertEqual(stub, live)
+
+    def test_list_and_search_signatures_match_both_directions(self):
+        for method_name in ("list_records", "search"):
+            with self.subTest(method=method_name):
+                stub_method = next(
+                    item
+                    for item in self.classes["RelayClient"].body
+                    if isinstance(item, ast.FunctionDef) and item.name == method_name
+                )
+                stub_parameters = {
+                    argument.arg: ("positional", default is None)
+                    for argument, default in zip(
+                        stub_method.args.args,
+                        [None]
+                        * (len(stub_method.args.args) - len(stub_method.args.defaults))
+                        + list(stub_method.args.defaults),
+                    )
+                }
+                stub_parameters.update(
+                    {
+                        argument.arg: ("keyword", default is None)
+                        for argument, default in zip(
+                            stub_method.args.kwonlyargs,
+                            stub_method.args.kw_defaults,
+                        )
+                    }
+                )
+
+                live_parameters = inspect.signature(
+                    getattr(relay.RelayClient, method_name)
+                ).parameters
+                live_projection = {
+                    name: (
+                        "keyword"
+                        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+                        else "positional",
+                        parameter.default is inspect.Parameter.empty,
+                    )
+                    for name, parameter in live_parameters.items()
+                }
+                self.assertEqual(stub_parameters, live_projection)
 
     def test_error_attributes_and_inheritance_are_pinned(self):
         self.assertEqual(

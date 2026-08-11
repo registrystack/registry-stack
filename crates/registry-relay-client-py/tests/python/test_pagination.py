@@ -74,7 +74,11 @@ class PaginationTest(unittest.TestCase):
             self.assertIsNone(second_records["continuation"])
 
             first_search = client.search(
-                "people", "nearby", page_size=3, format="json-ld"
+                "people",
+                "nearby",
+                bbox=[10, 20, 11, 21],
+                page_size=3,
+                format="json-ld",
             )
             search_continuation = first_search["continuation"]
             self.assertEqual(search_continuation["route"]["kind"], "search")
@@ -90,7 +94,11 @@ class PaginationTest(unittest.TestCase):
         self.assertNotIn("fields", queries[3])
         self.assertNotIn("pageSize", queries[3])
         self.assertNotIn("category", queries[3])
+        self.assertEqual(
+            queries[4], {"bbox": ["10,20,11,21"], "pageSize": ["3"]}
+        )
         self.assertEqual(queries[5], {"cursor": ["search_cursor"]})
+        self.assertNotIn("bbox", queries[5])
 
     def test_continuations_are_route_specific_and_exact(self):
         client = relay.RelayClient("http://127.0.0.1:9")

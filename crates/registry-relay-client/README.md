@@ -42,7 +42,7 @@ shared platform client primitives.
 
 ```rust,no_run
 use registry_relay_client::{
-    CollectionRequest, Conditional, RecordFormat, RecordOptions,
+    Conditional, ListRequest, RecordFormat, RecordOptions,
     ResourceListRequest,
 };
 # async fn run(client: &registry_relay_client::RelayClient) -> Result<(), registry_relay_client::RelayClientError> {
@@ -54,7 +54,7 @@ let options = RecordOptions::default()
     .fields(["name", "status"])?
     .access_profile("caseworker")?
     .format(RecordFormat::JsonLd);
-let request = CollectionRequest::default()
+let request = ListRequest::default()
     .options(options)
     .page_size(25)?
     .filter("status", "active")?;
@@ -76,8 +76,12 @@ wire format, and access profile. Its validated serializable projection supports
 language bindings and persistence without admitting first-page fields,
 filters, bbox, or page size. A caller cannot combine those facts with a cursor.
 
+List and named search use distinct first-page types. `ListRequest` permits only
+declared equality filters and has no bbox API. `SearchRequest::new(bbox)` makes
+the closed point-bbox search input mandatory and exposes no filter API.
+
 Lookups serialize exactly `{"selectors": {...}}`; selector names and scalar
-values are bounded before a request is built. Search filters cannot collide
+values are bounded before a request is built. List filters cannot collide
 with Relay's reserved query names. Field lists reject empty or duplicate names,
 and bounding boxes reject non-finite coordinates, invalid latitude/longitude,
 south-to-north inversion, and antimeridian crossing.

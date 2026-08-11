@@ -13,11 +13,11 @@ use napi_derive::napi;
 use registry_platform_crypto::PrivateJwk;
 use registry_relay_client::{
     BoundingBox, CollectionContinuation, CollectionContinuationProjection, CollectionPage,
-    CollectionRequest, CollectionRouteProjection, Complete, Conditional, LookupRequest,
-    NotModified, PrivateKeyJwt, PrivateKeyJwtConfig, ProtocolFailure, RawDocument, RecordFormat,
-    RecordOptions, RelayClient as CoreClient, RelayClientConfig, RelayClientError,
-    ResourceContinuation, ResourceContinuationProjection, ResourceListRequest, ResourcePage,
-    ResponseMetadata, SdmxDataFormat, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest,
+    CollectionRouteProjection, Complete, Conditional, ListRequest, LookupRequest, NotModified,
+    PrivateKeyJwt, PrivateKeyJwtConfig, ProtocolFailure, RawDocument, RecordFormat, RecordOptions,
+    RelayClient as CoreClient, RelayClientConfig, RelayClientError, ResourceContinuation,
+    ResourceContinuationProjection, ResourceListRequest, ResourcePage, ResponseMetadata,
+    SdmxDataFormat, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest, SearchRequest,
     StaticToken, StrongEtag, TokenError, TokenProvider,
 };
 use serde::Serialize;
@@ -674,20 +674,13 @@ fn record_options(object: &Map<String, Value>) -> Result<RecordOptions> {
     Ok(options)
 }
 
-fn collection_request(value: Option<Value>) -> Result<CollectionRequest> {
+fn list_request(value: Option<Value>) -> Result<ListRequest> {
     let object = request_object(
         value,
-        &[
-            "pageSize",
-            "fields",
-            "accessProfile",
-            "format",
-            "filters",
-            "bbox",
-        ],
-        "collection options must be an object with supported fields",
+        &["pageSize", "fields", "accessProfile", "format", "filters"],
+        "list options must be an object with supported fields",
     )?;
-    let mut request = CollectionRequest::default().options(record_options(&object)?);
+    let mut request = ListRequest::default().options(record_options(&object)?);
     if let Some(value) = request_optional_u32(
         &object,
         "pageSize",
@@ -698,24 +691,44 @@ fn collection_request(value: Option<Value>) -> Result<CollectionRequest> {
     for (name, value) in string_map(&object, "filters", "filters must map strings to strings")? {
         request = request.filter(name, value).map_err(client_error)?;
     }
-    if let Some(value) = object.get("bbox") {
-        if !value.is_null() {
-            let values = value.as_array().ok_or_else(|| {
-                binding_error("invalid_request", "bbox must be an array of four numbers")
-            })?;
-            let numbers = values
-                .iter()
-                .map(Value::as_f64)
-                .collect::<Option<Vec<_>>>()
-                .filter(|values| values.len() == 4)
-                .ok_or_else(|| {
-                    binding_error("invalid_request", "bbox must be an array of four numbers")
-                })?;
-            request = request.bbox(
-                BoundingBox::new(numbers[0], numbers[1], numbers[2], numbers[3])
-                    .map_err(client_error)?,
-            );
-        }
+    Ok(request)
+}
+
+fn search_request(value: Value) -> Result<SearchRequest> {
+    let object = request_object(
+        Some(value),
+        &["pageSize", "fields", "accessProfile", "format", "bbox"],
+        "search options must be an object with supported fields",
+    )?;
+    let values = object
+        .get("bbox")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            binding_error(
+                "invalid_request",
+                "search options must include bbox as an array of four numbers",
+            )
+        })?;
+    let numbers = values
+        .iter()
+        .map(Value::as_f64)
+        .collect::<Option<Vec<_>>>()
+        .filter(|values| values.len() == 4)
+        .ok_or_else(|| {
+            binding_error(
+                "invalid_request",
+                "search options must include bbox as an array of four numbers",
+            )
+        })?;
+    let bbox =
+        BoundingBox::new(numbers[0], numbers[1], numbers[2], numbers[3]).map_err(client_error)?;
+    let mut request = SearchRequest::new(bbox).options(record_options(&object)?);
+    if let Some(value) = request_optional_u32(
+        &object,
+        "pageSize",
+        "pageSize must be a non-negative integer",
+    )? {
+        request = request.page_size(value).map_err(client_error)?;
     }
     Ok(request)
 }
@@ -890,7 +903,7 @@ impl RelayClient {
         options: Option<Value>,
         etag: Option<String>,
     ) -> Result<Either<CollectionPageOutcome, NotModifiedOutcome>> {
-        let request = collection_request(options)?;
+        let request = list_request(options)?;
         let etag = parse_etag(etag)?;
         collection_page(
             self.inner
@@ -960,10 +973,10 @@ impl RelayClient {
         &self,
         resource: String,
         search: String,
-        options: Option<Value>,
+        options: Value,
         etag: Option<String>,
     ) -> Result<Either<CollectionPageOutcome, NotModifiedOutcome>> {
-        let request = collection_request(options)?;
+        let request = search_request(options)?;
         let etag = parse_etag(etag)?;
         collection_page(
             self.inner
@@ -1192,8 +1205,31 @@ mod tests {
 
     #[test]
     fn invalid_request_kind_is_not_configuration() {
-        let error = collection_request(Some(json!({"pageSize": 0}))).unwrap_err();
+        let error = list_request(Some(json!({"pageSize": 0}))).unwrap_err();
         assert_eq!(error_envelope(error)["kind"], "invalid_request");
+    }
+
+    #[test]
+    fn list_and_search_options_keep_distinct_query_shapes() {
+        let list_error =
+            list_request(Some(json!({"bbox": [100.0, 13.0, 101.0, 14.0]}))).unwrap_err();
+        assert_eq!(error_envelope(list_error)["kind"], "invalid_request");
+
+        let missing_bbox = search_request(json!({"pageSize": 10})).unwrap_err();
+        assert_eq!(error_envelope(missing_bbox)["kind"], "invalid_request");
+
+        let filter_error = search_request(json!({
+            "bbox": [100.0, 13.0, 101.0, 14.0],
+            "filters": {"status": "active"}
+        }))
+        .unwrap_err();
+        assert_eq!(error_envelope(filter_error)["kind"], "invalid_request");
+
+        search_request(json!({
+            "pageSize": 10,
+            "bbox": [100.0, 13.0, 101.0, 14.0]
+        }))
+        .expect("the closed search query shape is accepted");
     }
 
     #[test]

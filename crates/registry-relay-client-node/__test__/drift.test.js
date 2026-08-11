@@ -52,6 +52,20 @@ test('continuation format literals match the core wire projection', () => {
   assert.doesNotMatch(continuation[0], /'geo-json-rfc7946'/);
 });
 
+test('list and search declarations expose distinct closed option shapes', () => {
+  const declaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
+  const list = declaration.match(/export interface ListOptions[\s\S]*?\n}/);
+  const search = declaration.match(/export interface SearchOptions[\s\S]*?\n}/);
+  assert.ok(list);
+  assert.ok(search);
+  assert.match(list[0], /filters\?:/);
+  assert.doesNotMatch(list[0], /\bbbox\??:/);
+  assert.match(search[0], /\bbbox:/);
+  assert.doesNotMatch(search[0], /filters\?:/);
+  assert.match(declaration, /listRecords\(resource: string, options\?: ListOptions \| null,/);
+  assert.match(declaration, /search\(resource: string, search: string, options: SearchOptions,/);
+});
+
 test('only the normalized package entry point is exported', () => {
   assert.equal(require('@registrystack/relay-client').RelayClient, wrapper.RelayClient);
   assert.throws(

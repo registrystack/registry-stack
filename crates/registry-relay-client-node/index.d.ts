@@ -13,7 +13,7 @@ export declare class RelayClient {
   continueListRecords(continuation: any, etag?: string | undefined | null): Promise<CollectionPageOutcome | NotModifiedOutcome>
   readRecord(resource: string, recordIdentifier: string, options?: any | undefined | null, etag?: string | undefined | null): Promise<CompleteOutcome | NotModifiedOutcome>
   lookup(resource: string, lookup: string, selectors: any, options?: any | undefined | null, etag?: string | undefined | null): Promise<CompleteOutcome | NotModifiedOutcome>
-  search(resource: string, search: string, options?: any | undefined | null, etag?: string | undefined | null): Promise<CollectionPageOutcome | NotModifiedOutcome>
+  search(resource: string, search: string, options: any, etag?: string | undefined | null): Promise<CollectionPageOutcome | NotModifiedOutcome>
   continueSearch(continuation: any, etag?: string | undefined | null): Promise<CollectionPageOutcome | NotModifiedOutcome>
   artifact(artifactIdentifier: string, etag?: string | undefined | null): Promise<RawCompleteOutcome | NotModifiedOutcome>
   sdmxData(requestValue: any, etag?: string | undefined | null): Promise<RawCompleteOutcome | NotModifiedOutcome>

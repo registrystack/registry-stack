@@ -24,6 +24,17 @@ const second = first.kind === 'complete' && first.continuation
   : null;
 ```
 
+List options may contain declared equality `filters` but never `bbox`. Named
+searches instead require a `[west, south, east, north]` WGS84 `bbox` and do not
+accept equality filters:
+
+```js
+const premises = await client.search('premises', 'within-bbox', {
+  bbox: [100.45, 13.65, 100.65, 13.85],
+  pageSize: 25,
+});
+```
+
 Resource discovery similarly returns a closed `{ cursor }` continuation object
 for `continueResources`; raw cursor strings are not accepted.
 

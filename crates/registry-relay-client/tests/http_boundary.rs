@@ -9,10 +9,11 @@ use axum::routing::any;
 use axum::Router;
 use registry_platform_httputil::client::{BearerToken, TokenError, TokenProvider};
 use registry_relay_client::{
-    CollectionContinuation, CollectionContinuationProjection, CollectionRequest,
-    CollectionRouteProjection, Conditional, LookupRequest, ProblemCode, RecordFormat,
+    BoundingBox, CollectionContinuation, CollectionContinuationProjection,
+    CollectionRouteProjection, Conditional, ListRequest, LookupRequest, ProblemCode, RecordFormat,
     RecordOptions, RelayClient, RelayClientConfig, RelayClientError, ResourceContinuation,
-    ResourceListRequest, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest, StrongEtag,
+    ResourceListRequest, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest, SearchRequest,
+    StrongEtag,
 };
 use serde_json::json;
 use tokio::net::TcpListener;
@@ -146,6 +147,10 @@ async fn handler(State(state): State<TestState>, request: Request<Body>) -> Resp
             response
                 .headers_mut()
                 .insert("etag", ETAG.parse().expect("etag"));
+            response.headers_mut().insert(
+                "content-length",
+                "4096".parse().expect("representation content length"),
+            );
             response
         }
         Mode::NotModifiedMissingEtag => wire_response(
@@ -382,10 +387,12 @@ async fn base_prefix_is_preserved_for_every_route_family() {
     let _ = client.resources(ResourceListRequest::default(), None).await;
     let _ = client.resource("people", None).await;
     let _ = client
-        .list_records("people", &CollectionRequest::default(), None)
+        .list_records("people", &ListRequest::default(), None)
         .await;
+    let search_request =
+        SearchRequest::new(BoundingBox::new(100.0, 13.0, 101.0, 14.0).expect("search bbox"));
     let _ = client
-        .search_records("people", "by-name", &CollectionRequest::default(), None)
+        .search_records("people", "by-name", &search_request, None)
         .await;
     let _ = client
         .read_record("people", "person-1", &RecordOptions::default(), None)

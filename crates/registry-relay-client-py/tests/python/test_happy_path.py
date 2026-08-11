@@ -4,7 +4,7 @@ import json
 import pathlib
 import sys
 import unittest
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 TESTS = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
@@ -29,7 +29,8 @@ import registry_relay_client as relay  # noqa: E402
 class HappyPathTest(unittest.TestCase):
     def test_every_fixed_method_delegates_one_exchange_and_returns_plain_values(self):
         def respond(request: Request) -> Response:
-            path = urlsplit(request.target).path
+            target = urlsplit(request.target)
+            path = target.path
             if path in {"/prefix/health", "/prefix/ready"}:
                 return json_response({"status": "ok"})
             if path == "/prefix/openapi.json":
@@ -46,6 +47,7 @@ class HappyPathTest(unittest.TestCase):
                     }
                 )
             if path == "/prefix/v2/resources/people/records":
+                self.assertEqual(parse_qs(target.query), {"status": ["active"]})
                 return json_response(record_collection(None))
             if path == "/prefix/v2/resources/people/records/one":
                 return json_response({"data": record(), "meta": record_metadata()})
@@ -54,6 +56,7 @@ class HappyPathTest(unittest.TestCase):
                 self.assertEqual(json.loads(request.body), {"selectors": {"code": "one"}})
                 return json_response({"data": record(), "meta": record_metadata()})
             if path == "/prefix/v2/resources/people/searches/nearby":
+                self.assertEqual(parse_qs(target.query), {"bbox": ["10,20,11,21"]})
                 return json_response(record_collection(None))
             if path == "/prefix/v2/artifacts/schema":
                 return Response(200, "application/schema+json", b'{"type":"object"}')
@@ -79,7 +82,12 @@ class HappyPathTest(unittest.TestCase):
             self.assertEqual(client.service_metadata()["value"]["name"], "Example Registry")
             self.assertEqual(client.resources()["value"]["items"][0]["resourceIdentifier"], "people")
             self.assertEqual(client.resource("people")["value"]["data"]["title"], "People")
-            self.assertEqual(client.list_records("people")["value"]["items"][0]["recordIdentifier"], "one")
+            self.assertEqual(
+                client.list_records("people", filters={"status": "active"})["value"][
+                    "items"
+                ][0]["recordIdentifier"],
+                "one",
+            )
             self.assertEqual(client.read_record("people", "one")["value"]["data"]["domainData"]["label"], "Example")
             self.assertEqual(client.lookup("people", "by-code", {"code": "one"})["value"]["data"]["recordIdentifier"], "one")
             self.assertEqual(client.search("people", "nearby", bbox=[10, 20, 11, 21])["value"]["items"][0]["recordIdentifier"], "one")

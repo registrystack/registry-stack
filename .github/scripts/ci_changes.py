@@ -456,7 +456,7 @@ def classify(
             # description.
             "products/relay-v2/CONCEPT.md",
             "products/relay-v2/STANDARDS-ALIGNMENT.md",
-            # No page is generated from these four, but scripts/
+            # No page is generated from these files, but scripts/
             # ops-posture-spec.test.mjs reads them to prove the published
             # operational claims still match the runtime. A probe route, a
             # runtime bound, or a healthcheck default can change here and
@@ -466,6 +466,7 @@ def classify(
             "crates/registry-relay-v2/src/main.rs",
             "crates/registry-relay-v2/src/contract.rs",
             "crates/registry-relay-v2/src/startup.rs",
+            "crates/registry-relay-http-contract/src/lib.rs",
         }
         for path in paths
     )

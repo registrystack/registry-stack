@@ -13,7 +13,7 @@ class RelayClientError extends Error {
     this.name = 'RelayClientError';
     this.kind = envelope.kind;
     for (const field of ['code', 'status', 'traceId', 'retryAfterSeconds', 'transportKind', 'tokenKind']) {
-      if (envelope[field] !== undefined) this[field] = envelope[field];
+      if (envelope[field] !== undefined && envelope[field] !== null) this[field] = envelope[field];
     }
   }
 }
@@ -150,6 +150,7 @@ const REQUIRED_JSON_ARGUMENTS = {
   continueResources: new Set([0]),
   continueListRecords: new Set([0]),
   lookup: new Set([2]),
+  search: new Set([2]),
   continueSearch: new Set([0]),
   sdmxData: new Set([0]),
   sdmxStructure: new Set([0]),

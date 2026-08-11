@@ -28,9 +28,9 @@ use registry_platform_testing::{
     fixtures, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
 };
 use registry_relay_client::{
-    BoundingBox, CollectionRequest, Conditional, LookupRequest, RecordCollectionResponse,
-    RecordFormat, RecordOptions, RecordResponse, RelayClient, RelayClientConfig,
-    ResourceListRequest, SdmxDataFormat, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest,
+    BoundingBox, Conditional, ListRequest, LookupRequest, RecordCollectionResponse, RecordFormat,
+    RecordOptions, RecordResponse, RelayClient, RelayClientConfig, ResourceListRequest,
+    SdmxDataFormat, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest, SearchRequest,
     StaticToken, TokenProvider,
 };
 use registry_relay_v2::artifacts::generate_artifacts;
@@ -446,7 +446,7 @@ async fn rust_client_drives_the_real_relay_router_across_the_public_surface() {
         "registered-business"
     );
 
-    let first_list_request = CollectionRequest::default()
+    let first_list_request = ListRequest::default()
         .page_size(1)
         .expect("record page size is valid")
         .filter("jurisdiction", "EX-A")
@@ -557,9 +557,10 @@ async fn rust_client_drives_the_real_relay_router_across_the_public_surface() {
         RecordResponse::Json(_) => panic!("GeoJSON feature read returned ordinary JSON"),
     }
 
-    let spatial_request = CollectionRequest::default()
-        .options(RecordOptions::default().format(RecordFormat::GeoJsonRfc7946))
-        .bbox(BoundingBox::new(100.0, 13.0, 101.0, 14.0).expect("fixture bbox is valid"));
+    let spatial_request = SearchRequest::new(
+        BoundingBox::new(100.0, 13.0, 101.0, 14.0).expect("fixture bbox is valid"),
+    )
+    .options(RecordOptions::default().format(RecordFormat::GeoJsonRfc7946));
     let spatial = complete(
         client
             .search_records("registered-premises", "within-bbox", &spatial_request, None)
@@ -595,9 +596,10 @@ async fn rust_client_drives_the_real_relay_router_across_the_public_surface() {
             panic!("GeoJSON search continuation returned ordinary JSON")
         }
     }
-    let json_fg_request = CollectionRequest::default()
-        .options(RecordOptions::default().format(RecordFormat::JsonFg))
-        .bbox(BoundingBox::new(100.0, 13.0, 101.0, 14.0).expect("fixture bbox is valid"));
+    let json_fg_request = SearchRequest::new(
+        BoundingBox::new(100.0, 13.0, 101.0, 14.0).expect("fixture bbox is valid"),
+    )
+    .options(RecordOptions::default().format(RecordFormat::JsonFg));
     let json_fg = complete(
         client
             .search_records("registered-premises", "within-bbox", &json_fg_request, None)

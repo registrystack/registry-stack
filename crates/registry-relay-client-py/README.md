@@ -1,9 +1,10 @@
 # Registry Relay client for Python
 
 This package is the thin synchronous Python binding for
-`registry-relay-client`. It performs one bounded SDK exchange per method and
-does not implement HTTP routing, authentication, retries, pagination, or Relay
-Problem Details itself.
+`registry-relay-client`. It performs one bounded Relay SDK exchange per method;
+a configured private-key-JWT provider may perform a separate token acquisition
+or refresh exchange. The binding does not implement HTTP routing,
+authentication, retries, pagination, or Relay Problem Details itself.
 
 ```python
 from registry_relay_client import RelayClient
@@ -47,6 +48,18 @@ mapping discriminated by `kind`: either `complete` with `value`, `trace_id`,
 and optional `etag`, or `not_modified` with `trace_id` and `etag`. Page results
 also carry a plain `continuation`, which only the matching continuation method
 accepts. Raw OpenAPI, artifact, and SDMX bodies are returned as `bytes`.
+
+List and search requests follow their distinct Relay contracts. A list accepts
+optional equality `filters` and never accepts `bbox`. A named search requires a
+four-number `bbox` ordered as west, south, east, north and never accepts
+`filters`:
+
+```python
+listed = client.list_records("people", filters={"status": "active"})
+nearby = client.search("people", "nearby", bbox=[100.0, 13.0, 101.0, 14.0])
+```
+
+The client validates these shapes before performing a Relay exchange.
 
 Build and test from the workspace root:
 

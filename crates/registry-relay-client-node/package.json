@@ -15,7 +15,7 @@
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "test": "node --test __test__/*.test.js",
-    "check:types": "napi build --platform --release --dts index.d.ts.check && cmp index.d.ts index.d.ts.check && rm -f index.d.ts.check && tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 client.d.ts index.d.ts"
+    "check:types": "napi build --platform --release --dts index.d.ts.check && cmp index.d.ts index.d.ts.check && rm -f index.d.ts.check && tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 client.d.ts index.d.ts __test__/facade.test-d.ts"
   },
   "devDependencies": {
     "@napi-rs/cli": "3.8.2",

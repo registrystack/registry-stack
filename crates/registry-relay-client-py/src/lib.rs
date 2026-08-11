@@ -10,11 +10,11 @@ use pyo3::{
 };
 use relay_client_sdk::{
     BoundingBox, CollectionContinuation, CollectionContinuationProjection, CollectionPage,
-    CollectionRequest, CollectionRouteProjection, Complete, Conditional, LookupRequest,
-    NotModified, RawDocument, RecordFormat, RecordOptions, RelayClient as RustClient,
+    CollectionRouteProjection, Complete, Conditional, ListRequest, LookupRequest, NotModified,
+    RawDocument, RecordFormat, RecordOptions, RelayClient as RustClient,
     RelayClientError as RustClientError, ResourceContinuation, ResourceContinuationProjection,
     ResourceListRequest, ResourcePage, ResponseMetadata, SdmxDataFormat, SdmxDataRequest,
-    SdmxStructureKind, SdmxStructureRequest, StrongEtag,
+    SdmxStructureKind, SdmxStructureRequest, SearchRequest, StrongEtag,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -144,10 +144,7 @@ fn string_map(
         .collect()
 }
 
-fn bounding_box(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<BoundingBox>> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
+fn bounding_box(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<BoundingBox> {
     let value =
         python_to_json(value).map_err(|error| conversion_error(py, "invalid_request", &error))?;
     let Value::Array(values) = value else {
@@ -168,22 +165,19 @@ fn bounding_box(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Op
             )
         })?;
     BoundingBox::new(numbers[0], numbers[1], numbers[2], numbers[3])
-        .map(Some)
         .map_err(|error| sdk_error(py, &error))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn collection_request(
+fn list_request(
     py: Python<'_>,
     page_size: Option<u32>,
     fields: Option<Vec<String>>,
     access_profile: Option<String>,
     format: &str,
     filters: Option<&Bound<'_, PyAny>>,
-    bbox: Option<&Bound<'_, PyAny>>,
-) -> PyResult<CollectionRequest> {
+) -> PyResult<ListRequest> {
     let options = record_options(py, fields, access_profile, format)?;
-    let mut request = CollectionRequest::default().options(options);
+    let mut request = ListRequest::default().options(options);
     if let Some(page_size) = page_size {
         request = request
             .page_size(page_size)
@@ -194,8 +188,23 @@ fn collection_request(
             .filter(name, value)
             .map_err(|error| sdk_error(py, &error))?;
     }
-    if let Some(bbox) = bounding_box(py, bbox)? {
-        request = request.bbox(bbox);
+    Ok(request)
+}
+
+fn search_request(
+    py: Python<'_>,
+    bbox: &Bound<'_, PyAny>,
+    page_size: Option<u32>,
+    fields: Option<Vec<String>>,
+    access_profile: Option<String>,
+    format: &str,
+) -> PyResult<SearchRequest> {
+    let options = record_options(py, fields, access_profile, format)?;
+    let mut request = SearchRequest::new(bounding_box(py, bbox)?).options(options);
+    if let Some(page_size) = page_size {
+        request = request
+            .page_size(page_size)
+            .map_err(|error| sdk_error(py, &error))?;
     }
     Ok(request)
 }
@@ -500,7 +509,7 @@ impl RelayClient {
 
     #[pyo3(signature = (
         resource, *, page_size=None, fields=None, access_profile=None, format="json",
-        filters=None, bbox=None, etag=None
+        filters=None, etag=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn list_records<'py>(
@@ -512,11 +521,9 @@ impl RelayClient {
         access_profile: Option<String>,
         format: &str,
         filters: Option<&Bound<'_, PyAny>>,
-        bbox: Option<&Bound<'_, PyAny>>,
         etag: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let request =
-            collection_request(py, page_size, fields, access_profile, format, filters, bbox)?;
+        let request = list_request(py, page_size, fields, access_profile, format, filters)?;
         let etag = parse_etag(py, etag)?;
         let value = py
             .detach(|| {
@@ -538,8 +545,8 @@ impl RelayClient {
     }
 
     #[pyo3(signature = (
-        resource, search, *, page_size=None, fields=None, access_profile=None, format="json",
-        filters=None, bbox=None, etag=None
+        resource, search, *, bbox, page_size=None, fields=None, access_profile=None,
+        format="json", etag=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search<'py>(
@@ -547,16 +554,14 @@ impl RelayClient {
         py: Python<'py>,
         resource: &str,
         search: &str,
+        bbox: &Bound<'_, PyAny>,
         page_size: Option<u32>,
         fields: Option<Vec<String>>,
         access_profile: Option<String>,
         format: &str,
-        filters: Option<&Bound<'_, PyAny>>,
-        bbox: Option<&Bound<'_, PyAny>>,
         etag: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let request =
-            collection_request(py, page_size, fields, access_profile, format, filters, bbox)?;
+        let request = search_request(py, bbox, page_size, fields, access_profile, format)?;
         let etag = parse_etag(py, etag)?;
         let value = py
             .detach(|| {

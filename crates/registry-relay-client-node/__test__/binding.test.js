@@ -100,7 +100,6 @@ test('every endpoint accepts its documented plain input graph', async () => {
     accessProfile: 'public',
     format: 'geojson',
     filters: { status: 'active' },
-    bbox: [-10, -5, 10, 5],
   }, ETAG));
   await expectNotModified(client.continueListRecords({
     route: { kind: 'records', resource: 'people' },
@@ -120,7 +119,7 @@ test('every endpoint accepts its documented plain input graph', async () => {
   }, { format: 'json' }, ETAG));
   await expectNotModified(client.search('people', 'by-name', {
     pageSize: 10,
-    filters: { status: 'active' },
+    bbox: [-10, -5, 10, 5],
   }, ETAG));
   await expectNotModified(client.continueSearch({
     route: { kind: 'search', resource: 'people', search: 'by-name' },
@@ -153,6 +152,64 @@ test('request validation failures have a distinct stable kind', async () => {
     client.resources({ pageSize: 0 }),
     (error) => error instanceof RelayClientError && error.kind === 'invalid_request',
   );
+});
+
+test('list and search runtime options preserve their distinct query shapes', async () => {
+  const client = new RelayClient({ baseUrl });
+  for (const promise of [
+    client.listRecords('people', { bbox: [-10, -5, 10, 5] }),
+    client.search('people', 'within-bbox', { pageSize: 10 }),
+    client.search('people', 'within-bbox', {
+      bbox: [-10, -5, 10, 5],
+      filters: { status: 'active' },
+    }),
+  ]) {
+    await assert.rejects(
+      promise,
+      (error) => error instanceof RelayClientError && error.kind === 'invalid_request',
+    );
+  }
+  assert.throws(
+    () => client.search('people', 'within-bbox', undefined),
+    (error) => error instanceof RelayClientError
+      && error.kind === 'invalid_request'
+      && error.message === 'Relay client arguments are invalid',
+  );
+});
+
+test('error facts omit nulls while preserving present falsy values', () => {
+  const absent = new RelayClientError({
+    kind: 'protocol',
+    message: 'Relay response violated the protocol',
+    code: null,
+    status: null,
+    traceId: null,
+    retryAfterSeconds: null,
+    transportKind: null,
+    tokenKind: null,
+  });
+  for (const field of [
+    'code', 'status', 'traceId', 'retryAfterSeconds', 'transportKind', 'tokenKind',
+  ]) {
+    assert.equal(Object.hasOwn(absent, field), false);
+  }
+
+  const present = new RelayClientError({
+    kind: 'problem',
+    message: 'Relay refused the request',
+    code: 'resource.not_found',
+    status: 0,
+    traceId: TRACE_ID,
+    retryAfterSeconds: 0,
+    transportKind: 'connect',
+    tokenKind: 'transport',
+  });
+  assert.equal(present.code, 'resource.not_found');
+  assert.equal(present.status, 0);
+  assert.equal(present.traceId, TRACE_ID);
+  assert.equal(present.retryAfterSeconds, 0);
+  assert.equal(present.transportKind, 'connect');
+  assert.equal(present.tokenKind, 'transport');
 });
 
 test('synchronous napi argument conversion failures use fixed redacted envelopes', () => {

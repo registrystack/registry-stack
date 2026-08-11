@@ -51,11 +51,15 @@ export interface RecordOptions {
   format?: RecordFormat | null
 }
 
-export interface CollectionOptions extends RecordOptions {
+export interface ListOptions extends RecordOptions {
   pageSize?: number | null
   filters?: Readonly<Record<string, string>> | null
+}
+
+export interface SearchOptions extends RecordOptions {
+  pageSize?: number | null
   /** `[west, south, east, north]` in WGS84 longitude/latitude degrees. */
-  bbox?: readonly [number, number, number, number] | null
+  bbox: readonly [number, number, number, number]
 }
 
 export type LookupSelector = string | number | boolean
@@ -234,11 +238,11 @@ export declare class RelayClient {
   resources(options?: ResourceListOptions | null, etag?: string | null): Promise<ResourcePageOutcome>
   continueResources(continuation: ResourceContinuation, etag?: string | null): Promise<ResourcePageOutcome>
   resource(resource: string, etag?: string | null): Promise<Outcome<ResourceEnvelope>>
-  listRecords(resource: string, options?: CollectionOptions | null, etag?: string | null): Promise<CollectionPageOutcome>
+  listRecords(resource: string, options?: ListOptions | null, etag?: string | null): Promise<CollectionPageOutcome>
   continueListRecords(continuation: CollectionContinuation<RecordsRoute>, etag?: string | null): Promise<CollectionPageOutcome>
   readRecord(resource: string, recordIdentifier: string, options?: RecordOptions | null, etag?: string | null): Promise<Outcome<RecordResponse>>
   lookup(resource: string, lookup: string, selectors: LookupSelectors, options?: RecordOptions | null, etag?: string | null): Promise<Outcome<RecordResponse>>
-  search(resource: string, search: string, options?: CollectionOptions | null, etag?: string | null): Promise<CollectionPageOutcome>
+  search(resource: string, search: string, options: SearchOptions, etag?: string | null): Promise<CollectionPageOutcome>
   continueSearch(continuation: CollectionContinuation<SearchRoute>, etag?: string | null): Promise<CollectionPageOutcome>
   artifact(artifactIdentifier: string, etag?: string | null): Promise<RawOutcome>
   sdmxData(request: SdmxDataRequest, etag?: string | null): Promise<RawOutcome>

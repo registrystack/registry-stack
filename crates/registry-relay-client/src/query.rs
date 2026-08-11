@@ -155,17 +155,43 @@ impl BoundingBox {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct CollectionRequest {
-    pub(crate) options: RecordOptions,
-    pub(crate) page_size: Option<u32>,
-    pub(crate) filters: BTreeMap<String, String>,
-    pub(crate) bbox: Option<BoundingBox>,
+struct CollectionOptions {
+    options: RecordOptions,
+    page_size: Option<u32>,
 }
 
-impl CollectionRequest {
+impl CollectionOptions {
+    fn pairs(&self) -> Vec<(String, String)> {
+        let mut pairs = Vec::new();
+        if let Some(value) = self.page_size {
+            pairs.push(("pageSize".into(), value.to_string()));
+        }
+        self.options.append_query(&mut pairs);
+        pairs
+    }
+}
+
+/// First-page facts accepted by a Relay List operation.
+///
+/// List operations may carry declared equality filters but never a spatial
+/// bounding box. Explicit continuations use [`crate::CollectionContinuation`]
+/// instead of this type.
+///
+/// ```compile_fail
+/// use registry_relay_client::{BoundingBox, ListRequest};
+/// let bbox = BoundingBox::new(100.0, 13.0, 101.0, 14.0).unwrap();
+/// let _ = ListRequest::default().bbox(bbox);
+/// ```
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ListRequest {
+    common: CollectionOptions,
+    filters: BTreeMap<String, String>,
+}
+
+impl ListRequest {
     #[must_use]
     pub fn options(mut self, options: RecordOptions) -> Self {
-        self.options = options;
+        self.common.options = options;
         self
     }
 
@@ -175,7 +201,7 @@ impl CollectionRequest {
                 "page size must be greater than zero",
             ));
         }
-        self.page_size = Some(value);
+        self.common.page_size = Some(value);
         Ok(self)
     }
 
@@ -201,21 +227,8 @@ impl CollectionRequest {
         Ok(self)
     }
 
-    #[must_use]
-    pub fn bbox(mut self, value: BoundingBox) -> Self {
-        self.bbox = Some(value);
-        self
-    }
-
     pub(crate) fn pairs(&self) -> Result<Vec<(String, String)>, RelayClientError> {
-        let mut pairs = Vec::new();
-        if let Some(value) = self.page_size {
-            pairs.push(("pageSize".into(), value.to_string()));
-        }
-        self.options.append_query(&mut pairs);
-        if let Some(value) = self.bbox {
-            pairs.push(("bbox".into(), value.text()));
-        }
+        let mut pairs = self.common.pairs();
         pairs.extend(
             self.filters
                 .iter()
@@ -223,6 +236,69 @@ impl CollectionRequest {
         );
         ensure_query_bound(&pairs)?;
         Ok(pairs)
+    }
+
+    pub(crate) fn record_options(&self) -> RecordOptions {
+        self.common.options.clone()
+    }
+}
+
+/// First-page facts accepted by a named Relay point-bbox Search operation.
+///
+/// The closed Relay V2 search profile always requires one bbox and accepts no
+/// caller-defined equality filters. Explicit continuations use
+/// [`crate::CollectionContinuation`] instead of this type.
+///
+/// ```compile_fail
+/// use registry_relay_client::SearchRequest;
+/// let _ = SearchRequest::default();
+/// ```
+///
+/// ```compile_fail
+/// use registry_relay_client::{BoundingBox, SearchRequest};
+/// let bbox = BoundingBox::new(100.0, 13.0, 101.0, 14.0).unwrap();
+/// let _ = SearchRequest::new(bbox).filter("status", "active");
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchRequest {
+    common: CollectionOptions,
+    bbox: BoundingBox,
+}
+
+impl SearchRequest {
+    #[must_use]
+    pub fn new(bbox: BoundingBox) -> Self {
+        Self {
+            common: CollectionOptions::default(),
+            bbox,
+        }
+    }
+
+    #[must_use]
+    pub fn options(mut self, options: RecordOptions) -> Self {
+        self.common.options = options;
+        self
+    }
+
+    pub fn page_size(mut self, value: u32) -> Result<Self, RelayClientError> {
+        if value == 0 {
+            return Err(RelayClientError::invalid_request(
+                "page size must be greater than zero",
+            ));
+        }
+        self.common.page_size = Some(value);
+        Ok(self)
+    }
+
+    pub(crate) fn pairs(&self) -> Result<Vec<(String, String)>, RelayClientError> {
+        let mut pairs = self.common.pairs();
+        pairs.push(("bbox".into(), self.bbox.text()));
+        ensure_query_bound(&pairs)?;
+        Ok(pairs)
+    }
+
+    pub(crate) fn record_options(&self) -> RecordOptions {
+        self.common.options.clone()
     }
 }
 
@@ -644,10 +720,26 @@ mod tests {
 
     #[test]
     fn first_page_filters_cannot_claim_reserved_parameters() {
-        let error = CollectionRequest::default()
+        let error = ListRequest::default()
             .filter("cursor", "opaque")
             .unwrap_err();
         assert!(matches!(error, RelayClientError::InvalidRequest { .. }));
+    }
+
+    #[test]
+    fn list_and_search_first_page_shapes_match_the_closed_route_contract() {
+        let list = ListRequest::default()
+            .filter("status", "active")
+            .expect("list filter");
+        let list_pairs = list.pairs().expect("list pairs");
+        assert!(list_pairs.iter().any(|(name, _)| name == "status"));
+        assert!(list_pairs.iter().all(|(name, _)| name != "bbox"));
+
+        let search = SearchRequest::new(BoundingBox::new(100.0, 13.0, 101.0, 14.0).expect("bbox"));
+        assert_eq!(
+            search.pairs().expect("search pairs"),
+            vec![("bbox".into(), "100,13,101,14".into())]
+        );
     }
 
     #[test]

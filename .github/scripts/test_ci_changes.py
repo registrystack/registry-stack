@@ -928,6 +928,12 @@ on:
                 {"docs": True, "relay_v2_contracts": True},
             ),
             (
+                # The same test reads the shared probe-route constants from
+                # the standalone HTTP contract.
+                "crates/registry-relay-http-contract/src/lib.rs",
+                {"docs": True, "relay_client_contracts": True},
+            ),
+            (
                 # A Relay V2 source no docs test reads stays out of the docs job.
                 "crates/registry-relay-v2/src/api.rs",
                 {"docs": False, "relay_v2_contracts": True},

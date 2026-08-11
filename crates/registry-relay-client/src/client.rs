@@ -101,14 +101,14 @@ impl RelayClient {
     pub async fn list_records(
         &self,
         resource: &str,
-        request: &CollectionRequest,
+        request: &ListRequest,
         etag: Option<&StrongEtag>,
     ) -> Result<Conditional<CollectionPage<RecordCollectionResponse>>, RelayClientError> {
         validate_route_identifier(resource)?;
         let route = CollectionRoute::Records {
             resource: resource.to_owned(),
         };
-        self.collection_page(route, request.pairs()?, request.options.clone(), etag)
+        self.collection_page(route, request.pairs()?, request.record_options(), etag)
             .await
     }
 
@@ -116,7 +116,7 @@ impl RelayClient {
         &self,
         resource: &str,
         search: &str,
-        request: &CollectionRequest,
+        request: &SearchRequest,
         etag: Option<&StrongEtag>,
     ) -> Result<Conditional<CollectionPage<RecordCollectionResponse>>, RelayClientError> {
         validate_route_identifier(resource)?;
@@ -125,7 +125,7 @@ impl RelayClient {
             resource: resource.to_owned(),
             search: search.to_owned(),
         };
-        self.collection_page(route, request.pairs()?, request.options.clone(), etag)
+        self.collection_page(route, request.pairs()?, request.record_options(), etag)
             .await
     }
 
@@ -493,8 +493,8 @@ impl RelayClient {
                     Some(trace),
                 ));
             }
-            let body = self.transport.read(response, 1).await?;
-            return not_modified_outcome(actual, trace, &body);
+            let body_is_empty = self.transport.not_modified_body_is_empty(response).await?;
+            return not_modified_outcome(actual, trace, body_is_empty);
         }
         let media_type = match expected_media {
             Some(expected) if exact_media_type(&headers, expected) => expected.to_owned(),
@@ -528,9 +528,9 @@ impl RelayClient {
 fn not_modified_outcome(
     etag: StrongEtag,
     trace_id: registry_platform_httpsec::TraceId,
-    body: &[u8],
+    body_is_empty: bool,
 ) -> Result<WireOutcome, RelayClientError> {
-    if !body.is_empty() {
+    if !body_is_empty {
         return Err(RelayClientError::protocol(
             StatusCode::NOT_MODIFIED.as_u16(),
             ProtocolFailure::NotModifiedBody,
@@ -769,7 +769,8 @@ mod tests {
         let mut builder = HttpResponse::builder()
             .status(StatusCode::NOT_MODIFIED)
             .header("traceparent", TRACEPARENT)
-            .header(CONTENT_TYPE, APPLICATION_JSON);
+            .header(CONTENT_TYPE, APPLICATION_JSON)
+            .header("content-length", "4096");
         if let Some(etag) = etag {
             builder = builder.header("etag", etag);
         }
@@ -787,13 +788,17 @@ mod tests {
         .expect("client");
         let expected = StrongEtag::parse(ETAG).expect("etag");
 
+        let response = not_modified_response(Some(ETAG), b"");
+        assert_eq!(
+            response
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .expect("content length"),
+            "4096"
+        );
         assert!(matches!(
             client
-                .wire(
-                    not_modified_response(Some(ETAG), b""),
-                    Some(APPLICATION_JSON),
-                    Some(&expected)
-                )
+                .wire(response, Some(APPLICATION_JSON), Some(&expected))
                 .await,
             Ok(WireOutcome::NotModified(_))
         ));
@@ -816,7 +821,7 @@ mod tests {
         let trace = registry_platform_httpsec::TraceId::parse("4bf92f3577b34da6a3ce929d0e0e4736")
             .expect("trace ID");
         assert!(matches!(
-            not_modified_outcome(expected, trace, b"must-not-be-present"),
+            not_modified_outcome(expected, trace, false),
             Err(RelayClientError::Protocol { .. })
         ));
     }

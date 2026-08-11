@@ -153,7 +153,6 @@ class RelayClient:
         access_profile: Optional[str] = ...,
         format: RecordFormat = ...,
         filters: Optional[dict[str, str]] = ...,
-        bbox: Optional[Sequence[float]] = ...,
         etag: Optional[str] = ...,
     ) -> CollectionPageOutcome: ...
     def continue_list_records(
@@ -187,12 +186,11 @@ class RelayClient:
         resource: str,
         search: str,
         *,
+        bbox: Sequence[float],
         page_size: Optional[int] = ...,
         fields: Optional[Sequence[str]] = ...,
         access_profile: Optional[str] = ...,
         format: RecordFormat = ...,
-        filters: Optional[dict[str, str]] = ...,
-        bbox: Optional[Sequence[float]] = ...,
         etag: Optional[str] = ...,
     ) -> CollectionPageOutcome: ...
     def continue_search(

@@ -175,7 +175,8 @@ facts in an options object and uses camel case, such as `pageSize`, `accessProfi
 | Resource list | None | Page size from 1 through 100; ETag | `ResourceListRequest` |
 | Resource detail | Resource identifier | ETag | Resource identifier as `&str` |
 | Resource continuation | Complete resource continuation | ETag | `ResourceContinuation` |
-| Record list or search | Resource identifier; search identifier for search | Page size, record options, filters, bbox, ETag | `CollectionRequest` |
+| Record list | Resource identifier | Page size, record options, filters, ETag | `ListRequest` |
+| Record search | Resource identifier, search identifier, bbox | Page size, record options, ETag | `SearchRequest` |
 | Record or search continuation | Complete matching continuation | ETag | `CollectionContinuation` |
 | Record read | Resource and record identifiers | Record options; ETag | `RecordOptions` |
 | Governed lookup | Resource and lookup identifiers; selectors | Record options; ETag | `LookupRequest` |
@@ -183,11 +184,11 @@ facts in an options object and uses camel case, such as `pageSize`, `accessProfi
 | SDMX data | Agency, resource, three-part version | Key, constraints, offset, limit, dimension at observation, format, ETag | `SdmxDataRequest` |
 | SDMX structure | Kind, agency, resource, three-part version | ETag | `SdmxStructureRequest` |
 
-`RecordOptions` contains fields, access profile, and record format. `CollectionRequest` adds a
-positive page size, a string-to-string filter mapping, and an optional bounding box ordered as
-`[west, south, east, north]`. Rust constructs those with `RecordOptions`, `CollectionRequest`, and
-`BoundingBox`. Python passes the same facts as keyword arguments. Node passes them in
-`RecordOptions` or `CollectionOptions` objects.
+`RecordOptions` contains fields, access profile, and record format. `ListRequest` adds a positive
+page size and a string-to-string filter mapping. `SearchRequest::new` requires a `BoundingBox`
+ordered as `[west, south, east, north]` and can add a positive page size. Python passes list
+filters to `list_records` and requires the bbox keyword on `search`. Node uses `ListOptions` for
+`listRecords` and `SearchOptions`, whose `bbox` member is required, for `search`.
 
 Input record formats are `json`, `json-ld`, `geojson`, and `json-fg` in Python. Node also accepts
 `geo-json-rfc7946` as an alias for `geojson`. Rust uses `RecordFormat::Json`, `JsonLd`,

@@ -73,6 +73,24 @@ impl Transport {
             .await
             .map_err(|error| RelayClientError::transport(read_failure_kind(&error)))
     }
+
+    /// Inspect the actual 304 message body without treating Content-Length as
+    /// its size. RFC 9110 permits Content-Length on a 304 to describe the
+    /// selected representation that a 200 response would have carried.
+    pub(crate) async fn not_modified_body_is_empty(
+        &self,
+        mut response: Response,
+    ) -> Result<bool, RelayClientError> {
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            let error = registry_platform_httputil::BoundedReadError::Transport(error);
+            RelayClientError::transport(read_failure_kind(&error))
+        })? {
+            if !chunk.is_empty() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }
 
 pub(crate) fn trace_id(
