@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use registry_platform_canonical_json::canonicalize_json;
+use registry_relay_http_contract::{routes, PROBLEM_MEDIA_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -625,25 +626,26 @@ fn push_text(
 fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
     let mut paths = Map::new();
     for (path, operation_id, description) in [
-        ("/health", "relay.health", "Relay process liveness"),
-        ("/ready", "relay.ready", "Compiled Registry readiness"),
+        (routes::HEALTH, "relay.health", "Relay process liveness"),
+        (routes::READY, "relay.ready", "Compiled Registry readiness"),
         (
-            "/openapi.json",
+            routes::OPENAPI,
             "relay.openapi.public",
             "Safe public OpenAPI projection",
         ),
         (
-            "/v2",
+            routes::SERVICE,
             "relay.registry.metadata",
             "Registry service metadata",
         ),
     ] {
-        let cacheable = path == "/openapi.json"
-            || (path == "/v2" && registry.metadata_visibility.resources == Visibility::Public);
+        let cacheable = path == routes::OPENAPI
+            || (path == routes::SERVICE
+                && registry.metadata_visibility.resources == Visibility::Public);
         let schema = match path {
-            "/health" | "/ready" => json!({"$ref": "#/components/schemas/Status"}),
-            "/v2" => json!({"$ref": "#/components/schemas/ServiceMetadata"}),
-            "/openapi.json" => json!({"type": "object"}),
+            routes::HEALTH | routes::READY => json!({"$ref": "#/components/schemas/Status"}),
+            routes::SERVICE => json!({"$ref": "#/components/schemas/ServiceMetadata"}),
+            routes::OPENAPI => json!({"type": "object"}),
             _ => unreachable!("fixed OpenAPI path"),
         };
         let mut responses = json!({
@@ -680,7 +682,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
             add_not_modified_response(&mut retrieve_responses);
         }
         paths.insert(
-            "/v2/resources".into(),
+            routes::RESOURCES.into(),
             json!({"get": {
                 "operationId": "relay.resources.list",
                 "security": if registry.metadata_visibility.resources == Visibility::Public {
@@ -702,7 +704,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
             }}),
         );
         paths.insert(
-            "/v2/resources/{resource}".into(),
+            routes::RESOURCE.into(),
             json!({"get": {
                 "operationId": "relay.resources.retrieve",
                 "security": if registry.metadata_visibility.resources == Visibility::Public {
@@ -1128,7 +1130,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 },
                 "Problem": {
                     "description": "Registry Stack problem",
-                    "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+                    "content": {(PROBLEM_MEDIA_TYPE): {"schema": {"$ref": "#/components/schemas/Problem"}}}
                 }
             }
         }

@@ -37,7 +37,7 @@ use crate::model::{
     CompiledAccess, CompiledAccessProfile, CompiledOperation, CompiledResource,
     CompiledStatisticalDataset, OperationKind, RowAuthoritySource, POINT_BBOX_PREDICATE,
 };
-use crate::problem::{ProblemCode, TraceContext};
+use crate::problem::{ProblemCode, ProblemCodeResponseExt, TraceContext};
 use crate::sdmx::{DATA_CSV_MEDIA_TYPE, DATA_JSON_MEDIA_TYPE, STRUCTURE_JSON_MEDIA_TYPE};
 use crate::server::{uri_within_bound, RelayService};
 use crate::sqlite_runtime::{OperationQuery, PointBbox, SourceRevision, SqliteRuntimeError};

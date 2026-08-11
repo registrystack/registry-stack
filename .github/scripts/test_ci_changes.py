@@ -91,13 +91,10 @@ def normal_dependency_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 
     Cargo reports normal, build and dev dependencies in one list per package
     and tells them apart with a `kind` of null, "build" or "dev". The
-    classifier keeps all three on purpose, because a dev-dependency edge is
-    still a reason to run the dependent's tests. That makes its closure the
-    wrong witness for a claim about what a shipped binary contains: it cannot
-    see the difference between a crate an editor session compiles in and a
-    crate only a test harness pulls in. A test that has to prove the stronger
-    claim classifies against this reduced workspace as well, so a link moved
-    out of `[dependencies]` fails it however many test-only edges survive.
+    classifier schedules a direct dev-dependent's tests without propagating
+    through it, while this reduced workspace proves claims about code a
+    shipped binary actually links. A link moved out of `[dependencies]` must
+    therefore fail the stronger routing claim even if test-only edges remain.
     """
 
     packages = [
@@ -243,7 +240,7 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-relay-v2/examples/problem-catalog.rs",
             "crates/registry-relay-v2/src/artifacts.rs",
             "crates/registry-relay-v2/src/audit.rs",
-            "crates/registry-relay-v2/src/problem.rs",
+            "crates/registry-relay-http-contract/src/lib.rs",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["identifiers"])
@@ -393,6 +390,24 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-platform-crypto", outputs["rust_packages"])
         self.assertIn("registry-relay", outputs["rust_packages"])
 
+    def test_platform_changes_select_relay_client_reverse_dependents(self) -> None:
+        # The Relay SDK deliberately reuses the shared bounded outbound and
+        # OAuth primitives. A platform change can therefore alter its wire
+        # behavior without touching the SDK source, and must retain the native
+        # bindings in its affected closure.
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-platform-httputil/src/lib.rs",),
+        )
+        for package in (
+            "registry-relay-client",
+            "registry-relay-client-node",
+            "registry-relay-client-py",
+        ):
+            with self.subTest(package=package):
+                self.assertIn(package, outputs["rust_packages"])
+        self.assertTrue(outputs["client_bindings"])
+
     def test_ci_workflow_change_runs_the_complete_matrix(self) -> None:
         outputs = classify(self.workspace, (".github/workflows/ci.yml",))
         self.assertCountEqual(outputs["rust_packages"], self.workspace.package_names)
@@ -467,13 +482,9 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-language-server", outputs["rust_packages"])
         self.assertIn("registryctl", outputs["rust_packages"])
 
-        # The language server also dev-depends on the authoring form, for the
-        # testing feature its own suite drives, and the classifier's closure
-        # reads every dependency table alike. The assertions above therefore
-        # hold on that test-only edge by itself, which is a weaker fact than
-        # the one this test is named for: a test-only edge puts nothing inside
-        # an adopter's editor. Repeating the closure over normal edges alone
-        # ties the shards to the link the editor actually compiles against.
+        # The language server also dev-depends on the authoring form for its
+        # own test suite. Repeating the closure over normal edges alone ties
+        # the editor routing claim to the link the editor actually compiles.
         strict = classify(
             Workspace(normal_dependency_metadata(self.metadata)),
             AUTHORING_FORM_CHANGE,
@@ -527,11 +538,8 @@ class CiChangesTest(unittest.TestCase):
         # The check above is only worth its name if it can tell the two edges
         # apart, so hold it against the workspace where it must not hold: the
         # language server keeps the test-only dependency and loses the one it
-        # compiles against. Both halves matter here. The kind-blind closure
-        # still reaches every editor shard, which is the reason the routing
-        # claim cannot rest on it, and the normal-edge closure stops at the
-        # authoring form's own shard, which is the power the routing claim
-        # borrows from it.
+        # compiles against. A dev edge still selects that direct test suite,
+        # but cannot make registryctl a downstream affected package.
         mutated = dev_only_dependency_metadata(
             self.metadata,
             consumer="registry-language-server",
@@ -540,7 +548,7 @@ class CiChangesTest(unittest.TestCase):
 
         blind = classify(Workspace(mutated), AUTHORING_FORM_CHANGE)
         self.assertIn("registry-language-server", blind["rust_packages"])
-        self.assertIn("registryctl", blind["rust_packages"])
+        self.assertNotIn("registryctl", blind["rust_packages"])
 
         strict = classify(
             Workspace(normal_dependency_metadata(mutated)),
@@ -580,6 +588,30 @@ class CiChangesTest(unittest.TestCase):
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
             {"evidence"},
         )
+
+    def test_relay_client_change_runs_its_contract_and_native_binding_gates(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-relay-client/src/lib.rs",),
+        )
+        self.assertTrue(outputs["relay_client_contracts"])
+        self.assertTrue(outputs["client_bindings"])
+        # Relay V2 owns the real-router acceptance test and therefore
+        # dev-depends on the SDK. Its test suite must still run, but the
+        # dev-only edge cannot cascade into Relay V2's normal dependents.
+        self.assertIn("registry-relay-v2", outputs["rust_packages"])
+        self.assertNotIn("registry-relayctl", outputs["rust_packages"])
+        self.assertFalse(outputs["evidence_contracts"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"relay-client", "relay-v2"},
+        )
+        relay_client_matrix = next(
+            entry
+            for entry in outputs["rust_matrix"]["include"]
+            if entry["name"] == "relay-client"
+        )
+        self.assertFalse(relay_client_matrix["all_features"])
 
     def test_oid4vci_change_runs_rust_contracts_and_its_registered_tutorial(self) -> None:
         outputs = classify(
@@ -652,6 +684,10 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("\n  relay-contracts:\n", workflow)
         self.assertIn("name: Relay OpenAPI contract", workflow)
+        self.assertIn("\n  relay-client-contracts:\n", workflow)
+        self.assertIn(
+            "products/relay-v2/scripts/check-client-contract.sh", workflow
+        )
         self.assertNotIn("\n  notary-contracts:\n", workflow)
         self.assertNotIn("notary_contracts", workflow)
 
@@ -660,6 +696,7 @@ class CiChangesTest(unittest.TestCase):
         )[0]
         self.assertIn("\n      - evidence-contracts\n", rust_result)
         self.assertIn("\n      - relay-contracts\n", rust_result)
+        self.assertIn("\n      - relay-client-contracts\n", rust_result)
         self.assertNotIn("\n      - notary-contracts\n", rust_result)
 
     def test_archive_content_is_immutable_during_routine_docs_changes(self) -> None:
@@ -889,6 +926,12 @@ on:
                 # is a docs input as well as a contract input.
                 "crates/registry-relay-v2/src/server.rs",
                 {"docs": True, "relay_v2_contracts": True},
+            ),
+            (
+                # The same test reads the shared probe-route constants from
+                # the standalone HTTP contract.
+                "crates/registry-relay-http-contract/src/lib.rs",
+                {"docs": True, "relay_client_contracts": True},
             ),
             (
                 # A Relay V2 source no docs test reads stays out of the docs job.

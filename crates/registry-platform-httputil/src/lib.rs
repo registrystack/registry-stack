@@ -7,7 +7,80 @@ use http::header::{HeaderName, AUTHORIZATION, CONNECTION, COOKIE, HOST};
 use http::HeaderMap;
 use thiserror::Error;
 
+pub mod client;
 pub mod destination;
+
+pub use client::{
+    BearerToken, OAuthErrorCode, PrivateKeyJwt, PrivateKeyJwtConfig, ServiceBaseUrl,
+    ServiceBaseUrlError, ServiceBaseUrlJoinError, StaticToken, TokenError, TokenProvider,
+    TransportKind, DEFAULT_ASSERTION_LIFETIME_SECONDS, DEFAULT_REFRESH_MARGIN_SECONDS,
+    MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
+};
+
+/// Maximum number of response header field lines accepted by shared transports.
+pub const MAXIMUM_RESPONSE_HEADER_FIELDS: usize = 64;
+/// Maximum bytes accepted across all response header names and values.
+pub const MAXIMUM_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
+/// Maximum bytes accepted in one outbound client's pinned CA bundle.
+pub const MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES: usize = 1024 * 1024;
+/// Maximum certificates accepted in one outbound client's pinned CA bundle.
+pub const MAXIMUM_TRUSTED_ROOT_CERTIFICATES: usize = 32;
+
+/// Value-free reason a response's headers exceeded the shared client bounds.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResponseHeaderBoundError {
+    #[error("the response carries too many header fields")]
+    TooManyFields,
+    #[error("the response headers exceed the configured maximum")]
+    HeadersTooLarge,
+}
+
+/// Enforce strict field-count and aggregate-byte bounds before inspecting response headers.
+pub fn validate_response_headers(headers: &HeaderMap) -> Result<(), ResponseHeaderBoundError> {
+    let mut count = 0usize;
+    let mut total = 0usize;
+    for (name, value) in headers {
+        count = count
+            .checked_add(1)
+            .ok_or(ResponseHeaderBoundError::TooManyFields)?;
+        if count > MAXIMUM_RESPONSE_HEADER_FIELDS {
+            return Err(ResponseHeaderBoundError::TooManyFields);
+        }
+        let field_bytes = name
+            .as_str()
+            .len()
+            .checked_add(value.as_bytes().len())
+            .ok_or(ResponseHeaderBoundError::HeadersTooLarge)?;
+        total = total
+            .checked_add(field_bytes)
+            .ok_or(ResponseHeaderBoundError::HeadersTooLarge)?;
+        if total > MAXIMUM_RESPONSE_HEADER_BYTES {
+            return Err(ResponseHeaderBoundError::HeadersTooLarge);
+        }
+    }
+    Ok(())
+}
+
+/// Parse exactly one RFC 9110 delta-seconds `Retry-After` field within a caller bound.
+///
+/// HTTP-date values, duplicate field lines, non-ASCII values, zero, and waits above
+/// `maximum_seconds` are deliberately not actionable.
+#[must_use]
+pub fn retry_after_seconds(headers: &HeaderMap, maximum_seconds: u64) -> Option<u64> {
+    let mut values = headers.get_all(http::header::RETRY_AFTER).iter();
+    let value = match (values.next(), values.next()) {
+        (Some(value), None) => value.to_str().ok()?,
+        _ => return None,
+    };
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|seconds| (1..=maximum_seconds).contains(seconds))
+}
 
 /// Default timeout for requests built from [`ValidatedFetchUrl`].
 pub const DEFAULT_VALIDATED_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
@@ -15,11 +88,27 @@ pub const DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT: Duration = Duration::from_sec
 pub const DEFAULT_OUTBOUND_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Builder for outbound HTTP clients used by platform fetchers.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OutboundClientBuilder {
     timeout: Duration,
     connect_timeout: Duration,
     user_agent: Option<String>,
+    trusted_root_certificates: Option<zeroize::Zeroizing<Vec<u8>>>,
+}
+
+impl std::fmt::Debug for OutboundClientBuilder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OutboundClientBuilder")
+            .field("timeout", &self.timeout)
+            .field("connect_timeout", &self.connect_timeout)
+            .field("user_agent", &self.user_agent)
+            .field(
+                "has_trusted_root_certificates",
+                &self.trusted_root_certificates.is_some(),
+            )
+            .finish()
+    }
 }
 
 impl Default for OutboundClientBuilder {
@@ -37,6 +126,7 @@ impl OutboundClientBuilder {
             timeout: Duration::from_secs(30),
             connect_timeout: DEFAULT_OUTBOUND_CONNECT_TIMEOUT,
             user_agent: None,
+            trusted_root_certificates: None,
         }
     }
 
@@ -61,23 +151,93 @@ impl OutboundClientBuilder {
         self
     }
 
+    /// Trust exactly this PEM certificate-authority bundle instead of platform roots.
+    #[must_use]
+    pub fn trusted_root_certificates(mut self, pem_bundle: impl Into<Vec<u8>>) -> Self {
+        self.trusted_root_certificates = Some(zeroize::Zeroizing::new(pem_bundle.into()));
+        self
+    }
+
+    /// Fallibly build one hardened client with rustls, redirects and retries disabled,
+    /// proxy environment variables ignored, and optional exact CA pinning.
+    pub fn try_build(self) -> Result<reqwest::Client, OutboundClientBuildError> {
+        let mut builder = reqwest::Client::builder()
+            .timeout(self.timeout)
+            .connect_timeout(self.connect_timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .use_rustls_tls()
+            .retry(reqwest::retry::never());
+        if let Some(user_agent) = self.user_agent {
+            builder = builder.user_agent(user_agent);
+        }
+        if let Some(pem) = self.trusted_root_certificates {
+            if pem.len() > MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES {
+                return Err(OutboundClientBuildError::CertificateBundleTooLarge);
+            }
+            let certificates = reqwest::Certificate::from_pem_bundle(&pem)
+                .map_err(|_| OutboundClientBuildError::InvalidCertificateBundle)?;
+            if certificates.is_empty() {
+                return Err(OutboundClientBuildError::EmptyCertificateBundle);
+            }
+            if certificates.len() > MAXIMUM_TRUSTED_ROOT_CERTIFICATES {
+                return Err(OutboundClientBuildError::TooManyCertificates);
+            }
+            for certificate in certificates {
+                builder = builder.add_root_certificate(certificate);
+            }
+            builder = builder.tls_built_in_root_certs(false);
+        }
+        builder
+            .build()
+            .map_err(|_| OutboundClientBuildError::InvalidOptions)
+    }
+
     /// Build a reqwest client.
     ///
     /// The spec exposes an infallible return type. With the limited options
     /// above, construction failures indicate a programming error.
     #[must_use]
     pub fn build(self) -> reqwest::Client {
-        let mut builder = reqwest::Client::builder()
-            .timeout(self.timeout)
-            .connect_timeout(self.connect_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy();
-        if let Some(user_agent) = self.user_agent {
-            builder = builder.user_agent(user_agent);
-        }
-        builder
-            .build()
+        self.try_build()
             .expect("registry platform outbound client options are valid")
+    }
+}
+
+/// Fixed, value-free failure building a hardened outbound client.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OutboundClientBuildError {
+    #[error("the pinned certificate authority bundle exceeds the accepted byte bound")]
+    CertificateBundleTooLarge,
+    #[error("the pinned certificate authority bundle is not readable PEM")]
+    InvalidCertificateBundle,
+    #[error("the pinned certificate authority bundle carries no certificate")]
+    EmptyCertificateBundle,
+    #[error("the pinned certificate authority bundle carries too many certificates")]
+    TooManyCertificates,
+    #[error("the outbound client options are not usable")]
+    InvalidOptions,
+}
+
+impl OutboundClientBuildError {
+    #[must_use]
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::CertificateBundleTooLarge => {
+                "the pinned certificate authority bundle exceeds the accepted byte bound"
+            }
+            Self::InvalidCertificateBundle => {
+                "the pinned certificate authority bundle is not readable PEM"
+            }
+            Self::EmptyCertificateBundle => {
+                "the pinned certificate authority bundle carries no certificate"
+            }
+            Self::TooManyCertificates => {
+                "the pinned certificate authority bundle carries too many certificates"
+            }
+            Self::InvalidOptions => "the outbound client options are not usable",
+        }
     }
 }
 
@@ -853,6 +1013,50 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FOUND);
     }
 
+    #[test]
+    fn outbound_client_rejects_oversized_ca_bundle_before_parsing() {
+        let marker = b"canary-certificate-material";
+        let mut bundle = vec![b'x'; MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES + 1];
+        bundle[..marker.len()].copy_from_slice(marker);
+        let error = OutboundClientBuilder::new()
+            .trusted_root_certificates(bundle)
+            .try_build()
+            .expect_err("an oversized pinned CA bundle is refused");
+        assert_eq!(error, OutboundClientBuildError::CertificateBundleTooLarge);
+        assert!(!error.to_string().contains("canary"));
+        assert!(!format!("{error:?}").contains("canary"));
+    }
+
+    #[test]
+    fn outbound_client_rejects_too_many_ca_certificates() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        use rcgen::{generate_simple_self_signed, CertifiedKey};
+
+        let CertifiedKey { cert, .. } =
+            generate_simple_self_signed(vec!["registry.example.test".to_owned()])
+                .expect("generate TLS fixture");
+        let encoded = STANDARD.encode(cert.der().as_ref());
+        let body = encoded
+            .as_bytes()
+            .chunks(64)
+            .map(|line| std::str::from_utf8(line).expect("base64 is UTF-8"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let certificate =
+            format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n");
+        let bundle = certificate.repeat(MAXIMUM_TRUSTED_ROOT_CERTIFICATES + 1);
+        assert!(bundle.len() < MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES);
+
+        let error = OutboundClientBuilder::new()
+            .trusted_root_certificates(bundle)
+            .try_build()
+            .expect_err("an over-count pinned CA bundle is refused");
+        assert_eq!(error, OutboundClientBuildError::TooManyCertificates);
+        assert!(!error.to_string().contains("BEGIN CERTIFICATE"));
+        assert!(!format!("{error:?}").contains("BEGIN CERTIFICATE"));
+    }
+
     #[tokio::test]
     async fn read_bounded_accepts_body_within_limit() {
         let base = serve(Router::new().route("/body", get(|| async { "hello" }))).await;
@@ -1437,6 +1641,42 @@ mod tests {
             ),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn retry_after_requires_one_bounded_delta_seconds_field() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::RETRY_AFTER, "60".parse().unwrap());
+        assert_eq!(retry_after_seconds(&headers, 60), Some(60));
+        headers.append(http::header::RETRY_AFTER, "1".parse().unwrap());
+        assert_eq!(retry_after_seconds(&headers, 60), None);
+
+        for value in ["0", "61", " 1", "+1", "Wed, 21 Oct 2015 07:28:00 GMT"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(http::header::RETRY_AFTER, value.parse().unwrap());
+            assert_eq!(retry_after_seconds(&headers, 60), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn response_header_bounds_are_value_free_and_cover_count_and_size() {
+        let mut too_many = HeaderMap::new();
+        for index in 0..=MAXIMUM_RESPONSE_HEADER_FIELDS {
+            too_many.append("x-test", HeaderValue::from_str(&index.to_string()).unwrap());
+        }
+        assert_eq!(
+            validate_response_headers(&too_many),
+            Err(ResponseHeaderBoundError::TooManyFields)
+        );
+
+        let mut too_large = HeaderMap::new();
+        too_large.insert(
+            "x-canary",
+            HeaderValue::from_bytes(&vec![b'a'; MAXIMUM_RESPONSE_HEADER_BYTES]).unwrap(),
+        );
+        let error = validate_response_headers(&too_large).unwrap_err();
+        assert_eq!(error, ResponseHeaderBoundError::HeadersTooLarge);
+        assert!(!error.to_string().contains("canary"));
     }
 
     proptest! {

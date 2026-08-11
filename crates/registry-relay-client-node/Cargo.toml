@@ -1,0 +1,29 @@
+[package]
+name = "registry-relay-client-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Node.js binding for the Registry Relay V2 client, via napi-rs."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi.workspace = true
+napi-derive.workspace = true
+registry-platform-crypto.workspace = true
+registry-relay-client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio.workspace = true

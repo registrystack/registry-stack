@@ -1,6 +1,6 @@
 # registry-platform-httpsec
 
-Axum and Tower helpers for browser-facing HTTP security.
+Client-safe HTTP validation plus Axum and Tower helpers for HTTP security.
 
 ## What It Provides
 
@@ -16,6 +16,9 @@ Axum and Tower helpers for browser-facing HTTP security.
   primitives for Registry service responses.
 - `ProblemBody`, the fixed value-free Registry Stack problem envelope with
   `type`, `title`, `status`, `detail`, `code`, and `traceId` members.
+- `response_trace_id` for exact-one canonical W3C v0 response correlation.
+- `ProblemDocument` for bounded exact-six-member received problems. Products
+  retain their own closed `ProblemDefinition` catalogs.
 
 ## Typical Use
 
@@ -66,6 +69,8 @@ let _ = app;
 ```sh
 cargo test -p registry-platform-httpsec
 ```
+
+Client-only users can disable Axum and Tower with `default-features = false`.
 
 ## License
 

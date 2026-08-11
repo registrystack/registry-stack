@@ -16,11 +16,14 @@ rustls = ["reqwest/rustls-tls"]
 test-support = []
 
 [dependencies]
+async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 hickory-resolver.workspace = true
 http.workspace = true
 ipnet.workspace = true
+registry-platform-authcommon.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-crypto.workspace = true
 reqwest.workspace = true
@@ -36,7 +39,11 @@ zeroize.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+p256.workspace = true
 proptest.workspace = true
 rcgen.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 tokio-rustls.workspace = true
+wiremock.workspace = true

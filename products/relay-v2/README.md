@@ -16,6 +16,9 @@ The initial boundary is intentionally narrow:
   Aggregate Data statistical-dataflow pattern and the aligned SDMX read subset;
 - responses are unsigned;
 - Registry Mint is optional and Registry Evidence remains a separate product;
+- the separately versioned Relay client, including its Node and Python native
+  bindings, consumes the fixed public HTTP contract but never adds a route,
+  deployment capability, or Relay authorization semantic;
 - the written GovStack drafts are alignment inputs, not conformance contracts;
 - the obsolete Digital Registries OpenAPI is not consumed.
 
@@ -55,3 +58,7 @@ used only through the explicit temporary-fetch option or an external cache in
 Set `RELAY_V2_SDMX_CONFORMANCE=1` when running `scripts/test-http.sh` to fetch
 the digest-locked schemas temporarily and validate generated data and structure
 responses.
+
+`scripts/check-client-contract.sh` verifies the standalone fixed route and
+problem inventory used by `registry-relay-client`; it has no live deployment or
+fixture dependency.

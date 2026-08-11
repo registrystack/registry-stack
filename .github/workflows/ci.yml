@@ -45,6 +45,7 @@ jobs:
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
       relay_contracts: ${{ steps.filter.outputs.relay_contracts }}
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
+      relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
       project_authoring: ${{ steps.filter.outputs.project_authoring }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
@@ -570,6 +571,32 @@ jobs:
       - name: Relay V2 coequal HTTP journeys
         run: products/relay-v2/scripts/test-http.sh
 
+  relay-client-contracts:
+    name: Relay client contract and source neutrality
+    needs: changes
+    if: needs.changes.outputs.relay_client_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Relay client contract consistency
+        run: products/relay-v2/scripts/check-client-contract.sh
+
+      - name: Relay client source neutrality
+        run: products/relay-v2/scripts/check-source-neutrality.sh
+
   identifiers:
     name: Public identifier catalog
     needs: changes
@@ -604,6 +631,7 @@ jobs:
       - evidence-contracts
       - relay-contracts
       - relay-v2-contracts
+      - relay-client-contracts
       - identifiers
     runs-on: ubuntu-24.04
     env:
@@ -1188,7 +1216,7 @@ jobs:
           cmp LICENSE editors/zed/LICENSE
 
   client-bindings:
-    name: Evidence client bindings
+    name: Native client bindings
     needs: changes
     if: needs.changes.outputs.client_bindings == 'true'
     runs-on: ubuntu-24.04
@@ -1204,23 +1232,37 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: crates/registry-evidence-client-node/package-lock.json
+          cache-dependency-path: |
+            crates/registry-evidence-client-node/package-lock.json
+            crates/registry-relay-client-node/package-lock.json
 
-      - name: Build and test the Node binding
-        working-directory: crates/registry-evidence-client-node
+      - name: Build and test Node bindings
+        shell: bash
         run: |
-          npm ci
-          npm run build:debug
-          npm test
-          npm run check:types
-          cmp ../../LICENSE LICENSE
+          set -euo pipefail
+          for client in registry-evidence-client-node registry-relay-client-node; do
+            (
+              cd "crates/${client}"
+              npm ci
+              npm run build:debug
+              npm test
+              npm run check:types
+              cmp ../../LICENSE LICENSE
+            )
+          done
 
-      - name: Build and test the Python binding
-        working-directory: crates/registry-evidence-client-py
+      - name: Build and test Python bindings
+        shell: bash
         run: |
-          cargo build --locked -p registry-evidence-client-py --lib --features registry-evidence-client-py/extension-module
-          python3 -m unittest discover -s tests/python -v
-          cmp ../../LICENSE LICENSE
+          set -euo pipefail
+          for client in registry-evidence-client-py registry-relay-client-py; do
+            cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
+            (
+              cd "crates/${client}"
+              python3 -m unittest discover -s tests/python -v
+              cmp ../../LICENSE LICENSE
+            )
+          done
 
   ci-result:
     name: CI result

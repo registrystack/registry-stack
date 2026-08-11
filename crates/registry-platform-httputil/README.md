@@ -4,11 +4,20 @@ Outbound HTTP utilities for registry services.
 
 ## What It Provides
 
-- `OutboundClientBuilder` with request and connect timeouts, no redirects, and
-  ignored proxy environment variables by default. It does not validate target
-  URLs; pair it with `FetchUrlPolicy` for user-controlled destinations.
+- `OutboundClientBuilder::try_build` with explicit rustls, retries and redirects
+  disabled, ignored proxy environment variables, and optional exact CA pinning.
+  Pinned bundles are limited by
+  `MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES` and
+  `MAXIMUM_TRUSTED_ROOT_CERTIFICATES` before client construction.
+  Pair it with `ServiceBaseUrl` for configured credential-bearing services or
+  `FetchUrlPolicy` for user-controlled destinations.
 - `read_bounded` for response bodies with content-length and streaming byte
   limits.
+- `ServiceBaseUrl`, bearer token providers, and `PrivateKeyJwt` for hardened
+  credential-bearing clients without product semantics. The private-key-JWT
+  provider preserves its closed `client_credentials` request shape.
+- Shared strict response-header bounds and exact-one delta-seconds
+  `Retry-After` parsing.
 - `ProxyHeaderPolicy` plus request and response header filters for proxy-safe
   forwarding.
 - `url::append_path_segments` for safe path construction.

@@ -14,7 +14,7 @@ struct ProblemCatalog<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProblemEntry<'a> {
-    uri: String,
+    uri: &'a str,
     code: &'a str,
     title: &'a str,
     description: &'a str,

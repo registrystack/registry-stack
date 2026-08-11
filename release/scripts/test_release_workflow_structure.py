@@ -445,7 +445,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn('"${relay_install_dir}/relay" --version', assemble)
         self.assertIn("relay_patch >= 1", assemble)
 
-    def test_builds_and_smokes_stable_evidence_client_packages(self) -> None:
+    def test_builds_and_smokes_stable_native_client_packages(self) -> None:
         text, document = workflow("release-candidate.yml")
         clients = document["jobs"]["clients"]
         matrix = clients["strategy"]["matrix"]["include"]
@@ -472,15 +472,25 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             clients["env"]["CLIENT_VERSION"],
             "${{ needs.validate.outputs.version }}",
         )
-        wheel = step_run(document, "clients", "Build the Python client wheel")
+        wheel = step_run(document, "clients", "Build Python client wheels")
         self.assertIn("--compatibility linux", wheel)
-        self.assertIn("expected exactly one wheel", wheel)
+        self.assertIn("registry_${client}_client", wheel)
+        self.assertIn("expected_wheels=2", wheel)
         self.assertIn("--require-hashes --only-binary=:all:", wheel)
         self.assertIn("release/requirements/maturin-1.9.6.txt", wheel)
-        node = step_run(document, "clients", "Build the Node client package")
+        node = step_run(document, "clients", "Build Node client packages")
         self.assertIn(
-            "package/evidence-client.${{ matrix.napi_platform }}.node",
+            "package/${client}-client.${{ matrix.napi_platform }}.node",
             node,
+        )
+        self.assertIn("registry-${client}-client-node", node)
+        for name in ("Smoke Python client wheels", "Smoke Node client packages"):
+            smoke = step_run(document, "clients", name)
+            self.assertIn("smoke-${client}-client-package", smoke)
+            self.assertIn("for client in evidence relay", smoke)
+        self.assertIn(
+            "crates/registry-relay-client-node/package-lock.json",
+            str(clients),
         )
         assemble = step_run(
             document,
@@ -492,6 +502,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("expected-client-assets", assemble)
         self.assertIn("actual-client-assets", assemble)
         self.assertIn("diff -u", assemble)
+        self.assertIn("include_relay_clients=1", assemble)
+        self.assertIn("expected_client_assets=4", assemble)
+        self.assertIn("relay-client-node-", assemble)
+        self.assertIn("registry_relay_client-", assemble)
         self.assertIn("kind=client-package", text)
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
             self.assertNotIn(forbidden, text)

@@ -94,6 +94,7 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	move-evidence-to-production-signing              # drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
 	prove-an-evidence-project                        # how-to against the reader's own project; no fixed scenario this gate can replay
 	publish-governed-sqlite-registry                 # Relay V2 journey; replayed by the Relay product and real-process acceptance gates
+	query-relay-client                               # Relay client journey; depends on a released wheel and the Relay publishing prerequisite
 	request-a-holder-bound-credential                # draft: true, hidden from the sidebar; no verified wallet flow exists to replay
 	rotate-evidence-signing-keys                     # drift-checked by evidence-production-build-docs.test.mjs; needs a deployed signing key
 	verify-a-registered-parent-with-opencrvs         # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
