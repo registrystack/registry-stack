@@ -1149,6 +1149,9 @@ fn compile_question_plan(
             bail!("every question subject must be used by the source or declared for derivation");
         }
     }
+    if !source_subjects.iter().any(|source| *source) {
+        bail!("an inline OpenAPI question must bind at least one subject to the source path");
+    }
     let source_selector_fields = path_selector_fields.into_iter().collect::<Vec<_>>();
     exact_path_selectors(&operation, &source_selector_fields)?;
     let compiled_facts = compile_facts(
@@ -3813,6 +3816,28 @@ properties:
         assert!(error.to_string().contains(
             "every question subject must be used by the source or declared for derivation"
         ));
+    }
+
+    #[test]
+    fn inline_openapi_question_rejects_no_source_bound_subject() {
+        let openapi = OPENAPI
+            .replace("/people/{person_id}:", "/population-summary:")
+            .replace(
+                "      parameters:\n        - name: person_id\n          in: path\n          required: true\n          schema: {type: string}\n",
+                "",
+            );
+        let question = QUESTION.replace(
+            "  selector: person_id",
+            "  selector: person_id\n  derivation: true",
+        );
+        let fixture = Fixture::new(&openapi, &question, ANSWER, true);
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a constant source path still needs one source-bound subject");
+        assert!(error.to_string().contains(
+            "an inline OpenAPI question must bind at least one subject to the source path"
+        ));
+        assert!(fixture.staging_is_empty());
     }
 
     #[test]
