@@ -98,7 +98,7 @@ registry-platform-authcommon = { workspace = true }
 registry-platform-buildinfo = { workspace = true }
 registry-platform-audit = { workspace = true }
 registry-platform-crypto = { workspace = true }
-registry-platform-httpsec = { workspace = true }
+registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil = { workspace = true }
 registry-platform-oidc = { workspace = true }
 registry-platform-config = { workspace = true }

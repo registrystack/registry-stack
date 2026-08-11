@@ -51,6 +51,7 @@ RELAY_V2_ARTIFACT_INVENTORY = (
     "relay-installer",
     "relayctl",
 )
+RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -96,6 +97,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         if version_tuple >= (0, 19, 0)
         else LEGACY_ARTIFACT_INVENTORY
     )
+    if version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
+        inventory += ("relay-client-node", "relay-client-python")
     data = {
         "stack": {
             "release": release_id,

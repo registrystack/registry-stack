@@ -114,6 +114,12 @@ pub struct QuestionSubject {
     pub selector: String,
     #[serde(default)]
     pub profile: Option<String>,
+    /// Whether this role supplies an inline operation path selector.
+    ///
+    /// Omission keeps the unambiguous single-role shorthand. An explicit
+    /// value is useful when multiple roles use the same selector field name.
+    #[serde(default)]
+    pub source: Option<bool>,
     #[serde(default)]
     pub derivation: bool,
 }

@@ -27,6 +27,10 @@ members = [
     "crates/registry-manifest-cli",
     "crates/registry-mint",
     "crates/registry-relay",
+    "crates/registry-relay-http-contract",
+    "crates/registry-relay-client",
+    "crates/registry-relay-client-node",
+    "crates/registry-relay-client-py",
     "crates/registry-relay-v2",
     "crates/registry-relayctl",
     "crates/registry-language-server",
@@ -61,6 +65,10 @@ registry-language-server = { path = "crates/registry-language-server", version =
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.19.0" }
 registry-mint = { path = "crates/registry-mint", version = "0.19.0" }
 registry-relay = { path = "crates/registry-relay", version = "0.19.0" }
+registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.19.0" }
+registry-relay-client = { path = "crates/registry-relay-client", version = "0.19.0" }
+registry-relay-client-node = { path = "crates/registry-relay-client-node", version = "0.19.0" }
+registry-relay-client-py = { path = "crates/registry-relay-client-py", version = "0.19.0" }
 registry-relay-v2 = { path = "crates/registry-relay-v2", version = "0.19.0" }
 registry-relayctl = { path = "crates/registry-relayctl", version = "0.19.0" }
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.19.0" }
@@ -69,7 +77,7 @@ registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", ver
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.19.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.19.0" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.19.0" }
-registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.19.0" }
+registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.19.0", default-features = false }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.19.0" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.19.0" }
 registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.19.0" }

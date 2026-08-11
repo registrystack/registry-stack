@@ -432,6 +432,7 @@ export default defineConfig({
             { label: 'Evidence Gateway configuration', slug: 'reference/evidence-configuration' },
             { label: 'evidencectl CLI', slug: 'reference/evidencectl' },
             { label: 'relayctl CLI', slug: 'reference/relayctl' },
+            { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
             {
               label: 'API reference',
               collapsed: true,

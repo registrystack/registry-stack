@@ -1,0 +1,12 @@
+[package]
+name = "registry-relay-http-contract"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Stable HTTP wire contract for Registry Relay V2 clients."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true

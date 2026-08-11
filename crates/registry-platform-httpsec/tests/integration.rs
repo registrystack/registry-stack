@@ -1,3 +1,5 @@
+#![cfg(feature = "server")]
+
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
 use axum::response::IntoResponse;

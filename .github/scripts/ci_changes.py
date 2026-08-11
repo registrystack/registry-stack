@@ -33,6 +33,12 @@ SHARDS = {
         "registry-manifest-core",
     ),
     "relay": ("registry-relay",),
+    "relay-client": (
+        "registry-relay-http-contract",
+        "registry-relay-client",
+        "registry-relay-client-node",
+        "registry-relay-client-py",
+    ),
     "relay-v2": ("registry-relay-v2", "registry-relayctl"),
     "evidence": (
         "registry-evidence",
@@ -56,6 +62,7 @@ EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
+RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 
 # Every input the Evidence tutorial gate replays or is built from. The tutorial
 # pages and helper scripts here must stay in step with the gate's own registry
@@ -70,9 +77,11 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
         "docs/site/scripts/check-evidence-tutorials.sh",
         "docs/site/scripts/check-evidence-tutorials.test.mjs",
         "docs/site/scripts/evidence-tutorial-fence.sh",
+        "docs/site/scripts/fixtures/fhir-tutorial-mock.py",
         "docs/site/src/content/docs/tutorials/assert-a-role-bound-relationship.mdx",
         "docs/site/src/content/docs/tutorials/control-who-can-request-evidence.mdx",
         "docs/site/src/content/docs/tutorials/first-evidence-assertion.mdx",
+        "docs/site/src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx",
         "docs/site/src/content/docs/tutorials/refuse-unsafe-evidence-requests.mdx",
         "docs/site/src/content/docs/tutorials/request-evidence-as-sd-jwt-vc.mdx",
         "docs/site/src/content/docs/tutorials/request-evidence-from-an-application.mdx",
@@ -125,6 +134,10 @@ EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
 EVIDENCE_BINDING_PACKAGES = frozenset(
     {"registry-evidence-client-node", "registry-evidence-client-py"}
 )
+RELAY_BINDING_PACKAGES = frozenset(
+    {"registry-relay-client-node", "registry-relay-client-py"}
+)
+NATIVE_BINDING_PACKAGES = EVIDENCE_BINDING_PACKAGES | RELAY_BINDING_PACKAGES
 
 # A package is exempt from the tutorial trigger only while no tutorial runs it.
 # The Python binding is what `request-evidence-from-an-application` imports, so
@@ -261,6 +274,7 @@ class Workspace:
             ).as_posix()
 
         reverse_dependencies: dict[str, set[str]] = defaultdict(set)
+        dev_reverse_dependencies: dict[str, set[str]] = defaultdict(set)
         for package_name, package in packages.items():
             for dependency in package["dependencies"]:
                 dependency_name = dependency["name"]
@@ -271,8 +285,12 @@ class Workspace:
                     and Path(dependency_path).resolve()
                     == Path(packages[dependency_name]["manifest_path"]).resolve().parent
                 ):
-                    reverse_dependencies[dependency_name].add(package_name)
+                    if dependency.get("kind") == "dev":
+                        dev_reverse_dependencies[dependency_name].add(package_name)
+                    else:
+                        reverse_dependencies[dependency_name].add(package_name)
         self.reverse_dependencies = reverse_dependencies
+        self.dev_reverse_dependencies = dev_reverse_dependencies
 
     def package_for_path(self, path: str) -> str | None:
         matches = [
@@ -286,13 +304,19 @@ class Workspace:
 
     def affected_packages(self, seeds: Iterable[str]) -> set[str]:
         affected = set(seeds)
-        queue = deque(affected)
+        propagating = set(seeds)
+        queue = deque(propagating)
         while queue:
             dependency = queue.popleft()
             for dependent in self.reverse_dependencies.get(dependency, ()):
-                if dependent not in affected:
+                if dependent not in propagating:
                     affected.add(dependent)
+                    propagating.add(dependent)
                     queue.append(dependent)
+            # A dev-dependency must schedule the immediate consumer's tests,
+            # but it is not linked into that consumer's library. Do not let
+            # this test-only edge fan out through the consumer's dependents.
+            affected.update(self.dev_reverse_dependencies.get(dependency, ()))
         return affected
 
 
@@ -432,7 +456,7 @@ def classify(
             # description.
             "products/relay-v2/CONCEPT.md",
             "products/relay-v2/STANDARDS-ALIGNMENT.md",
-            # No page is generated from these four, but scripts/
+            # No page is generated from these files, but scripts/
             # ops-posture-spec.test.mjs reads them to prove the published
             # operational claims still match the runtime. A probe route, a
             # runtime bound, or a healthcheck default can change here and
@@ -442,6 +466,7 @@ def classify(
             "crates/registry-relay-v2/src/main.rs",
             "crates/registry-relay-v2/src/contract.rs",
             "crates/registry-relay-v2/src/startup.rs",
+            "crates/registry-relay-http-contract/src/lib.rs",
         }
         for path in paths
     )
@@ -476,11 +501,10 @@ def classify(
         or any(path.startswith("editors/") for path in paths)
         or "registry-language-server" in affected
     )
-    # Reverse dependents, not changed paths: both bindings are Cargo path
-    # dependents of the SDK and the verifier, so a change to either can move
-    # the native surface or the error envelope the packages wrap without
-    # touching a file inside a binding crate.
-    client_bindings = complete or bool(affected & EVIDENCE_BINDING_PACKAGES)
+    # Reverse dependents, not changed paths: bindings are Cargo path dependents
+    # of each SDK, so an SDK or shared HTTP-contract change can move a native
+    # surface without touching a binding crate.
+    client_bindings = complete or bool(affected & NATIVE_BINDING_PACKAGES)
 
     evidence_tutorial = (
         complete
@@ -508,6 +532,7 @@ def classify(
         "platform_hygiene": platform_hygiene,
         "relay_contracts": "registry-relay" in affected,
         "relay_v2_contracts": bool(affected & RELAY_V2_PACKAGES),
+        "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "project_authoring": "registryctl" in affected,
         "release_tool": release_tool,

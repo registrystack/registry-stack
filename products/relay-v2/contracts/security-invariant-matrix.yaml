@@ -308,6 +308,37 @@ invariants:
       - {path: crates/registry-relay-v2/src/problem.rs, name: version_zero_traceparent_rejects_non_lowercase_hex}
       - {path: crates/registry-relay-v2/src/problem.rs, name: invalid_traceparent_is_replaced_with_server_context}
       - {path: crates/registry-relay-v2/src/problem.rs, name: caller_tracestate_is_never_echoed_in_ordinary_or_problem_headers}
+  - id: sec-client-credential-transport
+    threat: A relying-party client sends credentials to an unsafe destination, follows an attacker-directed redirect, uses an ambient proxy or retry path, or renders a secret in diagnostics.
+    enforcementPoint: Closed outbound-client construction, strict service-base validation, protected credential transport, and value-free token types.
+    expected: Client URLs preserve only an explicit deployment prefix; bearer acquisition is never attempted for probes or public OpenAPI, and unsafe base URL components cannot enter diagnostic output.
+    evidence: relay-client-credential-transport-tests
+    negativeTest: probes_and_openapi_never_acquire_a_token
+    tests:
+      - {path: crates/registry-platform-httputil/src/client/mod.rs, name: service_base_urls_preserve_prefixes_and_refuse_credential_leaks}
+      - {path: crates/registry-relay-client/tests/http_boundary.rs, name: base_prefix_is_preserved_for_every_route_family}
+      - {path: crates/registry-relay-client/tests/http_boundary.rs, name: probes_and_openapi_never_acquire_a_token}
+  - id: sec-client-response-contract
+    threat: A malformed, oversized, replay-confusing, or forged response is interpreted as a Relay success or a typed refusal, weakening concealment or caller handling.
+    enforcementPoint: Bounded response parsing with exact W3C response trace, registered Problem Details, Retry-After, and strong ETag validation.
+    expected: The client accepts only one canonical lower-case traceparent, an exact registered six-member problem whose trace matches the header, and an empty 304 carrying the matching strong SHA-256 ETag.
+    evidence: relay-client-response-contract-tests
+    negativeTest: problem_requires_exact_registered_six_member_body_and_trace_equality
+    tests:
+      - {path: crates/registry-relay-client/tests/http_boundary.rs, name: response_trace_requires_one_canonical_lowercase_v0_traceparent}
+      - {path: crates/registry-relay-client/tests/http_boundary.rs, name: problem_requires_exact_registered_six_member_body_and_trace_equality}
+      - {path: crates/registry-relay-client/tests/http_boundary.rs, name: not_modified_http_requires_matching_strong_sha256_etag}
+      - {path: crates/registry-relay-client/src/client.rs, name: not_modified_requires_matching_strong_sha256_etag_and_empty_body}
+  - id: sec-client-request-confinement
+    threat: Caller options synthesize or change Relay route or query semantics.
+    enforcementPoint: Fixed route templates, client-owned reserved query parameters, opaque continuation state, and exact percent encoding for SDMX key material.
+    expected: The client keeps fixed routes and reserved query ownership closed, cannot mix continuation state with changed first-page facts, and never decodes a literal SDMX plus as a space.
+    evidence: relay-client-request-confinement-tests
+    negativeTest: continuations_cannot_mix_first_page_facts
+    tests:
+      - {path: crates/registry-relay-client/src/query.rs, name: first_page_filters_cannot_claim_reserved_parameters}
+      - {path: crates/registry-relay-client/tests/http_boundary.rs, name: continuations_cannot_mix_first_page_facts}
+      - {path: crates/registry-relay-client/src/query.rs, name: sdmx_literal_plus_is_never_decoded_as_space}
   - id: sec-unsigned-family-boundary
     threat: Relay output is mistaken for portable signed Evidence or API authentication is mistaken for Identity Federation.
     enforcementPoint: Product routes, dependencies, discovery, and family-alignment inventory.

@@ -71,13 +71,14 @@ pub const MAX_DESTINATION_REQUEST_BODY_BYTES: usize = 1_048_576;
 /// Maximum response-body ceiling accepted by the platform transport.
 pub const MAX_DESTINATION_RESPONSE_BODY_BYTES: usize = 16_777_216;
 /// Maximum parsed upstream response-header count.
-pub const MAX_DESTINATION_RESPONSE_HEADERS: usize = 64;
+pub const MAX_DESTINATION_RESPONSE_HEADERS: usize = crate::MAXIMUM_RESPONSE_HEADER_FIELDS;
 /// Maximum aggregate parsed upstream response-header name and value bytes.
-pub const MAX_DESTINATION_RESPONSE_HEADER_BYTES: usize = 65_536;
+pub const MAX_DESTINATION_RESPONSE_HEADER_BYTES: usize = crate::MAXIMUM_RESPONSE_HEADER_BYTES;
 /// Maximum configured private CA bundle bytes retained during TLS activation.
-pub const MAX_DESTINATION_CA_BUNDLE_BYTES: usize = 1_048_576;
+pub const MAX_DESTINATION_CA_BUNDLE_BYTES: usize =
+    crate::MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES;
 /// Maximum certificates accepted from one configured private CA bundle.
-pub const MAX_DESTINATION_CA_CERTIFICATES: usize = 32;
+pub const MAX_DESTINATION_CA_CERTIFICATES: usize = crate::MAXIMUM_TRUSTED_ROOT_CERTIFICATES;
 /// Maximum combined client certificate-chain and private-key PEM bytes.
 pub const MAX_DESTINATION_CLIENT_IDENTITY_BYTES: usize = 524_288;
 /// Frozen hard maximum for DNS, connect, send, and response body read together.
@@ -3636,20 +3637,15 @@ fn is_valid_header_value(value: &[u8]) -> bool {
 }
 
 fn validate_response_headers(headers: &HeaderMap) -> Result<(), DestinationSendError> {
-    if headers.len() > MAX_DESTINATION_RESPONSE_HEADERS {
-        return Err(DestinationSendError::TooManyResponseHeaders);
-    }
-    let mut bytes = 0_usize;
-    for (name, value) in headers {
-        bytes = bytes
-            .checked_add(name.as_str().len())
-            .and_then(|total| total.checked_add(value.as_bytes().len()))
-            .ok_or(DestinationSendError::ResponseHeaderBytesExceeded)?;
-        if bytes > MAX_DESTINATION_RESPONSE_HEADER_BYTES {
-            return Err(DestinationSendError::ResponseHeaderBytesExceeded);
+    match crate::validate_response_headers(headers) {
+        Ok(()) => Ok(()),
+        Err(crate::ResponseHeaderBoundError::TooManyFields) => {
+            Err(DestinationSendError::TooManyResponseHeaders)
+        }
+        Err(crate::ResponseHeaderBoundError::HeadersTooLarge) => {
+            Err(DestinationSendError::ResponseHeaderBytesExceeded)
         }
     }
-    Ok(())
 }
 
 fn origin_explicitly_denotes_loopback(origin: &Url) -> bool {

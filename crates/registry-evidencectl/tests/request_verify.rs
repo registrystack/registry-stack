@@ -31,6 +31,7 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
         "<QUESTION>",
         "--purpose",
         "--subject",
+        "--subjects-file",
         "--name",
         "--client",
         "--format",
@@ -51,6 +52,102 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
         assert!(verify.contains(visible), "missing {visible}: {verify}");
     }
     assert!(!verify.contains("--evidence-bin"));
+}
+
+#[test]
+fn owner_only_subjects_file_keeps_selector_values_out_of_command_arguments() {
+    let fixture = Fixture::new();
+    fixture.write_procedure(&[
+        "adult-status",
+        "--purpose",
+        "age-check",
+        "--subject",
+        "person_id=selector-file-canary",
+    ]);
+    let subjects = fixture.root.join("subjects.json");
+    private_file(
+        &subjects,
+        br#"{"subjects":[{"role":"person","field":"person_id","value":"selector-file-canary"}]}"#,
+        0o600,
+    );
+
+    let prepared = command()
+        .current_dir(&fixture.root)
+        .args([
+            "request",
+            "prepare",
+            "adult-status",
+            "--purpose",
+            "age-check",
+            "--subjects-file",
+        ])
+        .arg(&subjects)
+        .args([
+            "--name",
+            "subjects-file",
+            "--project",
+            ".",
+            "--evidence-bin",
+        ])
+        .arg(&fixture.evidence)
+        .arg("--mint-bin")
+        .arg(&fixture.mint)
+        .output()
+        .expect("prepare from subjects file");
+    assert_success(&prepared);
+    let request: Value = serde_json::from_slice(
+        &fs::read(
+            fixture
+                .root
+                .join(".evidence/requests/subjects-file/request.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        request["subjects"][0]["selector"]["values"]["person_id"],
+        "selector-file-canary"
+    );
+    assert!(!String::from_utf8_lossy(&prepared.stdout).contains("selector-file-canary"));
+    assert!(!String::from_utf8_lossy(&prepared.stderr).contains("selector-file-canary"));
+    assert!(
+        !fs::read_to_string(fixture.evidence.with_extension("prepare.args"))
+            .unwrap()
+            .contains("selector-file-canary")
+    );
+
+    let unsafe_subjects = fixture.root.join("unsafe-subjects.json");
+    private_file(
+        &unsafe_subjects,
+        br#"{"subjects":[{"role":"person","field":"person_id","value":"unsafe-selector-canary"}]}"#,
+        0o644,
+    );
+    let refused = command()
+        .current_dir(&fixture.root)
+        .args([
+            "request",
+            "prepare",
+            "adult-status",
+            "--purpose",
+            "age-check",
+            "--subjects-file",
+        ])
+        .arg(&unsafe_subjects)
+        .args([
+            "--name",
+            "unsafe-subjects-file",
+            "--project",
+            ".",
+            "--evidence-bin",
+        ])
+        .arg(&fixture.evidence)
+        .arg("--mint-bin")
+        .arg(&fixture.mint)
+        .output()
+        .expect("refuse unsafe subjects file");
+    assert!(!refused.status.success());
+    assert!(!String::from_utf8_lossy(&refused.stdout).contains("unsafe-selector-canary"));
+    assert!(!String::from_utf8_lossy(&refused.stderr).contains("unsafe-selector-canary"));
 }
 
 #[test]

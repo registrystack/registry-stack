@@ -23,6 +23,7 @@ standards_referenced:
   - ogc-api-features
   - ogc-api-records
   - ogc-api-edr
+  - fhir-r4
 ---
 
 You already know what Registry Stack is for: answer a question about a record without sharing the
@@ -120,6 +121,15 @@ Read the full context in the [Evidence Gateway protocol](../../spec/rs-pr-eviden
 - Readiness does not prove a source returns data: neither startup nor readiness sends an
   evidence-data request or probes a source data endpoint. A ready service is one whose credentials,
   trust bindings, signing provider, and audit sink resolved, not one whose sources are answering.
+- FHIR compatibility uses an adapter: the frozen v1 fixed-source contract accepts
+  `application/json` and `application/graphql-response+json`, not the formal
+  `application/fhir+json` media type. Evidence Gateway does not implement FHIR search, pagination,
+  subscriptions, or profile conformance. A local read-through adapter can request and validate
+  FHIR JSON while exposing the bounded result as ordinary JSON to Evidence Gateway. Credential-free
+  source access remains restricted to an exact numeric-loopback HTTP origin under local assurance;
+  deployment requires a reviewed authenticated HTTPS source or adapter.
+  {/* Evidence: products/evidence/contracts/source-contract.yaml response_media_types and
+  url_security; crates/registry-evidence/src/source.rs response_media_type. */}
 - Two deliberately narrow signing modes: local assurance uses a file-backed private JWK;
   production and evidence-grade assurance use Vault/OpenBao Transit through a workload-local
   Unix-socket proxy. There is no PKCS#11 adapter, cloud-KMS abstraction, provider registry, or

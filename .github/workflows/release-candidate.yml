@@ -395,7 +395,7 @@ jobs:
           retention-days: 2
 
   clients:
-    name: Build Evidence client packages for ${{ matrix.asset }}
+    name: Build native client packages for ${{ matrix.asset }}
     needs: validate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
@@ -435,100 +435,124 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: crates/registry-evidence-client-node/package-lock.json
+          cache-dependency-path: |
+            crates/registry-evidence-client-node/package-lock.json
+            crates/registry-relay-client-node/package-lock.json
 
-      - name: Restore Evidence client Cargo cache
+      - name: Restore native client Cargo cache
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-evidence-release-clients-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: registry-stack-release-clients-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
-            registry-evidence-release-clients-${{ matrix.asset }}-
+            registry-stack-release-clients-${{ matrix.asset }}-
 
-      - name: Build the Python client wheel
-        working-directory: crates/registry-evidence-client-py
+      - name: Build Python client wheels
         shell: bash
         run: |
           set -euo pipefail
           rustup toolchain install 1.95.0 --profile minimal
-          configured_version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          test "${configured_version}" = "${CLIENT_VERSION}"
           python3 -m venv "${RUNNER_TEMP}/maturin"
           "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
             --require-hashes --only-binary=:all: \
             --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
           wheel_dir="${GITHUB_WORKSPACE}/candidate-client-package/clients"
           mkdir -p "${wheel_dir}"
-          if [[ "${RUNNER_OS}" == Linux ]]; then
-            "${RUNNER_TEMP}/maturin/bin/maturin" build \
-              --release --locked --compatibility linux --out "${wheel_dir}"
-          else
-            "${RUNNER_TEMP}/maturin/bin/maturin" build \
-              --release --locked --out "${wheel_dir}"
+          for client in evidence relay; do
+            if [[ "${client}" == relay ]] &&
+                [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
+              continue
+            fi
+            client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-py"
+            configured_version="$(cd "${client_dir}" && python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+            test "${configured_version}" = "${CLIENT_VERSION}"
+            if [[ "${RUNNER_OS}" == Linux ]]; then
+              (cd "${client_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
+                --release --locked --compatibility linux --out "${wheel_dir}")
+            else
+              (cd "${client_dir}" && "${RUNNER_TEMP}/maturin/bin/maturin" build \
+                --release --locked --out "${wheel_dir}")
+            fi
+            wheel="registry_${client}_client-${CLIENT_VERSION}-${{ matrix.wheel_tag }}.whl"
+            if [[ ! -f "${wheel_dir}/${wheel}" ]]; then
+              echo "maturin did not produce ${wheel}" >&2
+              find "${wheel_dir}" -maxdepth 1 -name '*.whl' >&2
+              exit 1
+            fi
+          done
+          expected_wheels=1
+          if [[ ! "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. ]] &&
+              [[ "${CLIENT_VERSION}" != "0.19.0" ]]; then
+            expected_wheels=2
           fi
-          wheel="registry_evidence_client-${CLIENT_VERSION}-${{ matrix.wheel_tag }}.whl"
-          if [[ ! -f "${wheel_dir}/${wheel}" ]]; then
-            echo "maturin did not produce ${wheel}" >&2
-            find "${wheel_dir}" -maxdepth 1 -name '*.whl' >&2
-            exit 1
-          fi
-          if [[ "$(find "${wheel_dir}" -maxdepth 1 -name '*.whl' | wc -l)" -ne 1 ]]; then
-            echo "expected exactly one wheel for ${{ matrix.asset }}" >&2
-            exit 1
-          fi
+          test "$(find "${wheel_dir}" -maxdepth 1 -name '*.whl' | wc -l)" -eq "${expected_wheels}"
 
-      - name: Smoke the Python client wheel
+      - name: Smoke Python client wheels
         shell: bash
         run: |
           set -euo pipefail
-          wheel="registry_evidence_client-${CLIENT_VERSION}-${{ matrix.wheel_tag }}.whl"
-          python3 -m venv "${RUNNER_TEMP}/wheel-smoke"
-          "${RUNNER_TEMP}/wheel-smoke/bin/pip" install --quiet \
-            "${GITHUB_WORKSPACE}/candidate-client-package/clients/${wheel}"
-          "${RUNNER_TEMP}/wheel-smoke/bin/python" \
-            release/scripts/smoke-evidence-client-package.py
+          for client in evidence relay; do
+            if [[ "${client}" == relay ]] &&
+                [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
+              continue
+            fi
+            wheel="registry_${client}_client-${CLIENT_VERSION}-${{ matrix.wheel_tag }}.whl"
+            smoke="${RUNNER_TEMP}/wheel-smoke-${client}"
+            python3 -m venv "${smoke}"
+            "${smoke}/bin/pip" install --quiet \
+              "${GITHUB_WORKSPACE}/candidate-client-package/clients/${wheel}"
+            "${smoke}/bin/python" \
+              "release/scripts/smoke-${client}-client-package.py"
+          done
 
-      - name: Build the Node client package
-        working-directory: crates/registry-evidence-client-node
+      - name: Build Node client packages
         shell: bash
         run: |
           set -euo pipefail
-          npm ci
-          test "$(node -p "require('./package.json').version")" = "${CLIENT_VERSION}"
-          npm run build
-          npm pack --pack-destination "${RUNNER_TEMP}"
-          packed="${RUNNER_TEMP}/registrystack-evidence-client-${CLIENT_VERSION}.tgz"
-          if [[ ! -f "${packed}" ]]; then
-            echo "npm pack did not produce ${packed}" >&2
-            exit 1
-          fi
-          entries="$(tar -tzf "${packed}")"
-          if ! grep -Fxq "package/evidence-client.${{ matrix.napi_platform }}.node" \
-              <<<"${entries}"; then
-            echo "the packed tarball has no evidence-client.${{ matrix.napi_platform }}.node" >&2
-            printf '%s\n' "${entries}" >&2
-            exit 1
-          fi
-          cp "${packed}" \
-            "${GITHUB_WORKSPACE}/candidate-client-package/clients/evidence-client-node-${CLIENT_TAG}-${{ matrix.asset }}.tgz"
+          for client in evidence relay; do
+            if [[ "${client}" == relay ]] &&
+                [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
+              continue
+            fi
+            client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
+            (cd "${client_dir}" && npm ci)
+            test "$(node -p "require('${client_dir}/package.json').version")" = "${CLIENT_VERSION}"
+            (cd "${client_dir}" && npm run build)
+            (cd "${client_dir}" && npm pack --pack-destination "${RUNNER_TEMP}")
+            packed="${RUNNER_TEMP}/registrystack-${client}-client-${CLIENT_VERSION}.tgz"
+            test -f "${packed}"
+            entries="$(tar -tzf "${packed}")"
+            grep -Fxq "package/${client}-client.${{ matrix.napi_platform }}.node" \
+              <<<"${entries}"
+            cp "${packed}" \
+              "${GITHUB_WORKSPACE}/candidate-client-package/clients/${client}-client-node-${CLIENT_TAG}-${{ matrix.asset }}.tgz"
+          done
 
-      - name: Smoke the Node client package
+      - name: Smoke Node client packages
         shell: bash
         run: |
           set -euo pipefail
-          tarball="${GITHUB_WORKSPACE}/candidate-client-package/clients/evidence-client-node-${CLIENT_TAG}-${{ matrix.asset }}.tgz"
-          smoke="${RUNNER_TEMP}/node-smoke"
-          mkdir -p "${smoke}"
-          cd "${smoke}"
-          npm init --yes >/dev/null
-          npm install --no-audit --no-fund "${tarball}"
-          cp "${GITHUB_WORKSPACE}/release/scripts/smoke-evidence-client-package.js" .
-          node smoke-evidence-client-package.js
+          for client in evidence relay; do
+            if [[ "${client}" == relay ]] &&
+                [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
+              continue
+            fi
+            tarball="${GITHUB_WORKSPACE}/candidate-client-package/clients/${client}-client-node-${CLIENT_TAG}-${{ matrix.asset }}.tgz"
+            smoke="${RUNNER_TEMP}/node-smoke-${client}"
+            mkdir -p "${smoke}"
+            (
+              cd "${smoke}"
+              npm init --yes >/dev/null
+              npm install --no-audit --no-fund "${tarball}"
+              cp "${GITHUB_WORKSPACE}/release/scripts/smoke-${client}-client-package.js" .
+              node "smoke-${client}-client-package.js"
+            )
+          done
 
-      - name: Upload Evidence client packages
+      - name: Upload native client packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: candidate-clients-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -795,9 +819,19 @@ jobs:
           rm -f candidate/bundle-root/SHA256SUMS
           cp "${macos}"/platform/* candidate/bundle-root/
           cp "${linux_arm}"/platform/* candidate/bundle-root/
+          version="${{ needs.validate.outputs.version }}"
+          include_relay_clients=0
+          if [[ ! "${version}" =~ ^0\.([0-9]|1[0-8])\. ]] &&
+              [[ "${version}" != "0.19.0" ]]; then
+            include_relay_clients=1
+          fi
           for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
             client_root="inputs/candidate-clients-${platform}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/clients"
-            test "$(find "${client_root}" -maxdepth 1 -type f | wc -l)" -eq 2
+            expected_client_assets=2
+            if [[ "${include_relay_clients}" -eq 1 ]]; then
+              expected_client_assets=4
+            fi
+            test "$(find "${client_root}" -maxdepth 1 -type f | wc -l)" -eq "${expected_client_assets}"
             cp "${client_root}"/* candidate/bundle-root/
           done
           {
@@ -807,15 +841,24 @@ jobs:
             for wheel_platform in linux_x86_64 linux_aarch64 macosx_11_0_arm64; do
               echo "registry_evidence_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
             done
+            if [[ "${include_relay_clients}" -eq 1 ]]; then
+              for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
+                echo "relay-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"
+              done
+              for wheel_platform in linux_x86_64 linux_aarch64 macosx_11_0_arm64; do
+                echo "registry_relay_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
+              done
+            fi
           } | sort > "${RUNNER_TEMP}/expected-client-assets"
           find candidate/bundle-root -maxdepth 1 -type f \
             \( -name 'evidence-client-node-*.tgz' \
-               -o -name 'registry_evidence_client-*.whl' \) \
+               -o -name 'registry_evidence_client-*.whl' \
+               -o -name 'relay-client-node-*.tgz' \
+               -o -name 'registry_relay_client-*.whl' \) \
             -printf '%f\n' | sort > "${RUNNER_TEMP}/actual-client-assets"
           diff -u \
             "${RUNNER_TEMP}/expected-client-assets" \
             "${RUNNER_TEMP}/actual-client-assets"
-          version="${{ needs.validate.outputs.version }}"
           IFS=. read -r relay_major relay_minor relay_patch <<< "${version}"
           if (( relay_major > 0 || relay_minor > 19 ||
                 (relay_minor == 19 && relay_patch >= 1) )); then
@@ -926,7 +969,7 @@ jobs:
                     *.sbom.spdx.json) kind=sbom ;;
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
-                    evidence-client-node-*.tgz|registry_evidence_client-*.whl) kind=client-package ;;
+                    evidence-client-node-*.tgz|registry_evidence_client-*.whl|relay-client-node-*.tgz|registry_relay_client-*.whl) kind=client-package ;;
                     *) kind=binary ;;
                   esac
                   jq -n \

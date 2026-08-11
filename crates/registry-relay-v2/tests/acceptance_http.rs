@@ -27,6 +27,12 @@ use registry_platform_sqlite::{
 use registry_platform_testing::{
     fixtures, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
 };
+use registry_relay_client::{
+    BoundingBox, Conditional, ListRequest, LookupRequest, RecordCollectionResponse, RecordFormat,
+    RecordOptions, RecordResponse, RelayClient, RelayClientConfig, ResourceListRequest,
+    SdmxDataFormat, SdmxDataRequest, SdmxStructureKind, SdmxStructureRequest, SearchRequest,
+    StaticToken, TokenProvider,
+};
 use registry_relay_v2::artifacts::generate_artifacts;
 use registry_relay_v2::audit::RelayAudit;
 use registry_relay_v2::auth::RelayAuthenticator;
@@ -84,6 +90,64 @@ struct ProjectHarness {
     database: PathBuf,
     idp: Option<MockIdp>,
     _temp: TempDir,
+}
+
+struct ClientLoopback {
+    client: RelayClient,
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    server: tokio::task::JoinHandle<Result<(), std::io::Error>>,
+}
+
+impl ClientLoopback {
+    async fn start(harness: &ProjectHarness, token: Option<String>) -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("client acceptance listener binds");
+        let address = listener
+            .local_addr()
+            .expect("client acceptance address resolves");
+        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let app = harness.app.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+        });
+        let mut config = RelayClientConfig::new(
+            url::Url::parse(&format!("http://{address}"))
+                .expect("client acceptance base URL parses"),
+        );
+        if let Some(token) = token {
+            let provider: Arc<dyn TokenProvider> =
+                Arc::new(StaticToken::new(token).expect("fixture bearer token is header-safe"));
+            config = config.with_token_provider(provider);
+        }
+        Self {
+            client: RelayClient::new(config).expect("client acceptance client builds"),
+            shutdown,
+            server,
+        }
+    }
+
+    async fn stop(self) {
+        self.shutdown
+            .send(())
+            .expect("client acceptance server is running");
+        tokio::time::timeout(Duration::from_secs(5), self.server)
+            .await
+            .expect("client acceptance server shuts down before timeout")
+            .expect("client acceptance server task completes")
+            .expect("client acceptance server shuts down cleanly");
+    }
+}
+
+fn complete<T>(outcome: Conditional<T>, operation: &str) -> registry_relay_client::Complete<T> {
+    match outcome {
+        Conditional::Complete(value) => value,
+        Conditional::NotModified(_) => panic!("{operation} unexpectedly returned 304"),
+    }
 }
 
 struct ControlledAuditSink {
@@ -304,6 +368,379 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
         if let Some(idp) = harness.idp.take() {
             idp.stop().await;
         }
+    }
+}
+
+#[tokio::test]
+async fn rust_client_drives_the_real_relay_router_across_the_public_surface() {
+    let mut business = ProjectHarness::open("business-registry").await;
+    let business_loopback = ClientLoopback::start(&business, None).await;
+    let client = &business_loopback.client;
+
+    assert_eq!(
+        client.health().await.expect("health succeeds").value.status,
+        "ok"
+    );
+    assert_eq!(
+        client.ready().await.expect("ready succeeds").value.status,
+        "ready"
+    );
+    let openapi = complete(
+        client.openapi(None).await.expect("OpenAPI succeeds"),
+        "OpenAPI",
+    );
+    assert_eq!(openapi.value.media_type(), "application/json");
+    assert!(!openapi.value.as_bytes().is_empty());
+
+    let service = complete(
+        client
+            .service_metadata(None)
+            .await
+            .expect("service metadata succeeds"),
+        "service metadata",
+    );
+    assert_eq!(
+        service.value.registry_identifier,
+        "urn:example:registry:registered-businesses"
+    );
+
+    let first_resources = complete(
+        client
+            .resources(
+                ResourceListRequest::default()
+                    .page_size(1)
+                    .expect("resource page size is valid"),
+                None,
+            )
+            .await
+            .expect("first resource page succeeds"),
+        "first resource page",
+    );
+    assert_eq!(first_resources.value.value.items.len(), 1);
+    let resource_continuation = first_resources
+        .value
+        .continuation
+        .as_ref()
+        .expect("first resource page has a continuation");
+    let second_resources = complete(
+        client
+            .continue_resources(resource_continuation, None)
+            .await
+            .expect("second resource page succeeds"),
+        "second resource page",
+    );
+    assert_eq!(second_resources.value.value.items.len(), 1);
+    assert_ne!(
+        first_resources.value.value.items[0].resource_identifier,
+        second_resources.value.value.items[0].resource_identifier
+    );
+    let resource = complete(
+        client
+            .resource("registered-business", None)
+            .await
+            .expect("resource metadata succeeds"),
+        "resource metadata",
+    );
+    assert_eq!(
+        resource.value.data.resource_identifier,
+        "registered-business"
+    );
+
+    let first_list_request = ListRequest::default()
+        .page_size(1)
+        .expect("record page size is valid")
+        .filter("jurisdiction", "EX-A")
+        .expect("declared filter is valid");
+    let first_list = complete(
+        client
+            .list_records("registered-business", &first_list_request, None)
+            .await
+            .expect("first Record page succeeds"),
+        "first Record page",
+    );
+    match &first_list.value.value {
+        RecordCollectionResponse::Json(records) => assert_eq!(records.items.len(), 1),
+        RecordCollectionResponse::GeoJson(_) => panic!("list unexpectedly returned GeoJSON"),
+    }
+    let list_continuation = first_list
+        .value
+        .continuation
+        .as_ref()
+        .expect("first Record page has a continuation");
+    let second_list = complete(
+        client
+            .continue_collection(list_continuation, None)
+            .await
+            .expect("second Record page succeeds"),
+        "second Record page",
+    );
+    match &second_list.value.value {
+        RecordCollectionResponse::Json(records) => assert_eq!(records.items.len(), 1),
+        RecordCollectionResponse::GeoJson(_) => {
+            panic!("continuation unexpectedly returned GeoJSON")
+        }
+    }
+
+    let read = complete(
+        client
+            .read_record(
+                "registered-business",
+                "BIZ-SYNTH-0001",
+                &RecordOptions::default(),
+                None,
+            )
+            .await
+            .expect("Record read succeeds"),
+        "Record read",
+    );
+    match &read.value {
+        RecordResponse::Json(record) => {
+            assert_eq!(record.data.record_identifier, "BIZ-SYNTH-0001")
+        }
+        RecordResponse::GeoJson(_) => panic!("ordinary read unexpectedly returned GeoJSON"),
+    }
+    let etag = read
+        .metadata
+        .etag()
+        .cloned()
+        .expect("public snapshot read returns an ETag");
+    match client
+        .read_record(
+            "registered-business",
+            "BIZ-SYNTH-0001",
+            &RecordOptions::default(),
+            Some(&etag),
+        )
+        .await
+        .expect("Record revalidation succeeds")
+    {
+        Conditional::NotModified(not_modified) => assert_eq!(not_modified.etag, etag),
+        Conditional::Complete(_) => panic!("Record revalidation did not return 304"),
+    }
+    let json_ld_read = complete(
+        client
+            .read_record(
+                "registered-business",
+                "BIZ-SYNTH-0001",
+                &RecordOptions::default().format(RecordFormat::JsonLd),
+                None,
+            )
+            .await
+            .expect("JSON-LD Record read succeeds"),
+        "JSON-LD Record read",
+    );
+    match json_ld_read.value {
+        RecordResponse::Json(record) => {
+            assert_eq!(record.data.record_identifier, "BIZ-SYNTH-0001");
+            assert!(record.json_ld_context.is_some());
+        }
+        RecordResponse::GeoJson(_) => panic!("JSON-LD read unexpectedly returned GeoJSON"),
+    }
+
+    let feature_read = complete(
+        client
+            .read_record(
+                "registered-premises",
+                "PREM-SYNTH-0001",
+                &RecordOptions::default().format(RecordFormat::GeoJsonRfc7946),
+                None,
+            )
+            .await
+            .expect("GeoJSON feature read succeeds"),
+        "GeoJSON feature read",
+    );
+    match feature_read.value {
+        RecordResponse::GeoJson(feature) => {
+            assert_eq!(feature.kind, "Feature");
+            assert_eq!(feature.properties.record_identifier, "PREM-SYNTH-0001");
+        }
+        RecordResponse::Json(_) => panic!("GeoJSON feature read returned ordinary JSON"),
+    }
+
+    let spatial_request = SearchRequest::new(
+        BoundingBox::new(100.0, 13.0, 101.0, 14.0).expect("fixture bbox is valid"),
+    )
+    .options(RecordOptions::default().format(RecordFormat::GeoJsonRfc7946));
+    let spatial = complete(
+        client
+            .search_records("registered-premises", "within-bbox", &spatial_request, None)
+            .await
+            .expect("GeoJSON search succeeds"),
+        "GeoJSON search",
+    );
+    match &spatial.value.value {
+        RecordCollectionResponse::GeoJson(features) => {
+            assert_eq!(features.kind, "FeatureCollection");
+            assert!(!features.features.is_empty());
+        }
+        RecordCollectionResponse::Json(_) => panic!("GeoJSON search returned ordinary JSON"),
+    }
+    let spatial_continuation = spatial
+        .value
+        .continuation
+        .as_ref()
+        .expect("first GeoJSON search page has a continuation");
+    let next_spatial = complete(
+        client
+            .continue_collection(spatial_continuation, None)
+            .await
+            .expect("second GeoJSON search page succeeds"),
+        "second GeoJSON search page",
+    );
+    match &next_spatial.value.value {
+        RecordCollectionResponse::GeoJson(features) => {
+            assert_eq!(features.kind, "FeatureCollection");
+            assert_eq!(features.features.len(), 1);
+        }
+        RecordCollectionResponse::Json(_) => {
+            panic!("GeoJSON search continuation returned ordinary JSON")
+        }
+    }
+    let json_fg_request = SearchRequest::new(
+        BoundingBox::new(100.0, 13.0, 101.0, 14.0).expect("fixture bbox is valid"),
+    )
+    .options(RecordOptions::default().format(RecordFormat::JsonFg));
+    let json_fg = complete(
+        client
+            .search_records("registered-premises", "within-bbox", &json_fg_request, None)
+            .await
+            .expect("JSON-FG search succeeds"),
+        "JSON-FG search",
+    );
+    match json_fg.value.value {
+        RecordCollectionResponse::GeoJson(features) => {
+            assert_eq!(features.kind, "FeatureCollection");
+            assert!(features.conforms_to.is_some());
+        }
+        RecordCollectionResponse::Json(_) => panic!("JSON-FG search returned ordinary JSON"),
+    }
+
+    let artifact = complete(
+        client
+            .artifact("capability-inventory", None)
+            .await
+            .expect("public artifact succeeds"),
+        "public artifact",
+    );
+    assert_eq!(artifact.value.media_type(), "application/json");
+    assert!(!artifact.value.as_bytes().is_empty());
+
+    business_loopback.stop().await;
+    if let Some(idp) = business.idp.take() {
+        idp.stop().await;
+    }
+
+    let mut civil = ProjectHarness::open("civil-event").await;
+    let civil_journey = project_journey("civil-event");
+    let lookup_authorization = civil_journey
+        .authorizations
+        .get("civil-verifier-ex-a")
+        .expect("civil lookup authorization is declared");
+    let lookup_token = civil.token("client-lookup", lookup_authorization);
+    let civil_loopback = ClientLoopback::start(&civil, Some(lookup_token)).await;
+    let lookup = LookupRequest::default()
+        .options(
+            RecordOptions::default()
+                .fields([
+                    "eventType",
+                    "registrationStatus",
+                    "registrationDate",
+                    "certificateAvailable",
+                ])
+                .expect("lookup fields are valid"),
+        )
+        .selector("registrationNumber", json!("REG-SYNTH-000001"))
+        .expect("registration number selector is valid")
+        .selector("eventType", json!("BIRTH"))
+        .expect("event type selector is valid");
+    let lookup = complete(
+        civil_loopback
+            .client
+            .lookup_record("civil-event", "verify-registration", &lookup, None)
+            .await
+            .expect("lookup succeeds"),
+        "lookup",
+    );
+    match lookup.value {
+        RecordResponse::Json(record) => {
+            assert_eq!(record.data.record_identifier, "EVENT-SYNTH-0001")
+        }
+        RecordResponse::GeoJson(_) => panic!("lookup unexpectedly returned GeoJSON"),
+    }
+    civil_loopback.stop().await;
+    if let Some(idp) = civil.idp.take() {
+        idp.stop().await;
+    }
+
+    let mut labour = ProjectHarness::open("labour-statistics").await;
+    let labour_loopback = ClientLoopback::start(&labour, None).await;
+    let data_request =
+        SdmxDataRequest::new("LABOUR_STATISTICS", "LABOUR_FORCE_PARTICIPATION", "1.0.0")
+            .expect("SDMX data route is valid")
+            .keyed("EX-A.F")
+            .expect("SDMX key is valid")
+            .constraint("TIME_PERIOD", "ge:2024-Q1+le:2024-Q2")
+            .expect("SDMX time constraint is valid")
+            .dimension_at_observation("AllDimensions")
+            .expect("SDMX observation dimension is valid");
+    let data = complete(
+        labour_loopback
+            .client
+            .sdmx_data(&data_request, None)
+            .await
+            .expect("SDMX data succeeds"),
+        "SDMX data",
+    );
+    assert_eq!(
+        data.value.media_type(),
+        "application/vnd.sdmx.data+json;version=2.1.0"
+    );
+    assert!(!data.value.as_bytes().is_empty());
+    let csv_request =
+        SdmxDataRequest::new("LABOUR_STATISTICS", "LABOUR_FORCE_PARTICIPATION", "1.0.0")
+            .expect("SDMX CSV route is valid")
+            .keyed("EX-A.F")
+            .expect("SDMX CSV key is valid")
+            .constraint("TIME_PERIOD", "ge:2024-Q1+le:2024-Q2")
+            .expect("SDMX CSV time constraint is valid")
+            .format(SdmxDataFormat::Csv);
+    let csv = complete(
+        labour_loopback
+            .client
+            .sdmx_data(&csv_request, None)
+            .await
+            .expect("SDMX CSV succeeds"),
+        "SDMX CSV",
+    );
+    assert_eq!(
+        csv.value.media_type(),
+        "application/vnd.sdmx.data+csv;version=2.1.0"
+    );
+    assert!(!csv.value.as_bytes().is_empty());
+
+    let structure_request = SdmxStructureRequest::new(
+        SdmxStructureKind::Dataflow,
+        "LABOUR_STATISTICS",
+        "LABOUR_FORCE_PARTICIPATION",
+        "1.0.0",
+    )
+    .expect("SDMX structure route is valid");
+    let structure = complete(
+        labour_loopback
+            .client
+            .sdmx_structure(&structure_request, None)
+            .await
+            .expect("SDMX structure succeeds"),
+        "SDMX structure",
+    );
+    assert_eq!(
+        structure.value.media_type(),
+        "application/vnd.sdmx.structure+json;version=2.1.0"
+    );
+    assert!(!structure.value.as_bytes().is_empty());
+    labour_loopback.stop().await;
+    if let Some(idp) = labour.idp.take() {
+        idp.stop().await;
     }
 }
 

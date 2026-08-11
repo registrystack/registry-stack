@@ -5698,7 +5698,6 @@ dependencies = [
 name = "registry-evidence-client"
 version = "0.19.0"
 dependencies = [
- "async-trait",
  "base64",
  "chrono",
  "ed25519-dalek",
@@ -5707,8 +5706,8 @@ dependencies = [
  "registry-evidence",
  "registry-evidence-verifier",
  "registry-mint",
- "registry-platform-authcommon",
  "registry-platform-crypto",
+ "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-sdjwt",
  "reqwest 0.12.28",
@@ -6053,14 +6052,20 @@ dependencies = [
 name = "registry-platform-httputil"
 version = "0.19.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64",
  "bytes",
+ "chrono",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
  "hickory-resolver",
  "http",
  "ipnet",
+ "p256",
  "proptest",
  "rcgen",
+ "registry-platform-authcommon",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
  "reqwest 0.12.28",
@@ -6073,6 +6078,7 @@ dependencies = [
  "tokio-rustls",
  "url",
  "uuid",
+ "wiremock",
  "zeroize",
 ]
 
@@ -6253,6 +6259,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-relay-client"
+version = "0.19.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-relay-http-contract",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-relay-client-node"
+version = "0.19.0"
+dependencies = [
+ "axum",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-platform-crypto",
+ "registry-relay-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-relay-client-py"
+version = "0.19.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-platform-crypto",
+ "registry-relay-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
+name = "registry-relay-http-contract"
+version = "0.19.0"
+
+[[package]]
 name = "registry-relay-v2"
 version = "0.19.0"
 dependencies = [
@@ -6282,6 +6341,8 @@ dependencies = [
  "registry-platform-oidc",
  "registry-platform-sqlite",
  "registry-platform-testing",
+ "registry-relay-client",
+ "registry-relay-http-contract",
  "reqwest 0.12.28",
  "rustix",
  "schemars 1.2.1",

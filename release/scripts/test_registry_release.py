@@ -466,6 +466,7 @@ class RegistryReleaseTest(TestCase):
                 "evidence-contracts",
                 "identifiers",
                 "relay-contracts",
+                "relay-client-contracts",
                 "relay-v2-contracts",
             },
             set(rust_result["needs"]),
@@ -2549,6 +2550,9 @@ class RegistryReleaseTest(TestCase):
             root = Path(tmp)
             historical = write_manifest(root, version="0.19.0")
             historical_result = run_tool("validate", str(historical))
+            historical_data = yaml.safe_load(
+                historical.read_text(encoding="utf-8")
+            )
 
             current = write_manifest(
                 root,
@@ -2557,6 +2561,9 @@ class RegistryReleaseTest(TestCase):
             )
             current_result = run_tool("validate", str(current))
             data = yaml.safe_load(current.read_text(encoding="utf-8"))
+            self.assertNotIn("relay-client-node", historical_data["artifacts"])
+            self.assertEqual("0.19.1", data["artifacts"]["relay-client-node"])
+            self.assertEqual("0.19.1", data["artifacts"]["relay-client-python"])
             del data["artifacts"]["relay-installer"]
             current.write_text(
                 yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
@@ -4377,6 +4384,8 @@ def write_manifest(
         if version_tuple >= (0, 19, 1):
             artifacts["relay-installer"] = version
             artifacts["registry-docs"] = version
+            artifacts["relay-client-node"] = version
+            artifacts["relay-client-python"] = version
     if include_registryctl_image_lock is None:
         include_registryctl_image_lock = (0, 9, 0) <= version_tuple < (0, 19, 0)
     if include_registryctl_image_lock:
@@ -4427,11 +4436,28 @@ def write_manifest(
         },
     }
     if version_tuple >= (0, 19, 1):
-        catalog_path = ROOT / "products/identifiers/generated/catalog.v1.json"
-        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        catalog_relative_path = "products/identifiers/generated/catalog.v1.json"
+        repository = directory
+        repository_result = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if repository_result.returncode == 0:
+            repository = Path(repository_result.stdout.strip())
+        else:
+            repository = ROOT
+        catalog_result = subprocess.run(
+            ["git", "-C", str(repository), "show", f"{source_ref}:{catalog_relative_path}"],
+            check=True,
+            capture_output=True,
+        )
+        catalog_bytes = catalog_result.stdout
+        catalog = json.loads(catalog_bytes)
         manifest["identifier_catalog"] = {
-            "path": "products/identifiers/generated/catalog.v1.json",
-            "sha256": hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
+            "path": catalog_relative_path,
+            "sha256": hashlib.sha256(catalog_bytes).hexdigest(),
             "entry_count": len(catalog["entries"]),
         }
     path = directory / "release-manifest.yaml"

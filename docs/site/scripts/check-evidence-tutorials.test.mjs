@@ -11,6 +11,10 @@ const execFileAsync = promisify(execFile);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const gate = resolve(scriptDir, 'check-evidence-tutorials.sh');
 const fenceHelper = resolve(scriptDir, 'evidence-tutorial-fence.sh');
+const fhirTutorial = resolve(
+  scriptDir,
+  '../src/content/docs/tutorials/issue-fhir-evidence-as-vcs.mdx',
+);
 
 async function runGate(env = {}, args = ['--dry-run']) {
   try {
@@ -52,7 +56,8 @@ test('the dry-run gate registers the shared Evidence start tutorials', async () 
   assert.match(output, /refuse-unsafe-evidence-requests: 11 sh fences, 11 executed/u);
   assert.match(output, /verify-an-assertion-as-a-consumer: 3 sh fences, 3 executed/u);
   assert.match(output, /control-who-can-request-evidence: 20 sh fences, 20 executed/u);
-  assert.match(output, /Checked 9 tutorials\./u);
+  assert.match(output, /issue-fhir-evidence-as-vcs: 10 sh fences, 10 executed/u);
+  assert.match(output, /Checked 10 tutorials\./u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {
@@ -73,6 +78,66 @@ test('--only accepts the role-bound relationship follow-up', async () => {
   ]);
   assert.equal(code, 0, output);
   assert.match(output, /Checked 1 tutorial\./u);
+});
+
+test('--only accepts the deterministic FHIR tutorial replay', async () => {
+  const { code, output } = await runGate({}, [
+    '--dry-run',
+    '--only',
+    'issue-fhir-evidence-as-vcs',
+  ]);
+  assert.equal(code, 0, output);
+  assert.match(output, /issue-fhir-evidence-as-vcs: 10 sh fences, 10 executed/u);
+  assert.match(output, /Checked 1 tutorial\./u);
+});
+
+test('both FHIR tutorial clients bypass ambient proxies', async () => {
+  const source = await readFile(fhirTutorial, 'utf8');
+  const proxyFreeOpeners = source.match(
+    /build_opener\(ProxyHandler\(\{\}\), NoRedirect\)/gu,
+  );
+  assert.equal(proxyFreeOpeners?.length, 2);
+});
+
+test('the FHIR tutorial test origin refuses a remote endpoint', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fhir-tutorial-origin-test-'));
+  const discovery = join(root, 'discover-fhir-records.py');
+  try {
+    await execFileAsync('bash', [
+      fenceHelper,
+      'write-fence',
+      fhirTutorial,
+      'Select live synthetic records',
+      'python',
+      '1',
+      discovery,
+    ]);
+    await assert.rejects(
+      execFileAsync('python3', [discovery], {
+        env: {
+          ...process.env,
+          FHIR_TUTORIAL_TEST_BASE_URL: 'https://example.com',
+        },
+      }),
+      (error) => {
+        assert.match(error.stderr, /test origin must be numeric loopback HTTP/u);
+        return true;
+      },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the FHIR replay tracks the read-through adapter for cleanup', async () => {
+  const source = await readFile(gate, 'utf8');
+  const branch = source.match(
+    /\n\tissue-fhir-evidence-as-vcs\)[\s\S]*?\n\t\t;;/u,
+  )?.[0];
+  assert.ok(branch, 'the FHIR replay spec must exist');
+  assert.match(branch, /"run:3"\s+"track-pid:fhir-read-through\.pid"/u);
+  assert.match(source, /track-pid:\*\) emit_track_pid_step/u);
+  assert.match(source, /BACKGROUND_PIDS\+=\("\$tracked_pid"\)/u);
 });
 
 // Every follow-up below begins from the project first-evidence-assertion

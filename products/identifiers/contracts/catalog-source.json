@@ -7,7 +7,7 @@
       "status": "active",
       "compatibilityLine": "relay-v2",
       "uriPrefix": "https://id.registrystack.org/problems/registry-relay/",
-      "sourcePath": "crates/registry-relay-v2/src/problem.rs",
+      "sourcePath": "crates/registry-relay-http-contract/src/lib.rs",
       "exporterPath": "crates/registry-relay-v2/examples/problem-catalog.rs",
       "cargoPackage": "registry-relay-v2",
       "cargoExample": "problem-catalog"

@@ -371,6 +371,7 @@ struct SubjectPlan {
     selector_field: String,
     selector_profile: String,
     selector_profile_value: Value,
+    source: bool,
     derivation: bool,
 }
 
@@ -1101,13 +1102,58 @@ fn compile_question_plan(
         "selected OpenAPI operation",
     )?;
 
-    exact_path_selectors(
-        &operation,
-        &authored_subjects
+    let path_selector_fields = authored_subjects
+        .iter()
+        .filter(|subject| {
+            let placeholder = format!("{{{}}}", subject.selector);
+            operation
+                .path
+                .split('/')
+                .any(|segment| segment == placeholder)
+        })
+        .map(|subject| subject.selector.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut source_subjects = vec![false; authored_subjects.len()];
+    for selector in &path_selector_fields {
+        let candidates = authored_subjects
             .iter()
-            .map(|subject| subject.selector.as_str())
-            .collect::<Vec<_>>(),
-    )?;
+            .enumerate()
+            .filter(|(_, subject)| subject.selector == *selector)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let explicit = candidates
+            .iter()
+            .copied()
+            .filter(|index| authored_subjects[*index].source == Some(true))
+            .collect::<Vec<_>>();
+        let selected = match (explicit.as_slice(), candidates.as_slice()) {
+            ([selected], _) => *selected,
+            ([], [selected]) if authored_subjects[*selected].source != Some(false) => *selected,
+            ([], [_]) => {
+                bail!("an inline path selector cannot bind a subject with source: false")
+            }
+            ([], _) => {
+                bail!("shared selector fields require exactly one subject with source: true")
+            }
+            _ => {
+                bail!("an inline path selector must identify exactly one subject with source: true")
+            }
+        };
+        source_subjects[selected] = true;
+    }
+    for (index, subject) in authored_subjects.iter().enumerate() {
+        if subject.source == Some(true) && !source_subjects[index] {
+            bail!("a subject with source: true must supply an inline operation path selector");
+        }
+        if !source_subjects[index] && !subject.derivation {
+            bail!("every question subject must be used by the source or declared for derivation");
+        }
+    }
+    if !source_subjects.iter().any(|source| *source) {
+        bail!("an inline OpenAPI question must bind at least one subject to the source path");
+    }
+    let source_selector_fields = path_selector_fields.into_iter().collect::<Vec<_>>();
+    exact_path_selectors(&operation, &source_selector_fields)?;
     let compiled_facts = compile_facts(
         spec.expect("inline source needs parsed OpenAPI"),
         &operation,
@@ -1152,7 +1198,8 @@ fn compile_question_plan(
     let derivation_script = render_derivation(&authored.derivation, &concepts);
     let subjects = authored_subjects
         .iter()
-        .map(|authored_subject| {
+        .enumerate()
+        .map(|(index, authored_subject)| {
             let selector_profile = local_subject_selector_profile_id(
                 &question.id,
                 &authored_subject.role,
@@ -1172,6 +1219,7 @@ fn compile_question_plan(
                         }
                     },
                 }),
+                source: source_subjects[index],
                 derivation: authored_subject.derivation,
             }
         })
@@ -1234,6 +1282,7 @@ fn compile_referenced_question(
             anyhow!("question source ref `{source_id}` has no sources/{source_id}.yaml")
         })?
         .clone();
+    validate_referenced_source_authentication(&question.id, source_id, &source_value)?;
     let subjects = compile_referenced_subjects(question, &source_value, selectors)?;
 
     let requirement_uri = question
@@ -1333,6 +1382,7 @@ fn compile_referenced_subjects(
             selector_field: subject.selector.clone(),
             selector_profile,
             selector_profile_value,
+            source: used_by_source,
             derivation: subject.derivation,
         });
     }
@@ -1424,6 +1474,46 @@ fn referenced_selector_profile(source: &Value, role: &str, field: &str) -> Resul
         bail!("question subject must match exactly one referenced source selector alternative");
     }
     Ok(matches.pop().expect("one selector profile"))
+}
+
+/// Hold a referenced source to a credential posture it states itself. A
+/// transport that opens a network channel carries a credential decision, and
+/// neither an absent field nor a mapping that names no kind is that decision,
+/// so the compile names the source file rather than emitting a bundle the
+/// runtime rejects later. Which kind was stated is the runtime's closed
+/// enumeration to settle, so an unrecognized kind passes this gate and is
+/// judged there. A transport carrying no network channel holds no credential,
+/// so it declares none.
+fn validate_referenced_source_authentication(
+    question_id: &str,
+    source_id: &str,
+    source: &Value,
+) -> Result<()> {
+    if source.get("transport").and_then(Value::as_str) != Some("http-json") {
+        return Ok(());
+    }
+    let Some(authentication) = source
+        .get("authentication")
+        .filter(|value| !value.is_null())
+    else {
+        bail!(
+            "the referenced source sends no credential, and an absent field does not decide that: \
+question `{question_id}` must declare the posture itself by adding an `authentication:` mapping \
+naming the `kind:` its channel uses, in sources/{source_id}.yaml"
+        )
+    };
+    if authentication
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| !kind.trim().is_empty())
+    {
+        return Ok(());
+    }
+    bail!(
+        "the referenced source states `authentication:` without naming a `kind`, and an undecided \
+mapping is not a posture: question `{question_id}` must name the `kind:` its channel uses under \
+`authentication:` in sources/{source_id}.yaml"
+    )
 }
 
 fn referenced_source_artifacts(source: &Value) -> Result<Vec<String>> {
@@ -1696,7 +1786,9 @@ fn exact_path_selectors(operation: &Operation<'_>, expected: &[&str]) -> Result<
         }
     }
     if parameters.len() != expected.len() {
-        bail!("the local tutorial operation must declare exactly one path selector per subject");
+        bail!(
+            "the local tutorial operation must declare exactly one path selector per source-bound subject"
+        );
     }
     let expected = expected.iter().copied().collect::<BTreeSet<_>>();
     if expected.len() != parameters.len() {
@@ -2240,7 +2332,8 @@ fn render_question_bundle_parts(
     source_id: &str,
     requirement: &BundleRequirement,
 ) -> (Value, Value, Value) {
-    let path_bindings = Value::Object(Map::from_iter(subjects.iter().map(|subject| {
+    let source_subjects = subjects.iter().filter(|subject| subject.source);
+    let path_bindings = Value::Object(Map::from_iter(source_subjects.clone().map(|subject| {
         (
             subject.selector_field.clone(),
             json!({
@@ -2251,8 +2344,7 @@ fn render_question_bundle_parts(
             }),
         )
     })));
-    let selector_inputs = subjects
-        .iter()
+    let selector_inputs = source_subjects
         .map(|subject| {
             json!({
                 "role": subject.role,
@@ -3635,6 +3727,120 @@ properties:
     }
 
     #[test]
+    fn inline_openapi_derivation_only_subject_never_widens_the_source_request() {
+        let question = QUESTION.replace(
+            "subject:\n  role: person\n  selector: person_id",
+            "subjects:\n  - role: person\n    selector: person_id\n    derivation: true\n  - role: expected-beneficiary\n    selector: beneficiary_id\n    derivation: true",
+        );
+        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
+
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("derivation-only subject compiles");
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        let source = &bundle["sources"][local_source_id("adult-status")];
+        assert_eq!(
+            source["request"]["pathBindings"]
+                .as_object()
+                .expect("path bindings")
+                .len(),
+            1
+        );
+        assert!(source["request"]["pathBindings"]
+            .get("beneficiary_id")
+            .is_none());
+        assert_eq!(
+            source["request"]["selectorInputs"]
+                .as_array()
+                .expect("source selector inputs")
+                .len(),
+            1,
+            "the derivation-only beneficiary never reaches the provider request"
+        );
+        assert_eq!(
+            bundle["requirements"][0]["derivation"]["selectorInputs"]
+                .as_array()
+                .expect("derivation selector inputs")
+                .len(),
+            2
+        );
+        assert_eq!(
+            bundle["requirements"][0]["subjectRoles"]
+                .as_array()
+                .expect("subject roles")
+                .len(),
+            2
+        );
+
+        let shared_selector = question
+            .replace(
+                "    selector: person_id\n    derivation: true",
+                "    selector: person_id\n    source: true\n    derivation: true",
+            )
+            .replace("    selector: beneficiary_id", "    selector: person_id");
+        let fixture = Fixture::new(OPENAPI, &shared_selector, ANSWER, true);
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("an explicit role disambiguates a shared selector field");
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        assert_eq!(
+            bundle["sources"][local_source_id("adult-status")]["request"]["selectorInputs"],
+            json!([{
+                "role": "person",
+                "alternatives": [{
+                    "profile": local_subject_selector_profile_id("adult-status", "person", 2),
+                    "fields": ["person_id"]
+                }]
+            }])
+        );
+
+        let ambiguous = shared_selector.replace("    source: true\n", "");
+        let fixture = Fixture::new(OPENAPI, &ambiguous, ANSWER, true);
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a shared selector field needs one explicit source role");
+        assert!(error
+            .to_string()
+            .contains("shared selector fields require exactly one subject with source: true"));
+
+        let without_derivation = question.replace(
+            "  - role: expected-beneficiary\n    selector: beneficiary_id\n    derivation: true",
+            "  - role: expected-beneficiary\n    selector: beneficiary_id",
+        );
+        let fixture = Fixture::new(OPENAPI, &without_derivation, ANSWER, true);
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("an unused subject needs explicit derivation access");
+        assert!(error.to_string().contains(
+            "every question subject must be used by the source or declared for derivation"
+        ));
+    }
+
+    #[test]
+    fn inline_openapi_question_rejects_no_source_bound_subject() {
+        let openapi = OPENAPI
+            .replace("/people/{person_id}:", "/population-summary:")
+            .replace(
+                "      parameters:\n        - name: person_id\n          in: path\n          required: true\n          schema: {type: string}\n",
+                "",
+            );
+        let question = QUESTION.replace(
+            "  selector: person_id",
+            "  selector: person_id\n  derivation: true",
+        );
+        let fixture = Fixture::new(&openapi, &question, ANSWER, true);
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a constant source path still needs one source-bound subject");
+        assert!(error.to_string().contains(
+            "an inline OpenAPI question must bind at least one subject to the source path"
+        ));
+        assert!(fixture.staging_is_empty());
+    }
+
+    #[test]
     fn compiles_one_closed_controlled_category() {
         let fixture = Fixture::new(OPENAPI, AGE_BRACKET_QUESTION, AGE_BRACKET_ANSWER, true);
         let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
@@ -4361,27 +4567,11 @@ factSchema: schemas/source-facts.schema.yaml
         assert!(fixture.staging_is_empty());
     }
 
-    #[test]
-    fn referenced_v1_source_and_selector_are_reused_by_questions() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        for directory in ["sources", "selectors", "adapters", "schemas"] {
-            fs::create_dir(fixture.project.join(directory)).expect("authoring directory");
-        }
-        fs::write(
-            fixture.project.join("selectors/person-reference-v1.yaml"),
-            "maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
-        )
-        .expect("selector");
-        fs::write(
-            fixture.project.join("sources/people.yaml"),
-            r#"transport: http-json
-baseUrl: https://records.example.test
-posture: field-projected
-authentication:
-  kind: basic
-  usernameRef: secret:file/records-username
-  passwordRef: secret:file/records-password
-request:
+    /// Everything a referenced `people` source declares after its credential
+    /// posture. The posture itself is written by the caller, so one project
+    /// shape covers every authentication declaration the referenced route has
+    /// to settle.
+    const REFERENCED_SOURCE_TAIL: &str = r#"request:
   method: GET
   pathTemplate: /people/{person_id}
   pathBindings:
@@ -4403,7 +4593,24 @@ request:
 responseSchema: schemas/people-response.schema.yaml
 extractScript: adapters/people-extract.rhai
 factSchema: schemas/people-facts.schema.yaml
-"#,
+"#;
+
+    /// Write a project whose one question reads `sources/people.yaml`, with
+    /// the authentication block under test, and return the question text.
+    fn write_referenced_people_project(fixture: &Fixture, authentication: &str) -> String {
+        for directory in ["sources", "selectors", "adapters", "schemas"] {
+            fs::create_dir(fixture.project.join(directory)).expect("authoring directory");
+        }
+        fs::write(
+            fixture.project.join("selectors/person-reference-v1.yaml"),
+            "maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
+        )
+        .expect("selector");
+        fs::write(
+            fixture.project.join("sources/people.yaml"),
+            format!(
+                "transport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
+            ),
         )
         .expect("source");
         for (path, contents) in [
@@ -4444,6 +4651,16 @@ factSchema: schemas/people-facts.schema.yaml
             &referenced,
         )
         .expect("referenced question");
+        referenced
+    }
+
+    #[test]
+    fn referenced_v1_source_and_selector_are_reused_by_questions() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let referenced = write_referenced_people_project(
+            &fixture,
+            "authentication:\n  kind: basic\n  usernameRef: secret:file/records-username\n  passwordRef: secret:file/records-password\n",
+        );
         let copied = referenced
             .replace("id: adult-status", "id: adult-status-copy")
             .replace(
@@ -4475,6 +4692,105 @@ factSchema: schemas/people-facts.schema.yaml
             .staging
             .join("bundle/adapters/people-extract.rhai")
             .is_file());
+    }
+
+    #[test]
+    fn referenced_http_source_without_an_authentication_declaration_is_refused() {
+        for authentication in ["", "authentication:\n"] {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            write_referenced_people_project(&fixture, authentication);
+
+            let error =
+                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                    .expect_err("an undeclared credential posture must not compile")
+                    .to_string();
+
+            assert_eq!(
+                error,
+                "the referenced source sends no credential, and an absent field does not decide \
+that: question `adult-status` must declare the posture itself by adding an `authentication:` \
+mapping naming the `kind:` its channel uses, in sources/people.yaml",
+                "{authentication:?} was not refused as an absent posture"
+            );
+            assert!(fixture.staging_is_empty());
+        }
+    }
+
+    #[test]
+    fn referenced_http_source_with_an_unnamed_authentication_kind_is_refused() {
+        for authentication in [
+            "authentication: {}\n",
+            "authentication: {kind: null}\n",
+            "authentication: {kind: 3}\n",
+            "authentication: {kind: ' '}\n",
+            "authentication: basic\n",
+        ] {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            write_referenced_people_project(&fixture, authentication);
+
+            let error =
+                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                    .expect_err("a posture the source never names must not compile")
+                    .to_string();
+
+            assert_eq!(
+                error,
+                "the referenced source states `authentication:` without naming a `kind`, and an \
+undecided mapping is not a posture: question `adult-status` must name the `kind:` its channel \
+uses under `authentication:` in sources/people.yaml",
+                "{authentication:?} was not refused as an unnamed kind"
+            );
+            assert!(fixture.staging_is_empty());
+        }
+    }
+
+    #[test]
+    fn referenced_http_source_compiles_every_declared_authentication_posture() {
+        for authentication in [
+            "authentication: {kind: none}\n",
+            "authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}\n",
+            // The runtime owns the closed set of kinds. evidencectl settles
+            // only that the source named one, so an unrecognized kind reaches
+            // the runtime rather than being judged twice.
+            "authentication: {kind: kind-this-tool-does-not-enumerate}\n",
+        ] {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            write_referenced_people_project(&fixture, authentication);
+
+            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                .expect("a declared credential posture compiles");
+            let bundle: Value = serde_norway::from_slice(
+                &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle"),
+            )
+            .expect("bundle yaml");
+            assert_eq!(
+                bundle["sources"]["people"]["authentication"],
+                serde_norway::from_str::<Value>(authentication).expect("posture")["authentication"],
+            );
+        }
+    }
+
+    #[test]
+    fn referenced_question_consumes_the_shared_subject_source_finding() {
+        let question = QUESTION
+            .replace(
+                "  selector: person_id\n",
+                "  selector: person_id\n  source: true\n",
+            )
+            .replace(
+                "source:\n  operation: getPerson\n  facts:\n    - name: date_of_birth\n      path: /date_of_birth\n      combine: exactly-one\n  collectionBounds: {}",
+                "source:\n  ref: people",
+            );
+        let fixture = Fixture::new(OPENAPI, &question, ANSWER, true);
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a referenced source cannot use the inline source marker");
+
+        assert_eq!(
+            error.to_string(),
+            "subject.source is available only to an inline OpenAPI operation"
+        );
+        assert!(fixture.staging_is_empty());
     }
 
     #[test]

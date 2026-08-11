@@ -1305,6 +1305,26 @@ class ReleaseCandidateTest(TestCase):
         self.assertEqual("installer", current["relay-install.sh"])
         self.assertEqual("docs", current["registry-docs-v0.19.1.tar.gz"])
 
+    def test_relay_client_payloads_begin_after_v0_19_0(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.19.0")
+        current = self.module._relay_v2_payload_inventory("0.19.1")
+
+        self.assertNotIn(
+            "relay-client-node-v0.19.0-linux-amd64-glibc.tgz", historical
+        )
+        self.assertNotIn(
+            "registry_relay_client-0.19.0-cp310-abi3-linux_x86_64.whl",
+            historical,
+        )
+        self.assertEqual(
+            "client-package",
+            current["relay-client-node-v0.19.1-linux-amd64-glibc.tgz"],
+        )
+        self.assertEqual(
+            "client-package",
+            current["registry_relay_client-0.19.1-cp310-abi3-linux_x86_64.whl"],
+        )
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

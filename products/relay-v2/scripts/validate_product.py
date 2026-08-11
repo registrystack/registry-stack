@@ -80,6 +80,9 @@ SECURITY_INVARIANT_IDS = {
     "sec-value-free-diagnostics",
     "sec-value-free-operational-logs",
     "sec-value-free-trace-context",
+    "sec-client-credential-transport",
+    "sec-client-response-contract",
+    "sec-client-request-confinement",
     "sec-unsigned-family-boundary",
 }
 SIMPLE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

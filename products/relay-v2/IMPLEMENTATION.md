@@ -692,6 +692,8 @@ deployment TLS remains mandatory.
   audit event schema, and expected generated-artifact inventory.
 - Add source-neutrality, protected-value canary, and artifact reproducibility
   scripts before runtime behavior grows.
+- Keep the client-facing fixed route and problem inventory independent of the
+  runtime implementation and gate it with the same source-neutrality policy.
 
 Gate: schemas and examples parse; every security row has an owner, enforcement
 point, and planned test ID; no Digital Registries OpenAPI is used.
@@ -833,6 +835,20 @@ Gate: the runtime acceptance revision passes its focused source and
 gate-inventory checks. The owning future release train runs release
 validation, source-model, reproducibility, SBOM, and provenance checks when it
 publishes the artifacts.
+
+### 8. Relying-party client packages
+
+- Add `registry-relay-client` with a small fixed HTTP-contract crate and thin
+  Node and Python bindings. Keep the client outside the Relay runtime and
+  governed deployment model.
+- Test the route and problem inventory offline, scan every client source for
+  acceptance-domain leakage, and build each native package through the existing
+  release-candidate client-package machinery.
+- Begin Relay Node and Python package inventory only with v0.19.1. Historical
+  v0.19.0 release manifests remain immutable and do not claim these assets.
+
+Gate: the client contract, source-neutrality, native binding, and release
+candidate inventory checks pass without a live Relay deployment.
 
 ## Verification policy
 

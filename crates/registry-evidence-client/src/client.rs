@@ -12,13 +12,19 @@ use registry_evidence_verifier::{
     verifier::ExpectedSubjectDocument,
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
 };
-use registry_platform_httputil::read_bounded;
+use registry_platform_httputil::{read_bounded, retry_after_seconds, validate_response_headers};
 use reqwest::{
-    header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER},
+    header::{HeaderMap, ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method, StatusCode,
 };
 use url::Url;
-use zeroize::Zeroizing;
+
+#[cfg(test)]
+use crate::problem::TRACEPARENT_HEADER;
+#[cfg(test)]
+use reqwest::header::HeaderValue;
+#[cfg(test)]
+use reqwest::header::RETRY_AFTER;
 
 use crate::{
     batch::{SdJwtVcBatchResponse, MAX_SD_JWT_VC_BATCH_RESPONSE_BYTES},
@@ -30,7 +36,7 @@ use crate::{
         EvidenceRequestSpec, HolderBoundRequestSpec, PreparedEvidenceRequest,
         PreparedHolderBoundRequest,
     },
-    problem::{essence, map_problem, trace_id_from_traceparent, TRACEPARENT_HEADER},
+    problem::{essence, map_problem},
     request_batch::{
         EvidenceRequestBatchSpec, PreparedEvidenceRequestBatch, RawEvidenceRequestBatchResponse,
         VerifiedEvidenceRequestBatch, VerifiedEvidenceRequestBatchItem,
@@ -610,21 +616,7 @@ impl EvidenceClient {
         let request = match credential {
             Credential::Required => {
                 let token = self.config.token_provider.bearer_token().await?;
-                // The plaintext credential exists in one scrubbed buffer here.
-                // The header value reqwest owns afterwards cannot be zeroized,
-                // which is why it is marked sensitive below.
-                let mut header = Zeroizing::new(String::with_capacity(7 + token.expose().len()));
-                header.push_str("Bearer ");
-                header.push_str(token.expose());
-                let mut value = HeaderValue::from_str(&header).map_err(|_| {
-                    EvidenceClientError::configuration(
-                        "the credential is not a usable header value",
-                    )
-                })?;
-                // The credential must never reach a diagnostic, and reqwest
-                // honors this marking when it formats a request.
-                value.set_sensitive(true);
-                request.header(AUTHORIZATION, value)
+                request.header(AUTHORIZATION, token.authorization_header_value())
             }
             Credential::None => request,
         };
@@ -647,18 +639,22 @@ impl EvidenceClient {
         max_bytes: u64,
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         let status = response.status().as_u16();
+        if validate_response_headers(response.headers()).is_err() {
+            return Err(EvidenceClientError::Protocol {
+                status,
+                code: None,
+                trace_id: None,
+                retry_after_seconds: None,
+            });
+        }
         let trace_id = response_trace_id(response.headers());
         let media_type = response
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
-        let retry_after_seconds = response
-            .headers()
-            .get(RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .filter(|seconds| (1..=MAXIMUM_RETRY_AFTER_SECONDS).contains(seconds));
+        let retry_after_seconds =
+            retry_after_seconds(response.headers(), MAXIMUM_RETRY_AFTER_SECONDS);
 
         if trace_id.is_none() {
             return Err(EvidenceClientError::Protocol {
@@ -819,11 +815,9 @@ fn batch_protocol_failure(trace_id: Option<String>) -> EvidenceClientError {
 /// Read exactly one strict response trace context. Multiple field lines are an
 /// ambiguous provenance claim, so they are rejected rather than first-wins.
 fn response_trace_id(headers: &HeaderMap) -> Option<String> {
-    let mut traceparents = headers.get_all(TRACEPARENT_HEADER).iter();
-    match (traceparents.next(), traceparents.next()) {
-        (Some(value), None) => value.to_str().ok().and_then(trace_id_from_traceparent),
-        _ => None,
-    }
+    registry_platform_httpsec::response_trace_id(headers)
+        .ok()
+        .map(|trace_id| trace_id.as_str().to_owned())
 }
 
 /// Build the outbound client from the pinned deployment options.
