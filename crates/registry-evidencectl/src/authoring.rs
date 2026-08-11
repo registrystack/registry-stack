@@ -1279,6 +1279,7 @@ fn compile_referenced_question(
             anyhow!("question source ref `{source_id}` has no sources/{source_id}.yaml")
         })?
         .clone();
+    validate_referenced_source_authentication(&question.id, source_id, &source_value)?;
     let subjects = compile_referenced_subjects(question, &source_value, selectors)?;
 
     let requirement_uri = question
@@ -1473,6 +1474,46 @@ fn referenced_selector_profile(source: &Value, role: &str, field: &str) -> Resul
         bail!("question subject must match exactly one referenced source selector alternative");
     }
     Ok(matches.pop().expect("one selector profile"))
+}
+
+/// Hold a referenced source to a credential posture it states itself. A
+/// transport that opens a network channel carries a credential decision, and
+/// neither an absent field nor a mapping that names no kind is that decision,
+/// so the compile names the source file rather than emitting a bundle the
+/// runtime rejects later. Which kind was stated is the runtime's closed
+/// enumeration to settle, so an unrecognized kind passes this gate and is
+/// judged there. A transport carrying no network channel holds no credential,
+/// so it declares none.
+fn validate_referenced_source_authentication(
+    question_id: &str,
+    source_id: &str,
+    source: &Value,
+) -> Result<()> {
+    if source.get("transport").and_then(Value::as_str) != Some("http-json") {
+        return Ok(());
+    }
+    let Some(authentication) = source
+        .get("authentication")
+        .filter(|value| !value.is_null())
+    else {
+        bail!(
+            "the referenced source sends no credential, and an absent field does not decide that: \
+question `{question_id}` must declare the posture itself by adding an `authentication:` mapping \
+naming the `kind:` its channel uses, in sources/{source_id}.yaml"
+        )
+    };
+    if authentication
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| !kind.trim().is_empty())
+    {
+        return Ok(());
+    }
+    bail!(
+        "the referenced source states `authentication:` without naming a `kind`, and an undecided \
+mapping is not a posture: question `{question_id}` must name the `kind:` its channel uses under \
+`authentication:` in sources/{source_id}.yaml"
+    )
 }
 
 fn referenced_source_artifacts(source: &Value) -> Result<Vec<String>> {
@@ -4504,27 +4545,11 @@ factSchema: schemas/source-facts.schema.yaml
         assert!(fixture.staging_is_empty());
     }
 
-    #[test]
-    fn referenced_v1_source_and_selector_are_reused_by_questions() {
-        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
-        for directory in ["sources", "selectors", "adapters", "schemas"] {
-            fs::create_dir(fixture.project.join(directory)).expect("authoring directory");
-        }
-        fs::write(
-            fixture.project.join("selectors/person-reference-v1.yaml"),
-            "maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
-        )
-        .expect("selector");
-        fs::write(
-            fixture.project.join("sources/people.yaml"),
-            r#"transport: http-json
-baseUrl: https://records.example.test
-posture: field-projected
-authentication:
-  kind: basic
-  usernameRef: secret:file/records-username
-  passwordRef: secret:file/records-password
-request:
+    /// Everything a referenced `people` source declares after its credential
+    /// posture. The posture itself is written by the caller, so one project
+    /// shape covers every authentication declaration the referenced route has
+    /// to settle.
+    const REFERENCED_SOURCE_TAIL: &str = r#"request:
   method: GET
   pathTemplate: /people/{person_id}
   pathBindings:
@@ -4546,7 +4571,24 @@ request:
 responseSchema: schemas/people-response.schema.yaml
 extractScript: adapters/people-extract.rhai
 factSchema: schemas/people-facts.schema.yaml
-"#,
+"#;
+
+    /// Write a project whose one question reads `sources/people.yaml`, with
+    /// the authentication block under test, and return the question text.
+    fn write_referenced_people_project(fixture: &Fixture, authentication: &str) -> String {
+        for directory in ["sources", "selectors", "adapters", "schemas"] {
+            fs::create_dir(fixture.project.join(directory)).expect("authoring directory");
+        }
+        fs::write(
+            fixture.project.join("selectors/person-reference-v1.yaml"),
+            "maximumAggregateBytes: 200\nfields:\n  person_id:\n    type: string\n    minimumBytes: 1\n    maximumBytes: 200\n",
+        )
+        .expect("selector");
+        fs::write(
+            fixture.project.join("sources/people.yaml"),
+            format!(
+                "transport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\n{authentication}{REFERENCED_SOURCE_TAIL}"
+            ),
         )
         .expect("source");
         for (path, contents) in [
@@ -4587,6 +4629,16 @@ factSchema: schemas/people-facts.schema.yaml
             &referenced,
         )
         .expect("referenced question");
+        referenced
+    }
+
+    #[test]
+    fn referenced_v1_source_and_selector_are_reused_by_questions() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        let referenced = write_referenced_people_project(
+            &fixture,
+            "authentication:\n  kind: basic\n  usernameRef: secret:file/records-username\n  passwordRef: secret:file/records-password\n",
+        );
         let copied = referenced
             .replace("id: adult-status", "id: adult-status-copy")
             .replace(
@@ -4618,6 +4670,82 @@ factSchema: schemas/people-facts.schema.yaml
             .staging
             .join("bundle/adapters/people-extract.rhai")
             .is_file());
+    }
+
+    #[test]
+    fn referenced_http_source_without_an_authentication_declaration_is_refused() {
+        for authentication in ["", "authentication:\n"] {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            write_referenced_people_project(&fixture, authentication);
+
+            let error =
+                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                    .expect_err("an undeclared credential posture must not compile")
+                    .to_string();
+
+            assert_eq!(
+                error,
+                "the referenced source sends no credential, and an absent field does not decide \
+that: question `adult-status` must declare the posture itself by adding an `authentication:` \
+mapping naming the `kind:` its channel uses, in sources/people.yaml",
+                "{authentication:?} was not refused as an absent posture"
+            );
+            assert!(fixture.staging_is_empty());
+        }
+    }
+
+    #[test]
+    fn referenced_http_source_with_an_unnamed_authentication_kind_is_refused() {
+        for authentication in [
+            "authentication: {}\n",
+            "authentication: {kind: null}\n",
+            "authentication: {kind: 3}\n",
+            "authentication: {kind: ' '}\n",
+            "authentication: basic\n",
+        ] {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            write_referenced_people_project(&fixture, authentication);
+
+            let error =
+                compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                    .expect_err("a posture the source never names must not compile")
+                    .to_string();
+
+            assert_eq!(
+                error,
+                "the referenced source states `authentication:` without naming a `kind`, and an \
+undecided mapping is not a posture: question `adult-status` must name the `kind:` its channel \
+uses under `authentication:` in sources/people.yaml",
+                "{authentication:?} was not refused as an unnamed kind"
+            );
+            assert!(fixture.staging_is_empty());
+        }
+    }
+
+    #[test]
+    fn referenced_http_source_compiles_every_declared_authentication_posture() {
+        for authentication in [
+            "authentication: {kind: none}\n",
+            "authentication: {kind: static-authorization, tokenRef: 'secret:file/records-token'}\n",
+            // The runtime owns the closed set of kinds. evidencectl settles
+            // only that the source named one, so an unrecognized kind reaches
+            // the runtime rather than being judged twice.
+            "authentication: {kind: kind-this-tool-does-not-enumerate}\n",
+        ] {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            write_referenced_people_project(&fixture, authentication);
+
+            compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+                .expect("a declared credential posture compiles");
+            let bundle: Value = serde_norway::from_slice(
+                &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle"),
+            )
+            .expect("bundle yaml");
+            assert_eq!(
+                bundle["sources"]["people"]["authentication"],
+                serde_norway::from_str::<Value>(authentication).expect("posture")["authentication"],
+            );
+        }
     }
 
     #[test]
