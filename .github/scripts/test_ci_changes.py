@@ -881,7 +881,15 @@ on:
                 {"docs": False, "relay_v2_contracts": True},
             ),
             (
+                # ops-posture-spec.test.mjs reads this file to prove the
+                # published RS-OP-POSTURE claims still match the runtime, so it
+                # is a docs input as well as a contract input.
                 "crates/registry-relay-v2/src/server.rs",
+                {"docs": True, "relay_v2_contracts": True},
+            ),
+            (
+                # A Relay V2 source no docs test reads stays out of the docs job.
+                "crates/registry-relay-v2/src/api.rs",
                 {"docs": False, "relay_v2_contracts": True},
             ),
             (

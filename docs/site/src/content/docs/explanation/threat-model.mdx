@@ -59,7 +59,7 @@ beside them. A separate adopter demo sits outside the production trust boundary:
 
 - Registry Manifest: the offline metadata producer. No production data, no auth, no
   secrets. It lives entirely on the describe side of the primary boundary.
-- Registry Relay: a contract-compiled read-only API over one read-only SQLite source. It makes
+- Registry Relay: a contract-compiled read-only API over local read-only SQLite sources. It makes
   no outbound source call, holds no source credential, and signs nothing.
 - Evidence Gateway: a minimum-disclosure assertion service. It answers one bounded, predefined
   question about one subject with a signed assertion carrying the answer and not the record.

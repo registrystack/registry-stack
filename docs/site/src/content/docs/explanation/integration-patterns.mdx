@@ -41,7 +41,7 @@ For how the registry family relates to the wider ecosystem, see the
 [ecosystem page](https://registrystack.org/ecosystem/).
 
 Two runtime surfaces can appear in an integration path.
-Registry Relay publishes a governed read-only HTTP API over one SQLite source an institution
+Registry Relay publishes a governed read-only HTTP API over SQLite sources an institution
 already holds: the operations, the readable columns, and the shape of every response are fixed by
 a contract reviewed before the service starts, not by a query the caller writes.
 Evidence Gateway answers one predefined requirement about one set of subjects with a signed
@@ -86,8 +86,8 @@ not an artifact any tool in this stack emits or validates.
 ## Evidence Gateway to action boundary
 
 Every combined integration follows the same ownership boundary.
-Registry Relay owns one reviewed contract over one read-only SQLite source, and the governed read
-surface compiled from it.
+Registry Relay owns one reviewed contract over the read-only SQLite sources it declares, and the
+governed read surface compiled from it.
 Evidence Gateway owns the predefined requirement, evidence authorization, acquisition against its
 own fixed sources, and the declared disclosure that requirement carries.
 The evidence consumer determines how the evidence is used, and the decision owner remains
@@ -203,10 +203,11 @@ surfaces or chooses between candidates.
     products/evidence/contracts/source-contract.yaml, and
     products/evidence/contracts/README.md. */}
 
-## One source, read where it lives
+## Sources read where they live
 
 Registry Relay's source model is deliberately the narrowest thing that can still serve a registry:
-one SQLite database, opened read-only, read in place.
+local SQLite databases, each opened read-only and read in place. A contract may declare more than
+one, and each resource binds to exactly one of them.
 
 There is no source adaptation layer to configure, because there is nothing to adapt.
 Relay does not fetch from an HTTP source, read a spreadsheet, connect to PostgreSQL, run a

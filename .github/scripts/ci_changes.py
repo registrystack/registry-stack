@@ -413,13 +413,22 @@ def classify(
         in {
             ".github/workflows/docs-pages.yml",
             # The two Relay V2 product documents the site publishes through
-            # repo-docs.yaml. Relay V2 generates no docs-site artifact from
-            # crate source: relayctl compiles a project instead of exposing a
-            # schema catalog, and each deployment generates its own OpenAPI
-            # description, so nothing under crates/registry-relay-v2 or
-            # crates/registry-relayctl reaches a published page.
+            # repo-docs.yaml. Relay V2 generates no docs-site page from crate
+            # source: relayctl compiles a project instead of exposing a schema
+            # catalog, and each deployment generates its own OpenAPI
+            # description.
             "products/relay-v2/CONCEPT.md",
             "products/relay-v2/STANDARDS-ALIGNMENT.md",
+            # No page is generated from these four, but scripts/
+            # ops-posture-spec.test.mjs reads them to prove the published
+            # operational claims still match the runtime. A probe route, a
+            # runtime bound, or a healthcheck default can change here and
+            # leave RS-OP-POSTURE stale, and that test is the only thing that
+            # catches it.
+            "crates/registry-relay-v2/src/server.rs",
+            "crates/registry-relay-v2/src/main.rs",
+            "crates/registry-relay-v2/src/contract.rs",
+            "crates/registry-relay-v2/src/startup.rs",
         }
         for path in paths
     )

@@ -40,7 +40,7 @@ and to understand how the products and the external demo connect at runtime.
             separate Solmara Lab adopter demo. Registry Platform provides shared auth, audit, HTTP,
             crypto, SD-JWT, and test crates. Registry Manifest provides portable metadata contracts,
             validation, and renderers. Registry Relay compiles a reviewed registry contract into a
-            fixed set of protected read-only operations over one read-only SQLite source. Evidence
+            fixed set of protected read-only operations over local read-only SQLite sources. Evidence
             Gateway answers one bounded question about one subject with a signed assertion. Registry
             Mint issues the short-lived access tokens Evidence Gateway verifies. Solmara Lab is an
             external synthetic-data adopter demo." />
@@ -120,7 +120,7 @@ No HTTP serving, no database queries, no authorization scoping. The manifest com
 ## Registry Relay
 
 Registry Relay compiles a reviewed registry contract into a fixed set of read-only operations and
-serves them over one read-only SQLite source. It owns the compiled contract: which operations exist,
+serves them over the read-only SQLite sources it binds. It owns the compiled contract: which operations exist,
 which reviewed views and columns they may read, which access profile guards each one, which
 disclosure profile shapes each response, and what its audit record says. Everything on that list is
 decided before the process starts, sealed into a package, and re-derived and byte-compared at
