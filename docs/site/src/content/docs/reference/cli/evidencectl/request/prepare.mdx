@@ -27,20 +27,20 @@ evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --subject <SUBJECT> --
 
 ## Arguments
 
-| Argument | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `<QUESTION>` | Yes | n/a | n/a | n/a | Question defined by the active local project |
+| Argument | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `<QUESTION>` | Yes | No | n/a | n/a | n/a | Question defined by the active local project |
 
 ## Options
 
-| Option | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `--purpose <PURPOSE>` | Yes | n/a | n/a | n/a | Exact purpose declared by the question |
-| `--subject <SUBJECT>` | Yes | n/a | n/a | n/a | Subject selector. Repeat role:field=value for a multi-subject question |
-| `--name <NAME>` | Yes | n/a | n/a | n/a | Safe name for this retained request |
-| `--client <CLIENT>` | No | n/a | n/a | n/a | Registered local application used to request authorization |
-| `--format <FORMAT>` | No | `signed-jws` | `signed-jws`, `sd-jwt-vc` | n/a | Response format to request and verify |
-| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--purpose <PURPOSE>` | Yes | No | n/a | n/a | n/a | Exact purpose declared by the question |
+| `--subject <SUBJECT>` | Yes | Yes | n/a | n/a | n/a | Subject selector. Repeat role:field=value for a multi-subject question |
+| `--name <NAME>` | Yes | No | n/a | n/a | n/a | Safe name for this retained request |
+| `--client <CLIENT>` | No | No | n/a | n/a | n/a | Registered local application used to request authorization |
+| `--format <FORMAT>` | No | No | `signed-jws` | `signed-jws`, `sd-jwt-vc` | n/a | Response format to request and verify |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract
 

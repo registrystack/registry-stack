@@ -77,6 +77,7 @@ function validateArgument(argument, label) {
       'display',
       'description',
       'always_required',
+      'repeatable',
       'default_values',
       'possible_values',
       'environment',
@@ -89,6 +90,9 @@ function validateArgument(argument, label) {
   }
   if (typeof argument.always_required !== 'boolean') {
     throw new Error(`${label}.always_required must be a boolean`);
+  }
+  if (typeof argument.repeatable !== 'boolean') {
+    throw new Error(`${label}.repeatable must be a boolean`);
   }
   stringArray(argument.default_values, `${label}.default_values`);
   stringArray(argument.possible_values, `${label}.possible_values`);
@@ -277,6 +281,7 @@ function argumentTable(entries, heading, firstColumn) {
     [
       inlineCode(argument.display),
       argument.always_required ? 'Yes' : 'No',
+      argument.repeatable ? 'Yes' : 'No',
       values(argument.default_values),
       values(argument.possible_values),
       argument.environment === null ? 'n/a' : inlineCode(argument.environment),
@@ -286,8 +291,8 @@ function argumentTable(entries, heading, firstColumn) {
   return `
 ## ${heading}
 
-| ${firstColumn} | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
+| ${firstColumn} | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
 ${rows.map((row) => `| ${row} |`).join('\n')}
 `;
 }

@@ -17,6 +17,7 @@ function argument(display) {
     display,
     description: 'Static option description.',
     always_required: false,
+    repeatable: false,
     default_values: [],
     possible_values: [],
     environment: null,
@@ -86,6 +87,19 @@ test('renders required groups and conditional requirements', () => {
   assert.match(page, /One or more of `--scope`, `--role` are required\./u);
   assert.match(page, /`--right` is present \| `--detail` is required\./u);
   assert.match(page, /Always required/u);
+});
+
+test('renders repeatable option cardinality', () => {
+  const catalog = fixtureCatalog();
+  const relayctl = catalog.binaries.find((binary) => binary.name === 'relayctl');
+  relayctl.options.push({
+    ...argument('--attribute-column <COLUMN>'),
+    repeatable: true,
+  });
+
+  const page = renderCatalog(catalog).get('relayctl.mdx');
+  assert.match(page, /\| `--attribute-column <COLUMN>` \| No \| Yes \|/u);
+  assert.match(page, /\| Option \| Always required \| Repeatable \|/u);
 });
 
 test('rejects a hidden command even if a collector emits it', () => {

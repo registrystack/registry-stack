@@ -27,13 +27,13 @@ evidencectl keygen client-assertion [OPTIONS] --out-dir <OUT_DIR>
 
 ## Options
 
-| Option | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `--out-dir <OUT_DIR>` | Yes | n/a | n/a | n/a | Secret directory receiving the private JWK file (created 0700) |
-| `--public-out <PUBLIC_OUT>` | No | n/a | n/a | n/a | Public JWK output path; defaults to a file inside the secret directory |
-| `--private-name <PRIVATE_NAME>` | No | n/a | n/a | n/a | Name of the private JWK file, which is the `secret:file/NAME` a source's `clientAssertionKeyRef` points at; defaults to one naming the algorithm. The public half follows it as `NAME-public.jwk.json` |
-| `--algorithm <ALGORITHM>` | No | `es384` | `es384`, `rs384` | n/a | Signature algorithm the assertion is signed with |
-| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--out-dir <OUT_DIR>` | Yes | No | n/a | n/a | n/a | Secret directory receiving the private JWK file (created 0700) |
+| `--public-out <PUBLIC_OUT>` | No | No | n/a | n/a | n/a | Public JWK output path; defaults to a file inside the secret directory |
+| `--private-name <PRIVATE_NAME>` | No | No | n/a | n/a | n/a | Name of the private JWK file, which is the `secret:file/NAME` a source's `clientAssertionKeyRef` points at; defaults to one naming the algorithm. The public half follows it as `NAME-public.jwk.json` |
+| `--algorithm <ALGORITHM>` | No | No | `es384` | `es384`, `rs384` | n/a | Signature algorithm the assertion is signed with |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
 
 ## Generation contract
 

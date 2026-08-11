@@ -229,22 +229,52 @@ async function git(command, args, cwd) {
   }
 }
 
+async function resolveLocalCommit(ref, cwd) {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+      { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    );
+    const commit = stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(commit)) {
+      throw new Error(`git resolved ${ref} to an invalid commit: ${commit}`);
+    }
+    return commit;
+  } catch (error) {
+    if (error?.code === 1) return null;
+    const stderr = String(error?.stderr ?? '').trim();
+    throw new Error(`git could not resolve ${ref}: ${stderr || error.message}`);
+  }
+}
+
 export async function stagePinnedGeneratedArtifacts(docset, {
   docsRoot = process.cwd(),
   executeGit = git,
+  resolveCommit = resolveLocalCommit,
+  allowUnpublishedCandidate = false,
   artifacts = currentSourceGeneratedArtifacts,
 } = {}) {
   const sourceProduct = docset.products?.['registry-stack'];
   const declaredSourceRef = sourceProduct?.ref;
+  const repoRoot = resolve(docsRoot, '../..');
   let sourceRef = declaredSourceRef;
   if (isCandidateSourceProduct(docset, sourceProduct)) {
-    sourceRef = 'HEAD';
+    // An archive that has already been tagged must remain bound to that tag.
+    // Before publication the exact candidate tag does not exist yet, so the
+    // release-candidate entrypoint intentionally stages the checked-out source.
+    const taggedCommit = await resolveCommit(declaredSourceRef, repoRoot);
+    if (taggedCommit === null && !allowUnpublishedCandidate) {
+      throw new Error(
+        `Archived candidate docset "${docset.id}" must resolve its exact source tag`,
+      );
+    }
+    sourceRef = taggedCommit ?? 'HEAD';
   } else if (typeof sourceRef !== 'string' || !/^[0-9a-f]{40}$/.test(sourceRef)) {
     throw new Error(
       `Archived docset "${docset.id}" must pin products.registry-stack.ref to a full commit or its exact candidate tag`,
     );
   }
-  const repoRoot = resolve(docsRoot, '../..');
   // `git ls-tree` with no pathspec lists the whole tree, so an empty artifact
   // list must short-circuit rather than fall through. The ref check above still
   // runs: an archived docset has to pin its source ref whether or not there is
@@ -313,6 +343,7 @@ export async function buildDocsetArchive(docset, {
   applySeo = applyArchiveSeo,
   normalizePagefind = normalizePagefindGzipMetadata,
   stageGeneratedArtifacts = stagePinnedGeneratedArtifacts,
+  allowUnpublishedCandidate = false,
   indexable = false,
 } = {}) {
   if (docset.status !== 'archived') {
@@ -346,7 +377,10 @@ export async function buildDocsetArchive(docset, {
   // metadata.
   let restoreGeneratedArtifacts = async () => {};
   try {
-    restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, { docsRoot });
+    restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, {
+      docsRoot,
+      allowUnpublishedCandidate,
+    });
     await runCommand('npm', ['run', 'generate:archive'], rootEnv);
     await runCommand('npx', ['astro', 'check'], rootEnv);
     await runCommand(

@@ -31,14 +31,14 @@ evidence verify-presentation [OPTIONS] --sd-jwt-vc-presentation <SD_JWT_VC_PRESE
 
 ## Options
 
-| Option | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `--sd-jwt-vc-presentation <SD_JWT_VC_PRESENTATION>` | Yes | n/a | n/a | n/a | Stored compact SD-JWT VC presentation file |
-| `--jwks <JWKS>` | Yes | n/a | n/a | n/a | Pinned trusted JWKS document. This file is the complete trust set |
-| `--policy <POLICY>` | Yes | n/a | n/a | n/a | Holder-bound relying-procedure verification policy document |
-| `--at <AT>` | No | n/a | n/a | n/a | Verification instant as strict RFC 3339 UTC; system time by default |
-| `--runtime <RUNTIME>` | No | `/etc/registry-evidence/runtime.yaml` | n/a | `REGISTRY_EVIDENCE_RUNTIME` | One closed operator runtime file that binds the governed bundle |
-| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--sd-jwt-vc-presentation <SD_JWT_VC_PRESENTATION>` | Yes | No | n/a | n/a | n/a | Stored compact SD-JWT VC presentation file |
+| `--jwks <JWKS>` | Yes | No | n/a | n/a | n/a | Pinned trusted JWKS document. This file is the complete trust set |
+| `--policy <POLICY>` | Yes | No | n/a | n/a | n/a | Holder-bound relying-procedure verification policy document |
+| `--at <AT>` | No | No | n/a | n/a | n/a | Verification instant as strict RFC 3339 UTC; system time by default |
+| `--runtime <RUNTIME>` | No | No | `/etc/registry-evidence/runtime.yaml` | n/a | `REGISTRY_EVIDENCE_RUNTIME` | One closed operator runtime file that binds the governed bundle |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
 
 ## Generation contract
 

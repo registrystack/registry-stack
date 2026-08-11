@@ -27,17 +27,17 @@ evidencectl jwks [OPTIONS] --out <OUT> <PUBLIC_JWK_FILES>...
 
 ## Arguments
 
-| Argument | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `<PUBLIC_JWK_FILES>` | Yes | n/a | n/a | n/a | Public JWK files to include, in order |
+| Argument | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `<PUBLIC_JWK_FILES>` | Yes | Yes | n/a | n/a | n/a | Public JWK files to include, in order |
 
 ## Options
 
-| Option | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `--out <OUT>` | Yes | n/a | n/a | n/a | Output JWKS document path |
-| `--force` | No | n/a | n/a | n/a | Overwrite an existing output file |
-| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--out <OUT>` | Yes | No | n/a | n/a | n/a | Output JWKS document path |
+| `--force` | No | No | n/a | n/a | n/a | Overwrite an existing output file |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract
 

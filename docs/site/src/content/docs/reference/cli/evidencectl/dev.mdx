@@ -34,12 +34,12 @@ evidencectl dev [OPTIONS] [COMMAND]
 
 ## Options
 
-| Option | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `--detach` | No | n/a | n/a | n/a | Return after Registry Mint and Evidence Gateway are ready on loopback |
-| `--evidence-port <EVIDENCE_PORT>` | No | `8080` | n/a | n/a | Loopback port for the local Evidence Gateway service |
-| `--mint-port <MINT_PORT>` | No | `8081` | n/a | n/a | Loopback port for the local Mint service |
-| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--detach` | No | No | n/a | n/a | n/a | Return after Registry Mint and Evidence Gateway are ready on loopback |
+| `--evidence-port <EVIDENCE_PORT>` | No | No | `8080` | n/a | n/a | Loopback port for the local Evidence Gateway service |
+| `--mint-port <MINT_PORT>` | No | No | `8081` | n/a | n/a | Loopback port for the local Mint service |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract
 

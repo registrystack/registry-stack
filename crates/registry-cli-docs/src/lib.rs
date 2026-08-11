@@ -35,6 +35,7 @@ pub struct ArgumentReference {
     pub display: String,
     pub description: String,
     pub always_required: bool,
+    pub repeatable: bool,
     pub default_values: Vec<String>,
     pub possible_values: Vec<String>,
     pub environment: Option<String>,
@@ -152,6 +153,10 @@ fn argument_reference(argument: &Arg) -> ArgumentReference {
             .map(|value| normalized(&value))
             .unwrap_or_default(),
         always_required: argument.is_required_set() && argument.get_env().is_none(),
+        repeatable: matches!(
+            argument.get_action(),
+            clap::ArgAction::Append | clap::ArgAction::Count
+        ),
         default_values: if takes_values {
             argument
                 .get_default_values()
@@ -616,6 +621,11 @@ mod tests {
         assert!(source_suggest.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.arguments == ["--openapi <OPENAPI>", "--project <PROJECT>"]
+        }));
+
+        let inspect = find_command(&catalog.binaries, "relayctl inspect");
+        assert!(inspect.options.iter().any(|argument| {
+            argument.display == "--attribute-column <COLUMN>" && argument.repeatable
         }));
 
         for (invocation, option) in [

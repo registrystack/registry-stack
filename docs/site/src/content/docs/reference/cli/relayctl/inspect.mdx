@@ -36,22 +36,22 @@ relayctl inspect [OPTIONS] <DATABASE>
 
 ## Arguments
 
-| Argument | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `<DATABASE>` | Yes | n/a | n/a | n/a | SQLite database to inspect structurally |
+| Argument | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `<DATABASE>` | Yes | No | n/a | n/a | n/a | SQLite database to inspect structurally |
 
 ## Options
 
-| Option | Always required | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- |
-| `--profile <PROFILE>` | No | `live-read-only` | `snapshot`, `live-read-only` | n/a | Source posture to use while opening the database read-only |
-| `--starters <DIRECTORY>` | No | n/a | n/a | n/a | Write compiler-derived, visibly unreviewed starters to this directory |
-| `--statistical-view <VIEW>` | No | n/a | n/a | n/a | Generate a format-neutral statistical component starter for this view |
-| `--time-column <COLUMN>` | No | n/a | n/a | n/a | Exact source column for the required time-period dimension |
-| `--measure-column <COLUMN>` | No | n/a | n/a | n/a | Exact source column for the required observation measure |
-| `--attribute-column <COLUMN>` | No | n/a | n/a | n/a | Exact source column to treat as an observation attribute instead of a dimension |
-| `--json` | No | n/a | n/a | n/a | Emit the shared report as best-effort JSON for local automation |
-| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--profile <PROFILE>` | No | No | `live-read-only` | `snapshot`, `live-read-only` | n/a | Source posture to use while opening the database read-only |
+| `--starters <DIRECTORY>` | No | No | n/a | n/a | n/a | Write compiler-derived, visibly unreviewed starters to this directory |
+| `--statistical-view <VIEW>` | No | No | n/a | n/a | n/a | Generate a format-neutral statistical component starter for this view |
+| `--time-column <COLUMN>` | No | No | n/a | n/a | n/a | Exact source column for the required time-period dimension |
+| `--measure-column <COLUMN>` | No | No | n/a | n/a | n/a | Exact source column for the required observation measure |
+| `--attribute-column <COLUMN>` | No | Yes | n/a | n/a | n/a | Exact source column to treat as an observation attribute instead of a dimension |
+| `--json` | No | No | n/a | n/a | n/a | Emit the shared report as best-effort JSON for local automation |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract
 
