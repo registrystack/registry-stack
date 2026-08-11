@@ -137,7 +137,8 @@ const archivedRoots = new Set(
     .map((docset) => docset.path),
 );
 const publishedArchivedRoots = new Set(
-  publishedArchiveDocsets(docsets).map((docset) => docset.path),
+  publishedArchiveDocsets(docsets, process.env.DOCS_RELEASED_TAG || null)
+    .map((docset) => docset.path),
 );
 const retiredArchivedRoots = new Set(
   [...archivedRoots].filter((root) => !publishedArchivedRoots.has(root)),

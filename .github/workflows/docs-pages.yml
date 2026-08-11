@@ -1,15 +1,18 @@
 name: Deploy RegistryStack Docs
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       released_tag:
-        description: Exact public Registry Stack release tag
-        required: true
+        description: Optional exact public docs-bearing release tag
+        required: false
         type: string
       docs_sha256:
-        description: SHA-256 of the released documentation archive
-        required: true
+        description: Optional SHA-256 of that released documentation archive
+        required: false
         type: string
 
 permissions:
@@ -23,22 +26,34 @@ jobs:
   build:
     name: Authenticate and assemble docs site
     runs-on: ubuntu-24.04
+    outputs:
+      released_tag: ${{ steps.release.outputs.released_tag }}
+      docs_sha256: ${{ steps.release.outputs.docs_sha256 }}
     permissions:
       contents: read
     steps:
-      - name: Validate exact dispatch before build
+      - name: Validate deployment request before build
         env:
-          RELEASED_TAG: ${{ inputs.released_tag }}
-          DOCS_SHA256: ${{ inputs.docs_sha256 }}
+          REQUESTED_TAG: ${{ inputs.released_tag }}
+          REQUESTED_DOCS_SHA256: ${{ inputs.docs_sha256 }}
         shell: bash
         run: |
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
-          if [[ ! "${RELEASED_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          case "${GITHUB_EVENT_NAME}" in
+            push|workflow_dispatch) ;;
+            *) echo "unsupported deployment event ${GITHUB_EVENT_NAME}" >&2; exit 1 ;;
+          esac
+          if [[ -n "${REQUESTED_TAG}" && -z "${REQUESTED_DOCS_SHA256}" ]] || \
+             [[ -z "${REQUESTED_TAG}" && -n "${REQUESTED_DOCS_SHA256}" ]]; then
+            echo "released_tag and docs_sha256 must be supplied together" >&2
+            exit 1
+          fi
+          if [[ -n "${REQUESTED_TAG}" && ! "${REQUESTED_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "released_tag must be canonical v<major>.<minor>.<patch> text" >&2
             exit 1
           fi
-          if [[ ! "${DOCS_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+          if [[ -n "${REQUESTED_DOCS_SHA256}" && ! "${REQUESTED_DOCS_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
             echo "docs_sha256 must be 64 lowercase hexadecimal characters" >&2
             exit 1
           fi
@@ -46,16 +61,44 @@ jobs:
       - name: Checkout protected main without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
-          ref: refs/heads/main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           submodules: false
           persist-credentials: false
 
+      - name: Resolve latest published docs release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.released_tag }}
+          REQUESTED_DOCS_SHA256: ${{ inputs.docs_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            | jq 'add' > "${RUNNER_TEMP}/published-releases.json"
+          resolver=(
+            python3 release/scripts/verify_latest_published_release.py
+            --metadata "${RUNNER_TEMP}/published-releases.json"
+          )
+          if [[ -n "${REQUESTED_TAG}" ]]; then
+            resolver+=(
+              --expected-tag "${REQUESTED_TAG}"
+              --expected-sha256 "${REQUESTED_DOCS_SHA256}"
+            )
+          fi
+          "${resolver[@]}" > "${RUNNER_TEMP}/resolved-docs-release.json"
+          {
+            echo "released_tag=$(jq -er .tag_name "${RUNNER_TEMP}/resolved-docs-release.json")"
+            echo "docs_sha256=$(jq -er .docs_sha256 "${RUNNER_TEMP}/resolved-docs-release.json")"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Authenticate public release and checksum inventory
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASED_TAG: ${{ inputs.released_tag }}
-          DOCS_SHA256: ${{ inputs.docs_sha256 }}
+          RELEASED_TAG: ${{ steps.release.outputs.released_tag }}
+          DOCS_SHA256: ${{ steps.release.outputs.docs_sha256 }}
         shell: bash
         run: |
           set -euo pipefail
@@ -70,11 +113,6 @@ jobs:
             --arg tag "${RELEASED_TAG}" \
             '.tag_name==$tag and .draft==false and .prerelease==false' \
             "${release_dir}/release.json" >/dev/null
-          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
-            > "${release_dir}/latest-release.json"
-          python3 release/scripts/verify_latest_published_release.py \
-            --metadata "${release_dir}/latest-release.json" \
-            --expected-tag "${RELEASED_TAG}"
           for name in "${archive}" SHA256SUMS "${checksum_bundle}"; do
             test "$(jq -r --arg name "${name}" \
               '[.assets[] | select(.name==$name)] | length' \
@@ -104,7 +142,7 @@ jobs:
 
       - name: Verify tag-bound checksum signature
         env:
-          RELEASED_TAG: ${{ inputs.released_tag }}
+          RELEASED_TAG: ${{ steps.release.outputs.released_tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -137,6 +175,7 @@ jobs:
           DOCS_DOCSET=latest DOCS_BASE=/dev/ npx astro build --outDir dist/dev
           node scripts/apply-archive-seo.mjs dist/dev
         env:
+          DOCS_RELEASED_TAG: ${{ steps.release.outputs.released_tag }}
           PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.PUBLIC_UMAMI_WEBSITE_ID }}
           PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
           PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
@@ -144,7 +183,8 @@ jobs:
       - name: Assemble declared historical archives
         working-directory: docs/site
         env:
-          RELEASED_TAG: ${{ inputs.released_tag }}
+          RELEASED_TAG: ${{ steps.release.outputs.released_tag }}
+          DOCS_RELEASED_TAG: ${{ steps.release.outputs.released_tag }}
         run: |
           set -euo pipefail
           npm run assemble:archives -- \
@@ -153,9 +193,9 @@ jobs:
       - name: Promote exact released docs without rewriting archive files
         working-directory: docs/site
         env:
-          RELEASED_TAG: ${{ inputs.released_tag }}
-          DOCS_SHA256: ${{ inputs.docs_sha256 }}
-          RELEASED_ARCHIVE: ${{ runner.temp }}/released-docs/registry-docs-${{ inputs.released_tag }}.tar.gz
+          RELEASED_TAG: ${{ steps.release.outputs.released_tag }}
+          DOCS_SHA256: ${{ steps.release.outputs.docs_sha256 }}
+          RELEASED_ARCHIVE: ${{ runner.temp }}/released-docs/registry-docs-${{ steps.release.outputs.released_tag }}.tar.gz
         run: |
           set -euo pipefail
           npm run stage:production-docsets -- \
@@ -172,6 +212,8 @@ jobs:
 
       - name: Verify assembled documentation tree
         working-directory: docs/site
+        env:
+          DOCS_RELEASED_TAG: ${{ steps.release.outputs.released_tag }}
         run: |
           npm run check:seo:built
           npm run check:links:built
@@ -181,7 +223,7 @@ jobs:
         run: |
           npm run smoke:deployment -- \
             --root dist \
-            --released-tag "${{ inputs.released_tag }}"
+            --released-tag "${{ steps.release.outputs.released_tag }}"
 
       - name: Upload one Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
@@ -203,7 +245,7 @@ jobs:
       - name: Checkout deployment helpers from protected main
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
-          ref: refs/heads/main
+          ref: ${{ github.sha }}
           sparse-checkout: |
             docs/site/scripts/smoke-docs-deployment.mjs
             release/scripts/verify_latest_published_release.py
@@ -213,18 +255,21 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
 
-      - name: Recheck latest published release immediately before deployment
+      - name: Recheck latest published docs release immediately before deployment
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASED_TAG: ${{ inputs.released_tag }}
+          RELEASED_TAG: ${{ needs.build.outputs.released_tag }}
+          DOCS_SHA256: ${{ needs.build.outputs.docs_sha256 }}
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
-            > "${RUNNER_TEMP}/latest-release.json"
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            | jq 'add' > "${RUNNER_TEMP}/published-releases.json"
           python3 release/scripts/verify_latest_published_release.py \
-            --metadata "${RUNNER_TEMP}/latest-release.json" \
-            --expected-tag "${RELEASED_TAG}"
+            --metadata "${RUNNER_TEMP}/published-releases.json" \
+            --expected-tag "${RELEASED_TAG}" \
+            --expected-sha256 "${DOCS_SHA256}"
 
       - name: Deploy to GitHub Pages
         id: deployment
@@ -240,5 +285,5 @@ jobs:
         run: |
           node scripts/smoke-docs-deployment.mjs \
             --url https://docs.registrystack.org \
-            --released-tag "${{ inputs.released_tag }}" \
+            --released-tag "${{ needs.build.outputs.released_tag }}" \
             --attempts 12

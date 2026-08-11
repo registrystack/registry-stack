@@ -45,6 +45,7 @@ EVIDENCE_OID4VCI_MINIMUM_VERSION = (0, 18, 0)
 REGISTRYCTL_INSTALLER_MINIMUM_VERSION = (0, 14, 0)
 RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
+DOCS_RELEASE_RESUMPTION_VERSION = (0, 19, 1)
 IDENTIFIER_CATALOG_RELEASE_MINIMUM_VERSION = (0, 19, 1)
 IDENTIFIER_CATALOG_RELATIVE_PATH = "products/identifiers/generated/catalog.v1.json"
 # Historical v0.10-v0.16 releases shipped the V1 Relay and Notary identities.
@@ -191,6 +192,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory = set(RELAY_V2_ARTIFACT_INVENTORY)
             if parsed_version >= RELAY_INSTALLER_MINIMUM_VERSION:
                 expected_inventory.add("relay-installer")
+            if parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION:
+                expected_inventory.add("registry-docs")
         else:
             expected_inventory = set(
                 POST_NOTARY_ARTIFACT_INVENTORY
@@ -2386,6 +2389,7 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
     uses_release_docs = (
         parsed_version is None
         or parsed_version < RELAY_V2_RELEASE_MINIMUM_VERSION
+        or parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION
     )
     docsets_data = None
     selected_docset = None

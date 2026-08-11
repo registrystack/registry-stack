@@ -213,6 +213,7 @@ jobs:
           git checkout --detach "${{ steps.request.outputs.source_sha }}"
           release/scripts/registry-release validate \
             "${{ steps.request.outputs.manifest }}"
+          release/scripts/registry-release validate-docsets
           cargo metadata --locked --format-version 1 >/dev/null
           REGISTRY_RELEASE_SOURCE_MODE=monorepo \
             release/scripts/check-release-source-model.sh
@@ -291,6 +292,27 @@ jobs:
               > "dist/images/${name}.digest"
           done
 
+      - name: Setup Node for exact release docs archive
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Package exact release docs archive
+        working-directory: docs/site
+        env:
+          DOCS_ARCHIVE_OUTPUT: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
+          DOCS_DOCSET: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build:archive
+          npm run archive:snapshot -- \
+            "${DOCS_DOCSET}" \
+            --output "${DOCS_ARCHIVE_OUTPUT}" \
+            --verify-lock
+
       - name: Stage canonical build products
         shell: bash
         run: |
@@ -299,6 +321,9 @@ jobs:
           cp -R dist/bin candidate-canonical/dist/bin
           cp -R dist/image-bin candidate-canonical/dist/image-bin
           cp -R dist/images candidate-canonical/dist/images
+          cp \
+            "${RUNNER_TEMP}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
+            candidate-canonical/
 
       - name: Upload canonical build products
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -765,6 +790,8 @@ jobs:
           linux_arm="inputs/candidate-linux-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p candidate/bundle-root
           cp "${canonical}"/dist/bin/* candidate/bundle-root/
+          cp "${canonical}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
+            candidate/bundle-root/
           rm -f candidate/bundle-root/SHA256SUMS
           cp "${macos}"/platform/* candidate/bundle-root/
           cp "${linux_arm}"/platform/* candidate/bundle-root/
@@ -895,6 +922,7 @@ jobs:
               | while IFS= read -r -d '' file; do
                   name="$(basename "${file}")"
                   case "${name}" in
+                    registry-docs-*.tar.gz) kind=docs ;;
                     *.sbom.spdx.json) kind=sbom ;;
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
@@ -931,6 +959,7 @@ jobs:
                 '{image:$image,name:$name,sha256:$sha256,status:"passed"}'
             done | jq -s .
           )"
+          docs_name="registry-docs-${tag}.tar.gz"
           sbom_name="registry-stack-${tag}.sbom.spdx.json"
           advisory_name=advisory-verdict.json
           jq -n \
@@ -946,6 +975,8 @@ jobs:
             --arg expires_at "${expires_at}" \
             --argjson payloads "${payloads}" \
             --argjson images "${images}" \
+            --arg docs_name "${docs_name}" \
+            --arg docs_sha "$(sha256sum "candidate/bundle-root/${docs_name}" | awk '{print $1}')" \
             --arg sbom_name "${sbom_name}" \
             --arg sbom_sha "$(sha256sum "candidate/bundle-root/${sbom_name}" | awk '{print $1}')" \
             --argjson scans "${scans}" \
@@ -975,6 +1006,7 @@ jobs:
               },
               payloads: $payloads,
               images: $images,
+              docs: {name:$docs_name,sha256:$docs_sha},
               sbom: {name:$sbom_name,sha256:$sbom_sha},
               scans: $scans,
               advisory: {

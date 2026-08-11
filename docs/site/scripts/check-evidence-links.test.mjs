@@ -241,7 +241,7 @@ test('Pages authenticates an exact release before build and smokes one assembled
     resolve(repositoryRoot, '.github/workflows/docs-pages.yml'),
     'utf8',
   );
-  const dispatchValidation = workflow.indexOf('Validate exact dispatch before build');
+  const dispatchValidation = workflow.indexOf('Validate deployment request before build');
   const docsBuild = workflow.indexOf('Build protected main at /dev/');
   const archiveAssembly = workflow.indexOf('npm run assemble:archives');
   const rootStaging = workflow.indexOf('npm run stage:production-docsets');
@@ -264,6 +264,8 @@ test('Pages authenticates an exact release before build and smokes one assembled
   assert.ok(liveSmoke > upload);
   assert.match(workflow, /released_tag:/);
   assert.match(workflow, /docs_sha256:/);
+  assert.match(workflow, /push:\n\s+branches:\n\s+- main/);
+  assert.match(workflow, /Resolve latest published docs release/);
   assert.match(workflow, /registry-stack-\$\{RELEASED_TAG\}-SHA256SUMS\.sigstore\.json/);
   assert.match(workflow, /DOCS_BASE=\/dev\//);
   assert.match(workflow, /--exclude-docset "\$\{RELEASED_TAG\}"/);

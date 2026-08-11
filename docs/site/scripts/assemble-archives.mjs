@@ -223,7 +223,7 @@ export async function assembleArchives({
   let bootstrapped = 0;
   let restored = 0;
   const sources = {};
-  const published = publishedArchiveDocsets(docsets);
+  const published = publishedArchiveDocsets(docsets, excludeDocsetId);
   const publishedIds = new Set(published.map((entry) => entry.id));
   const omitted = docsets.docsets
     .filter((entry) => entry.status === 'archived' && !publishedIds.has(entry.id))

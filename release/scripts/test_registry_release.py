@@ -2563,10 +2563,24 @@ class RegistryReleaseTest(TestCase):
             )
             missing_result = run_tool("validate", str(current))
 
+            current = write_manifest(
+                root,
+                version="0.19.1",
+                source_ref=git(ROOT, "rev-parse", "HEAD"),
+            )
+            data = yaml.safe_load(current.read_text(encoding="utf-8"))
+            del data["artifacts"]["registry-docs"]
+            current.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+            missing_docs_result = run_tool("validate", str(current))
+
         self.assertEqual(0, historical_result.returncode, historical_result.stderr)
         self.assertEqual(0, current_result.returncode, current_result.stderr)
         self.assertNotEqual(0, missing_result.returncode)
         self.assertIn("missing relay-installer", missing_result.stderr)
+        self.assertNotEqual(0, missing_docs_result.returncode)
+        self.assertIn("missing registry-docs", missing_docs_result.stderr)
 
     def test_beta_27_manifest_is_the_notary_free_current_inventory(self) -> None:
         manifest = ROOT / "release/manifests/registry-stack-beta-27.yaml"
@@ -4362,6 +4376,7 @@ def write_manifest(
         }
         if version_tuple >= (0, 19, 1):
             artifacts["relay-installer"] = version
+            artifacts["registry-docs"] = version
     if include_registryctl_image_lock is None:
         include_registryctl_image_lock = (0, 9, 0) <= version_tuple < (0, 19, 0)
     if include_registryctl_image_lock:

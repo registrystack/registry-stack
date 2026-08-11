@@ -97,6 +97,29 @@ test('publishes only the latest configured semantic archives', () => {
   );
 });
 
+test('does not publish docsets newer than the authenticated release ceiling', () => {
+  const manifest = validDocsets();
+  manifest.published_archive_limit = 3;
+  manifest.docsets.push(
+    { ...manifest.docsets[1], id: 'v0.19.1', label: 'v0.19.1', path: '/v/0.19.1/' },
+    { ...manifest.docsets[1], id: 'v0.18.0', label: 'v0.18.0', path: '/v/0.18.0/' },
+    { ...manifest.docsets[1], id: 'v0.17.0', label: 'v0.17.0', path: '/v/0.17.0/' },
+  );
+
+  assert.deepEqual(
+    publishedArchiveDocsets(manifest, 'v0.18.0').map((entry) => entry.id),
+    ['v0.18.0', 'v0.17.0'],
+  );
+  assert.deepEqual(
+    selectableDocsets(manifest, 'v0.18.0').map((entry) => entry.id),
+    ['latest', 'v0.18.0', 'v0.17.0'],
+  );
+  assert.throws(
+    () => publishedArchiveDocsets(manifest, 'v0.19.0'),
+    /declared archived release docset/,
+  );
+});
+
 test('validateDocsets rejects an invalid publication limit', () => {
   for (const limit of [0, -1, 1.5, '3']) {
     const manifest = validDocsets();

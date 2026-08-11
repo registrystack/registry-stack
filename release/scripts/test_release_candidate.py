@@ -1051,6 +1051,10 @@ class ReleaseCandidateTest(TestCase):
                     files["registry-stack-v1.2.3.sbom.spdx.json"]
                 ),
             },
+            "docs": {
+                "name": "registry-docs-v1.2.3.tar.gz",
+                "sha256": sha256(files["registry-docs-v1.2.3.tar.gz"]),
+            },
             "scans": [
                 {
                     "image": name,
@@ -1105,16 +1109,14 @@ class ReleaseCandidateTest(TestCase):
             "ghcr.io/registrystack/registry-relay:v0.18.0"
         )
         candidate["scans"][0]["image"] = "registry-relay"
+        docs = next(
+            item
+            for item in candidate["payloads"]
+            if item["kind"] == "docs"
+        )
         docs_name = "registry-docs-v0.18.0.tar.gz"
         docs_sha = "8" * 64
-        candidate["payloads"].append(
-            {
-                "name": docs_name,
-                "kind": "docs",
-                "size": 128,
-                "sha256": docs_sha,
-            }
-        )
+        docs.update(name=docs_name, size=128, sha256=docs_sha)
         candidate["docs"] = {"name": docs_name, "sha256": docs_sha}
         return candidate
 
@@ -1222,16 +1224,24 @@ class ReleaseCandidateTest(TestCase):
         current, _, _, _ = self.make_v2_candidate()
         current["release"]["version"] = "0.19.0"
         current["release"]["tag"] = "v0.19.0"
-        current["docs"] = copy.deepcopy(legacy["docs"])
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "manifest has a non-closed schema: unknown docs",
         ):
             self.module.validate_candidate_manifest(current, now=self.now)
 
+        current.pop("docs")
+        current["payloads"] = [
+            item for item in current["payloads"] if item["kind"] != "docs"
+        ]
+
         too_old, _, _, _ = self.make_v2_candidate()
         too_old["release"]["version"] = "0.15.2"
         too_old["release"]["tag"] = "v0.15.2"
+        too_old.pop("docs")
+        too_old["payloads"] = [
+            item for item in too_old["payloads"] if item["kind"] != "docs"
+        ]
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "candidate v2 requires version 0.16.0 or later",
@@ -1266,6 +1276,10 @@ class ReleaseCandidateTest(TestCase):
         docs_payload = copy.deepcopy(candidate)
         docs_payload["release"]["version"] = "0.19.0"
         docs_payload["release"]["tag"] = "v0.19.0"
+        docs_payload.pop("docs")
+        docs_payload["payloads"] = [
+            item for item in docs_payload["payloads"] if item["kind"] != "docs"
+        ]
         docs_payload["payloads"].append(
             {
                 "name": "registry-docs-v1.2.3.tar.gz",
@@ -1286,8 +1300,10 @@ class ReleaseCandidateTest(TestCase):
 
         self.assertNotIn("relay-v0.19.0-install.sh", historical)
         self.assertNotIn("relay-install.sh", historical)
+        self.assertNotIn("registry-docs-v0.19.0.tar.gz", historical)
         self.assertEqual("installer", current["relay-v0.19.1-install.sh"])
         self.assertEqual("installer", current["relay-install.sh"])
+        self.assertEqual("docs", current["registry-docs-v0.19.1.tar.gz"])
 
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1452,11 +1468,17 @@ class ReleaseCandidateTest(TestCase):
             "docs", payload_schema["items"]["properties"]["kind"]["enum"]
         )
         version_branch = schema["allOf"][0]
-        self.assertEqual(
-            "^0\\.1[6-8]\\.",
-            version_branch["if"]["properties"]["release"]["properties"][
-                "version"
-            ]["pattern"],
+        docs_version_patterns = [
+            branch["pattern"]
+            for branch in version_branch["if"]["properties"]["release"][
+                "properties"
+            ]["version"]["anyOf"]
+        ]
+        self.assertIn("^0\\.1[6-8]\\.[0-9]+$", docs_version_patterns)
+        self.assertIn("^0\\.19\\.[1-9][0-9]*$", docs_version_patterns)
+        self.assertIn(
+            "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$",
+            docs_version_patterns,
         )
         self.assertIn("docs", version_branch["then"]["required"])
         self.assertEqual(

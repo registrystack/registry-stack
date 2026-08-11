@@ -472,35 +472,35 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "Authenticated legacy docs retry dispatch",
+        "Authenticated docs promotion dispatch",
         ".github/workflows/release.yml",
         (
-            "dispatch-docs:\n    name: Dispatch authenticated legacy docs promotion",
+            "dispatch-docs:\n    name: Dispatch authenticated docs promotion",
             "if: needs.verify.outputs.docs_sha256 != ''",
-            "name: Dispatch authenticated legacy docs promotion",
+            "name: Dispatch authenticated docs promotion",
             '-f "released_tag=${{ needs.verify.outputs.tag }}"',
             '-f "docs_sha256=${{ needs.verify.outputs.docs_sha256 }}"',
         ),
     ),
     (
-        "Latest-only released docs deployment",
+        "Latest docs-bearing release deployment on main",
         ".github/workflows/docs-pages.yml",
         (
             "name: Authenticate public release and checksum inventory",
-            'gh api "repos/${GITHUB_REPOSITORY}/releases/latest"',
+            '"repos/${GITHUB_REPOSITORY}/releases?per_page=100"',
             "python3 release/scripts/verify_latest_published_release.py",
-            "name: Recheck latest published release immediately before deployment",
+            "name: Recheck latest published docs release immediately before deployment",
             "name: Deploy to GitHub Pages",
         ),
     ),
     (
-        "Latest release metadata fails closed",
+        "Latest docs release metadata fails closed",
         "release/scripts/verify_latest_published_release.py",
         (
-            'if metadata.get("draft") is not False:',
-            'if metadata.get("prerelease") is not False:',
-            "if actual_tag != expected_tag:",
-            "is stale; latest published",
+            'if value.get("draft") is not False or value.get("prerelease") is not False:',
+            "if len(matches) != 1:",
+            "if expected_tag is not None and tag != expected_tag:",
+            "is stale; latest published ",
         ),
     ),
     (
@@ -594,9 +594,9 @@ ORDERED_RELEASE_SECURITY_GATES = (
         "publish:\n    name: Publish unique Evidence development prerelease",
     ),
     (
-        "Latest release recheck immediately before docs deployment",
+        "Latest docs release recheck immediately before docs deployment",
         ".github/workflows/docs-pages.yml",
-        "name: Recheck latest published release immediately before deployment",
+        "name: Recheck latest published docs release immediately before deployment",
         "name: Deploy to GitHub Pages",
     ),
     (
@@ -630,10 +630,10 @@ ORDERED_RELEASE_SECURITY_GATES = (
         "name: Publish immutable release",
     ),
     (
-        "Release publication before legacy docs dispatch",
+        "Release publication before docs dispatch",
         ".github/workflows/release.yml",
         "name: Publish immutable release",
-        "name: Dispatch authenticated legacy docs promotion",
+        "name: Dispatch authenticated docs promotion",
     ),
     (
         "Candidate validation before build",
