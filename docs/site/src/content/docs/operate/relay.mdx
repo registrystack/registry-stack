@@ -59,8 +59,8 @@ sources: {companies: {path: /srv/registries/business.sqlite}}
 authentication: {issuer: null}
 audit:
   sink: /var/lib/relay/business/audit.jsonl
-  integrityKeyRef: secret:file/secrets/audit-integrity-key
-cursor: {integrityKeyRef: secret:file/secrets/cursor-integrity-key, maximumAgeSeconds: 300}
+  integrityKeyRef: secret:file/audit-integrity-key
+cursor: {integrityKeyRef: secret:file/cursor-integrity-key, maximumAgeSeconds: 300}
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 32}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```

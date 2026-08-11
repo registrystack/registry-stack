@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-25"
+last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -45,8 +45,18 @@ Current public security assets include:
 - One `registry-stack-vX.Y.Z-SHA256SUMS.sigstore.json` bundle.
 - One consolidated SPDX JSON software bill of materials (SBOM).
 - One checksum-covered security-evidence archive.
-- One checksum-covered Registryctl image lock.
 - One compact release manifest recording candidate and promotion identity.
+
+Releases from `v0.19.0` onward publish no container image lock.
+The publication workflow requires that asset only for releases before `v0.19.0`,
+and the release tool refuses to cut an image-lock release at or after that
+version.
+{/* Evidence: .github/workflows/release.yml gates the required
+     registryctl-${tag}-image-lock.json asset on ((major == 0 && minor < 19));
+     release/scripts/registry-release raises "registryctl image lock releases
+     are retired starting with version 0.19.0" and its
+     RELAY_V2_ARTIFACT_INVENTORY carries no image-lock entry;
+     release/manifests/registry-stack-beta-29.yaml records the retirement. */}
 
 Current releases do not publish a second generic SLSA provenance envelope,
 per-file signature and certificate pairs, release capsules, candidate
@@ -97,7 +107,7 @@ version-pinned baseline map.
 | Vulnerability disclosure | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) | Implemented |
 | Automated tests | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) | Implemented |
 | Token permissions | Read-only build and verification jobs; package, release, signing, and Pages permissions are separated | Implemented |
-| Release artifacts | Signed checksums, consolidated SPDX SBOM, security archive, image lock, and release manifest | Implemented by the current workflow |
+| Release artifacts | Signed checksums, consolidated SPDX SBOM, security archive, and release manifest | Implemented by the current workflow |
 | Signed version tags | Cryptographic Git tag signatures | Not implemented |
 | Provenance | Candidate build attestations and a signed public checksum closure | Implemented by the current workflows |
 
@@ -105,8 +115,8 @@ version-pinned baseline map.
 
 Historical release assets remain immutable.
 Earlier releases may contain per-file `.sig` and `.pem` pairs, capsules,
-candidate receipts, separate digest files, multiple SBOMs, generic SLSA
-provenance, or no provenance.
+candidate receipts, separate digest files, multiple SBOMs, a container image
+lock, generic SLSA provenance, or no provenance.
 Use the verification document committed at the selected tag and do not infer
 current guarantees from an older inventory.
 `v0.8.0` remains unsigned.

@@ -5,196 +5,43 @@
 # standards_referenced and last_reviewed so future current-page reviews cannot
 # rewrite historical metadata.
 repos:
+  # Relay's product source moved to products/relay-v2 with the V2 rebuild. The
+  # V1 runtime docs under crates/registry-relay/docs described capabilities the
+  # V2 runtime does not have, so they are retired rather than retargeted: every
+  # retired dest carries an explicit redirect in
+  # src/lib/relay-v2-retirement-redirects.mjs. Only the two adopter-facing V2
+  # product documents are pulled. CONFIGURATION-EXAMPLES.md, IMPLEMENTATION.md,
+  # and DEFINITION-OF-DONE.md stay unpublished: they are design probes and
+  # internal engineering contracts, not adopter documentation.
+  #
+  # products/relay-v2 exists only on the current shell, so every entry excludes
+  # every archived docset. That makes this repo inactive for archived builds,
+  # which is why the archived docsets keep their frozen registry-relay refs
+  # without needing an override block here.
   registry-relay:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
     version: main source (unreleased)
     local: ../..
-    openapi: crates/registry-relay/openapi/registry-relay.openapi.json
-    archive_remote: https://github.com/jeremi/registry-relay
-    archive_openapi: openapi/registry-relay.openapi.json
     docs:
-      - src: crates/registry-relay/docs/README.md
-        archive_src: docs/README.md
+      - src: products/relay-v2/CONCEPT.md
         dest: products/registry-relay/index
         label: Registry Relay
         nav_order: 0
         doc_type: explanation
         last_reviewed: unreviewed
-        standards_referenced: [openapi, ogc-api-records, ogc-api-features, ogc-api-edr, odrl, sp-dci]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
-            standards_referenced: [openapi, ogc-api-records, ogc-api-features, ogc-api-edr, odrl, sp-dci]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
-            standards_referenced: [openapi, ogc-api-records, ogc-api-features, ogc-api-edr, odrl, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-        description: Operator and adopter documentation for Registry Relay.
-      - src: crates/registry-relay/docs/client-integration.md
-        archive_src: docs/client-integration.md
-        dest: products/registry-relay/client-integration
-        label: Client integration
-        nav_order: 20
-        doc_type: how-to
-        last_reviewed: unreviewed
-        standards_referenced: [openapi, sdmx, w3c-did]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
-            standards_referenced: [openapi, sdmx, w3c-did]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
-            standards_referenced: [openapi, verifiable-credentials, sdmx, prov-o, w3c-did]
-            last_reviewed: unreviewed
-      - src: crates/registry-relay/docs/configuration.md
-        archive_src: docs/configuration.md
-        dest: products/registry-relay/configuration
-        label: Configuration
-        nav_order: 30
-        doc_type: reference
-        last_reviewed: unreviewed
-        standards_referenced: [openapi, ogc-api-features, ogc-api-edr, odrl, sp-dci, w3c-did]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
-            standards_referenced: [openapi, ogc-api-features, ogc-api-edr, odrl, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
-            standards_referenced: [openapi, ogc-api-features, ogc-api-edr, json-schema, json-ld, verifiable-credentials, odrl, prov-o, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-      - src: crates/registry-relay/docs/api.md
-        dest: products/registry-relay/api
-        label: API guide
-        nav_order: 25
-        doc_type: reference
-        last_reviewed: unreviewed
-        standards_referenced: [dcat, bregdcat-ap, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, json-schema, sdmx, sp-dci, w3c-did]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
-            standards_referenced: [dcat, bregdcat-ap, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, json-schema, sdmx, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [dcat, bregdcat-ap, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, json-schema, verifiable-credentials, sdmx, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-      - src: crates/registry-relay/docs/metadata.md
-        dest: products/registry-relay/metadata
-        label: Portable metadata
-        nav_order: 35
-        doc_type: reference
-        last_reviewed: unreviewed
-        standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, ogc-api-features, shacl, json-schema, json-ld, odrl, sp-dci, w3c-did]
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, ogc-api-features, shacl, json-schema, json-ld, odrl, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-      - src: crates/registry-relay/docs/ops.md
-        dest: products/registry-relay/ops
-        label: Operations runbook
-        nav_order: 40
-        doc_type: how-to
-        last_reviewed: unreviewed
-        standards_referenced: [dcat, bregdcat-ap, ogc-api-edr, sp-dci, w3c-did]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
-            standards_referenced: [dcat, bregdcat-ap, ogc-api-edr, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [dcat, bregdcat-ap, ogc-api-edr, verifiable-credentials, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-      - src: crates/registry-relay/docs/provenance.md
-        dest: products/registry-relay/provenance
-        label: Credential issuance migration
-        nav_order: 45
-        doc_type: how-to
-        last_reviewed: unreviewed
-        standards_referenced: [json-ld, w3c-did]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
-            standards_referenced: [json-ld, w3c-did]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [json-schema, json-ld, sd-jwt-vc, verifiable-credentials, prov-o, w3c-did]
-            last_reviewed: unreviewed
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-      - src: crates/registry-relay/docs/openfn-relay-adaptor-guide.md
-        dest: products/registry-relay/openfn-relay-adaptor-guide
-        label: Call Relay from OpenFn
-        nav_order: 50
-        doc_type: how-to
-        last_reviewed: unreviewed
-        standards_referenced: []
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: []
-            last_reviewed: unreviewed
-      - src: crates/registry-relay/docs/standards-adapter-operator-guide.md
-        dest: products/registry-relay/standards-adapter-operator-guide
-        label: Standards adapter operator guide
-        nav_order: 55
-        doc_type: how-to
-        last_reviewed: unreviewed
-        standards_referenced: [ogc-api-records, ogc-api-features, ogc-api-edr, sp-dci]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
-            standards_referenced: [ogc-api-records, ogc-api-features, ogc-api-edr, sp-dci]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [ogc-api-records, ogc-api-features, ogc-api-edr, json-schema, sp-dci]
-            last_reviewed: unreviewed
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-      - src: crates/registry-relay/docs/xlsx-readiness-contract.md
-        dest: products/registry-relay/xlsx-readiness-contract
-        label: XLSX readiness contract
-        nav_order: 60
-        doc_type: reference
-        last_reviewed: unreviewed
-        standards_referenced: []
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: []
-            last_reviewed: unreviewed
-      - src: crates/registry-relay/STANDARDS_ASSUMPTIONS.md
-        dest: products/registry-relay/standards-assumptions
-        label: Standards assumptions
-        nav_order: 65
+        standards_referenced: [govstack-digital-registries, sdmx, openapi, json-schema, shacl, json-ld]
+        exclude_docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+        description: Approved Relay V2 product concept covering the registry contract, the compiler, the read-only source boundary, and the acceptance set.
+      - src: products/relay-v2/STANDARDS-ALIGNMENT.md
+        dest: products/registry-relay/standards-alignment
+        label: Standards alignment
+        nav_order: 10
         doc_type: explanation
         last_reviewed: unreviewed
-        standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, odrl, sp-dci, w3c-did]
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, odrl, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-      - src: crates/registry-relay/docs/relay-scenario-catalog.md
-        dest: products/registry-relay/relay-scenario-catalog
-        label: Relay scenario catalog
-        nav_order: 70
-        doc_type: explanation
-        last_reviewed: unreviewed
-        standards_referenced: [dcat, ogc-api-records, ogc-api-features, openapi, shacl, sp-dci]
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [dcat, ogc-api-records, ogc-api-features, openapi, shacl, sp-dci]
-            last_reviewed: unreviewed
-      - src: crates/registry-relay/docs/release-notes.md
-        dest: products/registry-relay/release-notes
-        label: Release notes
-        nav_order: 80
-        doc_type: reference
-        last_reviewed: unreviewed
-        standards_referenced: [dcat, ogc-api-edr, openapi, shacl, json-ld, sdmx, sp-dci, w3c-did]
-        docset_overrides:
-          - docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0]
-            standards_referenced: [dcat, ogc-api-edr, openapi, shacl, json-ld, sdmx, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [dcat, bregdcat-ap, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, verifiable-credentials, odrl, sp-dci, w3c-did]
-            last_reviewed: unreviewed
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
+        standards_referenced: [govstack-digital-registries, sdmx, openapi, json-schema, shacl, json-ld]
+        exclude_docsets: [v0.18.0, v0.17.0, v0.16.3, v0.16.2, v0.16.1, v0.16.0, v0.15.2, v0.15.1, v0.15.0, v0.13.0, v0.12.2, v0.12.1, v0.12.0, v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+        description: Maintained directional mapping from Relay V2 to the pinned GovStack drafts and the aligned SDMX read subset. Makes no conformance claim.
 
   registry-manifest:
     remote: https://github.com/registrystack/registry-stack

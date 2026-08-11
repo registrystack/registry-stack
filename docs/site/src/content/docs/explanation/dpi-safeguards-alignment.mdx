@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-manifest
   - registry-evidence
-last_reviewed: "2026-08-04"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -49,17 +49,30 @@ It can make a registry surface inspectable, scoped, auditable, and easier to int
 It does not create lawful basis, public mandate, inclusion practice, grievance handling, or
 independent oversight.
 
+This mapping is hand-written documentation. No product emits it: Relay's artifact generator
+deliberately produces no safeguards matrix and no standards-alignment artifact, and a test holds
+that boundary in place. Treat the table below as a reviewed argument you can check against the
+cited code, not as an artifact a build step generated.
+
+{/* Evidence: the test generated_inventory_covers_required_v1_artifact_classes_only asserts that
+     artifacts/safeguards-matrix.yaml, artifacts/standards-alignment.json, and
+     artifacts/registry-manifest.yaml are NOT among the generated artifact paths,
+     crates/registry-relay-v2/src/artifacts.rs. */}
+
 ## Where it fits
 
 Use the registry stack when a program needs controlled registry facts instead of broad data access:
 
-- A ministry needs a read-only consultation API over an existing registry.
+- A ministry needs a governed read-only API over an existing SQLite-backed registry, where the
+  operations, the readable columns, and the shape of every response are fixed by a reviewed
+  contract rather than by a query the caller writes.
 - A program needs a reviewed answer about a subject without copying the source record.
 - An integrator needs to inspect schemas, policies, services, and evidence offerings before
   connecting.
 - A reviewer needs audit events, stable denial codes, package and configuration-bundle digests, or
   signed evidence artifacts.
 - A relying party needs a signed, minimum-disclosure assertion it can verify after the fact.
+  Only Evidence Gateway signs. Relay responses and Relay packages carry no signature.
 
 Do not use the stack as an unrestricted data portal, data warehouse, ad-hoc SQL service, consent
 platform, grievance system, eligibility engine, or proof that a DPI deployment conforms to the
@@ -70,20 +83,42 @@ framework.
 | Safeguards question | Stack evidence | Boundary |
 | --- | --- | --- |
 | What does the registry expose? | Registry Manifest renders portable catalog, schema, service, policy, and evidence-offering metadata. | Metadata describes a surface. It does not authorize access. |
-| Who can read protected data? | Relay authenticates protected source routes. Evidence Gateway independently authenticates the assertion caller against one configured OIDC issuer and matches one complete entitlement before it contacts any source. | Deployment policy decides who receives scopes, grants, and workload authority. |
-| Is the exchange purpose-bound? | Governed runtime routes can require purpose and trusted context, then fail closed with stable [`pdp.*` denial codes](../../reference/errors/). | Static policy metadata is not enforcement until a runtime service binds it. |
-| Is data minimized? | Relay exposes configured fields, relationships, and aggregates. Evidence Gateway returns only the concepts a predefined requirement declares, each in one of eleven closed [value forms](../disclosure-modes-and-computed-answers/). | The operator still chooses the fields, the requirements, and how coarse each declared value form is. |
-| Can the exchange be reviewed later? | Relay audit events and Policy Decision Point (PDP) provenance, Evidence Gateway keyed audit records written at two durable gates, package and configuration digests, and Selective Disclosure JWT Verifiable Credentials (SD-JWT VC) provide review evidence. | Audit records support accountability. They are not accountability by themselves. |
-| Can other systems interoperate? | Manifest emits standards-shaped metadata; Relay and Evidence Gateway publish OpenAPI; Evidence Gateway can serialize one assertion as an SD-JWT VC under a frozen local profile. | These are scoped adoption claims, not blanket conformance to every named standard. The SD-JWT VC profile is a second encoding of one response, and it excludes OpenID for Verifiable Credential Issuance (OID4VCI) in every part. |
+| Who can read protected data? | Each operation Relay compiles carries an access profile that is either public or protected. A protected operation requires a bearer token from the one configured OpenID Connect (OIDC) issuer and the scope the contract names; there is no API-key mode and no static-credential mode. Evidence Gateway independently authenticates the assertion caller against its own one configured OIDC issuer and matches one complete entitlement before it contacts any source. | Deployment policy decides who receives scopes, grants, and workload authority. The two products do not share an issuer, an authorization model, or a decision. |
+| Is the exchange purpose-bound? | A Relay access profile may declare a purpose constraint: a claim name plus a closed list of allowed values, read from the verified token and never from a request field. It may also declare an authority row binding, so every returned row is pinned to a value the token carries. Denials use a closed set of 26 [stable problem codes](../../reference/errors/) under `https://id.registrystack.org/problems/registry-relay/`. | A declared purpose is enforcement only where an operation carries the constraint and the issuer actually populates the claim. Relay performs no consent check and no jurisdiction check; the `processingDescriptions` block it seals is a reviewed declaration, not a runtime gate. |
+| Is data minimized? | Relay returns only the properties a compiled disclosure profile declares, and can coarsen a returned value through exactly two fixed transforms: partial-string masking and date-precision reduction to year or year-month. Evidence Gateway returns only the concepts a predefined requirement declares, each in one of eleven closed [value forms](../disclosure-modes-and-computed-answers/). | The operator still chooses the properties, the requirements, and how coarse each declared value form is. Relay minimization is fixed per operation at compile time, not negotiated per caller. |
+| Can the exchange be reviewed later? | Relay writes one audit record per served request naming the resource, the operation, the contract revision, the access and disclosure profiles, the transforms applied, and the principal kind, and returns 503 rather than answering when the audit sink is unavailable. Evidence Gateway writes keyed audit records at two durable gates. Package and configuration digests and Selective Disclosure JWT Verifiable Credentials (SD-JWT VC) add artifact-level review evidence. | Audit records support accountability. They are not accountability by themselves. A Relay `packageRevision` is an integrity digest over the sealed package, not an authenticity proof, so it shows that a package is intact and not who produced it. |
+| Can other systems interoperate? | Manifest emits standards-shaped metadata; Evidence Gateway publishes a product-level OpenAPI document, and Relay serves an OpenAPI description generated from the deployment's own compiled contract at `GET /openapi.json`; Evidence Gateway can serialize one assertion as an SD-JWT VC under a frozen local profile. | These are scoped adoption claims, not blanket conformance to every named standard. Relay's OpenAPI describes one deployment, so two deployments do not share an API document. The SD-JWT VC profile is a second encoding of one response, and it excludes OpenID for Verifiable Credential Issuance (OID4VCI) in every part. |
+
+{/* Evidence: PurposeConstraint { claim, allowed } and AuthorityRowBinding over a token claim or the
+     token principal, crates/registry-relay-v2/src/contract.rs:966-976, enforced in
+     RelayAuthenticator::authorize(), crates/registry-relay-v2/src/auth.rs:204-257; the closed
+     26-variant ProblemCode set and its PROBLEM_BASE constant,
+     crates/registry-relay-v2/src/problem.rs:14-45; the two fixed transforms are partial-string and
+     date-precision with year and year-month only; every audit failure maps to
+     ProblemCode::AuditUnavailable (503) with no configuration to disable it,
+     crates/registry-relay-v2/src/api.rs; the OpenAPI document is generated from the compiled
+     contract and served at GET /openapi.json by the fixed router,
+     crates/registry-relay-v2/src/server.rs; packageRevision is documented in the source as an
+     integrity digest and not an authenticity proof,
+     crates/registry-relay-v2/src/package.rs:348-350. */}
 
 ## Project roles
 
 | Project | Safeguards contribution | Explicit boundary |
 | --- | --- | --- |
-| [Registry Manifest](../../products/registry-manifest/) | Validates `metadata.yaml`, rejects known runtime-only keys, and renders standards-shaped metadata: Data Catalog Vocabulary (DCAT), BRegDCAT-AP, Core Public Service Vocabulary Application Profile (CPSV-AP), Shapes Constraint Language (SHACL), JSON Schema, Open Digital Rights Language (ODRL), Core Criterion and Core Evidence Vocabulary (CCCEV), Open Geospatial Consortium (OGC) API Records, evidence offerings, and SKOS-shaped codelists. | Manifest does not serve HTTP, read production data, authorize callers, or evaluate claims. See the [Registry Manifest data model](../../spec/rs-dm-manifest/). |
-| [Registry Relay](../../products/registry-relay/) | Exposes protected, read-only, domain-oriented registry routes for records, relationships, schemas, aggregates, scoped metadata, and governed PDP reads, plus emitted audit events. | Relay does not mutate source data, expose arbitrary SQL, evaluate claims, issue credentials, host issuer DID documents, or put admin routes on the public API. See the [Registry Relay protocol](../../spec/rs-pr-relay/). |
+| [Registry Manifest](../../products/registry-manifest/) | Validates `metadata.yaml`, rejects known runtime-only keys, and renders standards-shaped metadata: Data Catalog Vocabulary (DCAT), BRegDCAT-AP, Core Public Service Vocabulary Application Profile (CPSV-AP), Shapes Constraint Language (SHACL), JSON Schema, Open Digital Rights Language (ODRL), Core Criterion and Core Evidence Vocabulary (CCCEV), Open Geospatial Consortium (OGC) API Records, evidence offerings, and SKOS-shaped codelists. | Manifest does not serve HTTP, read production data, authorize callers, or evaluate claims. The ODRL policy it renders is a published description of intent: no runtime in this stack evaluates it. See the [Registry Manifest data model](../../spec/rs-dm-manifest/). |
+| [Registry Relay](../../products/registry-relay/) | Compiles a reviewed registry contract into a fixed route set over one read-only SQLite source: record reads and lists, declared lookups and searches, an aggregate-data read where the contract declares statistical datasets, metadata under a declared visibility, and sealed artifacts. Every served request is audited. | Relay does not mutate source data, expose arbitrary SQL, evaluate external policy, issue credentials, sign anything, host issuer DID documents, or offer an administrative surface of any kind. Its route set is fixed at 14 routes with exactly one `POST`. See the [Registry Relay protocol](../../spec/rs-pr-relay/). |
 | [Evidence Gateway](../../products/registry-evidence/) | Evaluates predefined, versioned requirements against fixed, bounded source requests; authenticates the caller and matches one complete entitlement as a single decision before any source access; derives the declared concept values through bounded scripts; and returns a signed flattened JWS or SD-JWT VC assertion with keyed audit. | Evidence Gateway does not accept caller-provided facts, run a general policy engine, decide eligibility, run a wallet, verify presentations, certify source truth, or federate. It has no application database and persists no selector, source, or response data. See the [Evidence Gateway protocol](../../spec/rs-pr-evidence/). |
-| Registry Platform | Supplies shared primitives for authentication, OpenID Connect (OIDC), audit envelopes, HTTP security, outbound HTTP policy, cryptography, PDP behavior, and SD-JWT VC support. | Platform provides primitives. Relay and Evidence Gateway configure and enforce their own route behavior, and they do not share one authorization model. See [RS-SEC-G](../../spec/rs-sec-g/). |
+| Registry Platform | Supplies shared primitives for authentication, OpenID Connect (OIDC), audit envelopes, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC support, secret-reference resolution, and the bounded read-only SQLite boundary both runtimes read through. | Platform provides primitives. Relay and Evidence Gateway configure and enforce their own route behavior, and they do not share one authorization model. See [RS-SEC-G](../../spec/rs-sec-g/). |
+
+{/* Evidence: the fixed 14-route table with exactly one POST, crates/registry-relay-v2/src/server.rs
+     router(); no admin, posture, metrics, or reload route exists anywhere in
+     crates/registry-relay-v2. Relay's ODRL and policy-decision vocabulary was retired with V1:
+     crates/registry-platform-pdp is depended on only by the retired crates/registry-relay and by
+     itself, and crates/registry-relay-v2 contains no PDP or policy-evaluation path, so the
+     ODRL_ENFORCEMENT_PROFILE constant in crates/registry-manifest-core/src/lib.rs:13-14 has no
+     current runtime consumer. The shared read-only SQLite boundary is
+     crates/registry-platform-sqlite, used by Relay V2 and Evidence Gateway. */}
 
 ## Principle alignment
 
@@ -95,9 +130,9 @@ principles; the remaining principles are governance and institutional work outsi
 
 | Framework principle cluster | How the stack helps | What remains outside the stack |
 | --- | --- | --- |
-| Data privacy by design (O3) | Configured fields, scoped metadata, aggregate routes, computed answers in closed value forms, and selective disclosure reduce unnecessary data movement. | Legal privacy duties, data subject rights, retention rules, and consent operations remain deployment responsibilities. |
-| Data security by design (O4) | Protected routes use API key or OIDC modes, scope-before-source authorization, shared security primitives, separate admin surfaces, and fail-closed governed decisions. | Key custody, network controls, incident response, security audits, and production hardening remain operator responsibilities. |
-| Data protection during use (O5) | Runtime services can record purpose, checked scopes, PDP policy provenance, stable denials, and audit events for reads and evaluations. | A program still needs lawful basis, oversight, retention policy, and protections against overreaching requests. |
+| Data privacy by design (O3) | Compiled disclosure profiles, declared metadata visibility, aggregate-data reads, computed answers in closed value forms, and selective disclosure reduce unnecessary data movement. Relay copies nothing: it opens its source read-only in place, reads only the views a reviewer approved, and runs only statements the compiler produced. | Legal privacy duties, data subject rights, retention rules, and consent operations remain deployment responsibilities. Relay has no consent mechanism at all. |
+| Data security by design (O4) | Protected operations authenticate against one OIDC issuer with one signing algorithm, authorize before any source read, and compose shared security primitives. The audit sink fails closed with no switch to turn that off. A Relay package is re-derived and byte-compared at startup before any other resource is opened, and the runtime file cannot widen what the package sealed. | Key custody, network controls, incident response, security audits, and production hardening remain operator responsibilities. A Relay package is verified for integrity, not authenticated: nothing in the runtime proves who produced it. |
+| Data protection during use (O5) | Relay audit records the contract revision, the operation, the access and disclosure profiles, the transforms applied, and the principal kind, and no row value, selector, or raw identifier. Evidence Gateway writes keyed audit records for each evaluation. Both surface stable, closed denial codes. | A program still needs lawful basis, oversight, retention policy, and protections against overreaching requests. Neither runtime records a policy-decision rationale, because neither evaluates external policy. |
 | Transparency and accountability (F4) | Portable metadata, runtime metadata, OpenAPI references, stable error codes, audit records, signed assertions carrying the configuration revision they were produced under, and the [standards register](../../reference/standards/) make behavior reviewable. | Public governance, remedies, procurement discipline, and independent accountability mechanisms are institutional controls. |
 | Evolve with evidence (O2) | [ITB and SEMIC validation evidence](../../reference/itb-semic-evidence/), the [security self-assessment](../../security/self-assessment/), and [OpenSSF status and release verification evidence](../../security/openssf-evidence/) give assessors material they can re-run and re-check. | Independent assessments, audits, engagement with affected people, and acting on findings remain program and institutional responsibilities. |
 | Build and share open assets (O9) | The stack emits or uses open, standards-shaped artifacts and documented HTTP contracts rather than one-off integration agreements. | External conformance and certification require separate validation against each standard or program rule. |

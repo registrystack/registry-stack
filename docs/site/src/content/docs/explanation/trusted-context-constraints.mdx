@@ -1,12 +1,13 @@
 ---
 title: Trusted context constraints
-description: How Registry Relay and Evidence Gateway each preserve policy facts such as legal basis, consent, jurisdiction, assurance, and source freshness at their own separate boundaries.
+description: How Registry Relay and Evidence Gateway each preserve policy facts such as legal basis, purpose, jurisdiction, and consent at their own separate boundaries.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
+  - registry-relay
   - registry-evidence
-last_reviewed: "2026-08-07"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -14,45 +15,79 @@ standards_referenced:
 ---
 
 Trusted context constraints are policy facts whose meaning must survive the boundary between a
-caller, the product that answers the caller, and the source registry behind it. Registry Platform
-supplies shared types and redacted reporting conventions to the products that use them. Each
-product still owns the decision made at its own boundary.
+caller, the product that answers the caller, and the source registry behind it: why the operation
+is permitted, what purpose it serves, who may receive the result, and what safeguards apply.
 
-Read one thing before the rest: Registry Relay and Evidence Gateway do not share an authorization model
-or a source path. No service in this stack authorizes a caller and then consults another service on
-its behalf. Each product enforces its own boundary against its own configured sources.
+Read one thing before the rest: Registry Relay and Evidence Gateway do not share an authorization
+model, a policy vocabulary, or a source path. No service in this stack authorizes a caller and then
+consults another service on its behalf. Each product enforces its own boundary against its own
+configured sources, under its own closed contract names.
 
-## The shared vocabulary
+## There is no shared runtime policy vocabulary
 
-Registry Platform's policy vocabulary covers five families:
+Earlier versions of this page described a shared policy vocabulary in `registry-platform-pdp`,
+covering legal basis, consent, jurisdiction, assurance, and source freshness, which Registry Relay
+consumed at request time. That is no longer the model. Registry Relay carries no policy decision
+point, evaluates no external policy, and reads none of that vocabulary. The crate has no current
+runtime consumer.
 
-- Legal basis records why the requested operation is permitted.
-- Consent records whether a trusted consent reference is required and accepted.
-- Jurisdiction limits where the request can be used.
-- Assurance records the accepted assurance level and the trusted context that supplied it.
-- Source freshness limits the accepted age of an observation.
+{/* Evidence: crates/registry-platform-pdp is listed as a dependency only by
+     crates/registry-relay (the retired runtime) and by itself; crates/registry-relay-v2 contains
+     no PDP, ODRL, trust-context, or policy-evaluation path. */}
 
-That vocabulary lives in `registry-platform-pdp` and is reported through `registry-config-report`.
-Registry Relay uses it. Evidence Gateway does not: Evidence Gateway enforces its own constraints under its own
-frozen contract names, which are described below and specified in
-`products/evidence/contracts/`.
+What replaced it is narrower and easier to review: each product declares its own constraints in its
+own governed contract, and each enforces only what its own runtime can actually check. Where the
+two products use the same word, treat it as a coincidence of English rather than a shared control.
 
-Sharing names and report shapes does not make two products interchangeable. Where the vocabulary is
-shared, it prevents a constraint from being silently renamed or weakened.
+## Relay records governance in the contract and enforces purpose in the token
 
-## Relay owns source context
+Registry Relay separates two things that a shared vocabulary used to blur.
 
-Relay owns source identity, destinations, credentials, protocol adaptation, selector
-canonicalization, source observations, and minimized typed outputs. A source freshness check is
-therefore evaluated from Relay-owned observation semantics.
+**Declared governance.** A registry contract carries a `processingDescriptions` block: one entry
+per governed processing activity, each naming an identifier, the operations it covers, a purpose,
+a recipient class, a reference to a legal-basis document, a reference to a DPV processing profile,
+and a list of safeguards. These are closed, required fields of the contract, so a contract cannot
+compile without them and cannot carry an unrecognized extra field. They are a reviewed declaration
+sealed into the package, not a check the runtime performs on a request. Their visibility on the API
+is set by `metadataVisibility.processing`, which is public, operation-bound, or operator-only.
 
-`observed_at` means the time represented by the reviewed source observation contract. It is not
-automatically a domain record date. Birth date, registration date, amendment date, or a
-spreadsheet update column does not prove when Relay observed the record unless the integration
-declares that meaning and its fixtures prove it.
+{/* Evidence: ProcessingDescription { id, operationRefs, purpose, recipientClass, legalBasisRef,
+     dpvProfileRef, safeguards } with deny_unknown_fields,
+     crates/registry-relay-v2/src/contract.rs:1030-1040; MetadataVisibility carries a processing
+     field over the closed Visibility enum Public | OperationBound | OperatorOnly,
+     crates/registry-relay-v2/src/contract.rs:1042-1060; the compiler requires every
+     legalBasisRef and dpvProfileRef to resolve to a governed file it seals,
+     crates/registry-relay-v2/src/compiler.rs. */}
 
-If the observation-time contract is not proven, diagnostics must report it as unknown. They must
-not reinterpret a domain date as source freshness.
+**Enforced purpose.** Separately, an operation's access profile may declare a purpose constraint: a
+claim name plus a closed list of allowed values. Relay reads that claim from the verified access
+token and denies the request when the value is absent or outside the list. The caller does not
+declare a purpose in the request, so a purpose is authority the issuer granted rather than a label
+the caller chose. The same is true of the authority row binding: where an operation declares one,
+the value that pins every returned row comes from a token claim or from the token's principal
+identifier, never from a request field.
+
+{/* Evidence: PurposeConstraint { claim, allowed },
+     crates/registry-relay-v2/src/contract.rs:966-969; RelayAuthenticator::authorize() reads the
+     purpose claim from the verified principal and denies a value outside the allowed list,
+     crates/registry-relay-v2/src/auth.rs:204-253. */}
+
+Two constraints that used to be Relay's are simply gone, and no replacement exists: there is no
+consent-reference check and no jurisdiction check in the runtime. A contract can declare a
+jurisdiction in its authoritative scope and can name a consent-related safeguard in a processing
+entry, but those are review material for a human, not a gate the process applies.
+
+## Relay owns its source, and its source is a local file
+
+Relay owns source identity, the reviewed views it may read, the compiled statements it may run, and
+the properties a disclosure profile may return. In this version that ownership is much narrower
+than it used to be: the source is one read-only SQLite file per binding, opened in place, so Relay
+holds no source credential, negotiates no protocol, and adapts to no external system. See
+[Records stay home](../records-stay-home/) for how that boundary is enforced.
+
+There is no source-observation contract and no `observed_at` semantics. A Relay response carries
+the values the reviewed view returns and states nothing about when the underlying record was
+observed.
 
 ## Evidence Gateway owns its own boundary
 
@@ -79,51 +114,71 @@ authorization is most often assumed rather than enforced:
   identifiers are accepted only from authenticated context and must be bound to the complete
   entitlement (invariant `V1-I07`).
 
-Evidence Gateway has no notion of a Relay consultation or a compiled evidence mode selecting one. It
+Evidence Gateway has no notion of a Relay operation or a compiled evidence mode selecting one. It
 declares a closed single or search-then-fetch acquisition over HTTP sources with fixed origins,
 methods, fixed or tagged selector or prior-fact-bound paths, fixed non-secret headers, denied
 redirects, and client-side response projection. The core, not a script or response, executes the
 sequence and enforces one request per configured stage (invariants `V1-I09` and `V1-I40`). The source
 boundary belongs entirely to Evidence Gateway and its authoritative sources.
 
-## Freshness has no Evidence Gateway counterpart
+## Freshness has no counterpart in either product
 
-An assertion carries `observedAt`, which is when Evidence Gateway evaluated the requirement. It is not a
-source-declared observation time, and Evidence Gateway Version 1 has no source freshness family: there is
-no maximum accepted observation age, no freshness field, and no configuration for one. The request
-nonce is uninterpreted correlation data and is explicitly not a freshness proof
+An assertion carries `observedAt`, which is when Evidence Gateway evaluated the requirement. It is
+not a source-declared observation time, and Evidence Gateway Version 1 has no source freshness
+family: there is no maximum accepted observation age, no freshness field, and no configuration for
+one. The request nonce is uninterpreted correlation data and is explicitly not a freshness proof
 (`products/evidence/contracts/cccev-field-mapping.yaml`).
 
-A deployment that needs an age bound on the underlying record has to define and enforce it in the
-authoritative source contract. An assertion on its own does not carry one.
+Registry Relay has no freshness family either. A `snapshot` source is pinned to the exact bytes
+captured at startup, so its answers are as current as the file an operator placed there and no more;
+a `live-read-only` source reflects the file as other processes commit to it. Neither profile
+attaches an observation time to a response, and neither bounds how stale the underlying data may be.
+
+A deployment that needs an age bound on the underlying record has to define and enforce it outside
+these products: in the authoritative source contract for Evidence Gateway, and in the operational
+procedure that produces the SQLite file for Relay. Neither response carries one.
 
 ## Reports and audit evidence
 
-Registry Relay diagnostics expose bounded policy summaries and include a `context_constraints`
-array. An empty array means the configuration has no additional shared constraint block to report,
-which is what Relay reports today. It does not mean authentication, purpose, scope, or
-product-owned policy is disabled.
+Relay has no diagnostics command and no configuration report. What is inspectable about a running
+deployment is what its own metadata routes serve, under the visibility its contract compiled, plus
+its audit log. The processing entries described above are the deployment's declaration of legal
+basis, purpose, recipient class, and safeguards, and an operator can choose to publish them, bind
+them to the operations they cover, or withhold them entirely.
 
-Reports may identify the policy family, product-owned config location, trusted value class, and
-whether a presence or allow-list check was applied. They must not expose Relay source credentials,
-subject identifiers, selectors, raw records, consent values, or authorization details.
+Relay's audit records the resource, the operation, the contract revision, the access and disclosure
+profile names, the transform identifiers applied, and the principal kind. It records no row value,
+no selector value, and no raw identifier, and the same discipline applies to operational logs,
+where each request URI is mapped onto a closed set of literal route shapes before anything is
+written.
 
-Presence and allow-list checks remain distinct. Requiring a legal-basis or consent reference does
-not imply that every possible value is approved. Authentication-derived assurance also remains
-distinct from an assurance value asserted in authorization context.
+Presence and allow-list checks remain distinct concepts even though only the allow-list form is
+enforced here. Requiring that a purpose claim be present is not the same as approving every value
+it might carry, which is why the purpose constraint carries an explicit `allowed` list rather than
+a presence flag. Authentication-derived authority also remains distinct from an assurance value
+asserted somewhere in a token: Relay checks the claims its contract names and attributes no meaning
+to any other claim.
 
 ## Review questions
 
-- Is source freshness derived from a proven Relay observation contract rather than a domain date?
+- Does the contract's `processingDescriptions` block match what the deployment actually does, and
+  has a human reviewed the legal-basis and DPV documents it references?
+- Is `metadataVisibility.processing` set deliberately, rather than left at whatever the starter
+  contract produced?
+- Does every operation that should be purpose-bound carry a purpose constraint, and does the issuer
+  actually populate that claim?
 - Does Evidence Gateway deny an unauthorized request before it contacts any source?
-- Is every dimension of the Evidence Gateway entitlement matched as one decision rather than one at a time?
+- Is every dimension of the Evidence Gateway entitlement matched as one decision rather than one at
+  a time?
 - Are Registry Relay and Evidence Gateway sources, credentials, authorization decisions, and audit
   trails kept separate?
-- Are reports bounded and redacted at both product boundaries?
+- Where the deployment needs a freshness bound, is it enforced outside these products, and is that
+  written down?
 
 ## Related pages
 
 - [Disclosure modes and computed answers](../disclosure-modes-and-computed-answers/)
-- [Consultation flow](../consultation-flow/)
+- [Relay semantics and disclosure](../relay-semantics-and-disclosure/)
+- [Records stay home](../records-stay-home/)
 - [Integration patterns](../integration-patterns/)
 - [Contracts](../../reference/contracts/)

@@ -5,10 +5,12 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
+  - registry-relay
+  - registry-manifest
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-08"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -16,6 +18,11 @@ standards_referenced:
   - sd-jwt-vc
   - cccev
   - odrl
+  - sdmx
+  - geojson
+  - ogc-api-features
+  - ogc-api-records
+  - ogc-api-edr
 ---
 
 You already know what Registry Stack is for: answer a question about a record without sharing the
@@ -216,7 +223,7 @@ These boundaries cut across components.
 - No source mutation, no event stream: Registry Relay does not write back to or otherwise mutate
   source registry data, and it has no event-stream backend. Evidence Gateway reads its fixed sources
   read-only as well, and persists nothing it read.
-- Aggregate routes are not a privacy budget: Relay aggregate routes return the configured
+- Aggregate data is not a privacy budget: Relay's aggregate-data routes return the compiled
   statistical observations, but provide no built-in longitudinal privacy budget and do not track
   cumulative disclosure across repeated or overlapping queries.
   Do not describe an aggregate route as privacy-budgeted unless a separate deployed control
@@ -236,27 +243,114 @@ For the rationale behind each of these, follow the linked specifications in each
 
 ## Registry Relay limits
 
-Registry Relay exposes protected, read-only registry routes.
-Its boundaries are covered in depth in the [Registry Relay protocol](../../spec/rs-pr-relay/).
+Registry Relay compiles a reviewed registry contract into a fixed set of read-only operations over
+a read-only SQLite source. It is deliberately narrow, and most of what follows is a consequence of
+that narrowness rather than an unfinished feature. Its boundaries are covered in depth in the
+[Registry Relay protocol](../../spec/rs-pr-relay/) and in
+[governed registry publication](../governed-registry-publication/).
 
-- Read-only, batch or scan: Relay does not mutate source data in v1 and has no event-stream
-  backend; it reads sources as batch snapshots or table scans only.
-- Feature-gated surfaces: Several Relay surfaces (the OGC API Features, Records, and EDR adapters
-  and the SP DCI sync adapter) are feature-gated and present only in builds configured with the
-  matching Cargo feature.
-  Do not infer their presence in one build from another build's route catalog.
-- Aggregates are not privacy-budgeted: As noted stack-wide, Relay aggregate routes provide no
-  longitudinal privacy-budget or cumulative-differencing protection.
-- Relay does not evaluate or own the manifest: Relay evaluates no claims and issues no credentials
-  of its own, and it does not own or version the metadata manifest format, which belongs to
-  Registry Manifest.
-  Relay only serves and scopes compiled artifacts.
-- Governed enforcement is one PDP profile, not full interoperability: Governed runtime policy
-  enforcement covers only the supported PDP profile
-  (`registry-evidence-gateway-pdp/v1`, the legacy Relay PDP profile identifier and the single
-  profile this build recognizes). The identifier does not name or connect to Evidence Gateway.
-  It is not dynamic external policy discovery, and not enforcement of
-  [ODRL](../../reference/standards/) terms outside the supported set.
+### What Relay cannot read
+
+- SQLite only: a source is a SQLite database file. There is no CSV, XLSX, Parquet, PostgreSQL,
+  other SQL engine, HTTP, or API source, and no adapter, connector, or driver layer to add one.
+  Publishing from any other system means producing a SQLite file first.
+- Two source profiles, both read-only: `snapshot` pins a file that must be immutable to the
+  process, and `live-read-only` binds a file by device and inode. There is no third profile, no
+  refresh mode, no materialization, no generation, and no recovery group.
+- Reviewed views only: Relay observes only the SQL views in a source schema, so a resource cannot
+  bind to a raw table. This is a real safety property, but it also means adopting Relay requires
+  authoring views, and a source that exposes only tables is not yet ready to publish.
+- No freshness semantics: a response carries no observation time, and nothing bounds how stale the
+  underlying file may be. A snapshot is as current as the operator's own procedure for producing
+  it.
+
+### What Relay cannot do
+
+- No write path of any kind: no create, update, delete, provisioning, or registration surface. The
+  route set contains exactly one `POST`, and it carries a JSON selector body for a read.
+- No evidence and no signatures: Relay issues no assertion, no credential, and no signature. A
+  Relay response is authenticated by the transport and by the deployment the caller reached, and by
+  nothing that survives being forwarded. Signed, minimum-disclosure answers are Evidence Gateway's
+  job.
+- No notification and no access transparency: there is no webhook, subscription, event stream, or
+  data-subject access-history surface.
+- No identity federation: Relay verifies tokens from exactly one configured issuer. It brokers no
+  trust between issuers, discovers no peers, and evaluates nothing on another deployment's behalf.
+- No scripting: the runtime executes only statements the compiler produced. There is no embedded
+  script engine, no expression language, and no user-supplied transform. Exactly two response
+  transforms exist, both fixed: a partial string reveal that replaces the hidden part with `***`,
+  and a date reduced to `year` or `year-month` precision.
+- No external policy enforcement: no policy decision point, no [ODRL](../../reference/standards/)
+  term enforcement, no policy discovery, no attribute-release profile, and no crosswalk runtime.
+  Registry Manifest can publish a policy reference, and nothing in this stack evaluates it.
+- No administrative surface: no admin listener, no posture endpoint, no reload route, no metrics
+  endpoint, and no configuration apply path. A change to what a deployment serves is a new package
+  and a restart.
+- Relay does not own the manifest: Relay evaluates no claims, issues no credentials, and does not
+  own or version the metadata manifest format, which belongs to Registry Manifest.
+
+### What the guarantees do not cover
+
+- A package is verified, not authenticated: `packageRevision` is a SHA-256 integrity digest over
+  the canonical manifest. Startup re-runs the compiler and the artifact generator and requires
+  byte-for-byte equality, which detects drift and tampering. It cannot distinguish a legitimate
+  package from a well-formed forgery, because nothing signs a package. Package provenance rests on
+  the delivery path and the filesystem ownership checks, not on the format.
+- Snapshot immutability is an operator duty: Relay refuses a writable snapshot file and detects a
+  replaced or altered one, but cannot exclude a privileged writer that changes bytes and restores
+  them between two verifications. Put a snapshot on a read-only mount.
+- Quotas are per process and in memory: the configured requests-per-minute and burst budgets are a
+  token bucket per compiled operation, held in one process's memory. Running N replicas multiplies
+  every budget by N, and a restart resets each bucket. Treat them as an availability control.
+- Aggregate data is not privacy-budgeted: compiled statistical datasets return the observations
+  they declare and track no cumulative disclosure across repeated or overlapping queries. Do not
+  describe a Relay aggregate as privacy-budgeted unless a separate deployed control provides that
+  protection.
+- Minimization is per operation, not per caller: an operation returns the properties its disclosure
+  profile declares, identically for every caller authorized to invoke it. Showing one audience less
+  means compiling a second operation, not configuring the runtime.
+- Readiness does not prove a useful deployment: `/ready` reports that the audit sink, the SQLite
+  source, and the issuer key set resolved. It re-checks each source's schema fingerprint but reads
+  no row data, so it proves nothing about whether a view returns rows.
+- The unsupported-capability list is a hard-coded declaration: the capability inventory a
+  deployment serves reports `unsupportedFamilies` from a list compiled into the binary, currently
+  `provisioning`, `evidence`, `write`, `notification`, `access-transparency`, and
+  `identity-federation`, plus `aggregate-data` when the contract declares no statistical dataset.
+  It is an honest statement of this build's scope, not a computed capability negotiation, and only
+  two families are ever advertised as supported: `consultation` and `aggregate-data`.
+  {/* Evidence: the literal vector and the conditional aggregate-data insertion,
+       crates/registry-relay-v2/src/artifacts.rs:1659-1669; the two supported family strings,
+       :1596 and :1630. */}
+
+### Platform and packaging
+
+- One authentication mode, one issuer, one algorithm: OIDC bearer only. The issuer profile accepts
+  exactly one algorithm from `EdDSA`, `ES256`, or `RS256`, and exactly the `at+jwt` token type.
+  There is no static-credential mode, no API key, and no second issuer. A deployment needing two
+  mutually distrustful issuers needs two deployments.
+- Unix only, and it fails closed: Relay refuses to start on a non-Unix target, because its package
+  and runtime trust checks depend on Unix ownership and sticky-directory semantics that have no
+  equivalent there.
+- Linux amd64 binaries only: the published `relay` binary and its installer target Linux amd64.
+  The installer refuses any other platform before it downloads anything. There is no macOS,
+  Windows, or ARM asset.
+- No `relayctl` installer: the authoring tool has no install script of its own. Obtain it from the
+  release assets or build it from source.
+- The installer checks integrity, not authenticity: it verifies the downloaded binary against
+  `SHA256SUMS` and states plainly that it performs no authenticity check. Use the release
+  verification procedure for that.
+
+### Standards scope
+
+- SDMX is a narrow aligned subset: the aggregate-data routes speak an aligned subset of SDMX REST
+  2.2.2, not the whole standard.
+- Geospatial output is CRS84 points only, requested through `Accept: application/geo+json` with a
+  `formatProfile` of `rfc7946` or `jsonfg`. Relay is explicitly not conformant to OGC API Features,
+  OGC API Records, OGC API EDR, CQL2, or tiles, and has no adapter for any of them.
+- The OpenAPI document is per deployment: Relay generates its OpenAPI 3.1.0 description from the
+  compiled contract, so there is no fixed product-level Relay OpenAPI contract to integrate
+  against. The public document is served at `GET /openapi.json`; the full document stays inside the
+  package for operators.
 
 ## Data-model limits (Manifest)
 

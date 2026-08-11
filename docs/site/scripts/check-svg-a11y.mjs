@@ -7,8 +7,6 @@ const expected = new Set([
   'registry-architecture-flow.svg',
   'registry-country-evidence-mesh.svg',
   'registry-publishing-pipeline.svg',
-  'registry-relay-request-lifecycle.svg',
-  'registry-relay-two-rooms.svg',
   'registry-trust-boundaries.svg',
   'solmara-lab-topology.svg',
   'standards-claim-levels.svg',

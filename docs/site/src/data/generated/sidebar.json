@@ -8,67 +8,8 @@
         "slug": "products/registry-relay"
       },
       {
-        "label": "How-to",
-        "items": [
-          {
-            "label": "Client integration",
-            "slug": "products/registry-relay/client-integration"
-          },
-          {
-            "label": "Operations runbook",
-            "slug": "products/registry-relay/ops"
-          },
-          {
-            "label": "Credential issuance migration",
-            "slug": "products/registry-relay/provenance"
-          },
-          {
-            "label": "Call Relay from OpenFn",
-            "slug": "products/registry-relay/openfn-relay-adaptor-guide"
-          },
-          {
-            "label": "Standards adapter operator guide",
-            "slug": "products/registry-relay/standards-adapter-operator-guide"
-          }
-        ]
-      },
-      {
-        "label": "Reference",
-        "items": [
-          {
-            "label": "API guide",
-            "slug": "products/registry-relay/api"
-          },
-          {
-            "label": "Configuration",
-            "slug": "products/registry-relay/configuration"
-          },
-          {
-            "label": "Portable metadata",
-            "slug": "products/registry-relay/metadata"
-          },
-          {
-            "label": "XLSX readiness contract",
-            "slug": "products/registry-relay/xlsx-readiness-contract"
-          },
-          {
-            "label": "Release notes",
-            "slug": "products/registry-relay/release-notes"
-          }
-        ]
-      },
-      {
-        "label": "Explanation",
-        "items": [
-          {
-            "label": "Standards assumptions",
-            "slug": "products/registry-relay/standards-assumptions"
-          },
-          {
-            "label": "Relay scenario catalog",
-            "slug": "products/registry-relay/relay-scenario-catalog"
-          }
-        ]
+        "label": "Standards alignment",
+        "slug": "products/registry-relay/standards-alignment"
       }
     ]
   },

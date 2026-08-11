@@ -10,16 +10,18 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced:
   - dcat
   - bregdcat-ap
+  - cpsv-ap
   - ogc-api-records
   - openapi
   - shacl
   - json-schema
+  - json-ld
   - sd-jwt-vc
   - cccev
 ---
@@ -29,9 +31,10 @@ and Evidence Gateway.
 The stack is organized around two layers: a portable metadata layer and a runtime services layer.
 The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a
 registry exposes, without touching production sources.
-The runtime services layer enforces access against real data. Registry Relay binds Registry Manifest
-descriptions to protected reads. Evidence Gateway uses its own governed bundle and authoritative HTTP
-sources to answer bounded questions with signed assertions.
+The runtime services layer enforces access against real data. Registry Relay compiles a governed
+registry contract into a fixed set of read-only operations over a read-only SQLite source. Evidence
+Gateway uses its own governed bundle and authoritative HTTP sources to answer bounded questions with
+signed assertions.
 Registry Platform provides shared Rust primitives consumed by both runtime services.
 Registry Mint is a supporting service rather than a fifth product: it issues the short-lived access
 tokens a resource server such as Evidence Gateway verifies, for deployments that have callers and no identity
@@ -41,7 +44,7 @@ Registry Stack product or a production integration reference.
 
 At runtime, Registry Stack exposes source data through two patterns:
 
-- Protected registry APIs: controlled read-only interfaces over existing registry sources.
+- Protected registry APIs: controlled read-only interfaces over an existing registry source.
   Registry Relay implements this runtime surface.
 - Minimum-disclosure assertions: one bounded question about one subject, answered with a signed
   assertion that carries the answer and not the record. Evidence Gateway implements this runtime surface.
@@ -62,12 +65,13 @@ updated policy documents without touching deployment config.
 <figure>
   <img src="../../images/registry-architecture-flow.svg"
        alt="Architecture flow: Registry Platform provides shared primitives to both runtime services.
-            Registry Manifest compiles portable metadata contracts. Registry Relay binds those
-            descriptions to real sources and serves protected read-only APIs. Evidence Gateway answers one
-            bounded question about one subject and returns a signed assertion carrying the answer and
-            not the record, using its own configured authoritative HTTP sources. Registry Mint is a
-            supporting service issuing the short-lived access tokens Evidence Gateway verifies. The separate
-            Solmara Lab adopter project provides synthetic registry data for demonstrations." />
+            Registry Manifest compiles portable metadata contracts. Registry Relay compiles a governed
+            registry contract and serves protected read-only APIs over a read-only SQLite source.
+            Evidence Gateway answers one bounded question about one subject and returns a signed
+            assertion carrying the answer and not the record, using its own configured authoritative
+            HTTP sources. Registry Mint is a supporting service issuing the short-lived access tokens
+            Evidence Gateway verifies. The separate Solmara Lab adopter project provides synthetic
+            registry data for demonstrations." />
 </figure>
 
 ## Evidence Gateway and decision ownership
@@ -75,10 +79,11 @@ updated policy documents without touching deployment config.
 The following responsibility flow is normative for 1.0 project authoring:
 
 1. A source system owns its operational data and any decisions made inside that source.
-2. Registry Relay owns source-specific acquisition, source-access policy, and typed normalization
-   for Relay's protected read APIs.
-   Relay returns only the declared consultation outcome and typed outputs. It does not assign a
-   consumer consequence to those outputs.
+2. Registry Relay owns the compiled registry contract: which operations exist, which source columns
+   become published properties, which access profile guards each operation, and which disclosure
+   profile shapes each response.
+   Relay returns only the properties a compiled disclosure profile declares. It does not assign a
+   consumer consequence to those properties.
 3. Evidence Gateway owns the bounded assertion plus the authorization and disclosure policy for evaluating
    and releasing it. The requirement is the unit of disclosure: purpose, audience, and requester
    entitlement decide whether a requirement may be invoked at all, and never narrow the answer it
@@ -94,7 +99,7 @@ The following responsibility flow is normative for 1.0 project authoring:
      boundary is the Version 1 non-goal list: Evidence Gateway is not a workflow, orchestration, or
      case-management engine and not a runtime policy engine or general PDP. */}
 
-These are three different policy categories: Relay source-access and adaptation policy, Evidence Gateway
+These are three different policy categories: Relay contract and disclosure policy, Evidence Gateway
 authorization and disclosure policy, and consumer use, decision, and action policy.
 Project authors must keep them separate even when one deployment operates every component. The
 caller, assertion consumer, and decision owner can be the same component or separate components.
@@ -130,12 +135,23 @@ decision.
 3. Registry Manifest compiles and validates the manifest, then renders a static discovery bundle
    (catalog, DCAT, BRegDCAT-AP, CPSV-AP, SHACL, JSON Schemas, OGC Records item collection,
    policies, evidence-offering metadata, embedded codelist metadata, and an `index.json`).
-4. Registry Relay starts with runtime config that binds the manifest's logical datasets and entities
-   to actual data sources. Clients reach entity routes, metadata routes, and evidence-offering
-   endpoints through configured auth.
-5. Registry Relay executes compiler-pinned consultations. Its product-neutral `http`, `script`,
-   and `snapshot` capabilities adapt reviewed source contracts and return only declared typed
-   outputs.
+4. A separate authored registry contract (`registry.yaml`, `kind: RegistryContract`) declares the
+   resources, operations, access profiles, and disclosure profiles one Registry Relay process will
+   serve. `relayctl` compiles that contract against the observed source schema and seals the result,
+   with every generated artifact (OpenAPI, JSON Schema, SHACL, and JSON-LD context and vocabulary),
+   into one package. The
+   [governed registry publication](../governed-registry-publication/) page covers the
+   compile-and-seal model; the [relayctl reference](../../reference/relayctl/) covers the commands.
+5. Registry Relay verifies that package at startup, opens its SQLite source read-only, and serves the
+   fixed route set the package compiled. There is no adaptation step: the runtime executes only the
+   statements the compiler produced, over the source columns the contract named, and returns only the
+   properties a disclosure profile declares. The one runtime file (`runtime.yaml`,
+   `kind: RelayRuntime`) binds local paths, the audit sink, secret references, limits, and an optional
+   OIDC issuer, and cannot widen anything the package sealed.
+   {/* Evidence: RelayRuntime is a closed deny_unknown_fields schema over server, packagePath,
+        sources, authentication, audit, cursor, limits, quotas, and shutdown only,
+        crates/registry-relay-v2/src/contract.rs:1062-1079; startup verifies the package before
+        opening any other resource, crates/registry-relay-v2/src/startup.rs:96-104. */}
 6. Evidence Gateway evaluates one predefined, versioned requirement per request, aligned with CCCEV through
    its frozen field mapping. Rust owns authentication, authorization, the one fixed bounded HTTP JSON
    source request, output validation, assertion construction, signing, and audit; trusted Rhai
@@ -169,13 +185,14 @@ For what each project does and does not own, refer to the product overview pages
 The two-layer design supports complementary capabilities: describe what a registry can provide,
 expose protected registry APIs, or answer a bounded question with a signed assertion that matches
 the purpose and policy of the request.
+Only Evidence Gateway signs. Relay responses carry no signature and no assertion.
 A caller cannot safely use a registry until its fields, schemas, services, policies, and evidence
 offerings are inspectable, so metadata comes first.
 
 | Capability | Use it when | Primary project |
 | --- | --- | --- |
 | Describe registries | Other teams need to inspect fields, schemas, policies, services, and evidence offerings before integration. | [Registry Manifest](../../map/boundaries-and-map/) |
-| Protected registry APIs | A file, extract, database, or legacy registry needs a governed read-only API without replacing the source. | [Registry Relay](../../products/registry-relay/) |
+| Protected registry APIs | A SQLite extract or SQLite-backed registry needs a governed read-only API without replacing the source. | [Registry Relay](../../products/registry-relay/) |
 | Minimum-disclosure assertions | A caller needs one bounded fact about one subject, signed and audience-scoped, instead of access to the record behind it. | [Evidence Gateway](../../products/registry-evidence/) |
 
 Shared audit and operational behavior makes Registry Relay and Evidence Gateway reviewable:

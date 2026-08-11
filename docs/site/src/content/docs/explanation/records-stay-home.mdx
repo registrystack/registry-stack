@@ -6,7 +6,8 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-evidence
-last_reviewed: "2026-08-03"
+  - registry-relay
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -55,22 +56,23 @@ answer is one boolean. The register's list of that child's parents never travels
 ```mermaid
 flowchart LR
     subgraph inst["Institution: data stays here"]
-        relaySrc[("Relay source\nfile · database · HTTP")]
+        relaySrc[("Relay source\nread-only SQLite file")]
         evidenceSrc[("Evidence Gateway source\nauthoritative HTTP API")]
         relay["Registry Relay\nprotected read API"]
         evidence["Evidence Gateway\nevaluate · minimize · sign"]
         key>"Signing key\n(private half never leaves)"]
         audit[("Audit log")]
-        relaySrc -- read in place --> relay
+        relaySrc -- read-only, in place --> relay
         evidenceSrc -- one fixed request --> evidence
         evidence -. records .-> audit
+        relay -. records .-> audit
         key -. signs .-> evidence
     end
     caller["Caller / evidence consumer"]
     caller == "request: requirement + purpose + subject selectors" ==> evidence
     evidence == "signed assertion: declared values only" ==> caller
-    caller == "scoped record read" ==> relay
-    relay == "authorized source records" ==> caller
+    caller == "request: one compiled operation" ==> relay
+    relay == "declared properties only, unsigned" ==> caller
 
     classDef inside fill:#eef,stroke:#334,stroke-width:1px;
     classDef outside fill:#f7f7f7,stroke:#777,stroke-dasharray:3 3;
@@ -78,19 +80,20 @@ flowchart LR
     class caller outside;
 ```
 
-*Two governed surfaces can cross the boundary.* Registry Relay turns an existing file or
-database table into a read-only, access-controlled API without replacing the source.
-Its scoped record routes can return source records to authorized callers that hold the
-dataset's row-read permission.
+*Two governed surfaces can cross the boundary.* Registry Relay compiles a reviewed registry
+contract into a fixed set of read-only operations over a read-only SQLite source, without
+replacing that source. Its record routes can return published properties to authorized callers,
+bounded by the access profile that guards the operation and the disclosure profile that shapes
+the response.
 Evidence Gateway answers one predefined requirement about one set of subjects and returns a signed
 assertion; it is the only component that evaluates a requirement, minimizes the result, and
 signs it. It contacts its own configured authoritative HTTP source rather than calling Relay.
 Evidence Gateway is the stronger minimization surface.
-Relay record reads are scoped and audited, not open data.
+Relay reads are compiled, authorized, and audited, not open data.
 
 The policy boundary remains separate across the two products and their consumers. Relay
-owns source access and adaptation policy. Evidence Gateway owns evidence authorization and the
-declared disclosure of each requirement.
+owns its compiled contract and disclosure policy. Evidence Gateway owns evidence authorization and
+the declared disclosure of each requirement.
 The evidence consumer determines how evidence is used, and the decision owner remains
 accountable for requirements, eligibility, qualification, prioritization, approval, routing,
 payment, workflow, and action policy.
@@ -100,16 +103,42 @@ consumer or a technical intermediary acting for it.
 
 ## What stays home
 
-- Source data is read in place: Relay reads sources as batch snapshots or table scans;
-  there is no write-back to the source registry, and runtime services expose no
-  data-mutation routes. The source keeps running as it always has. "No write-back to the
-  source and no external handoff" is not the same as "no copy exists": in snapshot mode
-  (the default), Relay materializes a projected copy into its local cache (`cache_dir`), which
-  carries its own retention and access considerations.
-- Storage internals stay private: The paths, table names, and backend credentials that
-  point at the source live in Relay's runtime configuration, decided at startup. They
-  are never part of the public API surface, and never part of a portable metadata file that
-  gets distributed.
+- Source data is read in place, and Relay keeps no copy: Relay opens its SQLite source file
+  with `SQLITE_OPEN_READ_ONLY`, and neither of the two source profiles copies it. A `snapshot`
+  source is digested and pinned where it sits, and the file must be immutable to this process
+  (a read-only filesystem, or a file with no write bits) or Relay refuses it. A
+  `live-read-only` source is bound by device and inode and re-checked before use. In both
+  profiles Relay refuses a symlinked database and refuses a database with a `-wal` or
+  `-journal` sidecar, so it never adapts to a database another process is mid-write on. There
+  is no `cache_dir`, no materialization, and no projected local copy.
+  {/* Evidence: SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NO_MUTEX,
+       crates/registry-platform-sqlite/src/schema.rs:131-133 and src/statement.rs:494-496;
+       snapshot immutability requires a read-only filesystem or non-writable mode bits,
+       src/capture.rs:42-45; SNAPSHOT_SIDECARS = ["-wal", "-journal"], src/capture.rs:11;
+       symlink refusal, src/capture.rs:34-36; snapshot identity is dev/ino/len/mode/mtime/ctime
+       (same_file, src/capture.rs:285-296) and live identity is dev+ino (same_live_file,
+       src/capture.rs:305-309). */}
+- There is no write path at all: Relay serves fourteen fixed routes and exactly one of them
+  is a `POST`, which carries a JSON selector body for a read. There is no `PUT`, `PATCH`, or
+  `DELETE` anywhere, no provisioning surface, and no administrative endpoint. The source keeps
+  running as it always has.
+  {/* Evidence: the complete router, crates/registry-relay-v2/src/server.rs router(); the
+       compiled statement type is ReadOnlyStatement throughout
+       crates/registry-relay-v2/src/sqlite_runtime.rs. */}
+- Only reviewed views are readable: Relay observes a source's schema through a filter that
+  keeps only SQL views, so a resource can bind to a reviewed view and never to a raw table.
+  Whatever the view does not select is unreachable from the API, whether or not any contract
+  names it.
+  {/* Evidence: observe_sources() filters catalog objects to SchemaObjectKind::View,
+       crates/registry-relay-v2/src/source_observation.rs; ObservedSourceSchema carries a
+       views field and no tables field, crates/registry-relay-v2/src/model.rs:53-73. This is
+       Relay policy, not a registry-platform-sqlite guarantee: that crate owns the SQLite
+       safety boundary, not a disclosure policy. */}
+- Storage internals stay private: The SQLite file paths live in Relay's deployment-local
+  runtime file, which is never served. The source views and columns a contract binds live in
+  the compiled registry sealed inside the package, which Relay verifies at startup and does
+  not publish. Neither appears in a response body, and an artifact marked operator-only is
+  answered with a not-found problem rather than served.
 - The institution keeps custody: The design premise is *distributed custody*: each
   authority retains control of its own registry data, and the stack does not aggregate
   records into a central system. It provides the exchange surface, not a data lake.
@@ -126,9 +155,18 @@ consumer or a technical intermediary acting for it.
 ## What crosses the boundary
 
 What crosses depends on the surface.
-Registry Relay can return scoped source records to an authorized caller through a
-governed, audited read bounded by the caller's per-dataset row scope and the dataset's
-configured filters and limits.
+Registry Relay returns the properties a compiled disclosure profile declares, through a
+governed, audited read. An operation's access profile is either public or protected; a protected
+operation requires a scope, may require a declared purpose, and may pin every returned row to
+the caller's own authority through a bound `:row_authority` parameter derived from a token claim
+or from the token's principal identifier. Two fixed transforms can narrow a property further: a
+partial string reveal (`***`) and a date reduced to year or year-month. Relay signs nothing; its
+responses carry no assertion.
+{/* Evidence: AccessRule is Public | Protected{scope, purpose, authorityRowBinding} and
+     AuthorityRowBinding has a claim variant and a principal variant,
+     crates/registry-relay-v2/src/contract.rs:947-976; row authority is injected as a bound
+     parameter with an exact-equality COLLATE BINARY predicate, never string concatenation,
+     crates/registry-relay-v2/src/sqlite_runtime.rs add_row_authority(). */}
 Evidence Gateway returns the values a requirement declares rather than the source row; keeping that
 answer narrow is a modelling discipline, because a well-modelled requirement declares the
 coarsest value form that still answers the question.
@@ -188,7 +226,49 @@ status or that the source is correct (invariant `V1-I24`).
 ## How the boundary is enforced
 
 The "stays home" property rests on a few enforced rules, covered in depth in the Trust &
-Security material:
+Security material. Registry Relay enforces these:
+
+- The runtime executes only compiled statements: a caller cannot supply SQL, an expression, a
+  path, a projection, or a filter. Every statement Relay runs was produced by the compiler from
+  the reviewed contract, and the runtime refuses positional SQL parameters outright, accepting
+  only the named parameters the contract declared and binding them by pre-resolved ordinal.
+  {/* Evidence: contains_positional_parameter() rejects ?/?N with
+       ErrorKind::UndeclaredParameter, crates/registry-platform-sqlite/src/statement.rs:800-851;
+       named parameters are bound by resolved 1-based ordinal via raw_bind_parameter,
+       src/statement.rs:918-930. */}
+- The package is verified before anything else opens: at startup Relay re-derives the compiled
+  registry and every generated artifact from the sealed authored inputs and requires
+  byte-for-byte equality, before it opens a source, an audit sink, an issuer, or a listener.
+  Read `packageRevision` as an integrity digest, not an authenticity proof: the package is not
+  signed, and a caller who can rewrite the package can recompute it.
+  {/* Evidence: prepare() loads and verifies the package first,
+       crates/registry-relay-v2/src/startup.rs:96-104; verify_compiled_derivation and
+       verify_artifact_derivation re-run the compiler and artifact generator and compare bytes,
+       crates/registry-relay-v2/src/package.rs; the crate's own comment states that
+       "packageRevision is an integrity digest, not an authenticity proof". */}
+- Audit fails closed, with no switch: if the audit sink cannot durably accept the attempt or
+  terminal record, the request is refused with a 503 `audit.unavailable` problem rather than
+  answered. This is not configurable, and readiness re-checks the sink, so replacing the audit
+  file live takes the deployment out of `/ready`.
+  {/* Evidence: every audit failure path returns ProblemCode::AuditUnavailable,
+       crates/registry-relay-v2/src/api.rs; ProblemCode::AuditUnavailable maps to 503,
+       crates/registry-relay-v2/src/problem.rs; test audit_path_replacement_revokes_readiness,
+       crates/registry-relay-v2/src/startup.rs. */}
+- Nothing that identifies a person reaches a log: operational logging maps a URI onto a closed
+  set of literal route shapes before recording it, so no identifier, selector, or query value
+  can appear. `RELAY_LOG` accepts only `off`, `error`, `warn`, `info`, `debug`, and `trace`, and
+  any other value collapses to `info`, so it cannot be used to switch on a dependency's own
+  logging of URLs or headers. The audit record itself carries identifiers, revisions, profile
+  names, and transform identifiers, never row values.
+  {/* Evidence: operational_route() and the tests
+       operational_dimensions_never_include_request_values and
+       operational_trace_identifier_is_closed_and_bounded,
+       crates/registry-relay-v2/src/server.rs; operational_log_directive() and the test
+       operational_log_filter_cannot_enable_dependency_targets,
+       crates/registry-relay-v2/src/main.rs; AUDIT_SCHEMA registry.relay.audit/v2alpha1 and the
+       value-free AuditContext, crates/registry-relay-v2/src/audit.rs. */}
+
+Evidence Gateway enforces these:
 
 - One authorization decision, before any source read: Evidence Gateway resolves a single decision
   binding the requester, the requirement revision, the purpose, the audience, the authority
@@ -229,9 +309,27 @@ Security material:
   alone can reconstruct a protected value between them. The complete enabled configuration
   is reviewed as one disclosure surface, and that review is an operator duty rather than
   something the runtime can decide (invariant `V1-I03`).
-- Correctness depends on the source: Relay reports what the reviewed source consultation says,
-  and Evidence Gateway derives its answer from what the source returned. Neither product
+- Correctness depends on the source: Relay reports what the reviewed source view returns, and
+  Evidence Gateway derives its answer from what the source returned. Neither product
   independently vouches for whether the source is correct or current.
+- Relay minimization is contract-level, not per-caller: an operation returns the properties its
+  disclosure profile declares, the same way for every caller authorized to invoke it. Narrowing
+  what one audience sees means compiling a second operation with its own disclosure profile, not
+  configuring the runtime.
+- A Relay response is not evidence: Relay signs nothing. Its responses carry no signature and no
+  assertion, so a recipient can rely on the transport and on the deployment it called, and on
+  nothing that survives being forwarded. Only Evidence Gateway issues a later-verifiable
+  artifact.
+  {/* Evidence: the crate has no signing path; products/relay-v2/CONCEPT.md lists response
+       signing among the non-goals and states Relay V2 is not a credential or signed-assertion
+       issuer. */}
+- Snapshot immutability is an operator duty: Relay refuses a writable snapshot file and detects
+  a replaced or altered one, but a privileged writer that changes bytes and restores them
+  between two verifications is outside what the process can exclude. A snapshot deployment
+  should place the file on a read-only mount.
+  {/* Evidence: the verify_unchanged_until comment states that a process cannot exclude a
+       privileged writer changing and restoring bytes entirely between the two hashes,
+       crates/registry-platform-sqlite/src/capture.rs. */}
 - Signed is the default, unsigned is not evidence: The signed flattened JWS is mandatory and
   the default result. A separately typed unsigned envelope exists only when both the
   reviewed configuration and the matched grant permit it, carries no integrity protection,

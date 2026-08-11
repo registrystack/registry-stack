@@ -52,8 +52,8 @@ test('trailing-slash page -> strip slash + ".md"', () => {
 
 test('nested product page -> correct .md path', () => {
   assert.equal(
-    mdHrefForPath('/products/registry-relay/configuration/'),
-    '/products/registry-relay/configuration.md',
+    mdHrefForPath('/products/registry-relay/standards-alignment/'),
+    '/products/registry-relay/standards-alignment.md',
   );
 });
 

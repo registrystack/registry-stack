@@ -80,13 +80,9 @@ EVIDENCE_TUTORIALS=(
 # check_tutorial_coverage below fails by name on a page in neither list, which
 # is the gap that let broken DHIS2 tutorial commands ship once already.
 EXCLUDED_EVIDENCE_TUTORIALS=(
-	author-registry-project                          # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
 	build-and-deploy-evidence-project                # drift-checked by evidence-production-build-docs.test.mjs; needs a production build environment
-	configure-project-api-key-authentication         # draft: true, hidden from the sidebar and redirected away
-	configure-project-script-adapter                 # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
 	connect-an-institution-source                    # how-to against the reader's own OpenAPI source; no fixed scenario this gate can replay
 	connect-a-sqlite-extract                         # starter is covered by evidencectl scaffold and fixture tests; production half needs an operator-mounted extract
-	deploy-standalone-with-own-data                  # draft: true, hidden from the sidebar and redirected away
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
 	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
@@ -96,12 +92,9 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	move-evidence-to-production-signing              # drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
 	prove-an-evidence-project                        # how-to against the reader's own project; no fixed scenario this gate can replay
 	publish-governed-sqlite-registry                 # Relay V2 journey; replayed by the Relay product and real-process acceptance gates
-	publish-spreadsheet-secured-registry-api         # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
 	request-a-holder-bound-credential                # draft: true, hidden from the sidebar; no verified wallet flow exists to replay
 	rotate-evidence-signing-keys                     # drift-checked by evidence-production-build-docs.test.mjs; needs a deployed signing key
-	use-your-spreadsheet                             # registryctl tutorial, drift-checked by check-tutorial.sh
 	verify-a-registered-parent-with-opencrvs         # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
-	verify-opencrvs-claims                           # registryctl tutorial, replayed by check-tutorial.sh's REGISTRYCTL_TUTORIALS
 )
 
 in_list() {

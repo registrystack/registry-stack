@@ -62,7 +62,7 @@ parse human CLI output, or implement a second interpretation of Relay
 semantics. A frozen subprocess protocol is unnecessary until a consumer other
 than the in-tree tooling needs one.
 
-The existing `registryctl` is not renamed, migrated, deprecated, or otherwise changed as part of Relay V2. It remains outside this work. Relay V2 does not depend on it and provides no compatibility layer through it.
+Relay V2 was scoped to leave the earlier `registryctl` adopter tool untouched: it depends on nothing in that tool and provides no compatibility layer through it. `registryctl` and the Relay 1.0 runtime it authored for were retired in v0.19.0, after this concept was approved, so `relayctl` is now the only Relay adopter tool.
 
 The intended authoring lifecycle is:
 
@@ -682,7 +682,7 @@ Relay V2 is not:
 - a credential or signed-assertion issuer;
 - a grievance, eligibility, case-management, or identity-matching system;
 - a multi-source analytics or interoperability-protocol suite;
-- an extension, mode, or command group of the existing `registryctl`.
+- an extension, mode, or command group of the earlier `registryctl`.
 
 PostgreSQL and other source adapters, SpatiaLite, richer geometry types, richer
 semantic profiles, and additional registry protocols are later profiles.
@@ -698,7 +698,7 @@ Relay V2 should reuse mature product-neutral primitives directly and avoid inher
 | Platform crate | Relay V2 use |
 |---|---|
 | `registry-platform-authcommon` | Strict bearer parsing and secret-safe authentication helpers. |
-| `registry-platform-oidc` | Existing OIDC discovery, JWKS caching, and strict JWT access-token verification for the one configured issuer. Add only missing product-neutral claim checks required by Relay V1; additional discovery modes are deferred. |
+| `registry-platform-oidc` | Existing OIDC discovery, JWKS caching, and strict JWT access-token verification for the one configured issuer. Add only missing product-neutral claim checks required by Relay V2; additional discovery modes are deferred. |
 | `registry-platform-httpsec` | Security headers, narrow CORS, request limits, and RFC 9457 problem responses extended by Relay with its stable code and trace ID. |
 | `registry-platform-audit` | Tamper-evident envelopes, durable sinks, chain verification, redaction, and pseudonymization primitives. Relay V2 owns its event vocabulary and does not inherit old consultation semantics. |
 | `registry-platform-config` | Environment expansion, secret references, and optional signed governed-bundle verification. Relay still owns compilation of the registry contract. |
@@ -718,13 +718,13 @@ Relay V2 should reuse mature product-neutral primitives directly and avoid inher
 - `registry-platform-pdp`: its broad context, ODRL, redaction, assurance, consent, jurisdiction, and credential-format model is outside the small Relay V2 access decision.
 - `registry-platform-sdjwt`: signed assertions remain Evidence's responsibility.
 - existing Relay API-key, state-plane, hot-reload, destination, materialization, policy, aggregate, and protocol-specific machinery.
-- the existing `registryctl` crate, commands, project model, or compatibility surface.
+- the earlier `registryctl` crate, commands, project model, or compatibility surface.
 
 ### Registry Manifest boundary
 
 The Relay authoring contract is a strict Relay-owned `RegistryContract`. A
 future portability command may compile it one way into a
-`registry-manifest/v1` projection. Relay V1 does not need that projection to
+`registry-manifest/v1` projection. Relay V2 does not need that projection to
 compile, package, or serve. It is not a strict Registry Manifest profile because
 Manifest intentionally does not own source columns, access rules, filters,
 disclosure, classification, purpose, row binding, or runtime limits.

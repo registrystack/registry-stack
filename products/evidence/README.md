@@ -80,7 +80,7 @@ neutral.
 ## Adopter tooling
 
 `evidencectl`, built from the `registry-evidencectl` crate, is adopter tooling
-beside the runtime, like `registryctl` for the rest of the stack. It sits
+beside the runtime, like `relayctl` for Relay. It sits
 outside the frozen Version 1 runtime contract: it generates key material,
 starts OpenAPI-assisted workspaces and runnable synthetic SQLite starters,
 compiles a reviewed production candidate, and drives fixture runs for editable

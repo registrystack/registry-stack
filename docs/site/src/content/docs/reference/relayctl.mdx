@@ -1,0 +1,251 @@
+---
+title: Relayctl command reference
+description: Reference for the Relay adopter command line, covering project initialization, schema inspection, validation, artifact generation, fixtures, change classification, and sealed packaging.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+`relayctl` is Relay adopter tooling. It initializes an authoring project, inspects SQLite structure,
+compiles and validates the project, generates reviewable artifacts, runs the project's offline
+fixture cases, classifies changes between two project revisions, and builds a sealed deployment
+package. It serves no request, starts no listener, and performs no deployment action.
+
+## Contract status
+
+Relayctl is pre-1.0 adopter tooling and sits outside any frozen runtime contract. Its command line
+can change before a compatibility promise covers it. The `relay` binary stays the authority for
+package verification, activation, and serving.
+
+This page is written by hand from the command definitions in `crates/registry-relayctl/src/lib.rs`
+and the boundary tests in `crates/registry-relayctl/tests/cli_contract.rs`, at release v0.19.0. The
+command line is not generated, so the source files win on any disagreement.
+
+## Commands
+
+Seven commands, with no subcommand nesting.
+
+| Command | Inputs | Result | Does not do |
+| --- | --- | --- | --- |
+| `relayctl init <PROJECT>` | One new or empty project directory | Writes a complete authoring project of visibly unreviewed starter documents | Reuse a directory that already has entries, follow a symlinked project root, or read any database |
+| `relayctl inspect <DATABASE>` | One SQLite database and a source posture | Reports the schema fingerprint and the structure of each table, index, view, and trigger, and can write starter documents | Read row values, sample data, or run project queries |
+| `relayctl check <PROJECT>` | Authoring project directory | Compiles the project and reports diagnostics, the contract revision, and the accepted configuration key paths | Write artifacts, seal a package, or approve a change |
+| `relayctl generate <PROJECT>` | Authoring project directory | Writes the deterministic artifact set and five authoring reports, each with its SHA-256 digest | Seal a package or write into a destination that already has entries |
+| `relayctl test <PROJECT>` | Project fixture inputs | Runs the project's offline fixture cases through the shared kernel | Start a listener, contact a network source, or start `relay` |
+| `relayctl diff <PREVIOUS> <CURRENT>` | Two project directories | Classifies meaning, disclosure, and security changes between the reviewed project and the candidate | Add or remove change classes, or decide whether the change is acceptable |
+| `relayctl package <PROJECT> --output <DIRECTORY>` | Project that compiles under the production profile | Builds a sealed package directory carrying `relay-package.json` | Sign the package, deploy it, or write into a destination that already exists |
+
+## Global options
+
+| Option | Effect |
+| --- | --- |
+| `--json` | Emits the shared report as best-effort JSON for local automation, with no header line. Accepted before or after the subcommand. |
+| `--version` | Prints `relayctl <version>`, matching the release version of the asset. |
+| `--help` | Prints usage on standard output and exits with status `0`. |
+
+## Command options
+
+### init
+
+`init` takes one positional `PROJECT` path and no options. It writes exactly seven files:
+
+- `registry.yaml`
+- `runtime.yaml`
+- `governance/identifier-lifecycle.yaml`
+- `governance/classification-review.yaml`
+- `governance/legal-basis.yaml`
+- `governance/processing.dpv.yaml`
+- `codelists/record-lifecycle.yaml`
+
+A directory that already contains entries is a domain refusal with the diagnostic code
+`project.destination_not_empty`. A symlinked project root is an unsafe path and is an operational
+failure. Every starter document is marked as suggested rather than reviewed, so
+`relayctl check --production` refuses the project until an institution reviews it.
+
+### inspect
+
+`inspect` takes one positional `DATABASE` path.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--profile <PROFILE>` | `live-read-only` | Source posture used while opening the database read-only. Accepts `snapshot` or `live-read-only`. |
+| `--starters <DIRECTORY>` | Not written | Writes compiler-derived, visibly unreviewed starters to this directory, as `schema-starter.yaml`. |
+| `--statistical-view <VIEW>` | Not generated | Generates a format-neutral statistical component starter for one view, as `statistical-dataset-starter.yaml`. Requires `--starters`, `--time-column`, and `--measure-column`. |
+| `--time-column <COLUMN>` | Not set | Exact source column for the required time-period dimension. Requires `--statistical-view`. |
+| `--measure-column <COLUMN>` | Not set | Exact source column for the required observation measure. Requires `--statistical-view`. |
+| `--attribute-column <COLUMN>` | Not set | Exact source column to treat as an observation attribute instead of a dimension. Repeatable. Requires `--statistical-view`. |
+
+A partial statistical selection is a usage error rather than a guess: naming the view without both
+required columns, or naming the columns without `--starters`, fails argument parsing.
+
+The report carries the schema fingerprint and one entry per schema object, each with its kind
+(`table`, `index`, `view`, or `trigger`), its name, its table name, and its columns. Each column
+reports its name, its declared SQLite type, whether it is nullable, and whether it is part of the
+primary key. No row value, evaluated default, or query result can appear in the report.
+
+### check
+
+`check` takes one positional `PROJECT` path.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--production` | Authoring profile | Compiles under the production profile, which requires every generated suggestion to have been reviewed. |
+
+The report carries the contract revision, the profile that was applied, and the configuration key
+paths the compiler accepted for `registry.yaml` and `runtime.yaml`.
+
+### generate
+
+`generate` takes one positional `PROJECT` path.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--output <DIRECTORY>` | `<PROJECT>/generated` | Destination for generated artifacts. |
+
+A destination that already contains entries is a domain refusal with the diagnostic code
+`generation.destination_not_empty`. A symlinked destination is an unsafe path.
+
+Alongside the compiled artifact set, `generate` writes five authoring outputs:
+
+| Identifier | Path |
+| --- | --- |
+| `identification-report` | `reports/identification-report.json` |
+| `classification-inventory` | `reports/classification-inventory.json` |
+| `access-profile-report` | `reports/access-profile-report.json` |
+| `contextual-review-findings` | `reports/contextual-review-findings.json` |
+| `classification-review-starter` | `governance/classification-review-starter.yaml` |
+
+Every generated file is listed in the report with its identifier, its path relative to the
+destination, and its `sha256:` digest.
+
+### test
+
+`test` takes one positional `PROJECT` path.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--fixture <IDENTIFIER>` | Every step, in order | Runs the one step whose identifier matches exactly. |
+
+Fixture evaluation reads the project's `fixture.sql`, `runtime.yaml`, and `expected-http.yaml`. A
+missing or invalid fixture input is a domain refusal with a `fixture.*` diagnostic code rather than
+a crash.
+
+`--fixture` selects one step and expands no prerequisite. The plan keeps only the step whose
+identifier matches, and the journey runs that step alone, so a step that reads another step's
+observation cannot pass this way. Two expectations work that way: `recordsEquivalentTo` and
+`etagSameAs` each name an earlier step, and a missing observation is treated as a mismatch rather
+than as a skip. A step carrying either one selected on its own always refuses, with
+`fixture.representation_mismatch` or `fixture.etag_mismatch`. Prove those steps with a full journey
+run, and reserve `--fixture` for self-contained steps.
+
+### diff
+
+`diff` takes two positional paths: `PREVIOUS`, the previously reviewed project directory, and
+`CURRENT`, the candidate project directory. The report body is the compiler's change-impact report.
+Relayctl neither adds nor removes change classes.
+
+### package
+
+`package` takes one positional `PROJECT` path.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `--output <DIRECTORY>` | Required | New sealed package directory. |
+
+The destination is mandatory and must not already exist. `package` always compiles under the
+production profile, so an unreviewed project cannot be sealed.
+
+## Report output
+
+Every command that reaches the shared tooling facade prints one report. The report has three
+members:
+
+- `status`, either `success` or `refused`.
+- `diagnostics`, an array of objects with `severity` (`error` or `warning`), `code`, `location`, and
+  `message`.
+- `details`, a tagged object whose `kind` is `initialized`, `schema-inspection`, `check`,
+  `generate`, `test`, `diff`, or `package`.
+
+Without `--json`, the first line is `relayctl <command>` and the remaining lines are the
+pretty-printed report. With `--json`, the report is the whole output. Rendering is deterministic and
+ends with exactly one newline, so the same inputs produce the same bytes.
+
+The JSON shape is best-effort for local automation. It is not a covered compatibility surface, and
+the [compatibility promise](../api-stability/) does not cover adopter tooling.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The command completed and the report status is `success`. |
+| `1` | Domain refusal. The command ran, and the report status is `refused` with at least one diagnostic. |
+| `2` | Usage error. The command line did not parse, and nothing reached the shared tooling facade. |
+| `3` | Operational failure. An input could not be read, an output could not be written, a path was unsafe, or inspection, generation, or packaging could not be completed. |
+
+An operational failure writes one line to standard error, `relayctl: <message>`, using one of six
+categorical messages:
+
+- `the requested authoring input could not be read`
+- `the requested authoring output could not be written`
+- `the requested path is unsafe`
+- `the SQLite schema could not be inspected`
+- `the generated artifacts could not be constructed`
+- `the deployment package could not be constructed`
+
+None of them names a path, a SQL statement, a column value, or a row.
+
+## Boundaries
+
+Four boundaries are asserted by `crates/registry-relayctl/tests/cli_contract.rs` and hold for every
+release:
+
+- Relayctl never starts `relay` and never links `rusqlite`. The production source contains
+  `registry_relay_v2::tooling` and none of `std::process::Command`, `Command::new`, or `rusqlite`.
+  SQLite access happens inside the shared library through the read-only boundary in
+  `crates/registry-platform-sqlite`.
+- `inspect` offers no row or value sampling surface. Its help states that it inspects structure
+  without reading row values, and the test refuses the options `--sample`, `--rows`, `--values`, and
+  `--limit`.
+- A usage error discloses no project content. `relayctl package <project>` without `--output` exits
+  `2` with empty standard output and an error that names `--output` and nothing about the project.
+- All seven commands print help successfully with an empty standard error, so the adopter workflow
+  is exposed by one binary.
+
+Relayctl reads no environment variables. Every input is a positional path or an explicit flag, and
+every secret reference stays inside the project's `runtime.yaml` as a `secret:env/<NAME>` or
+`secret:file/<name>` reference that only `relay` resolves. See the
+[environment variable reference](../environment-variables/) for the variables the runtime does read.
+
+## Install
+
+There is no relayctl installer. Take the plain binary asset from the release, or build from source.
+
+The release publishes three relayctl assets:
+
+- `relayctl-<tag>-linux-amd64`
+- `relayctl-<tag>-linux-arm64`
+- `relayctl-<tag>-macos-arm64`
+
+Each asset is checked at build time to report `relayctl <version>` for the release version. Verify a
+downloaded asset against the release checksums and signatures documented in `release/VERIFY.md`
+before running it.
+
+To build from source at a pinned tag:
+
+```sh
+cargo build --release --locked -p registry-relayctl
+```
+
+The binary lands at `target/release/relayctl`.
+
+## Next
+
+- [Configure Relay](../../configure/relay/)
+- [Operate Relay](../../operate/relay/)
+- [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/)
+- [RS-PR-RELAYCTL](../../spec/rs-pr-relayctl/)

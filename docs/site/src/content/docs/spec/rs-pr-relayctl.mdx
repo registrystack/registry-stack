@@ -1,0 +1,338 @@
+---
+title: "RS-PR-RELAYCTL: relayctl contract"
+description: "The normative contract for relayctl: seven commands, the schema-inspection boundary, compilation profiles, the sealed package output, exit statuses, and the process boundary that keeps relayctl out of the serving path."
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: specification
+doc_id: RS-PR-RELAYCTL
+category: normative
+evidence: verified
+locale: en
+standards_referenced: []
+layer:
+  - operations
+audience:
+  - integrator
+  - maintainer
+  - tooling
+---
+
+This document defines the contract for `relayctl`, the adopter command line for Relay V2: its seven
+commands, the schema-inspection boundary, the two compilation profiles, generated artifacts, offline
+fixtures, change classification, the sealed deployment package, process exit statuses, and the
+boundary that separates authoring from serving. The implementation meets these requirements, but the
+document remains `draft`; the compatibility promise takes effect with Registry Stack `v1.0.0`, not
+with a pre-1.0 release.
+
+## Version history
+
+| Version | Date | Status | Change |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-08-11 | draft | Replaced the retired `registryctl` compatibility contract with the `relayctl` contract. The identifier prefix changed from `REQ-PR-REGISTRYCTL-` to `REQ-PR-RELAYCTL-`, so no retired requirement carries a second meaning. REQ-PR-REGISTRYCTL-001 through REQ-PR-REGISTRYCTL-031 are retired in full and MUST NOT be reused. Requirements without a successor include the ten-root command surface, `registry-stack.yaml` project discovery, environment selection, the `http` and `spreadsheet` templates, the disposable development runtime, the trust and approved-set surfaces, the versioned report schemas, and the operator-owned deployment package. |
+| 0.2.0 | 2026-07-31 | draft | Aligned the retired contract with the 1.0 command and deployment design. |
+| 0.1.0 | 2026-07-20 | draft | Initial `registryctl` compatibility contract. |
+
+## 1. Scope and conventions
+
+The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
+Terms are defined in [RS-TERMS](../rs-terms/).
+The runtime this tooling produces input for is specified in [RS-PR-RELAY](../rs-pr-relay/).
+
+This specification covers:
+
+- The seven public commands and their arguments.
+- The adopter-authored project and the closed schemas that define it.
+- The structural schema-inspection boundary over SQLite.
+- Authoring and production compilation profiles.
+- Deterministic generated artifacts and offline fixture execution.
+- Change classification between two project revisions.
+- The sealed deployment package and its manifest.
+- Report presentation and process exit statuses.
+- The process boundary between `relayctl` and `relay`.
+
+Human-readable output text, the JSON report shape, diagnostic message wording, and any private
+path inside a generated or packaged directory are not compatibility surfaces.
+
+## 2. Command surface
+
+`relayctl` exposes exactly seven commands.
+
+| Command | Contract |
+| --- | --- |
+| `init` | Create a complete authoring project of visibly unreviewed starters |
+| `inspect` | Read SQLite structure, never row values |
+| `check` | Compile and validate an authoring project |
+| `generate` | Write deterministic artifacts from the compiled project |
+| `test` | Run the project's offline fixture cases |
+| `diff` | Classify meaning, disclosure, and access changes between two projects |
+| `package` | Build a deterministic sealed deployment package |
+
+REQ-PR-RELAYCTL-001: `relayctl` MUST expose exactly `init`, `inspect`, `check`, `generate`, `test`,
+`diff`, and `package` as public commands.
+It MUST NOT expose a command that starts, stops, deploys, activates, or monitors a running
+deployment.
+
+REQ-PR-RELAYCTL-002: Every command that operates on a project MUST take that project directory as a
+positional argument.
+`relayctl` MUST NOT discover a project by walking parent directories, and MUST NOT accept a global
+project-selection or environment-selection option.
+
+REQ-PR-RELAYCTL-003: `relayctl` MUST read no environment variable.
+Every input MUST arrive as a command-line argument.
+Consequently there is no ambient configuration, no credential file, and no profile that changes what
+a command does between two hosts given the same arguments.
+
+## 3. Authored project
+
+An authoring project is a directory of adopter-owned YAML. `registry.yaml` carries the governed
+contract; `runtime.yaml` carries deployment-local bindings and is never governed.
+
+REQ-PR-RELAYCTL-004: `init <project>` MUST accept only an absent destination or an existing empty
+directory.
+A non-empty destination MUST produce a refusal, not an overwrite.
+Initialization MUST be offline and MUST write exactly `registry.yaml`, `runtime.yaml`,
+`governance/identifier-lifecycle.yaml`, `governance/classification-review.yaml`,
+`governance/legal-basis.yaml`, `governance/processing.dpv.yaml`, and
+`codelists/record-lifecycle.yaml`.
+
+REQ-PR-RELAYCTL-005: Every starter that carries a governance judgment MUST be written in a visibly
+unreviewed state, so a project cannot reach a production compilation without an institution
+recording its own review.
+
+REQ-PR-RELAYCTL-006: The `registry.yaml` and `runtime.yaml` schemas MUST reject unknown fields.
+`runtime.yaml` MUST reject every governed field.
+Authored paths MUST remain inside the project root; `relayctl` MUST refuse traversal, symbolic
+links, and unsupported file types before compilation, fixture execution, or packaging.
+
+## 4. Schema inspection
+
+`inspect` exists so an adopter can describe a source without the tooling ever reading the data the
+source holds.
+
+REQ-PR-RELAYCTL-007: `inspect <database>` MUST open the database read-only and MUST report only
+structure: the schema fingerprint, and for each schema object its kind, name, backing table, and
+columns with declared type, nullability, and primary-key membership.
+It MUST NOT expose a row-sampling, value-preview, or arbitrary-query option, and MUST NOT include a
+source value in its report.
+
+REQ-PR-RELAYCTL-008: `--profile` MUST accept exactly `snapshot` and `live-read-only`, and MUST
+default to `live-read-only`.
+
+REQ-PR-RELAYCTL-009: `--starters <directory>` MUST write compiler-derived starters that are visibly
+unreviewed.
+A statistical starter MUST require `--statistical-view` together with an explicit `--time-column`,
+an explicit `--measure-column`, and an explicit starter output directory; an incomplete selection
+MUST be a refusal rather than an inferred choice.
+
+## 5. Compilation profiles
+
+`check` compiles the project and reports diagnostics. Two profiles differ only in how strictly
+unreviewed and unobserved input is treated.
+
+REQ-PR-RELAYCTL-010: `check <project>` MUST compile under the authoring profile by default, and
+under the production profile when `--production` is given.
+
+REQ-PR-RELAYCTL-011: Under the production profile, a missing observed source schema, an unreviewed
+classification, a governance review document that is not marked reviewed, and a transformed or
+multiply-bound source column without its own complete reviewed classification MUST each be an error.
+Under the authoring profile the same conditions MUST be warnings, so an adopter can iterate before
+review.
+
+REQ-PR-RELAYCTL-012: A successful `check` MUST report the compiled contract revision and the
+configuration key paths present in the authored documents.
+Key paths MUST be reported as paths only, with dynamic map segments collapsed to a wildcard, so the
+report never carries an authored value.
+
+## 6. Generation
+
+REQ-PR-RELAYCTL-013: `generate <project>` MUST compile under the authoring profile and write its
+output to `--output <directory>` when given, otherwise to `generated/` inside the project.
+Generation MUST refuse a destination it would have to overwrite.
+
+REQ-PR-RELAYCTL-014: Generation MUST be deterministic: the same compiled contract MUST produce the
+same artifact bytes.
+Every generated file MUST be reported with its identifier, its project-relative path, and its
+SHA-256 digest.
+The generated set MUST include the deployment's OpenAPI descriptions and the authoring reports for
+identification, classification inventory, access profiles, contextual review findings, and the
+classification review starter.
+
+## 7. Fixtures
+
+REQ-PR-RELAYCTL-015: `test <project>` MUST execute the project's authored fixture cases offline,
+through the same request kernel the runtime uses, without network access, credentials, or a running
+`relay` process.
+`--fixture <identifier>` MUST select exactly one authored fixture.
+
+REQ-PR-RELAYCTL-016: A fixture step MUST be evaluated on its HTTP status and problem code, not on
+returned row values.
+A fixture run MUST succeed only when it produces no diagnostic.
+
+REQ-PR-RELAYCTL-017: `--fixture` MUST run exactly the named step and MUST NOT expand the steps that
+step depends on.
+A step whose request or expectation references another step's observation MUST fail when that
+observation is absent, and MUST NOT be treated as satisfied by default.
+Consequently a conformance claim MUST rest on a full-journey run: a selected-step run proves less
+than the journey it was taken from, and the two are not interchangeable.
+
+## 8. Change classification
+
+REQ-PR-RELAYCTL-018: `diff <previous> <current>` MUST compile both projects under the authoring
+profile and classify each difference with a change class and an impact of `informational`,
+`narrowing`, `widening`, or `breaking`.
+
+REQ-PR-RELAYCTL-019: The report MUST distinguish a change that widens disclosure or access from one
+that does not, so a reviewer can gate on that distinction rather than on a textual diff.
+`diff` MUST NOT write to either project.
+
+## 9. Sealed package
+
+`package` produces the governed trust root a Relay V2 deployment loads. The package is the unit the
+runtime verifies at startup; see [RS-PR-RELAY](../rs-pr-relay/) Section 2.
+
+REQ-PR-RELAYCTL-020: `package <project> --output <directory>` MUST compile under the production
+profile.
+`--output` MUST be required; `relayctl` MUST NOT infer a destination.
+The destination MUST be a new directory, and an existing destination MUST be refused.
+
+REQ-PR-RELAYCTL-021: Before writing, packaging MUST re-read `registry.yaml` from disk, re-parse it,
+and refuse when the re-parsed contract differs from the compiled one.
+Packaging MUST re-derive the compiled registry and every generated artifact from the authored inputs
+and refuse when a re-derived byte differs.
+
+REQ-PR-RELAYCTL-022: The package root MUST contain `registry.yaml`, the authored `governed/`
+closure, the canonical `compiled/registry.json`, the `generated/` artifacts, and the
+`relay-package.json` manifest.
+`runtime.yaml` MUST NOT be packaged: deployment-local bindings stay with the deployment.
+
+REQ-PR-RELAYCTL-023: The manifest MUST declare the package version, the package revision, the
+contract revision, the expected source schema fingerprint and observed schema for every source, the
+artifact inventory with per-artifact visibility and digest, the operation-to-artifact bindings, and
+one entry per packaged file with its size and digest.
+The package revision MUST be the SHA-256 digest of the canonical manifest without that field.
+It is an integrity digest, not an authenticity proof: any party can recompute it, so acceptance MUST
+NOT rest on the revision alone.
+
+REQ-PR-RELAYCTL-024: Packaging MUST enforce closure bounds on file count, manifest size, and total
+package size, and MUST refuse a symbolic link inside the closure.
+On a Unix host it MUST leave directories at mode `0755` and files at mode `0644`.
+A partially written destination MUST be left in place for inspection rather than removed, and a
+later packaging attempt MUST refuse it.
+
+## 10. Reports and output
+
+REQ-PR-RELAYCTL-025: Every command MUST return one report carrying a status of `success` or
+`refused`, the diagnostics that produced that status, and command-specific details tagged by kind.
+
+REQ-PR-RELAYCTL-026: With `--json`, a command MUST write only that report to standard output.
+Without `--json`, it MUST write a `relayctl <command>` header followed by the same report content.
+`--json` MUST be accepted before or after the command.
+
+REQ-PR-RELAYCTL-027: A diagnostic MUST identify a location by authored key path and MUST NOT contain
+a source value.
+An operational failure MUST be reported to standard error as `relayctl: <message>` using a
+categorical message that names neither a source value nor an absolute filesystem path.
+
+The JSON report carries no schema-version field and is not a versioned automation contract.
+Automation that must survive a release upgrade uses the sealed package and its manifest, which are
+versioned, rather than the report shape.
+
+## 11. Exit statuses
+
+| Status | Meaning |
+| --- | --- |
+| `0` | The command completed and its report status is `success`. |
+| `1` | The command ran and returned a domain refusal. |
+| `2` | Usage is invalid. |
+| `3` | An operational dependency, file operation, or output write failed. |
+
+REQ-PR-RELAYCTL-028: `relayctl` MUST return exactly `0`, `1`, `2`, or `3` according to this table.
+It MUST NOT return `0` when its report status is `refused`.
+A failure to write the report MUST return `3` even when the operation itself succeeded.
+
+## 12. Process boundary
+
+REQ-PR-RELAYCTL-029: `relayctl` MUST perform every operation by linking the shared Relay V2 tooling
+library.
+It MUST NOT spawn `relay`, spawn any other process, or reach a running deployment.
+Contract parsing, schema inspection, compilation, generation, fixture evaluation, change
+classification, and packaging MUST remain in the shared library, so the tooling path and the serving
+path cannot diverge.
+
+REQ-PR-RELAYCTL-030: `relayctl` MUST NOT read row values from an adopter source at any point.
+Its only source access is the structural read in Section 4 and the schema observation compilation
+requires.
+
+REQ-PR-RELAYCTL-031: `relayctl` MUST NOT sign a package, mint a credential, create a secret, or
+write deployment state.
+Serving-time configuration reaches the deployment through `runtime.yaml` and the process
+environment of `relay`, never through `relayctl`.
+
+## Conformance
+
+A `relayctl` release conforms to this specification when it:
+
+- Exposes exactly the seven commands, takes each project as a positional argument, and reads no
+  environment variable (REQ-PR-RELAYCTL-001 through REQ-PR-RELAYCTL-003).
+- Initializes only into an empty destination, writes the complete unreviewed starter set, and
+  enforces closed schemas and bounded paths (REQ-PR-RELAYCTL-004 through REQ-PR-RELAYCTL-006).
+- Inspects structure without a value-sampling surface and refuses an incomplete statistical starter
+  selection (REQ-PR-RELAYCTL-007 through REQ-PR-RELAYCTL-009).
+- Separates authoring and production compilation exactly at review and observation, and reports key
+  paths without values (REQ-PR-RELAYCTL-010 through REQ-PR-RELAYCTL-012).
+- Generates deterministic digest-reported artifacts, runs offline fixtures on status and problem
+  code, and keeps fixture selection a filter that proves less than a full journey
+  (REQ-PR-RELAYCTL-013 through REQ-PR-RELAYCTL-017).
+- Classifies change impact including disclosure and access widening, without mutating either project
+  (REQ-PR-RELAYCTL-018 and REQ-PR-RELAYCTL-019).
+- Builds a re-derived, bounded, hardened sealed package with a complete manifest and no
+  `runtime.yaml` (REQ-PR-RELAYCTL-020 through REQ-PR-RELAYCTL-024).
+- Emits value-free reports and diagnostics under both output modes (REQ-PR-RELAYCTL-025 through
+  REQ-PR-RELAYCTL-027).
+- Returns exact process statuses (REQ-PR-RELAYCTL-028).
+- Keeps authoring out of the serving path and reads no row value (REQ-PR-RELAYCTL-029 through
+  REQ-PR-RELAYCTL-031).
+
+## Evidence
+
+This specification is `verified`: the requirements describe implemented behavior with automated
+tests.
+
+{/* Evidence: crates/registry-relayctl/src/lib.rs defines the seven-command parser, the global
+     --json flag, the required package --output, the exit-code constants, and report rendering. */}
+{/* Evidence: crates/registry-relayctl/src/shared.rs is the single dependency seam from the command
+     line into the shared tooling facade. */}
+{/* Evidence: crates/registry-relayctl/tests/cli_contract.rs pins the one-binary workflow, the
+     absence of a row or value sampling surface, the refusal of an implicit package destination, and
+     that the commands link the shared library and never spawn relay. */}
+{/* Evidence: crates/registry-relayctl/Cargo.toml carries no process-spawning dependency. */}
+{/* Evidence: crates/registry-relay-v2/src/tooling.rs implements init, inspect, check, generate,
+     test, diff, and package, and the report and diagnostic shapes. */}
+{/* Evidence: crates/registry-relay-v2/src/compiler.rs holds the authoring and production severity
+     split for unobserved schemas, unreviewed classification, and review-document status. */}
+{/* Evidence: crates/registry-relay-v2/src/package.rs implements re-derivation, the package layout,
+     the canonical manifest, the closure bounds, symlink refusal, and permission hardening. */}
+{/* Evidence: crates/registry-relay-v2/src/fixtures.rs plans only the selected step, accumulates
+     observations as the journey runs, and treats an absent prior observation as a mismatch. */}
+{/* Evidence: crates/registry-relay-v2/src/diff.rs implements the change classes, the impact scale,
+     and disclosure or access widening detection. */}
+{/* Evidence: crates/registry-platform-sqlite/ owns the bounded read-only SQLite boundary the
+     inspection and compilation paths use. */}
+
+- The command line, its flags, its exit codes, and the no-spawn boundary are pinned by the
+  `relayctl` crate and its command-line contract tests.
+- Compilation profiles, generation, fixtures, change classification, and packaging are pinned by the
+  Relay V2 tooling and package modules and their tests.
+- The read-only SQLite boundary is owned by the shared platform SQLite crate.
+
+## Next
+
+- [Relay configuration](../../configure/relay/) describes the authored contract and runtime files.
+- [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/) walks the
+  seven commands end to end.
+- [RS-PR-RELAY](../rs-pr-relay/) specifies the runtime that loads the sealed package.
+- [Relay V1 and registryctl retirement](../../decisions/relay-v1-and-registryctl-retirement-2026-08-11/)
+  records why the previous tooling contract was retired.

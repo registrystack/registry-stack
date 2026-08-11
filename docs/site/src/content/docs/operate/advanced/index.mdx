@@ -1,49 +1,53 @@
 ---
 title: Advanced operations
-description: Recoverable operator journeys for configuration, trust, materialization, runtime inspection, diagnostics, and bounded Script sources.
+description: Cross-product operator procedures for credentials, trust material, runtime inspection, retained state, and audit evidence.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-  - registry-relay
+  - registry-evidence
+  - registry-mint
   - registry-platform
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-Use these task guides after the project fixtures, environment check, generated inputs, and
-product activation boundaries are familiar.
-Each guide names the evidence to retain, the limit of each gate, and a recovery path.
+Use these task guides once a deployment is running and the per-product
+operations guides are familiar.
+Each guide names the evidence to retain, the limit of each gate, and a recovery
+path.
+They cut across products; the procedure for one service does not grant authority
+over another.
 
 ## Configuration and trust
 
 - [Rotate credentials, keys, certificates, and trust](rotate-credentials-and-trust/)
-- [Compare a baseline and reapprove a source change](compare-and-reapprove-source-change/)
 
 ## State and runtime
 
-- [Refresh and recover a materialization](refresh-and-recover-materialization/)
-- [Recover, restart, upgrade, and roll back](recover-upgrade-migrate-and-rollback/)
 - [Inspect and diagnose a running deployment](inspect-and-diagnose/)
+- [Retention and persistent state](../retention-and-persistent-state/)
+- [Verify and interpret the Evidence Gateway audit chain](../evidence-audit/)
 
-## Source adaptation
+## Where Relay changes happen instead
 
-- [Operate bounded Script workers and protocol helpers](operate-script-workers/)
+Registry Relay serves one Registry per process from one sealed package.
+There is no second serving lane, no partial activation, and no runtime switch
+that changes what a package means.
+A change to resources, operations, access profiles, classifications, or
+disclosure is a new complete revision: the publisher reseals, the operator
+starts a candidate on a private listener, waits for readiness, shifts traffic,
+and drains the previous process.
+[Operate Registry Relay](../relay/) carries that procedure and its rollback
+condition.
 
-The public Relay lane and the consultation Relay lane activate separate product bundles, each
-with its own anchor, identity, and anti-rollback state.
-Neither serving workload depends on the other; only the consultation lane's state actions wait on
-a healthy PostgreSQL.
-Admit traffic to a lane only after that lane's product boundary passes.
-This sequence is compatible staged admission, not atomic project activation.
-
-{/* Evidence: crates/registryctl/src/deployment.rs and
-    docs/site/src/content/docs/operate/advanced/recover-upgrade-migrate-and-rollback.mdx. */}
+{/* Evidence: crates/registry-relay-v2/src/startup.rs serve(): "Configuration and
+    package state never reload in place." One package per process. */}
 
 ## Next
 
-- [Verify the project](../../verify/)
-- [Review generated artifacts](../../generated-artifacts/)
-- [Use the operator diagnostic reference](../../reference/diagnostics/operator/)
+- [Validate your project](../../verify/)
+- [Understand generated files](../../generated-artifacts/)
+- [Review the security guidance](../../security/)

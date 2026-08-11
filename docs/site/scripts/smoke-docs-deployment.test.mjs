@@ -33,10 +33,8 @@ function fixture(overrides = {}) {
     ['/sitemap-index.xml', Buffer.from('<sitemapindex/>')],
     ['/llms.txt', Buffer.from('docs')],
     ['/index.md', Buffer.from('# Docs')],
-    ['/generated/configuration-reference.v1.json', Buffer.from('{}')],
     ['/dev/llms.txt', Buffer.from('dev docs')],
     ['/dev/index.md', Buffer.from('# Dev docs')],
-    ['/dev/generated/configuration-reference.v1.json', Buffer.from('{}')],
   ]);
   for (const [path, value] of Object.entries(overrides)) routes.set(path, value);
   return async (pathname) => {

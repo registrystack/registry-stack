@@ -1,6 +1,6 @@
 ---
 title: Inspect and diagnose a running deployment
-description: Inspect Relay, Evidence Gateway, and Registry Mint runtime posture, audit, health, readiness, and API shape, then classify failures with stable diagnostics.
+description: Inspect Relay, Evidence Gateway, and Registry Mint runtime health, readiness, audit, and API shape, then classify failures with stable diagnostics.
 status: current
 owner: registry-docs
 source_repos:
@@ -9,48 +9,45 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-11"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this procedure to inspect a running Relay, Evidence Gateway, or Registry Mint instance and diagnose
-source denial, policy denial, ambiguity, stale materialization, bundle rejection, or capability
-mismatch without collecting source rows or secret values.
+Use this procedure to inspect a running Relay, Evidence Gateway, or Registry Mint instance and
+diagnose source or startup failure, caller authorization failure, format mismatch, cursor error,
+ambiguity, or audit-write failure without collecting source rows or secret values.
 
 ## Prerequisites
 
 - Use the protected operator network and a least-privilege posture or API credential.
-- Know the active product, environment, stream, instance, and expected bundle sequence for Relay,
-  and the deployment revision for Evidence Gateway and Registry Mint.
-- Keep public problem responses, operator diagnostics, restricted posture, and protected audit
-  records in separate access classes.
+- Know the active product and instance for Relay: its runtime file path, bound source path, and
+  package `packageRevision` digest. Know the deployment revision for Evidence Gateway and
+  Registry Mint.
+- Keep public problem responses, operator diagnostics, and protected audit records in separate
+  access classes.
 - Reproduce with synthetic identifiers unless separate authority permits another probe.
 
 ## Ownership and trust boundary
 
-Public problem details give callers stable, minimized classifications.
-The default posture tier is redacted for operational sharing.
-Restricted posture can contain per-resource or provider detail and belongs only to trusted
-operators.
+Public problem details give callers stable, minimized classifications; Relay's `404
+resource.not_found` concealment for both an unknown and an unauthorized access profile is one
+instance of that discipline.
 Relay, Evidence Gateway, and Registry Mint each write their own audit or operational records and keep
-their own keys separate: Relay's redacted posture and audit sink, Evidence Gateway's keyed JSONL audit
+their own keys separate: Relay's audit sink, Evidence Gateway's keyed JSONL audit
 chain (`products/evidence/OPERATOR-CONTRACT.md`, Audit and operational data), and Registry Mint's
 keyed JSONL token-decision chain.
 
-No deployment exposes a cross-product posture view: each product reports only its own.
+No deployment exposes a cross-product view: each product reports only its own health, readiness,
+and audit chain. Relay V2 has no separate operator-facing posture or admin surface beyond
+`/health`, `/ready`, and its audit sink.
 
-The generated diagnostic catalogs contain static meanings, rules, remediation, evidence scope,
-and limitations.
-They never need a project, environment, secret, runtime service, received configuration, path,
-hash, credential, source response, or country value.
-
-{/* Evidence: docs/site/src/content/docs/reference/diagnostics/operator.mdx,
-    docs/site/src/content/docs/reference/errors.mdx,
-    crates/registry-relay/docs/ops.md,
-    products/evidence/OPERATOR-CONTRACT.md, and
-    docs/site/src/content/docs/reference/evidence-problems.mdx. */}
+{/* Evidence: crates/registry-relay-v2/src/server.rs, crates/registry-relay-v2/src/api.rs,
+    crates/registry-relay-v2/src/cursor.rs, crates/registry-relay-v2/src/startup.rs,
+    crates/registry-relayctl/src/lib.rs, products/evidence/OPERATOR-CONTRACT.md,
+    docs/site/src/content/docs/reference/evidence-problems.mdx, and
+    docs/site/src/content/docs/reference/errors.mdx. */}
 
 ## Inspect the runtime surfaces
 
@@ -58,17 +55,19 @@ Inspect each surface for its own purpose:
 
 | Surface | Use | Boundary |
 | --- | --- | --- |
-| `GET /healthz` (Relay) or `GET /health` (Evidence Gateway, Registry Mint) | Process liveness | Does not check all dependencies or data freshness; Evidence Gateway's `/health` answers 200 even when a source credential is missing |
-| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Evidence Gateway checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist, its audit writer is healthy, and its signing provider is available |
-| `GET /admin/v1/posture` (Relay only) | Redacted deployment and control observations | Default and restricted tiers expose different detail; Evidence Gateway and Registry Mint have no equivalent admin posture endpoint |
-| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence Gateway and `mint verify-audit` for Mint |
-| `GET /openapi.json` | Concrete API shape for the running instance | Relay's document is configuration and authentication dependent; Evidence Gateway's is the released generated artifact, unauthenticated and independent of the deployed bundle |
+| `GET /health` (Relay, Evidence Gateway, Registry Mint) | Process liveness | Does not check all dependencies or data freshness; Evidence Gateway's `/health` answers 200 even when a source credential is missing |
+| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Relay's `/ready` ANDs audit-sink readiness, bound SQLite source readiness, and OIDC issuer readiness when an issuer is configured; Evidence Gateway checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist, its audit writer is healthy, and its signing provider is available |
+| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence Gateway and `mint verify-audit` for Mint. Relay V2 has no equivalent offline verification command; inspect the sealed segment sequence directly |
+| `GET /openapi.json` | Concrete API shape for the running instance | Relay's document reflects the operations compiled into the running package and needs no credential; Evidence Gateway's is the released generated artifact, unauthenticated and independent of the deployed bundle |
 | Evidence Gateway `GET /metrics` (only when `metricsListener` is configured) | Request-boundary counts and latency by route, method, status, and problem code | Absent unless configured; never serves evidence routes and reveals no request content |
+
+Relay V2 has no admin listener and no posture endpoint: `/health`, `/ready`, and `/openapi.json` on
+its one configured listener are the complete runtime status surface.
 
 Query health and readiness through the same network path used by traffic admission:
 
 ```sh
-curl -fsS https://<relay-host>/healthz
+curl -fsS https://<relay-host>/health
 curl -fsS https://<relay-host>/ready
 curl -fsS https://<evidence-host>/health
 curl -fsS https://<evidence-host>/ready
@@ -76,87 +75,120 @@ curl -fsS https://<mint-host>/health
 curl -fsS https://<mint-host>/ready
 ```
 
-Read Relay posture only through its protected admin listener:
+Fetch a running Relay instance's `/openapi.json` directly and compare it against the package's
+reviewed compiled operations:
 
 ```sh
-curl -fsS \
-  -H "Authorization: Bearer ${OPS_READ_TOKEN}" \
-  http://127.0.0.1:8081/admin/v1/posture
+curl -fsS https://<relay-host>/openapi.json
 ```
 
-Fetch the concrete Relay instance OpenAPI only through its configured authenticated route, and
-compare it with the reviewed generated input and the
-[Relay API reference](../../../reference/apis/registry-relay/).
-Evidence Gateway's `GET /openapi.json` needs no credential, because it always serves the same released
+Evidence Gateway's `GET /openapi.json` needs no credential either, because it always serves the same released
 generated artifact rather than a deployment-specific document
 (`products/evidence/OPERATOR-CONTRACT.md`, Startup and readiness); compare it with the
 [Evidence Gateway API reference](../../../reference/apis/registry-evidence/).
-An OpenAPI match does not prove authorization, source behavior, or claim semantics.
+An OpenAPI match does not prove authorization, source behavior, or claim semantics. Relay V2
+currently has no separate published API reference page to compare against; the running instance's
+own `/openapi.json` is the source of truth.
 
-## Load the stable diagnostic catalogs
+## Diagnostic tools by product
 
-Print the catalogs without opening a project or contacting a runtime:
+Relay V2 has no machine-readable diagnostic catalog. `registryctl tooling diagnostics --catalog
+operator/fixture/authoring` was Relay V1 and `registryctl`-only tooling; no `relayctl` subcommand
+replaces it. Diagnose a Relay V2 deployment with:
 
-```sh
-registryctl tooling diagnostics --catalog operator --format json
-registryctl tooling diagnostics --catalog fixture --format json
-registryctl tooling diagnostics --catalog authoring --format json
-```
+- `relayctl check <project>` and `relayctl check <project> --production` for an authoring-time
+  project's compiled contract, offline.
+- `relayctl test <project>` and `relayctl test <project> --fixture <identifier>` for offline fixture
+  reproduction.
+- `relayctl inspect <database>` for a source database's structural shape without reading row
+  values. It reads a SQLite file directly, before an authoring project exists.
+- `relayctl diff <project> <project>` to compare two authoring-time projects.
+- `GET /health`, `GET /ready`, and `relay healthcheck` for a running instance.
 
-Use the generated [operator](../../../reference/diagnostics/operator/),
-[fixture](../../../reference/diagnostics/fixture/), and
-[authoring](../../../reference/diagnostics/authoring/) references for the same code definitions.
-Branch on the exact code and response status.
-Do not parse error prose, paths, or type URI segments.
-
-These catalogs cover Relay, `registryctl`, and shared platform operations; they do not enumerate
-Evidence Gateway or Registry Mint failures. Evidence Gateway's closed problem-code catalog is the
+Evidence Gateway's closed problem-code catalog is the
 [Evidence Gateway errors and problems reference](../../../reference/evidence-problems/) instead, and it
 needs no separate CLI catalog because the codes are fixed by the frozen public contract.
 
 ## Diagnose the failure class
 
-### Source denial or source failure
+### Source access and startup refusal
 
-Separate caller authorization from upstream source access.
-Public `auth.*` codes describe Relay caller authentication and scope.
-`relay.consultation.activation.source_credentials_unavailable` describes a Relay activation
-boundary: Relay could not activate the source-credential capability its consultation registry
-needs at startup.
-Offline fixture failures such as `source.status_rejected`, `source.unavailable`, and
-`authorization.denied` classify synthetic Relay source behavior.
+Relay V2 verifies its package, source, and runtime bindings before it starts listening. `relay
+serve --runtime <file>` refuses an unsafe path (a symbolic link, or a component with the wrong
+owner or mode), a package whose re-derived bytes do not match what is installed at `packagePath`,
+a source whose SQLite schema fingerprint has drifted from what the package pinned, a missing
+mandatory audit input, or a runtime binding incompatible with the package, such as a protected
+access profile paired with `authentication.issuer: null`. Correct the mismatched package, source,
+or runtime file and restart.
+
+{/* TODO[evidence]: confirm whether relay serve reports a stable, documented code per
+    startup-refusal cause, beyond the free-text startup log line; not confirmed in
+    crates/registry-relay-v2/src/startup.rs during this review. */}
+
+Relay V2 has no source-credential concept to fail separately from startup. A snapshot source is an
+immutable file Relay pins by content digest; a live read-only source is read inside one read
+transaction per request. Neither uses an OAuth token, an API key, or any other per-source
+credential, so there is no source-authentication failure class distinct from the startup checks
+above.
+
+{/* TODO[evidence]: confirm whether a live read-only source that becomes unavailable mid-deployment
+    (file missing, locked, or schema-drifted after startup) produces a distinct stable runtime
+    code, or only a generic request failure; not confirmed during this review. */}
+
 Evidence Gateway collapses every source-boundary failure (unreachable, timed out, wrong credential, wrong
 media type, an oversized response, malformed JSON, or an error envelope) into the single
 `dependency_unavailable` problem (`crates/registry-evidence/src/runtime.rs`,
 `source_failure_problem`; see the
 [Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)).
 
-Confirm which boundary denied access before changing a credential or policy.
-Do not widen a source path or caller scope to clear a source credential failure.
+Confirm which product and which boundary produced a denial before changing a credential, a source
+path, or an access profile.
+Do not widen a Relay access profile or an Evidence Gateway source binding to clear a startup or
+source failure.
 
-### Policy denial
+### Caller authorization and access-profile mismatch
 
-Stable `pdp.*` codes identify Relay policy decisions such as `pdp.purpose_not_permitted`,
-`pdp.assurance_insufficient`, and `pdp.evidence_stale`; despite the shared word, `pdp.evidence_stale`
-is Relay's policy-decision-point code for stale source data
-(`crates/registry-platform-pdp/src/lib.rs`) and is unrelated to the Evidence Gateway product.
-Use the policy id, hash, checked rule ids, and other redacted audit evidence available to the
-authorized operator.
-Do not turn a policy denial into source unavailability or bypass the rule during diagnosis.
+A Relay protected access profile without a satisfying token, and a syntactically unknown access
+profile, both return the same concealed `404 resource.not_found`. Relay does not fall back to a
+less restrictive access profile. Correct the issuer configuration in `runtime.yaml` or the
+caller's granted scope; do not widen the compiled access profile to clear a caller's `404`.
+
+### Format and geometry mismatch
+
+A request for a format or geometry the selected access profile does not disclose, or a request for
+an unsupported response format, returns `406 format.unsupported`. Select an access profile that
+discloses a primary geometry, or request a format the deployment supports.
+
+### Cursor errors
+
+Relay authenticates and encrypts every pagination cursor with a fresh nonce, binding it to the
+source and contract revisions, operation, access profile, disclosure profile, filters, order,
+selected fields, and authorization context it was issued for. It refuses a cursor that is
+malformed, carries invalid protection, has expired past `cursor.maximumAgeSeconds` (default `300`
+seconds), or no longer matches the request context, including a changed filter, order, access
+profile, or disclosure profile. Treat a cursor error as an expected consequence of elapsed time or
+changed request context, not a defect, and issue a fresh first-page request. Cursors apply only to
+snapshot-source list operations; live read-only sources do not support pagination.
 
 ### Ambiguity
 
-`ambiguous` is a valid minimized outcome for a Relay consultation or attribute-release request,
-not an operator startup failure.
-The result carries no selected output map, and Relay must not choose a source record.
-Reproduce the selector and cardinality with synthetic fixtures.
-Use `source.cardinality_violation` only when the source behavior violates the declared fixture or
-decoder contract.
-Evidence Gateway applies the same discipline to a `POST /v1/evidence` request: an ambiguous match is one
-of the conditions the `evidence_not_available` problem collapses into a single value-free
-response, so timing and status code do not reveal which condition occurred
-(`products/evidence/OPERATOR-CONTRACT.md`, Source and selector controls; see the
-[Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)).
+Relay V2's Record operations are exact lookup or bounded list, not fuzzy matching, so Relay V2 has
+no separate ambiguous-outcome category the way Relay V1's consultation lane did. A request either
+matches a compiled operation and access profile or it does not.
+
+Evidence Gateway keeps the ambiguity discipline for its own `POST /v1/evidence` request: an
+ambiguous source match is one of the conditions the `evidence_not_available` problem collapses
+into a single value-free response, so timing and status code do not reveal which condition
+occurred (`products/evidence/OPERATOR-CONTRACT.md`, Source and selector controls; see the
+[Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)). Reproduce
+with synthetic fixtures rather than selecting a record manually inside either product.
+
+### Audit write failure
+
+For every operation, including anonymous public access, Relay writes an attempt event before
+source access and a terminal release, unresolved, or source-failed event before returning. When
+the terminal write fails, Relay withholds the response rather than serve it unaudited. Restore the
+audit sink and confirm write access before accepting traffic again.
 
 ### Offline fixture reproduction
 
@@ -185,66 +217,53 @@ stopped on an error.
 The flag is offline only. A served request has no equivalent: diagnose it from its public problem
 and the keyed audit chain.
 
-### Stale materialization
+### Diagnostic classes that do not apply to Relay V2
 
-Check restricted `relay.refresh_health`, the last successful load, consecutive failures, and
-`serving_last_good`.
-`pdp.evidence_stale` is a policy decision.
-`schema.resource_unavailable` is a serving failure.
-A last-good table can remain ready while the acquisition path is unhealthy, so readiness alone
-cannot close this diagnosis.
+Relay V1 diagnosed failures Relay V2 has no equivalent for. Do not look for these when diagnosing a
+Relay V2 deployment:
 
-### Bundle rejection
-
-Use the shared stable results `rejected_signature`, `rejected_binding`,
-`rejected_validation`, and `rejected_rollback`.
-Relay's startup codes include:
-
-- `relay.startup.bundle_signature_rejected`
-- `relay.startup.bundle_binding_rejected`
-- `relay.startup.bundle_validation_rejected`
-- `relay.startup.bundle_rollback_rejected`
-
-Evidence Gateway and Registry Mint have no equivalent stable startup-rejection codes: `evidence check` and
-`mint check` fail with a descriptive message instead, covered in
-[Rotate Evidence Gateway signing keys](../../../tutorials/rotate-evidence-signing-keys/)
-and [Configure Registry Mint](../../../configure/mint/#troubleshooting).
-
-Correct the signer, binding, closed file set, product validation, or sequence.
-Do not disclose the rejected configuration or delete anti-rollback state.
-
-### Capability or activation mismatch
-
-Use `relay.consultation.activation.unsupported_plan` and
-`relay.consultation.activation.artifact_registry_invalid` for a Relay consultation-lane activation
-failure: Relay could not compile or activate the verified artifact registry its runtime needs at
-startup.
-
-Compare the generated capability inventory, the public consultation contract, and the exact
-`contract_hash` against what the running instance actually compiled.
-Relay rejects an execute-time contract mismatch before source access.
-Stage a compatible product bundle separately and repeat the check before returning it to traffic.
+- **Policy-decision-point codes.** Stable `pdp.*` codes such as `pdp.purpose_not_permitted`,
+  `pdp.assurance_insufficient`, and `pdp.evidence_stale` belonged to a policy-decision-point layer
+  Relay V2 does not have. Relay V2's only access decision is whether a request satisfies the
+  compiled access profile, reported as the `404` and `406` classes above.
+- **Consultation-activation codes.** `relay.consultation.activation.source_credentials_unavailable`,
+  `relay.consultation.activation.unsupported_plan`, and
+  `relay.consultation.activation.artifact_registry_invalid` all belonged to Relay V1's
+  `consultation` lane. Relay V2 has no consultation lane, no activation-time artifact registry, and
+  no PostgreSQL-backed consultation state.
+- **Stale materialization.** `relay.refresh_health`, `serving_last_good`, and the staleness
+  diagnosis built around them assumed a periodically refreshed materialization cache. Relay V2
+  keeps no server-side ingest cache; a snapshot source is read from its pinned immutable file and a
+  live read-only source is read fresh inside one transaction per request, so there is nothing to go
+  stale between requests.
+- **Signed-bundle rejection codes.** `relay.startup.bundle_signature_rejected`,
+  `_binding_rejected`, `_validation_rejected`, and `_rollback_rejected` assumed a signed product
+  bundle and an anti-rollback ratchet. Relay V2 packages are integrity-digested through
+  `packageRevision`, not signed, and carry no anti-rollback state, so there is no signature,
+  binding, or rollback check to reject.
 
 ## Expected evidence
 
 Retain:
 
 - Timestamped health and readiness status without response secrets.
-- Default redacted posture and restricted fields only in the protected operator record.
-- Stable public, operator, fixture, or authoring diagnostic codes.
-- Product, environment, stream, instance, and bundle sequence for Relay.
+- Stable public diagnostic codes and status classes.
+- Relay's package `packageRevision` digest and runtime file path identifying the deployed
+  instance, rather than a signed bundle sequence.
 - Evidence Gateway's `operation` identifier from the problem response or `X-Request-Id` header, and the
   output of `evidence verify-audit` when a signing or audit failure is suspected.
 - Registry Mint's operation identifier from its local log and the output of `mint verify-audit`
   when a token-decision audit failure is suspected. Do not retain the assertion or access token.
 - Redacted audit correlation ids and the tested synthetic canary outcome.
-- The traffic-admission, quarantine, or escalation decision.
+- The traffic-admission or escalation decision.
 
 ## What this proves
 
-The diagnostic code identifies a stable product-owned failure class and safe remediation.
-Posture reports the controls and observations available to the running product.
-Audit records prove the retained product event chain under the configured sink and keys.
+The `404` and `406` response classes and the cursor-error categories above identify stable,
+documented Relay V2 failure classes with safe remediation; Relay V2's startup refusal is evidenced
+by its log message rather than a separate stable code catalog. Health and readiness prove only the
+checks each endpoint runs; Relay V2 exposes no posture surface distinct from `/health` and
+`/ready`. Audit records prove the retained product event chain under the configured sink and key.
 The instance OpenAPI proves the exposed API description returned by that instance.
 
 These surfaces do not prove off-host audit completeness, legal approval, country acceptance,
@@ -252,17 +271,15 @@ source-domain correctness, backup freshness, or an untested client journey.
 
 ## Roll back or recover
 
-Keep traffic blocked while a startup, bundle, capability, or cross-product contract failure
-remains.
-Restore the last verified product recovery set before traffic when recovery does not violate
-anti-rollback or state compatibility.
-After a higher sequence or new correctness-state write, use a reviewed higher-sequence fix-forward
-path unless the release documents safe rollback.
+Keep traffic blocked while a Relay startup refusal, a capability mismatch, or a cross-product
+contract failure remains. Relay V2 has no anti-rollback state to violate: recovery is installing a
+complete prior reviewed package, source, and runtime file and following
+[Replace complete revisions](../../relay/#replace-complete-revisions). There is no fix-forward
+sequence ratchet to satisfy first.
 
-For ambiguity, fix or narrow the reviewed selector or source data.
-Do not select a record manually inside Relay or Evidence Gateway.
-For stale materialization, follow the materialization recovery procedure without enabling live
-fallback.
+Evidence Gateway's ambiguous match and Relay V2's `404 resource.not_found` concealment are both
+expected minimized outcomes, not defects to recover from; fix or narrow the reviewed selector,
+access profile, or source data instead of selecting a record manually inside either product.
 
 ## Escalate
 
@@ -270,12 +287,11 @@ Escalate to security when diagnostics or logs expose secret, source, path, hash,
 country values.
 Escalate to the source owner for unexplained denials, ambiguity, or freshness.
 Escalate to both product owners for contract or capability mismatch.
-Escalate to release operations for a rejection that cannot be resolved without changing
-anti-rollback state or runtime schemas.
+Escalate to release operations for a Relay startup refusal that persists after installing a
+corrected package, source, and runtime file.
 
 ## Next
 
-- [Refresh and recover a materialization](../refresh-and-recover-materialization/)
-- [Recover, upgrade, migrate, and roll back](../recover-upgrade-migrate-and-rollback/)
+- [Operate Relay: replace complete revisions](../../relay/#replace-complete-revisions)
 - [Review the error and status code reference](../../../reference/errors/)
 - [Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)

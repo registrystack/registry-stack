@@ -1,9 +1,0 @@
----
-const installerUrl = new URL(
-  `${import.meta.env.BASE_URL}install.sh`,
-  'https://docs.registrystack.org',
-).href;
-const command = `curl -fsSLo registryctl-install.sh ${installerUrl}`;
----
-
-<pre><code class="language-sh">{command}</code></pre>

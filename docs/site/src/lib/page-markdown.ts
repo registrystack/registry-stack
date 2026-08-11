@@ -7,21 +7,6 @@ export const DISCOVERY_HEADER = `Registry stack documentation: machine-readable 
 Index of all pages: https://docs.registrystack.org/llms.txt
 Full corpus: https://docs.registrystack.org/llms-full.txt`;
 
-const REGISTRYCTL_INSTALL_COMPONENT = '<RegistryctlInstallCommand />';
-
-function expandMachineReadableComponents(body: string, basePath: string): string {
-  const installerUrl = new URL(
-    `${basePath.replace(/\/?$/, '/')}install.sh`,
-    'https://docs.registrystack.org',
-  ).href;
-  const installerCommand = [
-    '```sh',
-    `curl -fsSLo registryctl-install.sh ${installerUrl}`,
-    '```',
-  ].join('\n');
-  return body.replaceAll(REGISTRYCTL_INSTALL_COMPONENT, installerCommand);
-}
-
 /**
  * Map a docs collection entry slug to the output path param used in
  * src/pages/[...slug].md.ts so the generated file URL matches the page URL.
@@ -53,18 +38,16 @@ export function entrySlugToOutputPath(entryId: string): string {
  * @param description - Optional description from frontmatter.
  * @param body - Raw Markdown body (entry.body from the content collection,
  *               which excludes frontmatter).
- * @param basePath - Built docset base path used for version-bound public assets.
  */
 export function buildPageMarkdown(
   title: string,
   description: string | undefined,
   body: string,
-  basePath = '/',
 ): string {
   const parts: string[] = [DISCOVERY_HEADER, '', `# ${title}`];
   if (description) {
     parts.push('', `> ${description}`);
   }
-  parts.push('', expandMachineReadableComponents(body, basePath));
+  parts.push('', body);
   return parts.join('\n');
 }

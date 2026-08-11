@@ -42,20 +42,14 @@ const archiveExecutionEnvironmentKeys = Object.freeze([
   'http_proxy',
   'no_proxy',
 ]);
-export const currentSourceGeneratedArtifacts = Object.freeze([
-  'docs/site/src/data/generated/project-authoring-journeys.json',
-  'docs/site/src/data/generated/project-starters.json',
-  'docs/site/src/data/generated/configuration-reference.json',
-  'docs/site/src/data/generated/configuration-reference-coverage.json',
-  'docs/site/public/generated/configuration-reference.v1.json',
-  'docs/site/public/generated/configuration-reference-coverage.v1.json',
-  'docs/site/src/data/generated/diagnostics/authoring.json',
-  'docs/site/src/data/generated/diagnostics/fixture.json',
-  'docs/site/src/data/generated/diagnostics/operator.json',
-  'docs/site/public/generated/diagnostics/authoring.v1.json',
-  'docs/site/public/generated/diagnostics/fixture.v1.json',
-  'docs/site/public/generated/diagnostics/operator.v1.json',
-]);
+// Artifacts a current-source generator writes from the checked-out tree, which
+// an archive must instead take from its docset's pinned source ref. Every
+// entry this list carried was generated from the retired registryctl authoring
+// and diagnostic contracts, so the list is empty until a Relay V2 generator
+// writes an artifact with the same drift exposure. `stagePinnedGeneratedArtifacts`
+// keeps working when it is empty; the staging behavior stays under test through
+// the `artifacts` option.
+export const currentSourceGeneratedArtifacts = Object.freeze([]);
 
 function compareEntryNames(left, right) {
   if (left.name < right.name) return -1;
@@ -215,6 +209,7 @@ async function git(command, args, cwd) {
 export async function stagePinnedGeneratedArtifacts(docset, {
   docsRoot = process.cwd(),
   executeGit = git,
+  artifacts = currentSourceGeneratedArtifacts,
 } = {}) {
   const sourceProduct = docset.products?.['registry-stack'];
   const declaredSourceRef = sourceProduct?.ref;
@@ -227,9 +222,16 @@ export async function stagePinnedGeneratedArtifacts(docset, {
     );
   }
   const repoRoot = resolve(docsRoot, '../..');
+  // `git ls-tree` with no pathspec lists the whole tree, so an empty artifact
+  // list must short-circuit rather than fall through. The ref check above still
+  // runs: an archived docset has to pin its source ref whether or not there is
+  // anything to stage from it.
+  if (artifacts.length === 0) {
+    return async () => {};
+  }
   const { stdout: listed } = await executeGit(
     'git',
-    ['ls-tree', '-rz', '--name-only', sourceRef, '--', ...currentSourceGeneratedArtifacts],
+    ['ls-tree', '-rz', '--name-only', sourceRef, '--', ...artifacts],
     repoRoot,
   );
   const pinnedPaths = new Set(
@@ -245,7 +247,7 @@ export async function stagePinnedGeneratedArtifacts(docset, {
   }
 
   const snapshots = new Map();
-  for (const repoRelative of currentSourceGeneratedArtifacts) {
+  for (const repoRelative of artifacts) {
     const local = resolve(repoRoot, repoRelative);
     if (relative(docsRoot, local).startsWith('..')) {
       throw new Error(`generated archive input resolves outside docs root: ${repoRelative}`);
@@ -260,7 +262,7 @@ export async function stagePinnedGeneratedArtifacts(docset, {
     }
   };
   try {
-    for (const repoRelative of currentSourceGeneratedArtifacts) {
+    for (const repoRelative of artifacts) {
       const local = resolve(repoRoot, repoRelative);
       const contents = pinnedContents.get(repoRelative);
       if (contents === undefined) await rm(local, { force: true });
@@ -305,12 +307,12 @@ export async function buildDocsetArchive(docset, {
     homeDirectory: archiveHome,
     indexable: false,
   });
-  // Current-source generators consume the checked-out registryctl contracts
-  // and label their output as unreleased. Release archives instead stage those
-  // generated artifacts from the docset's pinned source ref and refresh only
-  // inputs whose generators honor DOCS_DOCSET. Released archives are built at
-  // the canonical root so Pages can promote their bytes without rewriting
-  // links or canonical metadata.
+  // Current-source generators read the checked-out tree and label their output
+  // as unreleased. Release archives instead stage those generated artifacts
+  // from the docset's pinned source ref and refresh only inputs whose
+  // generators honor DOCS_DOCSET. Released archives are built at the canonical
+  // root so Pages can promote their bytes without rewriting links or canonical
+  // metadata.
   let restoreGeneratedArtifacts = async () => {};
   try {
     restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, { docsRoot });

@@ -12,7 +12,7 @@ const criticalPaths = [
   'index.html',
   'start/when-to-use/index.html',
   'start/quickstart/index.html',
-  'tutorials/author-registry-project/index.html',
+  'tutorials/publish-governed-sqlite-registry/index.html',
   'verify/index.html',
   'generated-artifacts/index.html',
   'operate/index.html',

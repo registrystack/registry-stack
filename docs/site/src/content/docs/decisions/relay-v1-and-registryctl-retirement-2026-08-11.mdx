@@ -1,0 +1,90 @@
+---
+title: Relay V1 and registryctl retirement decision
+description: Record of the decision to retire the Relay V1 runtime and the registryctl adopter tool, and to document Relay V2 as the only current Relay.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: decision
+locale: en
+standards_referenced: []
+---
+
+Registry Stack decided on 2026-08-11 to retire the Relay V1 runtime and the
+`registryctl` adopter tool from the current documentation surface, and to
+document Relay V2 as the only Relay a new adopter should read about.
+
+## Decision
+
+**Date:** 2026-08-11
+
+**Status:** Accepted
+
+The v0.19.0 beta-29 release replaced both Relay identities:
+
+- `relay`, built from `registry-relay-v2`, replaces the `registry-relay`
+  runtime.
+- `relayctl`, built from `registry-relayctl`, replaces `registryctl`.
+
+`release/manifests/registry-stack-beta-29.yaml` records the legacy runtime,
+the Rhai worker, the `registryctl` binary, its installer, its image lock, and
+the PostgreSQL release closure as absent from the release.
+
+Documentation follows the release inventory. Pages describing the retired
+runtime and tool are deleted rather than archived, because the published
+documentation archives already hold them at the versions where they were true.
+Retired routes redirect to the Relay V2 guidance that answers the same
+question.
+
+## Context
+
+Relay V1 and Relay V2 are not two configurations of one product. V2 narrows
+the boundary deliberately, and most V1 documentation describes capabilities V2
+does not have:
+
+- V1 read spreadsheets, HTTP APIs, PostgreSQL, and SQLite. V2 reads read-only
+  SQLite only, and only from reviewed views.
+- V1 ran Rhai scripts in a worker. V2 has no scripting.
+- V1 carried an OAuth client-credentials path and API keys. V2 verifies OIDC
+  tokens only.
+- V1 split public and consultation lanes across two services. V2 serves one
+  route set and distinguishes callers by access profile.
+- V1 materialized data. V2 does not.
+- V1 exposed an admin surface including a posture endpoint. V2 exposes
+  `GET /ready` and nothing else.
+- V1 published one product-level OpenAPI document. V2 generates an OpenAPI
+  document per deployment from that deployment's registry contract.
+
+Keeping the V1 pages on the current surface would leave a reader following
+procedures against a runtime that is no longer released. Archiving them in
+place would give the same reader two present-tense answers to the same
+question.
+
+## Consequences
+
+- The retired tutorials, configuration pages, operations procedures, and
+  reference pages for the V1 runtime and `registryctl` are removed from the
+  current docset. Published archives keep them at their own versions.
+- Retired routes redirect rather than 404, following the pattern established by
+  the [Registry Notary retirement](/decisions/notary-retirement-2026-08-03/).
+- The site no longer pins a Relay OpenAPI document. Relay V2 serves its own
+  description at `GET /openapi.json`, generated from the adopter's registry
+  contract, so there is no single product-level document to publish.
+- The generated authoring reference and diagnostic catalogs are removed. They
+  were produced from `registryctl` introspection commands that `relayctl` does
+  not yet offer. Restoring generated coverage requires that introspection to
+  exist first.
+- The normative RS-\* specifications for the Relay protocol, the adopter tool,
+  operational posture, and terminology are rewritten against V2. Their
+  requirement identifiers are renumbered, and the change is recorded in each
+  specification's version history.
+- Capabilities that V1 documented and V2 does not implement are recorded in
+  [Known limitations](/explanation/known-limitations/) rather than being
+  dropped silently.
+- The retired crates stay in the source tree. They are still needed to validate
+  historical releases, and this decision does not archive source.
+
+## Superseded by
+
+None.

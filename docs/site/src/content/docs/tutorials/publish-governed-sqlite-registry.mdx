@@ -250,14 +250,16 @@ falls back to the public default.
 ## Verify the spatial response boundary
 
 The supplied project also contains a `registered-premises` resource with one reviewed Point and a
-bounded bbox query. Replay its JSON-FG fixture:
+bounded bbox query. Its JSON-FG step declares `recordsEquivalentTo: premises-first-page`, so it
+cannot be replayed on its own: `--fixture` runs exactly the named step and expands no
+prerequisites, and an equivalence expectation whose referenced observation was never recorded
+fails as `fixture.representation_mismatch`. Run the whole journey instead:
 
 ```sh
-relayctl test "$project" --fixture premises-feature-collection-jsonfg
+relayctl test "$project"
 ```
 
-The report first runs `premises-first-page`, the declared record-equivalence prerequisite, then the
-selected JSON-FG step. Both pass. The selected step is:
+The report lists every step. The JSON-FG one is:
 
 ```json
 {
@@ -267,6 +269,9 @@ selected JSON-FG step. Both pass. The selected step is:
   "passed": true
 }
 ```
+
+Selecting a single step is for cases that stand alone, like `filtered-page` above. Cross-format
+equivalence is a claim about two responses, so it is only provable in a run that produces both.
 
 The request uses `Accept: application/geo+json`, `formatProfile=jsonfg`, and a bounded CRS84
 `bbox` on the named `within-bbox` search. `Accept` and `formatProfile` select serialization. The

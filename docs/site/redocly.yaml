@@ -1,8 +1,6 @@
 extends:
   - recommended
 apis:
-  registry-relay:
-    root: openapi/registry-relay.openapi.json
   registry-evidence:
     root: openapi/registry-evidence.openapi.json
 rules:

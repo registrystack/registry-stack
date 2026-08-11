@@ -78,28 +78,6 @@ test('raw body content is included verbatim', () => {
   assert.ok(out.includes(body), 'body content not found in output');
 });
 
-test('expands the Registryctl installer component for machine-readable Markdown', () => {
-  const body = 'Install:\n\n<RegistryctlInstallCommand />\n\nThen continue.';
-  const current = buildPageMarkdown('Title', undefined, body);
-  const archived = buildPageMarkdown('Title', undefined, body, '/v/0.17.0/');
-
-  assert.match(
-    current,
-    /curl -fsSLo registryctl-install\.sh https:\/\/docs\.registrystack\.org\/install\.sh/,
-  );
-  assert.match(
-    archived,
-    /curl -fsSLo registryctl-install\.sh https:\/\/docs\.registrystack\.org\/v\/0\.17\.0\/install\.sh/,
-  );
-  assert.doesNotMatch(current, /RegistryctlInstallCommand/);
-  assert.doesNotMatch(archived, /RegistryctlInstallCommand/);
-});
-
-test('per-page Markdown route binds component expansion to the build base path', () => {
-  const routeSource = readFileSync(routePath, 'utf8');
-  assert.match(routeSource, /entry\.body \?\? '',\s*import\.meta\.env\.BASE_URL,/);
-});
-
 test('full output structure: header + title + description + body', () => {
   const out = buildPageMarkdown('My Page', 'Summary here.', 'Page body.');
   const lines = out.split('\n');

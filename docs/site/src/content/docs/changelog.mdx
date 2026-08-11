@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-08-09"
+last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -26,6 +26,49 @@ BREAKING:
   together. New clients read an older response without this member as a batch
   size of `1`; older strict clients reject responses that contain the new
   member.
+
+## 2026-08-11
+
+Documentation updates for the v0.19.0 beta-29 release, which replaced both
+Relay identities:
+
+- BREAKING: `relay` replaces the `registry-relay` runtime, and `relayctl`
+  replaces `registryctl`. The legacy runtime, the Rhai worker, the
+  `registryctl` binary, its installer, its image lock, and the PostgreSQL
+  release closure are absent from the release.
+- Rewrote the Relay documentation around the V2 model: a governed registry
+  contract, a deployment-local runtime document, and generated package
+  artifacts. Relay V1 configuration is not an in-place upgrade input.
+- Documented the V2 read surface: bounded Record reads, named lookups and
+  searches, CRS84 Point data as GeoJSON or JSON-FG, and a profiled SDMX data
+  and structure read subset. Access profiles stay independent of wire-format
+  selection.
+- Removed the documentation for capabilities V2 does not implement:
+  spreadsheet, HTTP, and PostgreSQL sources, Rhai script adapters, API-key and
+  OAuth client-credentials authentication, the two-lane public and
+  consultation split, materialization, and the administrative posture
+  endpoint. [Known limitations](/explanation/known-limitations/) records what
+  is now absent.
+- Replaced the pinned Relay OpenAPI reference with the per-deployment model.
+  Relay V2 generates its description from the adopter's registry contract and
+  serves it at `GET /openapi.json`.
+- Removed the generated authoring reference and diagnostic catalogs, which
+  were produced from `registryctl` introspection commands that `relayctl` does
+  not yet offer.
+- Rewrote the normative RS-\* specifications for the Relay protocol, adopter
+  tooling, operational posture, security, and terminology against the V2
+  contracts.
+- Recorded the [Relay V1 and registryctl retirement
+  decision](/decisions/relay-v1-and-registryctl-retirement-2026-08-11/) and
+  redirected the retired routes.
+- Documented the Relay installer and the `ghcr.io/registrystack/relay:v0.19.0`
+  image. `relayctl` has no installer; it is taken from the release assets or
+  built from source.
+- Documented the Evidence bounded multi-subject request batch, which shares one
+  authorization and execution budget and returns results in request order.
+  Existing single-subject clients need no wire-format migration.
+- A Registry Docs archive is not part of this release, so the current
+  documentation can be updated without waiting for a runtime release.
 
 ## 2026-08-09
 

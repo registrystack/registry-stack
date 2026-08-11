@@ -1,6 +1,6 @@
 ---
 title: Harden a production deployment
-description: An actionable checklist for the operator responsibilities RS-SEC-G Section 9 leaves to your deployment, grouped by key custody, audit, transport, deployment profile, and incident response.
+description: An actionable checklist for the operator responsibilities RS-SEC-G Section 9 leaves to your deployment, grouped by key custody, audit, transport, startup gates, and incident response.
 status: draft
 owner: registry-docs
 source_repos:
@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - registry-platform
-last_reviewed: "2026-08-07"
+last_reviewed: "2026-08-11"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -26,19 +26,24 @@ production-ready.
 ## When to use this
 
 Use this checklist before a deployment serving real data goes live, and again after any change to
-signing keys, audit sinks, network placement, the governed Evidence Gateway bundle, or Relay's declared
-deployment profile. It assumes you have already configured your services per the
-[Registry Relay configuration reference](../../products/registry-relay/configuration/) and, for
-Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
+signing keys, audit sinks, network placement, the governed Evidence Gateway bundle, or the sealed
+Relay package. It assumes you have already configured your services per
+[Configure Relay](../../configure/relay/) and, for Evidence Gateway,
+[Configure Evidence Gateway](../../configure/evidence/).
 
 ## Before you start
 
-- Decide the Relay deployment profile (`local`, `hosted_lab`, `production`, or `evidence_grade`)
-  you are claiming; see the deployment profile section of the
-  [Registry Relay configuration reference](../../products/registry-relay/configuration/). The
-  profile is never inferred from hostname or network position; you declare it.
-- Have your Relay startup logs and `registry-relay doctor` output available to check gate findings
-  as you work through each Relay item.
+- Have the exact `relayctl` project that produced the package you intend to serve, and be able to
+  re-run `relayctl check --production` and `relayctl test` against it. Relay declares no assurance
+  profile and has no posture endpoint: its equivalent of a gate finding is a compile error, a
+  startup failure, or a readiness failure, so the offline commands are where you find problems
+  first.
+- Have `relayctl diff` runnable between the package currently deployed and the one you are about to
+  deploy. It classifies meaning, disclosure, and security changes, and a security-class change is
+  the signal that this checklist needs re-running rather than skimming.
+- Have your Relay startup logs available. `RELAY_LOG` accepts only `off`, `error`, `warn`, `info`,
+  `debug`, or `trace`; any other value silently falls back to the crate's own `info` filter rather
+  than turning on a dependency's logging, so confirm the value you set is one of the six.
 - Have `evidence check` runnable against the exact revision you intend to serve. Evidence Gateway has no
   posture endpoint, no profile declaration, and no admin surface: its equivalent of a gate finding
   is a startup or readiness failure, so the offline commands are where you find problems first.
@@ -69,14 +74,32 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
   material, plaintext backup disabled, and an exact governed public-key match. Local JWK signing is
   for local assurance only. See
   [Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/).
-- Relay: confirm every env-backed `fingerprint.name` referenced in config exists in the runtime
-  environment, and that no raw key, fingerprint, private JWK, or full environment dump reaches a
-  log line; see the production checklist in the
-  [Registry Relay configuration reference](../../products/registry-relay/configuration/).
-- Relay: keep the OIDC algorithm allowlist to what the deployment actually uses. `HS*` and `none`
-  are absent from the configuration type entirely; the default allowlist is RS256, ES256, and
-  EdDSA. Evidence Gateway's own access-token allowlist is configured per bundle from the same three, while
-  its assertion signing is fixed ES256.
+- Relay: supply every secret through one of the two reference grammars its runtime file accepts,
+  `secret:env/<NAME>` or `secret:file/<name>`, and never as a literal value. `<NAME>` is uppercase
+  ASCII, digits, and underscores starting with a letter; `<name>` is a single flat lowercase
+  filename with no directory component, so a nested or traversing path is rejected rather than
+  resolved. No secret may exceed 64 KiB.
+- Relay: on Unix, a `secret:file/<name>` target must be a regular file owned by the running user
+  with mode exactly `0600` and a link count of one; a hard-linked file is refused under every name.
+  Relay refuses to start at all on a non-Unix target, because the runtime file's own path-trust
+  check fails closed where Unix ownership and sticky-directory semantics are unavailable, so do not
+  treat a non-Unix host as a degraded-but-working option.
+- Relay: `audit.integrityKeyRef` and, where a cursor is required, `cursor.integrityKeyRef` are
+  separate secret references. Give each independently generated random material and hold each under
+  your own custody and retention controls.
+- Relay: pick the single OIDC signing algorithm the deployment actually uses.
+  `authentication.issuer.algorithms` must contain exactly one of `EdDSA`, `ES256`, or `RS256`, and
+  `tokenTypes` must be exactly `["at+jwt"]`. There is no allowlist to prune and no `HS*` or `none`
+  to exclude: anything else fails the closed runtime profile before the process serves. Evidence
+  Gateway's own access-token allowlist is configured per bundle from the same three, while its
+  assertion signing is fixed ES256.
+- Relay: give the issuer an `https` discovery URL that is byte-identical to its canonical form and
+  ends in `/.well-known/openid-configuration`, with no user information, query, or fragment. Relay
+  derives the trusted issuer identifier by stripping that suffix, so a near-miss URL is a startup
+  failure and not a silently different trust anchor.
+- Relay: it holds no signing key of its own, because it signs nothing. If your review process
+  expects a signature over a Relay response or a Relay package, that expectation is not met by this
+  product.
 - Registry Mint, when the deployment runs it: use the same active, published, revoked P-256 service
   key posture and Transit boundary as Evidence Gateway. Treat `clients.directory` as key material. Any
   file written there registers a client and the authority Registry Mint will assert for it, and a
@@ -111,6 +134,37 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
   output is releasable only where the immutable bundle and the one matched grant both name it,
   and it is transport-authenticated convenience, never later-verifiable evidence.
 
+## Freeze the Relay source and package
+
+- Mount the sealed package at `packagePath` read-only. Relay re-runs the compiler and the artifact
+  generator over the sealed inputs at startup and compares the results byte for byte, so a modified
+  package fails to start rather than serving quietly. That check proves integrity, not
+  authenticity: `packageRevision` is a digest and nothing signs a Relay package, so provenance is
+  whatever your build and distribution pipeline can prove, not something the runtime verifies.
+- Decide the source profile deliberately per binding. A `snapshot` source is pinned to the exact
+  bytes present at startup; a `live-read-only` source reflects the file as other processes commit
+  to it. There is no third option, and neither profile copies the file.
+- For a `snapshot` source, put the file on a read-only filesystem or leave it non-writable by its
+  own mode bits. Relay requires one of the two and refuses to start otherwise. It also refuses a
+  symlink, and refuses a `-wal` or `-journal` sidecar beside the file, because a sidecar means the
+  bytes it hashed are not the whole story.
+- Treat continued immutability as your duty, not the runtime's. Relay pins device, inode, length,
+  mode, and both timestamps for a snapshot and re-checks them, but a process comparing two hashes
+  cannot exclude a privileged writer that changes and restores the bytes between them. Keep the
+  file on storage no other workload can write.
+- Review the contract, not the route table. Which operations exist, which reviewed views they read,
+  which are public and which are protected, and which properties each disclosure profile returns
+  are all decided in `registry.yaml` before the package is sealed. `runtime.yaml` cannot widen any
+  of it, so a review that reads only the runtime file has reviewed almost nothing.
+
+{/* Evidence: verify_compiled_derivation() and verify_artifact_derivation() re-run the compiler and
+     generator and compare bytes, and packageRevision is documented as an integrity digest and not
+     an authenticity proof, crates/registry-relay-v2/src/package.rs:348-350; SourceProfile has
+     exactly two variants, crates/registry-relay-v2/src/contract.rs:323-325; SNAPSHOT_SIDECARS,
+     symlink refusal, the read-only-filesystem-or-non-writable requirement, same_file() over
+     dev/ino/len/mode/mtime/ctime, and the verify_unchanged_until comment about a privileged writer,
+     crates/registry-platform-sqlite/src/capture.rs:11, :34-36, :42-45, :285-296. */}
+
 ## Audit sink and retention
 
 - Evidence Gateway: put `auditStorage.path` on storage whose append durability, permissions, capacity,
@@ -137,44 +191,38 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
   exclusive lock at startup. Archive sealed segments oldest first, never rename or archive the
   active segment while Mint runs, and run `mint verify-audit` during backup, restore, incident
   procedures, and on the cadence your retention policy requires.
-- Relay: configure a durable audit sink (`file` or `syslog`, not bare `stdout`) before you declare
-  `production` or `evidence_grade`. A missing durable sink trips `relay.audit.sink_missing`, which
-  fails startup at `evidence_grade`.
-- Relay: set `audit.hash_secret_env` to an environment variable holding at least 32 bytes of
-  deployment-specific random secret material. Relay startup fails closed if it is missing, empty,
-  unset, or weak.
-- Relay: keep `audit.write_policy: fail_closed` (the default) unless an explicit availability
-  exception accepts best-effort audit durability under `availability_first`. `fail_closed` means a
-  request whose audit record cannot be written returns `503 audit.write_failed` instead of a
-  success (REQ-SEC-G-009).
+- Relay: `audit.sink` is a path on storage whose append durability, permissions, capacity, backup,
+  restore, and retention you own. It is a plain path, not a choice between transports, so there is
+  no `stdout` mode to fall back to and nothing to configure away.
+- Relay: audit is fail-closed and there is no write-policy setting. A request whose audit record
+  cannot be written returns `503 audit.unavailable` instead of an answer (REQ-SEC-G-009). Do not
+  plan capacity on the assumption that a full or unwritable disk degrades to best-effort logging;
+  it stops the service answering.
+- Relay: readiness re-verifies the audit sink rather than trusting the check made at startup, so
+  replacing the audit file under a running process revokes readiness. Treat a sudden readiness loss
+  with a healthy source as an audit-path problem first.
+- Relay: give `audit.integrityKeyRef` deployment-specific random material and retain it for as long
+  as the chain it keys must remain verifiable. Rotating it makes new records incomparable to old
+  ones.
 - If you rotate an audit hash secret in any service, retain the old secret under your audit
   retention controls for any period during which older records must remain comparable to new ones,
   or accept that new records will not match old audit handles.
 - Hash-chained envelopes detect ordering gaps and accidental corruption inside the retained set,
   but they do not prove that every historical audit record remains present. Use off-host audit
   shipping when completeness matters.
-- Relay, for `evidence_grade`: configure `deployment.evidence.audit_ack_cursor_path` for every
-  shipping target, including `stdout` and `syslog`. The off-host shipper writes
-  `registry.audit.ack_cursor.v1` after a successful hand-off, and Relay reports ready only while
-  `acked_at` is fresh and `last_acked_hash` equals the live keyed audit chain tail. A matching
-  cursor means the trusted shipper claims zero local backlog; the local cursor does not prove
-  remote receipt or retention.
-- Relay: replace the cursor atomically, keep it at or below 16 KiB, and mount it read-only for the
-  Relay process. Keep the cursor path on local storage. Runtime reads use one 500 ms bounded
-  worker and fail readiness when the file is missing, stale, malformed, unsafe, mismatched, or too
-  slow.
-- Relay: treat `registry-relay doctor` as an offline contract check. It can validate the cursor
-  timestamp and shape but cannot bind it to a live audit tail, so a fresh cursor remains
-  `unverified` and an `evidence_grade` offline run reports the hard shipping gate until the live
-  service performs tail binding.
+- Relay: there is no off-host audit shipping feature, no acknowledgement cursor, and no readiness
+  gate that proves remote receipt. If your controls require audit to leave the host, ship the sink
+  file with your own tooling and own the completeness argument yourself.
+- Relay: `runtime.yaml`'s `cursor` block is pagination-cursor integrity, not audit shipping. It
+  carries its own `integrityKeyRef` and a `maximumAgeSeconds` between 1 and 86400, and any contract
+  that declares a list or a search operation, or that shows more than one resource in its resource
+  listing, requires it. Do not confuse the two when reading a configuration file.
 
 ## Transport and edge
 
-- For the 1.0 single-node VM topology, follow
-  [Run single-node Compose behind your reverse proxy](../../operate/single-node-compose-behind-proxy/)
-  before exposing a service beyond the host.
 - Terminate TLS and manage certificates at your reverse proxy or load balancer; RS-SEC-G Section 9
-  leaves transport termination and certificate management to the operator.
+  leaves transport termination and certificate management to the operator. Relay serves plain HTTP
+  and has no TLS settings at all.
 - Evidence Gateway: bind the listener to loopback, a private IPv4 address, or a unique-local IPv6 address.
   The runtime schema admits nothing else, fixes `tlsTermination` at
   `operator-controlled-upstream`, and fixes `trustProxyIdentityHeaders` at `false`. A gateway may
@@ -189,31 +237,25 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
   multiplies every configured limit by N and a restart resets each budget to full. Set the
   failed-selector budget deliberately, because it is the selector-enumeration defense rather than
   a throughput knob, and put per-client quotas in the gateway.
-- Relay: keep the admin listener private. A publicly exposed admin surface trips
-  `relay.admin.public_exposure`, a `startup_fail` gate at `evidence_grade`.
-- Relay: scrape metrics from the private admin network with `registry_relay:metrics_read`. Alert
-  when `registry_relay_ingest_consecutive_refresh_failures` reaches `3`, or sooner when the
-  deployment's freshness service-level objective requires it. Relay deliberately keeps `/ready` at
-  `200` while a valid last-good table remains available. Refresh health shows source load
-  failures; it does not prove that business-domain data is current.
-- Relay: set explicit `cors.allowed_origins`. The default CORS policy is deny by omission; add
-  only the origins your integration actually needs.
-- Relay: enable `server.trust_proxy` with an explicit `trusted_proxies` list only when a reverse
-  proxy sits in front of Relay. Both `enabled` and `trusted_proxies` default to off/empty.
-- Relay: enforce ingress rate limiting at your gateway or edge, then either declare
-  `deployment.evidence.ingress_rate_limit: true` or accept the `relay.ingress.rate_limit_missing`
-  finding it otherwise raises. The flag defaults to `false`.
+- Relay: `server.bind` is the entire server block. There is no admin listener, no metrics listener,
+  no CORS setting, and no trusted-proxy setting, so every one of those controls is your edge's job.
+  Bind Relay to loopback or a private address and publish it through a proxy you configure.
+- Relay: enforce ingress rate limiting at your gateway or edge. `runtime.yaml`'s optional `quotas`
+  block is a per-operation in-memory token bucket inside one process, so N replicas multiply every
+  configured limit by N and a restart resets each budget to full. Treat it as a self-protection
+  floor, not as the deployment's rate control. A contract that declares any lookup requires it.
+- Relay: set `limits.requestTimeoutMilliseconds` (1 to 120000) and `limits.concurrentQueries`
+  (1 to 256) to values your host can actually sustain. These are the only request-shaping knobs the
+  runtime file has.
+- Relay: it makes no outbound source request, so there is no source destination to pin, no source
+  credential to scope, and no database connection string to harden. Its only outbound traffic is
+  OIDC discovery and JWKS retrieval against the one configured issuer. If your review checklist has
+  a source-egress section for Relay, it no longer applies.
 - Keep every Evidence Gateway source hop on a private network where possible, publish no unnecessary
   source port, and give Evidence Gateway a dedicated source credential scoped to exactly the operation
   the bundle performs. Source authorization and audit remain independently operated controls.
-- Require every project-authored Relay source destination to be an exact HTTPS origin. The project
-  validator rejects origins with user information, paths, queries, or fragments.
-- For Postgres sources, require `sslmode=require` on the connection string and use read-only
-  database credentials; for live materialization, scope that role to `SELECT` only the configured
-  table or view.
 - Apply Registry Platform HTTP-security response headers and outbound HTTP policy to product
-  egress. Confirm that Relay source calls remain inside the compiler-pinned destination, method,
-  path, and cumulative budget (REQ-SEC-G-012), and that every Evidence Gateway source keeps hostname and
+  egress (REQ-SEC-G-012), and confirm that every Evidence Gateway source keeps hostname and
   fixed-origin verification on. Evidence Gateway ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
   `NO_PROXY` and has no application-level proxy, so an ambient proxy variable will not silently
   redirect a source call.
@@ -223,38 +265,45 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
   inside its `60..=3600` bound, because a minted token is accepted until it expires and no service
   in this stack revokes one.
 
-## Deployment profile and posture endpoint
+## Declared posture, and why neither product has one
 
-- Relay: declare `deployment.profile` explicitly. An omitted profile produces the
-  `deployment.profile_undeclared` startup failure. Relay never infers `local` or another profile
-  from its hostname, listener, or network placement.
-- Relay: treat `evidence_grade` as requiring a signed local config bundle. Running it from a plain
-  local YAML file trips `relay.config.unsigned` and the process refuses to start.
-- Relay: review `GET /admin/v1/posture` regularly. It reports the declared profile, active
-  findings, and active waivers, so the deployment's actual state is inspectable rather than
-  asserted. Read [RS-OP-POSTURE](../../spec/rs-op-posture/) before building operational tooling
-  around its default or restricted tier.
-- Relay: give every waiver a validated operator reference and a mandatory expiry date. Add a short
-  summary only when operators need more context, and keep credentials and private keys out of both
-  fields. `startup_fail` and `readiness_fail` gates are never waivable; a waiver naming one is
-  rejected. Waiver references and summaries appear only in the restricted posture tier.
-- Relay: expect `relay.aggregates.privacy_budget_untracked` to warn under `hosted_lab`,
-  `production`, and `evidence_grade` (the `local` profile binds no gates) when a `personal`,
-  `confidential`, or `secret` dataset carries a dataset-level aggregate configured with
-  `access.aggregate_only_execution: true`. Aggregate routes apply per-result minimum cell-size
-  suppression but track no longitudinal query budget; this is a documented, accepted limitation,
-  not a misconfiguration to fix. Leaving the warning active is a legitimate steady state and
-  keeps the posture honest. Record a deployment waiver naming the finding only if your review
-  process needs a dated acknowledgement, and expect to re-issue it: every waiver carries a
-  mandatory expiry. See [Known limitations and non-guarantees](../../explanation/known-limitations/).
-- Relay: use `deployment.evidence.*` flags (for example `ingress_rate_limit`, `api_key_rotation`)
-  only to assert controls that live outside the process and cannot be observed by it. Each flag
-  defaults to `false`.
-- Evidence Gateway has no equivalent declaration and no posture route, by design. Its posture is the exact
+Neither maintained runtime asks you to declare an assurance level, and neither exposes a posture
+route. Both replace that with the same thing: the exact bytes they loaded, verified before they
+serve, and a startup that fails rather than degrades.
+
+- Relay: there is no `deployment` block, no `local`/`hosted_lab`/`production`/`evidence_grade`
+  profile, no findings catalog, no waivers, and no `GET /admin/v1/posture`. If a runbook, ticket
+  template, or review form still asks for a Relay deployment profile or a waiver expiry, it is
+  describing the retired V1 runtime and needs updating rather than answering.
+- Relay: the checks that used to be profile-bound are now unconditional. A contract with any
+  protected access requires a configured issuer; a contract that declares any lookup requires
+  quotas; a contract that declares a list or a search operation, or that shows more than one
+  resource in its resource listing, requires a cursor key. None of these is a warning you can
+  accept, and none of them can be waived.
+- Relay: record the `packageRevision` you deployed, the digest of the package file, and the
+  `relayctl` project revision that produced it. That triple plus the runtime file is the only
+  description of what the process is enforcing, and the runtime file alone is not enough because it
+  binds paths and limits and nothing about disclosure.
+- Relay: the metadata a deployment exposes about itself is governed, not operational. Service,
+  resource, statistical-dataset, semantics, classification, and processing metadata each carry a
+  declared visibility of public, operation-bound, or operator-only. Review those settings
+  deliberately rather than accepting whatever the starter contract produced, because they decide
+  what an unauthenticated reader can learn about the registry's shape.
+- Evidence Gateway has no equivalent declaration and no posture route either. Its posture is the exact
   bytes it loaded: one governed bundle and one closed runtime file, each with its own content
   digest, mounted read-only, with no reload, merge, mutation, governed-field override, or fallback
   path. Record the bundle revision you deployed, because that identifier plus the digests is the
   only description of what the process is enforcing.
+
+{/* Evidence: RelayRuntime is a closed deny_unknown_fields schema over apiVersion, kind, server,
+     packagePath, sources, authentication, audit, cursor, limits, quotas, and shutdown only, with
+     ServerRuntime carrying exactly one field (bind), crates/registry-relay-v2/src/contract.rs:1062-1180;
+     validate_runtime_contract() with the test
+     protected_contracts_require_issuer_lists_require_cursor_and_lookups_require_quota,
+     crates/registry-relay-v2/src/startup.rs:469-492; QuotaLimiter is an in-memory per-operation
+     token bucket, crates/registry-relay-v2/src/server.rs:359-401; MetadataVisibility over the
+     closed Visibility enum, crates/registry-relay-v2/src/contract.rs:1042-1060. */}
+
 - Evidence Gateway serves one operator-controlled trust domain per process. Mutually distrustful issuers
   or customers, or one issuer whose clients carry the same authority under different claim names,
   require a second deployment with its own bundle, signer, and audit boundary.
@@ -270,7 +319,12 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
   Evidence Gateway defines no credential-status or lifecycle feature, so plan incident response
   around short assertion validity windows and service-key denylisting rather than recall.
 - Rotate a compromised source credential or Registry Mint client key at the credential's own
-  source and restart the affected process. Neither service reloads secret material in place.
+  source and restart the affected process. No service in this stack reloads secret material in
+  place.
+- Withdraw a Relay disclosure by publishing a new package and restarting. Relay has no admin
+  endpoint, no reload signal, and no way to narrow a compiled operation at runtime, so the only
+  levers during an incident are stopping the process and deploying a corrected package. Plan for
+  that: the mean time to withdraw a disclosure is your deployment pipeline's, not the runtime's.
 - Preserve the audit trail for post-incident review. For Evidence Gateway, take the whole audit directory
   including sealed segments and run `evidence verify-audit` over it before and after moving it;
   for Relay, hash-chained, fail-closed audit records are the record a deployment reconstructs a
@@ -288,10 +342,18 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
 
 - Start each service against your production configuration and confirm it starts, or fails closed
   as expected for a deliberately unmet gate.
-- Relay: query `GET /admin/v1/posture` and read the `deployment` object. Confirm the profile
-  matches what you declared, and that no unwaived finding at or above your profile's threshold is
-  outstanding. Validate the response as [RS-OP-POSTURE](../../spec/rs-op-posture/) before an
-  automated check acts on it.
+- Relay: confirm `GET /ready` succeeds, then confirm what it does not tell you. Readiness proves the
+  package verified, the sources opened and are still the files they were bound to, and the audit
+  sink is writable. It sends no query and proves nothing about whether the data underneath is
+  current or correct.
+- Relay: fetch `GET /openapi.json` from an unauthenticated client and read it as an outsider would.
+  It is generated from this deployment's own compiled contract, so it is the most direct statement
+  of which operations exist and which are public. If it lists something you did not intend to
+  publish, the fix is in `registry.yaml` and a new package, not in the runtime file.
+- Relay: send a request to a protected operation with no token, with a token from the wrong
+  audience, and with a valid token missing the required purpose claim. Confirm you get `401`,
+  `401`, and `403` respectively, and that none of the three response bodies distinguishes which
+  check failed beyond its stable problem code.
 - Evidence Gateway: confirm `GET /ready` succeeds, which rechecks the subject-binding key, the signing
   provider, the pinned audit sink, and every source credential, including a bounded OAuth token
   bootstrap where a source uses client credentials. Readiness sends no evidence-data request and
@@ -304,16 +366,19 @@ Evidence Gateway, [Configure Evidence Gateway](../../configure/evidence/).
 - Evidence Gateway: request an assertion and verify the stored response offline with
   `evidence verify --jws <file> --jwks <file> --policy <file>`, using expectations you retained
   independently rather than values read back out of the response.
-- Attempt an admin-listener request to Relay from outside the private network it is meant to be
-  bound to, and confirm it is refused.
+- Attempt to reach Relay's listener directly from outside the private network it is meant to be
+  bound to, and confirm your edge refuses it. Relay itself has no network allowlist to fall back
+  on.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Relay refuses to start after declaring `production` or `evidence_grade` | A `startup_fail` gate tripped, for example a missing audit sink or unsigned config | Check the posture or startup log for the finding id, then fix the underlying condition; `startup_fail` gates cannot be waived |
-| Relay startup reports `deployment.profile_undeclared` | No `deployment.profile` is set | Declare the actual profile explicitly before restarting; an omitted profile is not the same as `local` |
-| Relay posture reports `deployment.waiver_expired` | A waiver's `expires` date passed | Re-review the finding and either fix it or issue a new waiver with a new expiry |
+| Relay refuses to start and names the package | The package did not re-derive: the sealed bytes and a fresh compile of the sealed inputs disagree | Rebuild the package from the authoring project with `relayctl package` and redeploy; do not edit a package in place |
+| Relay refuses to start and names the runtime file | The runtime file violates the closed profile: an unknown field, a bad bind address, a limit outside its bound, a secret reference that is not one of the two grammars, or an issuer that fails the exact OIDC profile | Fix the named field; there is no permissive mode and no partial start |
+| Relay refuses to start on a contract it served before | The contract now has protected access with no configured issuer, a lookup with no quotas, or a list with no cursor key | Add the missing runtime block; none of the three is waivable |
+| Relay refuses to start and names the source | The snapshot sits on writable storage, is a symlink, or has a `-wal` or `-journal` sidecar beside it | Place the file on a read-only filesystem or make it non-writable, resolve the symlink, and remove the sidecar by checkpointing the database before you stage it |
+| Relay returns `503 audit.unavailable` and then fails readiness | The audit sink is unwritable, or the file it was bound to was replaced | Restore writable durable storage at `audit.sink` and restart; the failed requests returned no data |
 | Evidence Gateway refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, or a captured artifact is writable by the service process | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`) and restart |
 | A second Evidence Gateway process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
 | A second Registry Mint process fails to start, or `mint verify-audit` rejects its chain | Another writer holds `audit.path`, or retained records were changed, reordered, or written with another key | Run one writer per path and restore the matching retained chain and HMAC key; do not delete audit records to make startup pass |

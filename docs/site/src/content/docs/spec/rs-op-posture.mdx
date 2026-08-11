@@ -1,23 +1,19 @@
 ---
-title: "RS-OP-POSTURE: Operations posture document"
-description: "The normative contract for the registry.ops.posture.v1 operations posture document: its envelope, component sections, sensitivity tiers, producer and consumer duties, and immutable schema evolution."
+title: "RS-OP-POSTURE: Relay operational posture"
+description: "The normative operational contract for a Relay deployment: the liveness and readiness probes, how readiness composes audit, source, and issuer state, the audit sink as a serving precondition, runtime limits and quotas, bounded operational logging, and startup verification of the sealed package."
 status: draft
 owner: registry-docs
 source_repos:
-  - registry-platform
-  - registry-relay
-  - registry-evidence
-  - registry-mint
-last_reviewed: "2026-08-03"
+  - registry-stack
+last_reviewed: "2026-08-11"
 doc_type: specification
 doc_id: RS-OP-POSTURE
 category: normative
 evidence: verified
 locale: en
 standards_referenced:
-  - json-schema
+  - openapi
 layer:
-  - administration
   - operations
 audience:
   - integrator
@@ -25,23 +21,20 @@ audience:
   - maintainer
 ---
 
-This document defines the operations posture observation that Registry Relay returns from its
-protected admin surface. It gives operators and tooling authors one stable,
-versioned document for observing build, runtime, configuration, deployment, audit, and
-component-specific status without treating that observation as an authorization decision or a
-source of secrets.
-The `registry.ops.posture.v1` contract is frozen and still models a second component,
-`registry-notary`, which is retired. Section 1 states which components produce a posture document
-today.
+This document defines what an operator can observe about a running Relay deployment and what the
+runtime guarantees while it serves. It covers the two operational probes, the state readiness
+composes, the audit sink as a precondition of serving rather than a side effect of it, the runtime
+limits and quotas a deployment configures, the closed operational log level, and the verification
+the process performs before it opens a listener.
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
-{/* TODO[evidence]: Add a release-tagged Registry Ops Posture v1 JSON Schema source link after
-    the waiver definitions and shared portable metadata constraints merge. The earlier pinned
-    schema predates those definitions and is not evidence for this draft revision. */}
-Portable structural validation is defined by the in-tree draft schema; release-tagged source
-evidence for this revision is pending. This specification defines the operational meaning,
-semantic producer validation, and evolution rules that JSON Schema alone does not express.
+
+Relay exposes no administrative surface, no posture document, and no metrics endpoint. Everything
+an operator can observe over HTTP is stated in Section 2, and it is deliberately small: two probes
+that answer with a fixed status word and nothing else. The observable detail a previous Relay
+returned in a posture document now lives in the audit chain and in the process log, both of which
+are read from the deployment host rather than fetched over the service port.
 
 ## Version history
 
@@ -53,273 +46,286 @@ semantic producer validation, and evolution rules that JSON Schema alone does no
 | 0.1.3 | 2026-07-23 | draft | Reserved credential-shaped waiver-reference prefixes before the 1.0 schema freeze. |
 | 0.1.4 | 2026-07-24 | draft | Separated portable waiver-schema checks from contextual semantic validation before the 1.0 schema freeze. |
 | 0.1.5 | 2026-08-03 | draft | Recorded that Registry Notary is retired and that no supported deployment produces a `registry-notary` document, while the frozen v1 shape and the consumer validation path for one are unchanged. Stated that Evidence Gateway and Registry Mint expose no posture endpoint. |
+| 1.0.0 | 2026-08-11 | draft | Rewritten for the Relay V2 runtime that replaced the V1 gateway. REQ-OP-POSTURE-001 through REQ-OP-POSTURE-011 are retired in full and MUST NOT be reused: they defined the `registry.ops.posture.v1` document returned from `GET /admin/v1/posture`, its component pairing, its sensitivity tiers, its deployment-waiver metadata, and Relay per-resource refresh health. The current runtime has no administrative surface, emits no posture document, and performs no source refresh, so none of those requirements has a successor. The operational contract that does exist is numbered from REQ-OP-POSTURE-101 so that no retired identifier carries a second meaning. |
 
 ## 1. Scope and surface
 
-This specification covers a point-in-time operations observation returned by
-`GET /admin/v1/posture`.
-Registry Relay exposes that route on its protected admin surface, not in
-the public Registry Relay API document.
-The product route and authorization details remain with the
-[Registry Relay API reference](../../reference/apis/registry-relay/).
+This specification covers the operational behavior of one `relay` process serving one sealed
+package: what it exposes for liveness and readiness checks, what it refuses to do while a
+dependency is unavailable, the bounds a runtime document sets on it, what it writes to its log, and
+what it verifies before it accepts traffic.
 
-Registry Relay is the only producer of a posture document in a supported deployment. The v1
-contract also models a second, retired component: no supported deployment emits a
-`registry-notary` document, and the shape is kept only so a consumer can still validate one it
-has retained.
+It does not define the data protocol. The route set, the response envelope, access and disclosure
+profiles, pagination, and the error vocabulary belong to [RS-PR-RELAY](../rs-pr-relay/). It does
+not define authoring, compilation, or packaging, which belong to
+[RS-PR-RELAYCTL](../rs-pr-relayctl/). It does not define the security model or the threat boundary,
+which belong to [RS-SEC-G](../rs-sec-g/).
 
-Evidence Gateway and Registry Mint expose no `/admin/v1/posture` route and emit no posture document. An
-operator observes an Evidence Gateway process through its unauthenticated liveness and readiness probes
-and, where the deployment enables it, through the optional metrics listener that Evidence Gateway binds
-to a private address and that serves only `GET /metrics`. Registry Mint likewise exposes liveness
-and readiness probes only. Neither service is in scope for the requirements in this
-specification.
+Evidence Gateway and Registry Mint are out of scope. Each exposes liveness and readiness probes of
+its own, and neither is governed by the requirements in this specification.
 
-This specification does not define deployment configuration, profile-gate policy, audit
-retention, or a new authorization scope.
-It also does not make a posture document a health guarantee, a conformance certificate, or proof
-that an external artifact is safe to trust.
+An operational probe is an observation, not an authorization decision, a conformance claim, or a
+statement about the correctness of the data a source holds. A ready deployment is one that can
+answer a consultation now; it is not a deployment whose records are current, complete, or fit for a
+given purpose.
 
-## 2. Document envelope
+## 2. Operational routes
 
-The schema identifier is `registry.ops.posture.v1`.
-Its canonical JSON Schema identifier is
-`https://id.registrystack.org/schemas/registry-platform/registry.ops.posture.v1.schema.json`.
-The root object and named nested objects use `additionalProperties: false`, except for two
-explicitly modeled maps.
-`standards_artifacts` accepts producer-selected artifact labels, while each artifact-reference
-value has the closed shape defined by the schema.
-The second modeled map, `notary.signing_keys.readiness`, accepts signing-key identifiers with one
-of the defined readiness states as each value. It belongs to the retired component's section and
-no supported producer emits it.
+A Relay deployment serves a fixed route set. Four of its routes are unauthenticated in every
+deployment, and two of those are the operational probes this specification governs. A contract that
+publishes its resource metadata or its generated artifacts lets further routes answer without a
+credential; RS-PR-RELAY describes those rather than this specification.
 
-REQ-OP-POSTURE-001: A producer MUST emit a JSON object that validates against
-`registry.ops.posture.v1`.
-It MUST include `schema`, `observed_at`, `component`, `instance`, `build`, `runtime`,
-`configuration`, `standards_artifacts`, and `posture`.
-`observed_at` MUST be an RFC 3339 date-time and `schema` MUST equal
-`registry.ops.posture.v1`.
-A producer MUST NOT add a root or nested property that the schema does not model.
-
-REQ-OP-POSTURE-002: A runtime endpoint producer MUST include `tier` as either `default` or
-`restricted`, even though the v1 schema permits its omission.
-Consumers of a runtime endpoint MUST treat an absent `tier` as invalid for that endpoint rather
-than silently guessing the disclosure class.
-
-### Component rules
-
-`component` is exactly one of `registry-relay` and `registry-notary`, the retired component.
-The component selects one, and only one, component section.
-
-| `component` value | Required section | Forbidden section |
+| Route | Operation identifier | Answers |
 | --- | --- | --- |
-| `registry-relay` | `relay` | `notary`, the section of the retired component |
-| `registry-notary`, retired | `notary` | `relay` |
+| `GET /health` | `relay.health` | Whether the process is alive and serving |
+| `GET /ready` | `relay.ready` | Whether the activated package can be served now |
 
-REQ-OP-POSTURE-003: A `registry-relay` document MUST contain `relay` and MUST NOT contain
-`notary`.
-A `registry-notary` document MUST contain `notary` and MUST NOT contain `relay`.
-A consumer MUST reject a document that does not satisfy this pairing, even when the shared
-envelope itself appears complete.
-No supported deployment produces the second document; the pairing rule stays part of the frozen v1
-contract so a consumer can still validate a retained one.
+`GET /openapi.json` and `GET /v2` are also unauthenticated, and both are described by RS-PR-RELAY
+rather than by this specification. The per-deployment OpenAPI description lists `relay.health` and
+`relay.ready` as operations with empty security, which is how an integrator discovers that neither
+probe takes a credential.
 
-The shared sections state the following categories of observation:
+REQ-OP-POSTURE-101: A deployment MUST expose exactly two operational probes, `GET /health` and
+`GET /ready`, both unauthenticated.
+It MUST NOT expose an administrative route, a posture route, a metrics route, or any other
+operational surface on the service port.
+A probe response MUST carry `Content-Type: application/json` and `Cache-Control: no-store`, and its
+body MUST be exactly `{"status":"ok"}` for `/health` and exactly `{"status":"ready"}` for `/ready`.
+A probe body MUST NOT carry deployment identity, build or version detail, configuration values,
+source paths, record counts, or the identity of any failing dependency.
+The deployment's OpenAPI description MUST declare both operations with empty security.
 
-- `instance`: deployment identity and environment, with optional owner, jurisdiction, and URL.
-- `build`: package and version, with optional source revision and enabled features.
-- `runtime`: authentication mode, admin enablement, and readiness state.
-- `configuration`: configuration source, reload support, the latest applied state, and optional
-  emergency or trusted-root state.
-- `deployment`: optional profile, findings, and waivers.
-- `audit`: optional assurance characteristics for the configured audit path.
-- `standards_artifacts`: observed published-artifact references keyed by artifact label.
-- `posture`: warnings, actionable findings, and the observed audit-shipping state.
+REQ-OP-POSTURE-102: `/health` MUST report process liveness only.
+It MUST NOT consult the audit sink, a configured source, or the token issuer, and it MUST return
+`200` for as long as the process is serving.
+An operator MUST NOT read a `/health` success as evidence that the deployment can answer a
+consultation. The two probes exist because those are different questions: a process can be alive
+and correctly refusing every request.
 
-The `relay` section reports configured surface counts, metadata-manifest state, adapter state, and
-restricted per-resource refresh health.
-The `notary` section belonged to the retired component and reported claim and credential-profile
-counts plus state, credential-status, federation, OID4VCI, and optional subject-access
-observations. It remains modeled by the frozen v1 schema and is never emitted.
+REQ-OP-POSTURE-103: `/ready` MUST report whether the deployment can answer a consultation now.
+It MUST evaluate the composition in Section 3 on each request rather than return a value cached at
+startup.
+When the composition does not hold, the response MUST be a problem document with code
+`service.not_ready` and HTTP status `503`, and that document MUST NOT identify which dependency is
+unready.
+An operator that needs to know which dependency failed MUST read the process log on the deployment
+host.
 
-### Deployment waiver metadata
+The `relay` binary also ships a `healthcheck` subcommand for container orchestration.
 
-A deployment waiver names one finding and expiry date. Its `reference` is a required opaque
-operator-local approval, incident, or ticket identifier. The optional `summary` adds short
-operational context. Neither value grants authority or changes which gate severities can be
-waived.
+REQ-OP-POSTURE-104: `relay healthcheck` MUST probe liveness, not readiness. Its default URL is
+`http://127.0.0.1:8080/health`.
+It MUST reject a URL carrying credentials, a query, or a fragment before sending anything, MUST
+bypass any ambient proxy configuration, MUST follow no redirect, MUST time out after 5 seconds, and
+MUST read at most 128 response bytes.
+It MUST succeed only on `200` with `application/json` and a body equal to `{"status":"ok"}`, and it
+MUST exit non-zero on every other outcome.
+A deployment that wants an orchestrator to withhold traffic until a package is servable MUST probe
+`/ready` directly rather than rely on this subcommand.
 
-REQ-OP-POSTURE-011: A producer that emits a deployment waiver MUST include `reference` as an
-already canonical 1 to 128 byte string using only ASCII letters, digits, `.`, `_`, `:`, and `-`.
-The reference MUST NOT contain `..`.
-It MUST NOT start, case-insensitively, with the credential-shaped prefix `Bearer:<value>` or
-`Basic:<value>`, directly or after `Authorization:`.
-`OPS-2026-0042` is an accepted ticket-style reference.
-If the producer emits `summary`, the summary MUST be an already trimmed 1 to 256
-Unicode-character string without control characters, an authorization value, or a private-key
-begin marker.
-The producer MUST omit `summary` when no summary was configured and MUST NOT emit the retired
-`reason` property.
-The JSON Schema enforces the reference syntax and reserved prefixes. It also enforces the
-summary length, C0 and C1 control-character exclusion, and leading or trailing whitespace
-exclusion.
-The schema does not encode context-sensitive authorization-value or private-key marker detection.
-Before emitting either waiver shape, a producer MUST apply semantic validation equivalent to
-`validate_deployment_waiver_metadata`.
-Schema acceptance alone does not satisfy the contextual exclusions in REQ-OP-POSTURE-011.
-These metadata rules do not alter expiry behavior: an expired waiver stops suppressing its
-finding.
-They also do not alter the hard-gate boundary: `startup_fail` and `readiness_fail` findings
-remain non-waivable.
+## 3. Readiness composition
 
-## 3. Examples
+Readiness is a conjunction of three independent observations, evaluated concurrently.
 
-The schema-valid [Registry Relay default example](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/examples/registry-relay.posture.valid.json)
-shows the default projection a supported producer emits.
-The checked-in `registry-notary.posture.valid.json` example shows the default projection for the
-retired component; it is kept as a fixture for the frozen v1 shape, not as a deployment an adopter
-can run.
-The [restricted-tier fixture](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/fixtures/posture/restricted-posture.valid.json)
-shows fields that are valid but intentionally absent from the default projection.
-The checked-in `registry-relay.restricted-posture.valid.json` fixture shows the Relay refresh-health
-shape and its last-good serving state.
+REQ-OP-POSTURE-105: A deployment is ready exactly when audit readiness, source readiness, and
+issuer readiness all hold.
+Audit readiness MUST require both a resolvable hash-chain head and a live probe of the concrete
+sink, so that a replaced, removed, or unwritable audit destination makes the deployment unready.
+Source readiness MUST re-verify every configured source within the runtime's request timeout: a
+snapshot source MUST be confirmed unchanged, and every source's observed schema fingerprint MUST
+still equal the fingerprint the sealed package recorded.
+Issuer readiness MUST reflect the authenticator's own state when the runtime configures an issuer,
+and MUST hold trivially when it configures none.
+A source verification that exceeds the request timeout MUST resolve as unready rather than block
+the probe.
 
-Examples are observations, not deployment templates.
-An operator MUST supply actual deployment configuration through the product's configuration
-surface, not by copying posture values into configuration.
+Source readiness is therefore a drift check, not a liveness ping. A source file edited, replaced, or
+migrated under a running deployment makes it unready rather than making it serve records the sealed
+package did not describe.
 
-## 4. Sensitivity tiers and emit-only filtering
+REQ-OP-POSTURE-106: Concurrent readiness probes MUST share one in-flight source verification.
+A probe arriving while a verification is running MUST await that result rather than start a second
+one, and a verification that reached its deadline MUST hold the flight until its worker observes
+the same deadline and exits.
+Readiness probing is thereby bounded work: a probe interval shorter than the verification cost
+cannot multiply source reads.
 
-The tier identifies the disclosure class of the document, not the caller's authorization level.
-The product endpoint remains responsible for authentication and authorization before it returns
-either tier.
-A deployment MUST NOT assume that selecting `restricted` grants a caller any new permission.
+REQ-OP-POSTURE-107: A deployment MUST NOT begin serving in an unready state.
+Startup MUST evaluate readiness after constructing the service and again immediately before binding
+the listener, and MUST fail with a startup error rather than bind a listener when either evaluation
+does not hold.
 
-REQ-OP-POSTURE-004: A producer of the `default` tier MUST create its emitted document from the
-default JSON-pointer allowlist.
-It MUST use an emit-only projection, not a blacklist redaction pass over a complete operational
-object.
-If a leaf is not allowlisted, the producer MUST omit it rather than mask it, hash it, or preserve
-it in an opaque nested value.
+## 4. Audit as a serving precondition
 
-The default projection includes operational status, counts, selected digests, finding identifiers
-and severities, and non-secret audit-shipping observations.
-It excludes values that can reveal topology or operational free text, including instance URLs,
-build revisions and features, trusted roots, artifact URLs, waiver references and summaries,
-signing-key details, and the federation identities and peers of the retired component.
-The checked-in sensitive fixture proves that the projection excludes credentials, private keys,
-source URLs, subject identifiers, raw rows, claim values, and the restricted topology fields.
-The default tier also excludes `relay.refresh_health`, including its dataset and resource
-identifiers.
+Relay writes a hash-chained, value-free audit record for every consultation it attempts, refuses,
+or completes. That record is a precondition of the response, not a trace left behind it.
 
-REQ-OP-POSTURE-005: A `restricted` document MAY contain every field modeled by the v1 schema,
-including fields excluded from the default allowlist.
-It MUST still conform to the closed schema and MUST NOT contain secret material, raw registry
-data, claim values, subject identifiers, bearer tokens, or private keys.
-The restricted tier is not a substitute for a private admin listener, access control, or operator
-review.
+REQ-OP-POSTURE-108: When an audit append fails at any phase, including the attempt record written
+before a source is read, a refusal record, and the terminal record written before a prepared body is
+returned, the request MUST fail with problem code `audit.unavailable` and HTTP status `503`.
+The runtime MUST NOT return a response body it had already prepared once its terminal audit record
+failed, and MUST NOT degrade to serving without audit.
+A refusal MUST be recorded with the same durability as a successful read, so that an unavailable
+audit sink cannot turn a refusal into an unrecorded event.
 
-Consumers MUST treat a missing field as unreported, not as `false`, `none`, or a failed check.
-Consumers MUST NOT reconstruct excluded values from a default-tier document or compare a default
-and restricted observation as though omission proves a configuration change.
+The operational consequence is that audit availability is a serving dependency of the same rank as
+the source. An operator sizing or mounting the audit path is sizing the deployment's availability,
+not its observability.
 
-## 5. Schema evolution
+## 5. Limits and quotas
 
-The v1 schema is a strict closed contract, not an extensible envelope.
-Its `schema` field is a constant and the root and named nested objects reject unknown keys, apart
-from the explicitly modeled maps in Section 2.
-This lets consumers validate a complete known shape before making an operational decision.
+A runtime document binds one sealed package to one host. Its operational fields are bounded, and
+the bounds are refusals rather than clamps.
 
-REQ-OP-POSTURE-006: The identifier `registry.ops.posture.v1` MUST continue to name exactly its
-published v1 shape and meaning.
-Every post-1.0 shape change, including an additive optional property, a new required property, a
-removed or renamed property, a changed type or enum, or a changed field meaning, requires a new
-schema identifier and new JSON Schema document.
-A producer MUST NOT send a changed shape while retaining `registry.ops.posture.v1`.
+REQ-OP-POSTURE-109: A runtime document MUST set `limits.requestTimeoutMilliseconds` between 1 and
+120000 inclusive and `limits.concurrentQueries` between 1 and 256 inclusive.
+When present, `cursor.maximumAgeSeconds` MUST be between 1 and 86400 inclusive, `quotas.burst`
+MUST be between 1 and 100000 inclusive, `quotas.requestsPerMinute` MUST be non-zero, and
+`shutdown.gracePeriodMilliseconds` MUST be non-zero.
+The runtime MUST refuse to start on a document that violates any of these bounds, and MUST NOT
+silently clamp an out-of-range value to a supported one.
+The runtime defaults a missing cursor maximum age to 300 seconds and a missing shutdown grace
+period to 30 seconds.
 
-Adding an artifact label inside `standards_artifacts` does not change the v1 shape because that map
-is the explicitly modeled extension point.
-The new entry's value MUST remain a v1 `artifact_reference` object.
+REQ-OP-POSTURE-110: `limits.concurrentQueries` MUST bound admission at the source boundary: every
+query MUST acquire an admission permit before it runs, and `limits.requestTimeoutMilliseconds` MUST
+bound the total of the wait for that permit and the query itself.
+A request that cannot acquire a permit within the timeout MUST be refused rather than queued
+indefinitely.
 
-REQ-OP-POSTURE-007: A consumer MUST dispatch on `schema` before interpreting the document.
-It MUST validate the complete document against the corresponding schema, reject an unknown
-schema identifier, and reject unknown properties in a v1 document.
-A consumer that supports a later schema identifier MUST retain an explicit validation path for v1
-until its own compatibility policy retires v1.
+REQ-OP-POSTURE-111: When a runtime configures `quotas`, the quota key MUST be the compiled operation
+identifier, and the bucket MUST refill continuously at `requestsPerMinute` divided by 60 per second
+up to `burst`.
+A denied consultation MUST be refused with `consultation.rate_limited` and a denied aggregate-data
+request with `aggregate-data.rate_limited`, both at HTTP status `429`.
+A quota denial MUST be audited as a refusal before the response is returned, and an audit failure
+during that refusal MUST take precedence, producing `audit.unavailable`.
+The bucket is shared by every caller of the operation, so a deployment MUST NOT rely on quotas as a
+per-caller, per-client, or per-tenant fairness control. They bound the load one operation can place
+on a source.
+Quotas MUST NOT apply to `/health` or `/ready`.
 
-## 6. Producer and consumer expectations
+REQ-OP-POSTURE-112: A request URI longer than 16384 bytes MUST be refused with
+`internal.uri_too_long` and HTTP status `414` before the runtime resolves a route, a profile, or a
+credential.
 
-REQ-OP-POSTURE-008: A producer MUST observe the current runtime state, set `observed_at` at the
-time of that observation, select the component section that matches the runtime, and emit a result
-that conforms to the selected schema and tier.
-It MUST select posture fields through typed, explicit construction and apply the selected tier's
-emit-only projection.
-This construction MUST prevent secret-bearing configuration and production data from being copied
-into the output.
+REQ-OP-POSTURE-113: A runtime document MUST NOT carry inline secret material.
+Every secret MUST be an indirect reference of the form `secret:env/NAME`, where `NAME` is upper
+snake case, or `secret:file/name`, where `name` uses lower-case letters, digits, `.`, `_`, and `-`,
+each at most 128 bytes.
+The runtime MUST refuse to start when a referenced secret cannot be resolved, rather than start
+with an unauthenticated or unkeyed configuration.
 
-REQ-OP-POSTURE-009: A consumer MUST use posture as an observation for operations and troubleshooting
-only.
-It MUST evaluate readiness, findings, audit status, and artifact observations according to its own
-policy and MUST NOT treat any of them as an authorization grant, an external conformance claim,
-or proof of remote receipt or retention.
+## 6. Operational logging
 
-### Relay refresh health
+Relay's log is the operational detail its HTTP surface deliberately withholds. It is written where
+only the deployment host can read it, which is what allows it to be more specific than a probe
+response.
 
-REQ-OP-POSTURE-010: A restricted Registry Relay producer MUST include one
-`relay.refresh_health` entry for every resource with a valid last-good table.
-Each entry MUST carry the configured `dataset_id` and `resource_id`, the RFC 3339
-`last_successful_refresh_at` data-load time, a saturating `consecutive_refresh_failures` count, and
-`serving_last_good`.
-`serving_last_good` MUST be `true` exactly when the resource remains ready and the consecutive
-failure count is greater than zero.
-A failed refresh or metadata poll MUST increment the count without advancing the last successful
-data-load time or making a valid last-good resource unready.
-A successful data load MUST reset the count and advance the time.
-A successful unchanged metadata poll MUST reset the count without advancing the time.
+REQ-OP-POSTURE-114: The runtime MUST write structured JSON log records to standard error.
+`RELAY_LOG` selects the level from the closed set `off`, `error`, `warn`, `info`, `debug`, and
+`trace`, defaulting to `info`.
+An unrecognized value MUST be treated as `info` and MUST NOT be passed through as a log filter
+directive.
+The configured level MUST apply to Relay-owned log targets only, so that dependency events, which
+can carry request URLs and headers, remain off at every level.
+A Relay-owned log record MUST carry fixed messages and value-free dimensions, and MUST NOT carry
+record values, credentials, or token contents.
 
-Refresh health describes Relay's ability to observe and load the configured source.
-It MUST NOT be interpreted as semantic or domain freshness of the source records.
-An operator SHOULD alert at three consecutive failures and MAY use a lower threshold when a
-freshness service-level objective requires it.
+`RELAY_LOG` and `RELAY_RUNTIME`, which supplies the runtime document path, are the environment
+variables the `relay` process reads by name, alongside `RELAY_HEALTHCHECK_URL` for the healthcheck
+subcommand. It also reads whatever variable a `secret:env/<NAME>` reference in the runtime document
+names. The `relayctl` authoring tool reads no environment variable at all, per
+[RS-PR-RELAYCTL](../rs-pr-relayctl/).
+
+## 7. Startup and shutdown
+
+Startup is where a deployment's trust in its package is established. Nothing else opens until that
+verification passes.
+
+REQ-OP-POSTURE-115: The runtime MUST verify the sealed package before it opens an issuer, audit,
+source, or listener resource.
+Verification MUST re-derive the package rather than trust its manifest: it MUST recompute the digest
+of every listed file, recompute the manifest's `packageRevision` over the canonical JSON of the
+manifest's own unsigned content, re-canonicalize the compiled registry and compare it byte for byte
+with the packaged bytes, and re-derive the compiled contract from the packaged `registry.yaml`,
+governed files, and recorded source schemas.
+The package directory's file set MUST equal the manifest's file list exactly, so an added or removed
+file fails verification.
+A package containing a symlink, a non-regular file, or an unsafe permission bit MUST be refused.
+
+REQ-OP-POSTURE-116: After package verification, the runtime MUST observe each configured source and
+MUST refuse to start unless the observed schemas equal the schemas the package recorded, source for
+source.
+A deployment therefore cannot start against a source whose shape has drifted from the one the
+contract was compiled against, and cannot start with a source the package does not describe.
+
+REQ-OP-POSTURE-117: A startup failure MUST be terminal and value-free. The runtime MUST exit
+non-zero with one of its fixed failure reasons, and MUST NOT continue in a degraded mode, retry
+against a different package, or serve any route.
+
+REQ-OP-POSTURE-118: On `SIGINT`, or on `SIGTERM` where the platform provides it, the runtime MUST
+stop accepting new connections and allow in-flight requests to complete within the configured grace
+period.
+Exceeding that grace period MUST be reported as a shutdown failure rather than a clean exit.
 
 ## Conformance
 
-A producer conforms to this specification when it emits a schema-valid, component-consistent,
-tier-labeled observation; uses the emit-only allowlist for default output; keeps restricted output
-within the same secret and source-data boundary; assigns a new schema identifier for every
-post-1.0 shape change; reports Relay refresh health when applicable; and emits only validated
-deployment waiver metadata (REQ-OP-POSTURE-001 through REQ-OP-POSTURE-006,
-REQ-OP-POSTURE-008, REQ-OP-POSTURE-010, and REQ-OP-POSTURE-011).
+A runtime conforms to this specification when it exposes exactly the two operational probes with
+their fixed bodies and no administrative, posture, or metrics surface; evaluates readiness as the
+live conjunction of audit, source, and issuer state; refuses to serve when audit is unavailable;
+enforces its configured limits and quotas as refusals; keeps its log bounded to Relay-owned targets
+at a closed set of levels; ships a liveness-only healthcheck subcommand with the stated safety
+constraints; re-derives the sealed package before opening any other resource; and shuts down within
+its grace period (REQ-OP-POSTURE-101 through REQ-OP-POSTURE-118).
 
-A consumer conforms when it validates and dispatches by schema, enforces component pairing,
-handles omissions as unreported, and does not elevate posture observations into proof or authority
-(REQ-OP-POSTURE-002, REQ-OP-POSTURE-003, REQ-OP-POSTURE-007, and REQ-OP-POSTURE-009).
+A deployment conforms when it probes liveness and readiness as separate questions, reads
+dependency-level detail from the process log rather than from a probe body, probes `/ready`
+directly when an orchestrator must withhold traffic, and does not treat quotas as a per-caller
+control. Those duties are the operator-facing halves of REQ-OP-POSTURE-102, REQ-OP-POSTURE-103,
+REQ-OP-POSTURE-104, and REQ-OP-POSTURE-111.
 
-## Evidence Gateway
+## Evidence
 
-This specification is `verified`: its document shape, examples, component pairing, and tier
-filter are shipped in Registry Platform and exercised by contract tests.
+This specification is `verified`: every requirement describes behavior shipped in the Relay V2
+runtime and exercised by its tests.
 
-- Release-tagged source evidence for the v1 JSON Schema's waiver definitions and shared portable
-  metadata constraints is pending. The source pack will be linked after those changes merge.
-- The [posture contract tests](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/tests/posture_contract.rs)
-  validate both examples, the default allowlist projection, the sensitive fixture, and exclusion
-  of restricted fields from default output (Sections 3, 4, and 6).
-- The checked-in restricted Relay posture fixture and Registry Relay admin tests validate
-  per-resource last-good state, tier filtering, and the live producer shape (Sections 4 and 6).
-- The [Registry Relay admin handler](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-relay/src/api/admin.rs)
-  selects the requested tier and returns the shared posture document (Sections 1, 4, and 6). It is
-  the only producer this specification recognizes.
-- The Evidence Gateway and Registry Mint routers (`crates/registry-evidence/src/server.rs` and
-  `crates/registry-mint/src/server.rs`) expose liveness and readiness probes and no posture route,
-  which Section 1 states.
+{/* Evidence: crates/registry-relay-v2/src/server.rs defines the fixed route set and the readiness
+    conjunction; crates/registry-relay-v2/src/api.rs holds the probe handlers, the fixed status
+    bodies, the audit-failure paths, and quota refusal. */}
+
+- The route table and `RelayService::is_ready` in `crates/registry-relay-v2/src/server.rs` fix the
+  probe inventory and compose audit, source, and issuer readiness (Sections 2 and 3).
+- The `health` and `ready` handlers in `crates/registry-relay-v2/src/api.rs` return the fixed status
+  bodies with `no-store`, and return `service.not_ready` without naming a dependency (Section 2).
+- `crates/registry-relay-v2/src/audit.rs` defines audit readiness as a chain head plus a live sink
+  probe, and the audit-failure branches in `api.rs` return `audit.unavailable` at every phase
+  (Sections 3 and 4).
+- `verify_readiness_sources` in `crates/registry-relay-v2/src/sqlite_runtime.rs` re-verifies
+  snapshot immutability and schema fingerprints under the request timeout, and its readiness gate
+  coalesces concurrent probes (Section 3).
+- `RelayRuntime::is_valid` and `valid_secret_reference` in
+  `crates/registry-relay-v2/src/contract.rs` enforce the numeric bounds and the secret-reference
+  forms (Section 5).
+- `QuotaLimiter` in `crates/registry-relay-v2/src/server.rs` implements the per-operation token
+  bucket, and `crates/registry-relay-v2/src/problem.rs` fixes the refusal codes and statuses
+  (Section 5).
+- `operational_log_directive` in `crates/registry-relay-v2/src/main.rs` implements the closed
+  `RELAY_LOG` enum and the Relay-target scoping (Section 6).
+- `load_package` in `crates/registry-relay-v2/src/package.rs` performs the re-derivation, and
+  `prepare` in `crates/registry-relay-v2/src/startup.rs` orders it before every other resource and
+  checks readiness twice (Sections 3 and 7).
+- The out-of-process test `crates/registry-relay-v2/tests/process_http.rs` asserts both probe
+  bodies against a real `relay` process and asserts that graceful shutdown completes within its
+  deadline (Sections 2 and 7).
 
 ## Next
 
-- [Harden a production deployment](../../security/hardening-checklist/) explains how an operator
-  uses posture findings while preparing a deployment.
-- [Registry Relay protocol](../rs-pr-relay/) defines the Relay admin-surface boundary.
-- [RS-PR-EVIDENCE](../rs-pr-evidence/) defines the Evidence Gateway service surface, which carries no
-  posture endpoint.
-- [RS-SEC-G](../rs-sec-g/) defines the security model and the operator boundary this observation
-  helps inspect.
+- [Operate Relay](../../operate/relay/) is the operator task guide for the behavior this
+  specification fixes.
+- [Configure Relay](../../configure/relay/) documents the runtime document whose bounds Section 5
+  states.
+- [RS-PR-RELAY](../rs-pr-relay/) defines the data protocol, including the routes this specification
+  leaves out of scope.
+- [RS-SEC-G](../rs-sec-g/) defines the security model these operational refusals serve.

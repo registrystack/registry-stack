@@ -34,7 +34,7 @@ The rest of the lifecycle policy is designed to make rolling forward cheap:
   [compatibility promise](../../reference/api-stability/), so moving to
   the fixed release does not require migration work beyond reading the release notes.
 - Patch releases contain fixes only, so a security patch is a minimal, low-risk step.
-- The [upgrade procedure](../../operate/upgrade-and-rollback/) documents the manual abort and
+- The [revision replacement procedure](../../operate/relay/) documents the manual abort and
   post-acceptance recovery boundary. Operators verify and exercise the exact candidate package
   before traffic admission.
 
@@ -80,4 +80,4 @@ within 5 business days.
 
 - [Report a vulnerability](../report-a-vulnerability/)
 - [API stability and versioning](../../reference/api-stability/)
-- [Upgrade and recover a deployment](../../operate/upgrade-and-rollback/)
+- [Operate Relay](../../operate/relay/)

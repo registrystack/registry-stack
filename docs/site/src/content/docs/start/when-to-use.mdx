@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -23,8 +23,8 @@ system that owns the data.
 - Each caller must have an explicit purpose, permission, and limited result.
 - The institution needs to test source behavior with synthetic fixtures before
   connecting a runtime environment.
-- Operators need separate control over endpoints, credentials, trust, and
-  deployment.
+- Operators need separate control over endpoints, credentials, token issuers,
+  and deployment.
 
 ## Choose the result you need
 
@@ -39,6 +39,17 @@ configuration, and audit boundary. Evidence Gateway does not use Relay as its
 source path. Registry Mint can issue short-lived access tokens to either
 service when a deployment has no identity provider; see the
 [Registry Mint reference](../../reference/mint/).
+
+### What each door needs from the source
+
+Registry Relay reads reviewed read-only SQLite views. The institution decides in
+SQL what leaves the system of record, and Relay binds only views: a raw table is
+never a source. It reads nothing else, so a workbook, a live third-party
+API, or another database engine has to be reduced to a reviewed view first, by a
+process the institution owns and Relay does not see.
+
+Evidence Gateway calls its own fixed, reviewed sources and evaluates one bounded
+question against them. It never reaches a Relay deployment to do so.
 
 ### Who does what
 
@@ -58,6 +69,8 @@ service when a deployment has no identity provider; see the
 - You need Registry Stack to decide legal authority, data ownership, or
   institutional approval.
 - You want to publish unrestricted open data.
+- The records you want to publish through Relay cannot be exposed as a reviewed
+  read-only SQLite view.
 
 Registry Stack makes these boundaries visible, but the responsible
 institutions still make and approve the underlying decisions.
@@ -69,16 +82,16 @@ Before moving beyond a local sample, identify:
 - The source owner and update process.
 - The fields and operations the integration is allowed to use.
 - The callers, purposes, and fields each service may disclose.
-- The operator responsible for endpoints, credentials, trust, deployment,
-  monitoring, recovery, and audit retention.
+- The operator responsible for endpoints, credentials, token issuers,
+  deployment, monitoring, recovery, and audit retention.
 
 Start with non-personal data. A successful local tutorial is not production
 approval.
 
 ## Next
 
-- [Start a registry from a spreadsheet](../../tutorials/publish-spreadsheet-secured-registry-api/)
-- [Connect an existing HTTP registry](../../tutorials/author-registry-project/)
+- [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/)
 - [Evaluate Evidence Gateway](../evaluate-evidence/)
+- [Connect an existing registry](../../configure/)
 - [Read the architecture overview](../../explanation/architecture/)
 - [Review the security boundaries](../../security/)
