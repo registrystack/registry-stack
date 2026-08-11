@@ -30,6 +30,41 @@ fn the_adopter_workflow_is_exposed_by_one_binary() {
 }
 
 #[test]
+fn the_public_command_tree_supports_documentation_generation() {
+    let command = registry_relayctl::command();
+
+    assert_eq!(command.get_name(), "relayctl");
+    assert!(command.get_about().is_some());
+
+    let public_subcommands = command
+        .get_subcommands()
+        .filter(|subcommand| !subcommand.is_hide_set() && subcommand.get_name() != "help")
+        .collect::<Vec<_>>();
+    assert_eq!(public_subcommands.len(), 8);
+    for (subcommand, expected_name) in public_subcommands.iter().zip([
+        "init", "inspect", "check", "generate", "test", "diff", "package", "tooling",
+    ]) {
+        assert_eq!(subcommand.get_name(), expected_name);
+        assert!(
+            subcommand.get_about().is_some(),
+            "{expected_name} lacks documentation"
+        );
+    }
+
+    let tooling = command
+        .find_subcommand("tooling")
+        .expect("tooling subcommand exists");
+    assert_eq!(
+        tooling
+            .get_subcommands()
+            .filter(|subcommand| !subcommand.is_hide_set() && subcommand.get_name() != "help")
+            .map(clap::Command::get_name)
+            .collect::<Vec<_>>(),
+        ["editor", "language-server"]
+    );
+}
+
+#[test]
 fn schema_inspection_offers_no_row_or_value_sampling_surface() {
     let output = relayctl(&["inspect", "--help"]);
     assert!(output.status.success());

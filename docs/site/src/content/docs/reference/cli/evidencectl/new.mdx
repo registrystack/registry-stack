@@ -1,0 +1,45 @@
+---
+title: "evidencectl new command reference"
+description: "Generated syntax and options for evidencectl new."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Start an editable Evidence Gateway project from OpenAPI or a SQLite extract.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl new [OPTIONS] <DIRECTORY>
+```
+
+## Arguments
+
+| Argument | Required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `<DIRECTORY>` | Yes | n/a | n/a | n/a | New directory to create for the editable authoring project |
+
+## Options
+
+| Option | Required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--openapi <OPENAPI>` | No | n/a | n/a | n/a | OpenAPI 3.0 or 3.1 document: a local path or an HTTPS URL |
+| `--transport <TRANSPORT>` | No | n/a | `sqlite-extract` | n/a | Source transport to author without an API description |
+| `--profile <PROFILE>` | No | n/a | `local` | n/a | Explicit development profile for local authoring |
+| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

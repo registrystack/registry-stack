@@ -1,0 +1,46 @@
+---
+title: "evidencectl dev command reference"
+description: "Generated syntax and options for evidencectl dev."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Run the private local Registry Mint and Evidence Gateway pair.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl dev [OPTIONS] [COMMAND]
+```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| [`stop`](./stop/) | Stop the active local Registry Mint and Evidence Gateway pair |
+| [`clean`](./clean/) | Remove one completed stopped local generation |
+
+## Options
+
+| Option | Required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--detach` | No | n/a | n/a | n/a | Return after Registry Mint and Evidence Gateway are ready on loopback |
+| `--evidence-port <EVIDENCE_PORT>` | No | `8080` | n/a | n/a | Loopback port for the local Evidence Gateway service |
+| `--mint-port <MINT_PORT>` | No | `8081` | n/a | n/a | Loopback port for the local Mint service |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

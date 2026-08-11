@@ -1,0 +1,45 @@
+---
+title: "Command-line interfaces"
+description: "Generated command references for released Registry Relay and Evidence binaries."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Use these generated references for exact command syntax, arguments, options, defaults, and environment bindings.
+
+## Contract status
+
+The pages in this section are generated from each released binary's public Clap command tree. Hidden implementation commands are omitted.
+
+## Registry Relay
+
+| Binary | Description |
+| --- | --- |
+| [`relay`](./relay/) | Compiled read-only Registry Relay runtime |
+| [`relayctl`](./relayctl/) | Relay V2 project authoring, validation, and packaging |
+
+## Evidence Gateway
+
+| Binary | Description |
+| --- | --- |
+| [`evidence`](./evidence/) | Evidence Gateway Version 1 |
+| [`evidencectl`](./evidencectl/) | Evidence adopter tooling: keys, source authoring, fixture runs |
+
+## Supporting Evidence services
+
+| Binary | Description |
+| --- | --- |
+| [`mint`](./mint/) | Registry Stack token issuer |
+| [`evidence-oid4vci`](./evidence-oid4vci/) | Registry Stack wallet delivery front end for Evidence credentials |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a supported command-line surface. The docs check compares the generated pages and JSON catalog with the current Clap definitions.

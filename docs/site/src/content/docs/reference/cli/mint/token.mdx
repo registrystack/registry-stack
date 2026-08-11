@@ -1,0 +1,49 @@
+---
+title: "mint token command reference"
+description: "Generated syntax and options for mint token."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Obtain an access token from a running token endpoint, as a client would.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Description
+
+Obtain an access token from a running token endpoint, as a client would. This authenticates. It signs a client assertion with the caller's own key and posts it; the endpoint decides. Nothing here can produce a token the same request over the wire would not have produced.
+
+## Usage
+
+```text
+mint token [OPTIONS] --url <URL> --client-id <CLIENT_ID> --key <KEY>
+```
+
+## Options
+
+| Option | Required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--url <URL>` | Yes | n/a | n/a | n/a | The token endpoint, for example `https://mint.example.org/token` |
+| `--client-id <CLIENT_ID>` | Yes | n/a | n/a | n/a | The `clientId` this caller is registered under |
+| `--key <KEY>` | Yes | n/a | n/a | n/a | The caller's private JWK. Must be owner-only and not a symlink |
+| `--audience <AUDIENCE>` | No | n/a | n/a | n/a | The endpoint's configured `clientAssertion.audience`. Defaults to `--url`, which is the usual configuration |
+| `--actor <ACTOR>` | No | n/a | n/a | n/a | Request a delegated token for this actor. Requires `--subject-file` |
+| `--subject-file <SUBJECT_FILE>` | No | n/a | n/a | n/a | A JSON object of subject selector fields, for the actor to act for. A file rather than repeated flags on purpose: these are a real person's identifying details, and command lines are visible to every process on the host and land in shell history. |
+| `--lifetime-seconds <LIFETIME_SECONDS>` | No | `120` | n/a | n/a | Assertion lifetime in seconds |
+| `--ca-certificate <CA_CERTIFICATE>` | No | n/a | n/a | n/a | Trust this PEM certificate bundle in addition to the system roots, for a development deployment behind a private CA |
+| `--verbose` | No | n/a | n/a | n/a | Print the full endpoint response instead of the access token alone |
+| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

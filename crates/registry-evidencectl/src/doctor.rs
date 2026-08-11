@@ -72,7 +72,8 @@ pub struct DoctorArgs {
     #[arg(long)]
     pub project: PathBuf,
 
-    /// Mechanically compare this Mint configuration with Evidence authentication.
+    /// Mechanically compare this Registry Mint configuration with Evidence
+    /// Gateway authentication.
     #[arg(long, value_name = "PATH")]
     pub mint_config: Option<PathBuf>,
 

@@ -7,6 +7,8 @@ pub mod audit;
 pub mod auth;
 pub mod binding;
 pub mod bundle;
+#[doc(hidden)]
+pub mod cli;
 pub mod config;
 pub mod contracts;
 pub mod kernel;
@@ -35,6 +37,8 @@ pub use registry_evidence_verifier::{
     EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_SD_JWT_VC_TYP, EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1,
     EVIDENCE_UNSIGNED_MEDIA_TYPE,
 };
+
+pub use cli::command;
 
 #[cfg(test)]
 mod runtime_tests;

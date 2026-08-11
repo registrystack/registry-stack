@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ci_changes import (
+    CLI_REFERENCE_INPUTS,
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
@@ -270,6 +271,7 @@ class CiChangesTest(unittest.TestCase):
             {
                 "registry-relay-v2",
                 "registry-language-server",
+                "registry-cli-docs",
                 "registry-relayctl",
                 "registryctl",
                 "registry-evidencectl",
@@ -435,7 +437,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-evidence", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"evidence", "mint"},
+            {"developer-tools", "evidence", "mint"},
         )
 
         # A products/evidence path belongs to no crate directory, so it seeds
@@ -558,7 +560,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("registryctl", strict["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in strict["rust_matrix"]["include"]},
-            {"evidence"},
+            {"developer-tools", "evidence"},
         )
 
     def test_the_mutation_fixture_refuses_to_demote_an_absent_link(self) -> None:
@@ -637,7 +639,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["evidence_tutorial"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"evidence"},
+            {"developer-tools", "evidence"},
         )
 
     def test_the_python_binding_and_its_sdk_replay_the_tutorial_that_imports_them(
@@ -799,6 +801,11 @@ on:
                 "docs"
             ]
         )
+
+    def test_cli_reference_inputs_run_docs(self) -> None:
+        for _pattern, source in CLI_REFERENCE_INPUTS:
+            with self.subTest(source=source):
+                self.assertTrue(classify(self.workspace, (source,))["docs"])
 
     def test_evidence_contract_change_runs_docs_and_evidence_contracts(self) -> None:
         """The docs Evidence configuration page is generated from these files."""

@@ -1,0 +1,43 @@
+---
+title: "relayctl tooling editor command reference"
+description: "Generated syntax and options for relayctl tooling editor."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Write project-local schema mappings for VS Code and Zed.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+relayctl tooling editor [OPTIONS] [PROJECT]
+```
+
+## Arguments
+
+| Argument | Required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `[PROJECT]` | No | `.` | n/a | n/a | Relay V2 authoring project; defaults to the current directory |
+
+## Options
+
+| Option | Required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--json` | No | n/a | n/a | n/a | Emit the shared report as best-effort JSON for local automation |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

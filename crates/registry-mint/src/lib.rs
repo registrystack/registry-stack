@@ -42,6 +42,8 @@ compile_error!(
 pub mod assertion;
 pub mod audit;
 pub mod caller;
+#[doc(hidden)]
+pub mod cli;
 pub mod clients;
 pub mod config;
 pub mod error;
@@ -49,6 +51,8 @@ pub mod replay;
 pub mod secretfile;
 pub mod server;
 pub mod token;
+
+pub use cli::command;
 
 /// RFC 7523 client assertion type for `private_key_jwt` authentication.
 pub const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";

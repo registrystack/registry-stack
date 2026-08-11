@@ -1,43 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The Relay V2 `relay` process.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-
-const DEFAULT_HEALTHCHECK_URL: &str = "http://127.0.0.1:8080/health";
-
-#[derive(Debug, Parser)]
-#[command(
-    name = "relay",
-    about = "Compiled read-only Registry Relay runtime",
-    version = registry_platform_buildinfo::DISPLAY_VERSION
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Verify and activate one sealed Registry package, then serve it.
-    Serve {
-        /// Strict deployment binding for the sealed package and local resources.
-        #[arg(long, env = "RELAY_RUNTIME")]
-        runtime: PathBuf,
-    },
-    /// Probe an unauthenticated Relay liveness endpoint.
-    Healthcheck {
-        /// Complete HTTP(S) URL of the Relay `/health` endpoint.
-        #[arg(
-            long,
-            env = "RELAY_HEALTHCHECK_URL",
-            default_value = DEFAULT_HEALTHCHECK_URL
-        )]
-        url: String,
-    },
-}
+use clap::Parser;
+use registry_relay_v2::cli::{Cli, Command};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -86,28 +53,7 @@ fn operational_log_directive(configured: Option<&str>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
-
-    use clap::CommandFactory;
-
     use super::*;
-
-    #[test]
-    fn healthcheck_endpoint_has_a_safe_configurable_default() {
-        let command = Cli::command();
-        let healthcheck = command
-            .find_subcommand("healthcheck")
-            .expect("healthcheck subcommand exists");
-        let url = healthcheck
-            .get_arguments()
-            .find(|argument| argument.get_id() == "url")
-            .expect("healthcheck URL argument exists");
-        assert_eq!(url.get_env(), Some(OsStr::new("RELAY_HEALTHCHECK_URL")));
-        assert_eq!(
-            url.get_default_values(),
-            [OsStr::new(DEFAULT_HEALTHCHECK_URL)]
-        );
-    }
 
     #[test]
     fn operational_log_filter_cannot_enable_dependency_targets() {

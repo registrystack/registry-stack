@@ -1,0 +1,55 @@
+---
+title: "evidencectl command reference"
+description: "Generated syntax and options for evidencectl."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Evidence adopter tooling: keys, source authoring, fixture runs.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl <COMMAND>
+```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| [`access`](./access/) | Manage local caller access policies and clients |
+| [`keygen`](./keygen/) | Generate Evidence Gateway deployment key material as owner-only files |
+| [`jwks`](./jwks/) | Assemble a public JWKS document from public JWK files |
+| [`new`](./new/) | Start an editable Evidence Gateway project from OpenAPI or a SQLite extract |
+| [`build`](./build/) | Compile an editable project into a reviewed deployment candidate |
+| [`fixtures`](./fixtures/) | Drive the evidence binary across a project's bundle fixtures |
+| [`source`](./source/) | Work with a project's sources, starting from their own API documents |
+| [`doctor`](./doctor/) | Report every project artifact whose mode or owner the runtime refuses |
+| [`dev`](./dev/) | Run the private local Registry Mint and Evidence Gateway pair |
+| [`request`](./request/) | Prepare a closed request for the active local project |
+| [`verify`](./verify/) | Verify one retained Evidence Gateway response offline |
+| [`audit`](./audit/) | Inspect stopped local audit history |
+| [`tooling`](./tooling/) | Advanced: editor and tooling integration surfaces |
+
+## Options
+
+| Option | Required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| `-V, --version` | No | n/a | n/a | n/a | Print version |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

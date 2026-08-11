@@ -430,8 +430,21 @@ export default defineConfig({
             { label: 'Validate a project', slug: 'verify' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Evidence Gateway configuration', slug: 'reference/evidence-configuration' },
-            { label: 'evidencectl CLI', slug: 'reference/evidencectl' },
-            { label: 'relayctl CLI', slug: 'reference/relayctl' },
+            {
+              label: 'Command-line interfaces',
+              collapsed: true,
+              items: [
+                { label: 'Overview', slug: 'reference/cli' },
+                { label: 'relay', slug: 'reference/cli/relay' },
+                { label: 'relayctl', slug: 'reference/cli/relayctl' },
+                { label: 'evidence', slug: 'reference/cli/evidence' },
+                { label: 'evidencectl', slug: 'reference/cli/evidencectl' },
+                { label: 'mint', slug: 'reference/cli/mint' },
+                { label: 'evidence-oid4vci', slug: 'reference/cli/evidence-oid4vci' },
+              ],
+            },
+            { label: 'relayctl workflows', slug: 'reference/relayctl' },
+            { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
             { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
             {
               label: 'API reference',

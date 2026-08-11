@@ -52,6 +52,7 @@ SHARDS = {
     ),
     "mint": ("registry-mint",),
     "developer-tools": (
+        "registry-cli-docs",
         "registry-config-report",
         "registry-language-server",
     ),
@@ -125,6 +126,23 @@ EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS = (
 EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
     pattern for pattern, _ in EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS
 )
+
+# Generated CLI pages consume the public Clap trees for every released Relay
+# and Evidence binary. Keep this list at module ownership so changing an Args
+# type beside a top-level parser cannot leave its published page stale.
+CLI_REFERENCE_INPUTS = (
+    ("crates/registry-cli-docs/src/**", "crates/registry-cli-docs/src/lib.rs"),
+    ("crates/registry-evidence/src/cli.rs", "crates/registry-evidence/src/cli.rs"),
+    (
+        "crates/registry-evidence-oid4vci/src/cli.rs",
+        "crates/registry-evidence-oid4vci/src/cli.rs",
+    ),
+    ("crates/registry-evidencectl/src/**", "crates/registry-evidencectl/src/lib.rs"),
+    ("crates/registry-mint/src/cli.rs", "crates/registry-mint/src/cli.rs"),
+    ("crates/registry-relay-v2/src/cli.rs", "crates/registry-relay-v2/src/cli.rs"),
+    ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
+)
+CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
 # Binding crates stay in EVIDENCE_PACKAGES and the `evidence` shard, because
 # their own source is covered by check-source-neutrality.sh, and that is what
@@ -445,6 +463,7 @@ def classify(
             # The published authoring guide states behavior enforced in these
             # modules, not only the generated question and marker schemas.
             *EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS,
+            *CLI_REFERENCE_PATTERNS,
         )
         or path
         in {

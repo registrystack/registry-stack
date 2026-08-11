@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/registry-cli-docs",
     "crates/registry-config-report",
     "crates/registry-evidence",
     "crates/registry-evidence-authoring",
@@ -60,7 +61,9 @@ registry-evidence-authoring = { path = "crates/registry-evidence-authoring", ver
 registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.19.0" }
 registry-evidence-client-node = { path = "crates/registry-evidence-client-node", version = "0.19.0" }
 registry-evidence-client-py = { path = "crates/registry-evidence-client-py", version = "0.19.0" }
+registry-evidence-oid4vci = { path = "crates/registry-evidence-oid4vci", version = "0.19.0" }
 registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.19.0" }
+registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.19.0" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.19.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.19.0" }
 registry-mint = { path = "crates/registry-mint", version = "0.19.0" }

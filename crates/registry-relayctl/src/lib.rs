@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 mod shared;
@@ -32,6 +32,14 @@ pub struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+/// Return the complete public command tree for documentation and completion
+/// generators without running a Relay operation.
+pub fn command() -> clap::Command {
+    let mut command = Cli::command();
+    command.build();
+    command
 }
 
 #[derive(Debug, Subcommand)]

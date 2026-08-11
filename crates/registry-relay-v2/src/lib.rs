@@ -6,6 +6,8 @@ pub mod artifacts;
 pub mod audit;
 pub mod auth;
 pub mod authoring;
+#[doc(hidden)]
+pub mod cli;
 pub mod compiler;
 pub mod contract;
 pub mod cursor;
@@ -31,6 +33,7 @@ pub mod startup;
 pub mod tooling;
 pub mod transform;
 
+pub use cli::command;
 pub use compiler::{classification_inventory_digest, compile, CompileError};
 pub use contract::{RegistryContract, RelayRuntime};
 pub use model::{CompileProfile, CompiledRegistry, ObservedSourceSchema};

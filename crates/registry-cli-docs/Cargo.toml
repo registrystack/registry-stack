@@ -1,0 +1,23 @@
+[package]
+name = "registry-cli-docs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic generated reference data for released Registry Stack CLIs."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+registry-evidence.workspace = true
+registry-evidence-oid4vci.workspace = true
+registry-evidencectl.workspace = true
+registry-mint.workspace = true
+registry-relay-v2.workspace = true
+registry-relayctl.workspace = true
+serde.workspace = true
+serde_json.workspace = true
