@@ -162,6 +162,20 @@ class CatalogGeneratorTest(unittest.TestCase):
         with self.assertRaisesRegex(generate.CatalogError, "invalid status"):
             self.build()
 
+    def test_catalog_contract_rejects_blank_owner(self) -> None:
+        document = json.loads(self.config.read_text())
+        document["schemaSources"][0]["owner"] = ""
+        self.config.write_text(json.dumps(document))
+        with self.assertRaisesRegex(generate.CatalogError, "invalid owner"):
+            self.build()
+
+    def test_catalog_contract_rejects_invalid_problem_statuses(self) -> None:
+        document = json.loads(self.problem_catalog.read_text())
+        document["entries"][0]["httpStatuses"] = [99, 99]
+        self.problem_catalog.write_text(json.dumps(document))
+        with self.assertRaisesRegex(generate.CatalogError, "invalid HTTP statuses"):
+            self.build()
+
     def test_unclassified_identifier_reference_is_rejected(self) -> None:
         (self.root / "src" / "unclassified.rs").write_text(
             f'const URI: &str = "{generate.BASE_URL}/unclassified/value";\n'

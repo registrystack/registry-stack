@@ -375,6 +375,127 @@ def validate_entries(repo_root: Path, entries: list[dict[str, Any]]) -> None:
                     raise CatalogError(f"schema $id and catalog URI disagree: {uri}")
 
 
+def validate_catalog_contract(catalog: dict[str, Any]) -> None:
+    if set(catalog) != {"version", "baseUrl", "entries"}:
+        raise CatalogError("generated catalog has an invalid top-level shape")
+    if catalog["version"] != 1 or catalog["baseUrl"] != BASE_URL:
+        raise CatalogError("generated catalog has an invalid version or base URL")
+    entries = catalog["entries"]
+    if not isinstance(entries, list):
+        raise CatalogError("generated catalog entries must be an array")
+
+    common_required = {
+        "uri",
+        "kind",
+        "status",
+        "compatibilityLine",
+        "owner",
+        "title",
+        "description",
+        "source",
+    }
+    allowed = common_required | {"artifact", "problem"}
+    valid_kinds = {
+        "problem",
+        "schema",
+        "context",
+        "namespace",
+        "vocabulary",
+        "vocabulary-term",
+    }
+    digest_pattern = re.compile(r"^[0-9a-f]{64}$")
+
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise CatalogError(f"generated catalog entry {index} must be an object")
+        if not common_required.issubset(entry) or not set(entry).issubset(allowed):
+            raise CatalogError(f"generated catalog entry {index} has an invalid shape")
+        for field in (
+            "uri",
+            "compatibilityLine",
+            "owner",
+            "title",
+            "description",
+        ):
+            if not isinstance(entry[field], str) or not entry[field]:
+                raise CatalogError(
+                    f"generated catalog entry {index} has an invalid {field}"
+                )
+        if not entry["uri"].startswith(f"{BASE_URL}/"):
+            raise CatalogError(f"generated catalog entry {index} has an invalid uri")
+        if entry["kind"] not in valid_kinds or entry["status"] != "active":
+            raise CatalogError(
+                f"generated catalog entry {index} has an invalid kind or status"
+            )
+
+        source = entry["source"]
+        if not isinstance(source, dict) or set(source) != {"path", "sha256"}:
+            raise CatalogError(f"generated catalog entry {index} has an invalid source")
+        if not isinstance(source["path"], str) or not source["path"]:
+            raise CatalogError(f"generated catalog entry {index} has an invalid source path")
+        if not isinstance(source["sha256"], str) or digest_pattern.fullmatch(
+            source["sha256"]
+        ) is None:
+            raise CatalogError(
+                f"generated catalog entry {index} has an invalid source digest"
+            )
+
+        artifact = entry.get("artifact")
+        if entry["kind"] in {"schema", "context"} and artifact is None:
+            raise CatalogError(f"generated catalog entry {index} requires an artifact")
+        if artifact is not None:
+            if not isinstance(artifact, dict) or set(artifact) != {
+                "path",
+                "sha256",
+                "mediaType",
+            }:
+                raise CatalogError(
+                    f"generated catalog entry {index} has an invalid artifact"
+                )
+            for field in ("path", "mediaType"):
+                if not isinstance(artifact[field], str) or not artifact[field]:
+                    raise CatalogError(
+                        f"generated catalog entry {index} has an invalid artifact {field}"
+                    )
+            if not isinstance(artifact["sha256"], str) or digest_pattern.fullmatch(
+                artifact["sha256"]
+            ) is None:
+                raise CatalogError(
+                    f"generated catalog entry {index} has an invalid artifact digest"
+                )
+
+        problem = entry.get("problem")
+        if entry["kind"] == "problem" and problem is None:
+            raise CatalogError(f"generated catalog entry {index} requires problem facts")
+        if problem is not None:
+            if not isinstance(problem, dict) or set(problem) != {
+                "code",
+                "httpStatuses",
+            }:
+                raise CatalogError(
+                    f"generated catalog entry {index} has invalid problem facts"
+                )
+            if not isinstance(problem["code"], str) or not problem["code"]:
+                raise CatalogError(
+                    f"generated catalog entry {index} has an invalid problem code"
+                )
+            statuses = problem["httpStatuses"]
+            if not isinstance(statuses, list) or not statuses:
+                invalid_statuses = True
+            else:
+                invalid_statuses = any(
+                    isinstance(status, bool)
+                    or not isinstance(status, int)
+                    or status < 100
+                    or status > 599
+                    for status in statuses
+                ) or len(statuses) != len(set(statuses))
+            if invalid_statuses:
+                raise CatalogError(
+                    f"generated catalog entry {index} has invalid HTTP statuses"
+                )
+
+
 def reference_uris(path: Path) -> set[str]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -438,13 +559,15 @@ def build_catalog(
     ]
     entries.sort(key=lambda entry: entry["uri"])
     validate_entries(repo_root, entries)
+    catalog = {"version": 1, "baseUrl": BASE_URL, "entries": entries}
+    validate_catalog_contract(catalog)
     validate_reference_closure(
         repo_root,
         entries,
         config["referenceExclusions"],
         repository_paths,
     )
-    return {"version": 1, "baseUrl": BASE_URL, "entries": entries}
+    return catalog
 
 
 def render(catalog: dict[str, Any]) -> bytes:

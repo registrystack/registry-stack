@@ -190,6 +190,9 @@ def identifier_catalog_inputs(
 
     inputs = [
         "products/identifiers/**",
+        "crates/registry-relay-v2/examples/audit-event-schema.rs",
+        "crates/registry-relay-v2/examples/problem-catalog.rs",
+        "crates/registry-relay-v2/src/audit.rs",
         "crates/registry-relay-v2/src/problem.rs",
     ]
     for index, group in enumerate(schema_groups):

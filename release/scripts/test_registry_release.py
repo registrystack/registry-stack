@@ -2483,7 +2483,12 @@ class RegistryReleaseTest(TestCase):
     def test_validate_requires_exact_identifier_catalog_after_v0_19_0(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            manifest = write_manifest(root, version="0.19.1")
+            catalog_source_ref = git(ROOT, "rev-parse", "HEAD")
+            manifest = write_manifest(
+                root,
+                version="0.19.1",
+                source_ref=catalog_source_ref,
+            )
             accepted = run_tool("validate", str(manifest))
 
             data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
@@ -2493,7 +2498,11 @@ class RegistryReleaseTest(TestCase):
             )
             mismatched = run_tool("validate", str(manifest))
 
-            missing = write_manifest(root, version="0.19.1")
+            missing = write_manifest(
+                root,
+                version="0.19.1",
+                source_ref=catalog_source_ref,
+            )
             data = yaml.safe_load(missing.read_text(encoding="utf-8"))
             del data["identifier_catalog"]
             missing.write_text(
@@ -2507,13 +2516,58 @@ class RegistryReleaseTest(TestCase):
         self.assertNotEqual(0, absent.returncode)
         self.assertIn("identifier_catalog is required", absent.stderr)
 
+    def test_validate_uses_identifier_catalog_from_recorded_source_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = init_repo(Path(tmp))
+            catalog_path = (
+                root / "products/identifiers/generated/catalog.v1.json"
+            )
+            catalog_path.parent.mkdir(parents=True)
+            source_catalog = (
+                ROOT / "products/identifiers/generated/catalog.v1.json"
+            ).read_bytes()
+            catalog_path.write_bytes(source_catalog)
+            git(root, "add", str(catalog_path.relative_to(root)))
+            git(root, "commit", "-m", "record release catalog")
+            source_ref = git(root, "rev-parse", "HEAD")
+            manifest = write_manifest(
+                root,
+                version="0.19.1",
+                source_ref=source_ref,
+                status="released",
+            )
+
+            catalog_path.write_text(
+                json.dumps({"version": 1, "entries": [{"status": "active"}]})
+                + "\n",
+                encoding="utf-8",
+            )
+            accepted = run_tool("validate", str(manifest))
+
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["identifier_catalog"]["sha256"] = hashlib.sha256(
+                catalog_path.read_bytes()
+            ).hexdigest()
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+            mismatched = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertNotEqual(0, mismatched.returncode)
+        self.assertIn("does not match the committed catalog bytes", mismatched.stderr)
+
     def test_relay_installer_joins_the_exact_inventory_after_v0_19_0(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             historical = write_manifest(root, version="0.19.0")
             historical_result = run_tool("validate", str(historical))
 
-            current = write_manifest(root, version="0.19.1")
+            current = write_manifest(
+                root,
+                version="0.19.1",
+                source_ref=git(ROOT, "rev-parse", "HEAD"),
+            )
             current_result = run_tool("validate", str(current))
             data = yaml.safe_load(current.read_text(encoding="utf-8"))
             del data["artifacts"]["relay-installer"]

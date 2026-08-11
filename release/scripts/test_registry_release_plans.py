@@ -130,7 +130,11 @@ class FixtureRepo:
         git(root, "config", "user.email", "release-test@example.invalid")
         git(root, "config", "user.name", "Release Test")
         write(root / "seed", "candidate\n")
-        git(root, "add", "seed")
+        write_json(
+            root / "products/identifiers/generated/catalog.v1.json",
+            FIXTURE_IDENTIFIER_CATALOG,
+        )
+        git(root, "add", "seed", "products/identifiers/generated/catalog.v1.json")
         git(root, "commit", "-m", "candidate")
         self.candidate = git(root, "rev-parse", "HEAD")
         git(root, "tag", "v1.0.0")
@@ -653,7 +657,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         )
         self.assertIn("unexpected registry-docs", incomplete_inventory.stderr)
 
-    def test_prepare_rejects_identifier_catalog_drift(self) -> None:
+    def test_prepare_uses_identifier_catalog_from_recorded_source_ref(self) -> None:
         write_json(
             self.repo.root / "products/identifiers/generated/catalog.v1.json",
             {
@@ -661,6 +665,28 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 "entries": [{"status": "active"}, {"status": "active"}],
             },
         )
+
+        result = self.prepare()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_prepare_rejects_identifier_catalog_drift_at_recorded_source_ref(
+        self,
+    ) -> None:
+        write_json(
+            self.repo.root / "products/identifiers/generated/catalog.v1.json",
+            {
+                "version": 1,
+                "entries": [{"status": "active"}, {"status": "active"}],
+            },
+        )
+        git(self.repo.root, "add", "products/identifiers/generated/catalog.v1.json")
+        git(self.repo.root, "commit", "-m", "change release catalog")
+        changed_source = git(self.repo.root, "rev-parse", "HEAD")
+        target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
+        data = yaml.safe_load(target.read_text(encoding="utf-8"))
+        data["stack"]["source_ref"] = changed_source
+        write_yaml(target, data)
 
         result = self.prepare()
 

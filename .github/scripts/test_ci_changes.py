@@ -239,6 +239,19 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(pattern=pattern):
                 self.assertTrue(classify(self.workspace, (sample,))["identifiers"])
 
+    def test_identifier_exporters_and_indirect_inputs_select_the_catalog_gate(
+        self,
+    ) -> None:
+        for path in (
+            "crates/registry-relay-v2/examples/audit-event-schema.rs",
+            "crates/registry-relay-v2/examples/problem-catalog.rs",
+            "crates/registry-relay-v2/src/artifacts.rs",
+            "crates/registry-relay-v2/src/audit.rs",
+            "crates/registry-relay-v2/src/problem.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["identifiers"])
+
     def test_ci_always_checks_repository_identifier_reference_closure(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn(
