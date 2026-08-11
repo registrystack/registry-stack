@@ -56,7 +56,7 @@ test('uses the adopter-first top-level flow in its published order', () => {
     'Start',
     'Answer with Evidence Gateway',
     'Connect an existing registry',
-    'Operate',
+    'Operate across products',
     'Security',
     'Reference',
   ]);
@@ -67,7 +67,7 @@ test('publishes one overview route for every task-flow section', () => {
     ['Start', "link: '/'"],
     ['Answer with Evidence Gateway', "slug: 'start/evidence-quickstart'"],
     ['Connect an existing registry', "slug: 'configure'"],
-    ['Operate', "slug: 'operate'"],
+    ['Operate across products', "slug: 'operate/advanced'"],
     ['Security', "slug: 'security'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -75,6 +75,28 @@ test('publishes one overview route for every task-flow section', () => {
     assert.ok(section, `could not isolate ${label}`);
     assert.match(section, new RegExp(route.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
+});
+
+// A page that names one product belongs under that product, so a reader
+// following one adoption path never leaves it. The two cross-product sections
+// keep only what applies to every deployment.
+test('files product-scoped pages under their product, not under the cross-product sections', () => {
+  const crossProduct = topLevelSection(sidebarSource, 'Operate across products');
+  const relay = topLevelSection(sidebarSource, 'Connect an existing registry');
+  for (const relayOnly of ['operate', 'operate/relay']) {
+    const entry = new RegExp(`slug: '${relayOnly.replaceAll('/', '\\/')}' \\}`);
+    assert.doesNotMatch(
+      crossProduct,
+      entry,
+      `${relayOnly} documents Registry Relay and belongs in the Relay section`,
+    );
+    assert.match(relay, entry, `the Relay section must carry ${relayOnly}`);
+  }
+
+  const security = topLevelSection(sidebarSource, 'Security');
+  assert.doesNotMatch(security, /slug: 'security\/evidence'/);
+  const evidence = topLevelSection(sidebarSource, 'Answer with Evidence Gateway');
+  assert.match(evidence, /slug: 'security\/evidence'/);
 });
 
 test('publishes one Relay reader journey without the retired V1 routes', () => {
@@ -94,6 +116,14 @@ test('publishes one Relay reader journey without the retired V1 routes', () => {
       "slug: 'operate/relay'",
     ],
     'Relay reader journey',
+  );
+  // The section mirrors the Evidence Gateway shape: an overview and the first
+  // hands-on tutorial in the open, then the deeper phases collapsed behind the
+  // phase they belong to.
+  assertOrdered(
+    connect,
+    ["label: 'Author a project'", "label: 'Operate Relay'"],
+    'Relay phase group',
   );
   // Relay V2 is the only Relay the site documents, so the section carries no
   // preview group beside the maintained journey and none of the V1 source
@@ -133,15 +163,23 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
   assertOrdered(
     evidence,
     [
+      // The first hands-on tutorial sits beside the overview rather than inside
+      // a collapsed group, so a first-time reader reaches it without opening
+      // anything.
+      "slug: 'tutorials/first-evidence-assertion'",
       "label: 'Learn locally'",
       "label: 'Connect a source'",
       "label: 'Prepare and deploy'",
       "label: 'Authenticate callers'",
-      "label: 'Verify and trust'",
+      // Relying-party verification and wallet delivery are different audiences
+      // with different deployments, so they are separate groups.
+      "label: 'Verify as a relying party'",
+      "label: 'Deliver to wallets'",
       "label: 'Operate Evidence Gateway'",
     ],
     'Evidence Gateway task group',
   );
+  assert.doesNotMatch(evidence, /label: 'Verify and trust'/);
   assert.doesNotMatch(evidence, /first-run-with-solmara-lab|Relay-protected|over a Relay/);
   assert.equal(hasDocForSlug('tutorials/first-run-with-solmara-lab'), false);
   assert.match(

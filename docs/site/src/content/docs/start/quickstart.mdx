@@ -35,22 +35,21 @@ provides the toolset and the local runtimes the tutorial uses.
 Registry Relay serves one Registry per process from a sealed package compiled out
 of one reviewed contract over read-only SQLite views.
 [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/)
-takes the supplied business Registry through `relayctl check --production`,
-`generate`, `test`, and `package`, then replays minimized record and bounded
-spatial requests through the same router the service uses.
+builds a small business register from scratch: a SQLite view, a reviewed
+contract, `relayctl check --production`, `generate`, and `package`, then a
+running service answering with the two fields the review released and refusing
+the third.
 
 Take this path when the institution can expose a reviewed read-only SQLite view
 of the records it wants to publish. Relay reads no other source: not a
 spreadsheet, not a live third-party API, and not a raw database table.
 Continue with [author a Registry Relay project](../../configure/relay/) once the
-supplied project works.
+first register works.
 
-That first run builds `relayctl` from a Registry Stack source checkout, because
-the synthetic project it uses is tracked in the source tree rather than
-published as a sample archive. The released binaries are separate: the `relay`
-runtime ships as a Linux amd64 installer and a container image, and `relayctl`
-ships as a plain release binary for Linux amd64, Linux arm64, and macOS arm64.
-Both are operator inputs, not tutorial prerequisites.
+This run needs no source checkout either. One released installer provides both
+`relay` and `relayctl` for Linux amd64, Linux arm64, and macOS arm64. The
+runtime also ships as a container image, which is an operator input rather than
+a tutorial prerequisite.
 
 ## Keep the two doors separate
 

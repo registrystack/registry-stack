@@ -1,11 +1,11 @@
 ---
 title: Publish a governed SQLite registry
-description: Run the supplied business Registry, then test minimized Record and bounded Point responses through Registry Relay.
-status: draft
+description: Turn a SQLite table into a read-only public API that answers with two fields, refuses a third, and records every answer.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-10"
+last_reviewed: "2026-08-11"
 doc_type: tutorial
 persona:
   - data publisher
@@ -16,112 +16,454 @@ standards_referenced:
   - json-schema
   - json-ld
   - shacl
-  - geojson
-  - json-fg
-  - sdmx
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Run a synthetic business Registry through Registry Relay, from a reviewed
-SQLite view to a verified read-only API package. You will verify the supplied contract,
-generate its documentation and semantic model, seal a deployment package, and
-replay minimized Record and bounded Point requests through the Relay router.
+Registry Relay compiles one reviewed contract into a read-only HTTP API over a database an
+institution already holds. In this tutorial you will publish a small business register that
+answers with a company's legal name and legal form, refuses to answer with its address, and
+never sees the registrar's internal notes at all.
 
 <QuickstartMeta
-  outcome="One governed business Registry sealed into a package, with minimized Record and bounded Point behavior verified through the Relay router."
-  time="About 20 minutes after the Rust toolchain is installed"
-  level="Source-built preview with synthetic data"
-  prerequisites={['Rust and Cargo', 'Python 3', 'curl', 'A Unix environment', 'A Registry Stack source checkout']}
+  outcome="One public register API serving two reviewed fields, refusing a third, with an audit line for the answer it gave."
+  time="About 30 minutes"
+  level="Local development with synthetic data"
+  prerequisites={['The sqlite3 command line', 'A shell with curl', 'An editor', 'Linux or macOS']}
 />
 
-## Before you start
+## Understand the flow
 
-This preview builds Relay from the source checkout. Run every command from the
-repository root unless the tutorial tells you to change directory.
+Two boundaries stand between the database and the caller, and you author both of them.
 
-The supplied project uses synthetic organisations and reserved `.invalid`
-service names. Do not substitute production data, identifiers, or keys during
-this first run. A data publisher reviews the Registry meaning and disclosure
-rules. An operator binds the reviewed package to local files and starts the
-service. You will perform both roles locally.
+```mermaid
+flowchart LR
+    T["businesses table<br/>8 columns, including registrar_note"]
+    V["relay_registered_businesses view<br/>7 columns"]
+    D["public disclosure profile<br/>legalName, legalForm"]
+    C["Anonymous caller"]
 
-## Build the authoring tool
+    T -->|SQL view you write| V
+    V -->|contract you review| D
+    D -->|relay serve| C
+```
 
-Build `relayctl`, the project-authoring command:
+The view decides which columns can leave the database at all. The disclosure profile decides
+which of those the API is willing to answer with. `registrar_note` never crosses the first
+boundary, and `registeredAddress` never crosses the second.
+
+## Install Registry Relay
+
+Install the runtime and the authoring tool:
 
 ```sh
-repo_root="$(pwd -P)"
-cargo build --locked -p registry-relayctl
-export PATH="$repo_root/target/debug:$PATH"
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 relayctl --version
+relay --version
 ```
 
-The final line has this form. The version follows your checkout:
+The installer provides `relayctl`, which you use to author and check a project, and `relay`,
+which serves a sealed package. Both land in `~/.local/bin` unless you set `RELAY_INSTALL_DIR`.
+If the version commands are not found, add that directory to your `PATH`.
 
-```text
-relayctl <version>
-```
+## Start a project
 
-`relayctl` uses the same contract compiler and HTTP router as the `relay` service while checking,
-generating, packaging, and replaying the synthetic project.
-
-## Prepare the sample Registry
-
-Copy the supplied business Registry into a disposable directory, then create
-its SQLite snapshot from the tracked synthetic SQL:
+`relayctl init` writes a starter project into a new directory:
 
 ```sh
-reader_root="$(mktemp -d "${TMPDIR:-/tmp}/relay-tutorial.XXXXXX")"
-cp -R products/relay-v2/acceptance/business-registry "$reader_root/business-registry"
-cd "$reader_root/business-registry"
-project="$(pwd -P)"
-mkdir -m 700 var
-python3 - "$project" <<'PY'
-import sqlite3
-import sys
-from pathlib import Path
-
-project = Path(sys.argv[1])
-database = project / "fixture.sqlite"
-with sqlite3.connect(database) as connection:
-    connection.executescript((project / "fixture.sql").read_text())
-database.chmod(0o444)
-PY
+relayctl init business-registry
+cd business-registry
 ```
 
-These commands print nothing when they succeed. `pwd -P` records the physical
-path because Relay rejects symlinks in trusted runtime paths.
+It reports the files it created:
 
-The project contains one YAML contract, one deployment binding, and the files
-needed to prove them:
-
-```text
-registry.yaml       Registry identity, resources, operations, access profiles, and disclosure
-runtime.yaml        local package, SQLite, audit, secret, and listener paths
-fixture.sql         synthetic SQLite source construction
-expected-http.yaml  expected requests and responses
-codelists/          reviewed controlled values
-governance/         legal-basis and identifier-lifecycle records
-semantics/          optional mappings to external vocabularies
-reports/             accepted generated-review evidence when applicable
+```json
+{
+  "status": "success",
+  "diagnostics": [],
+  "details": {
+    "kind": "initialized",
+    "files": [
+      "registry.yaml",
+      "runtime.yaml",
+      "governance/identifier-lifecycle.yaml",
+      "governance/classification-review.yaml",
+      "governance/legal-basis.yaml",
+      "governance/processing.dpv.yaml",
+      "codelists/record-lifecycle.yaml"
+    ]
+  }
+}
 ```
 
-The Registry contract is the reviewed agreement about what the API means and
-may release. The SQLite database remains a separate deployment input and is
-not copied into the package.
+`registry.yaml` is the contract: what the register means and what it may release. `runtime.yaml`
+is the deployment binding: where the database is, where audit goes, what to listen on. The
+`governance/` files are the institutional record behind the contract. You will edit all three
+kinds before the end.
 
-## Verify the project
+## Build the register database
 
-Compile the production checks before generating or serving anything:
+The institution's database is an input, not part of the project. Create a small one here.
+
+Open `registry.sql` in your editor and add this:
+
+```sql
+CREATE TABLE businesses (
+  registration_number TEXT PRIMARY KEY NOT NULL,
+  record_revision     TEXT NOT NULL,
+  lifecycle_state     TEXT NOT NULL,
+  recorded_at         TEXT NOT NULL,
+  legal_name          TEXT NOT NULL,
+  legal_form          TEXT NOT NULL,
+  registered_address  TEXT NOT NULL,
+  registrar_note      TEXT NOT NULL
+) STRICT;
+
+INSERT INTO businesses VALUES
+  ('BIZ-0001', '3', 'ACTIVE',  '2026-02-11T09:00:00Z', 'Aurora Freight Cooperative', 'COOPERATIVE', '14 Harbour Road, Port Meridian',  'Renewal reviewed by registrar A'),
+  ('BIZ-0002', '1', 'ACTIVE',  '2026-01-04T09:00:00Z', 'Meridian Dairy Limited',     'COMPANY',     '3 Mill Lane, Northfield',         'Filed on paper'),
+  ('BIZ-0003', '7', 'RETIRED', '2025-11-20T09:00:00Z', 'Kestrel Analytics Limited',  'COMPANY',     '77 Vantage Street, Port Meridian', 'Struck off, registrar B');
+
+CREATE VIEW relay_registered_businesses AS
+SELECT registration_number,
+       record_revision,
+       lifecycle_state,
+       recorded_at,
+       legal_name,
+       legal_form,
+       registered_address
+FROM businesses;
+```
+
+The view is the point of the file. Relay binds a resource to a view, never to a base table, so
+the institution decides in SQL which columns are even eligible for publication. `registrar_note`
+is not in the view, so nothing later in this tutorial can reach it, whatever the contract says.
+
+Create the database and make it read-only:
 
 ```sh
-relayctl check "$project" --production
+sqlite3 registry.sqlite < registry.sql
+chmod 444 registry.sqlite
 ```
 
-After the command label, the report begins with a successful status and no
-diagnostics. This abridged excerpt omits the compiled configuration key paths
-at `details.configuration_key_paths`:
+These commands print nothing when they succeed. Relay opens the database read-only in any case;
+the file mode makes that visible to anyone reading the deployment.
+
+## Record the schema you reviewed
+
+Ask `relayctl` what it sees in the database:
+
+```sh
+relayctl inspect registry.sqlite
+```
+
+The report lists every table, view, and column, and opens with a fingerprint of the whole schema:
+
+```json
+{
+  "status": "success",
+  "diagnostics": [],
+  "details": {
+    "kind": "schema-inspection",
+    "fingerprint": "sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18",
+    "objects": [ ... ]
+  }
+}
+```
+
+Copy that fingerprint. Writing it into the contract is how you say which schema you reviewed. If
+someone later adds, drops, or retypes a column, the fingerprint changes and Relay refuses to
+serve rather than guessing whether your review still applies.
+
+## Write the contract
+
+Replace `registry.yaml` with this. It names the register, binds the resource to the view,
+publishes three properties, and then discloses only two of them.
+
+```yaml
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RegistryContract
+metadata:
+  id: business-registry
+  version: draft-1
+  title: Business register
+
+registry:
+  registryIdentifier: urn:example:registry:businesses
+  name: Business register
+  authority:
+    identifier: urn:example:authority:registrar
+    name: Companies Registrar
+  authoritativeScope: Reviewed authoritative records in the declared jurisdiction
+  baseUri: https://registry.example.invalid/
+  identifierLifecyclePolicyRef: governance/identifier-lifecycle.yaml
+  alignmentTargets:
+    - name: govstack-digital-registries
+      version: 3.0.0-alpha.2
+      status: directional
+
+governance:
+  controller: urn:example:authority:registrar
+  publisher: urn:example:authority:registrar
+  auditOwner: urn:example:authority:registrar
+
+semantics:
+  localVocabulary: https://registry.example.invalid/vocabulary/
+
+classifications:
+  privacy:
+    scheme: https://w3id.org/dpv
+    version: "2.3"
+  institutional:
+    scheme: urn:example:classification
+    version: draft-1
+  handling:
+    scheme: https://id.registrystack.org/vocab/handling
+    version: "1"
+  provenanceRef: governance/classification-review.yaml
+
+sources:
+  registry:
+    kind: sqlite
+    profile: snapshot
+    expectedSchemaFingerprint: sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18
+
+resources:
+  - id: registered-business
+    title: Registered business
+    description: One entry in the public business register.
+    semanticClass: local:RegisteredBusiness
+    source:
+      source: registry
+      view: relay_registered_businesses
+    classificationDefaults:
+      privacy: non-personal
+      institutional: public
+      handling: public
+      status: reviewed
+    recordContext:
+      recordIdentifier:
+        sourceColumn: registration_number
+      revisionIdentifier:
+        sourceColumn: record_revision
+      lifecycleState:
+        sourceColumn: lifecycle_state
+        codelist: codelists/record-lifecycle.yaml
+      recordedAt:
+        sourceColumn: recorded_at
+    sourceColumnClassifications: {}
+    properties:
+      legalName:
+        label: Legal name
+        description: Registered legal name.
+        sourceColumn: legal_name
+        type: string
+        sourceRequired: true
+        semanticTerm: local:legalName
+      legalForm:
+        label: Legal form
+        description: Registered legal form.
+        sourceColumn: legal_form
+        type: string
+        sourceRequired: true
+        semanticTerm: local:legalForm
+      registeredAddress:
+        label: Registered address
+        description: Registered office address.
+        sourceColumn: registered_address
+        type: string
+        sourceRequired: true
+        semanticTerm: local:registeredAddress
+    disclosureProfiles:
+      public:
+        properties:
+          - legalName
+          - legalForm
+    operations:
+      read:
+        defaultAccessProfile: public
+        accessProfiles:
+          public:
+            access: public
+            disclosureProfile: public
+    processingDescriptions:
+      - id: consultation
+        operationRefs:
+          - read
+        purpose: reviewed-consultation
+        recipientClass: anonymous-public
+        legalBasisRef: governance/legal-basis.yaml
+        dpvProfileRef: governance/processing.dpv.yaml
+        safeguards:
+          - property-minimization
+
+metadataVisibility:
+  service: public
+  resources: public
+  semantics: public
+  classifications: public
+  processing: public
+```
+
+Paste your own fingerprint into `expectedSchemaFingerprint` if it differs from the one above.
+
+Three parts of that file are worth reading twice.
+
+`properties` declares `registeredAddress`, but `disclosureProfiles.public` lists only `legalName`
+and `legalForm`. A property that is declared and not disclosed is a property the register knows
+about and this audience does not get. Declaring it is what lets you disclose it later to a
+different audience without touching the view.
+
+`access: public` means anonymous. That is the whole authorization decision for this deployment,
+which is why it will need no identity provider later.
+
+`metadataVisibility` is set to `public` throughout because a public audience has to be able to
+resolve the schema and vocabulary the answer points at. A contract that publishes an answer
+anonymously but hides the documents that explain it is refused, not served.
+
+## Check the contract
+
+```sh
+relayctl check .
+```
+
+The check compiles the contract, opens the database read-only to confirm the view and columns
+exist, and reports the revision of what it compiled:
+
+```json
+{
+  "status": "success",
+  "diagnostics": [],
+  "details": {
+    "kind": "check",
+    "contract_revision": "sha256:<digest>",
+    "production": false
+  }
+}
+```
+
+Nothing is running yet. `check` reads, and writes nothing.
+
+## Generate the artifacts
+
+```sh
+relayctl generate .
+```
+
+This writes 22 artifacts under `generated/`: an OpenAPI 3.1 description, JSON Schema and SHACL
+shapes, a JSON-LD context and vocabulary, the capability inventory, the audit event schema, and
+the review reports. Every one of them is derived from the contract, so none of them can describe
+a field the contract does not disclose.
+
+Two of the generated files are review inputs rather than outputs. `generated/reports/classification-inventory.json`
+is the list of source columns and output properties with the handling each one carries.
+`generated/governance/classification-review-starter.yaml` is a pre-filled review record for
+exactly that inventory:
+
+```yaml
+apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:businesses
+classificationInventoryDigest: sha256:b01c845f9aabc500bae3756dd3daa855c182f540d48ccc5a341ccd2ca25e5e1f
+method: generated
+reviewer: urn:example:authority:registrar
+reviewDate: pending-review
+status: suggested
+rationaleRef: pending-review
+generatedIdentification: ...
+```
+
+`status: suggested` and `reviewDate: pending-review` are the tool saying it has an opinion and no
+authority. Only a person supplies the rest.
+
+## See what production refuses
+
+```sh
+relayctl check . --production
+```
+
+The starter project is refused, and the diagnostics say exactly why:
+
+```json
+{
+  "status": "refused",
+  "diagnostics": [
+    {"code": "codelist.unreviewed", "location": "codelists/record-lifecycle.yaml",
+     "message": "production codelists must be institutionally reviewed"},
+    {"code": "classification.review_inventory_stale",
+     "location": "governance/classification-review.yaml:classificationInventoryDigest",
+     "message": "the classification review does not bind the current inventory"},
+    {"code": "classification.review_registry_stale",
+     "location": "governance/classification-review.yaml:registryIdentifier",
+     "message": "the classification review is bound to another Registry"},
+    {"code": "classification.review_date_invalid",
+     "location": "governance/classification-review.yaml:reviewDate",
+     "message": "the review date must be a canonical calendar date"},
+    {"code": "classification.review_unreviewed",
+     "location": "governance/classification-review.yaml:status",
+     "message": "production classification requires reviewed institutional evidence"}
+  ]
+}
+```
+
+This is the governed result. A contract that compiles is not a contract an institution has
+agreed to publish, and `--production` is the difference between the two.
+
+## Record the review
+
+Replace `governance/classification-review.yaml` with the review a person signs off. The digest
+comes from the starter file `generate` just wrote:
+
+```yaml
+apiVersion: relay.registrystack.org/classification-review/v1
+kind: ClassificationReview
+registryIdentifier: urn:example:registry:businesses
+classificationInventoryDigest: sha256:b01c845f9aabc500bae3756dd3daa855c182f540d48ccc5a341ccd2ca25e5e1f
+method: manual
+reviewer: urn:example:authority:registrar
+reviewDate: 2026-08-11
+status: reviewed
+rationaleRef: governance/classification-review-rationale.md
+```
+
+`method: manual` is the honest description of what you just did: a person read the inventory and
+accepted it. `method: generated` is for the case where tooling produced the classifications and
+the review binds the report and rule pack that produced them, which the starter file shows.
+
+Write the rationale it points at, in `governance/classification-review-rationale.md`:
+
+```markdown
+# Classification review
+
+The registrar read `generated/reports/classification-inventory.json` on
+2026-08-11 and accepted it unchanged. Legal name and legal form are already
+published in the paper register, so disclosing them to anonymous callers adds
+no new disclosure. Registered address stays undisclosed pending a separate
+review.
+```
+
+Mark the legal basis reviewed in `governance/legal-basis.yaml`:
+
+```yaml
+status: reviewed
+legalBasis: Public inspection of the business register under the Companies Act.
+```
+
+And the codelist in `codelists/record-lifecycle.yaml`, which has to list every lifecycle value
+the view can produce:
+
+```yaml
+id: record-lifecycle
+version: draft-1
+values: [ACTIVE, RETIRED]
+status: reviewed
+```
+
+Now run the production check again:
+
+```sh
+relayctl check . --production
+```
 
 ```json
 {
@@ -135,203 +477,219 @@ at `details.configuration_key_paths`:
 }
 ```
 
-This is the first governed result. Production checks refuse unreviewed
-semantic or classification suggestions, missing or stale classification-review
-evidence, source-schema changes, and inconsistent access or disclosure rules.
-
-Generate the public and operator artifacts:
+## Seal the package
 
 ```sh
-relayctl generate "$project"
+relayctl package . --output package
 ```
 
-The abridged result identifies the generated artifact inventory:
-
-```text
-relayctl generate
+```json
 {
   "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "generate",
-    "contract_revision": "sha256:<digest>",
-    "artifacts": [ ... ]
-  }
-}
-```
-
-Now replay every supplied HTTP request through the same router used by the
-service:
-
-```sh
-relayctl test "$project"
-```
-
-The test report lists each request and its observed result. Every supplied step
-must record `"passed": true`:
-
-```text
-relayctl test
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "test",
-    "contract_revision": "sha256:<digest>",
-    "report": {
-      "steps": [
-        {"id": "registry-discovery", "actualStatus": 200, "passed": true},
-        ...
-      ]
-    }
-  }
-}
-```
-
-Generated files include OpenAPI 3.1, JSON Schema, Shapes Constraint Language
-(SHACL), JSON for Linked Data (JSON-LD), codelist schemas, processing
-descriptions, capability discovery, and deterministic value-free reports under
-`generated/reports/` and `generated/governance/`. The reports distinguish
-source-column processing handling from output-property disclosure handling.
-They are review inputs, not automatic approvals.
-
-## Seal the deployment package
-
-Package the reviewed contract and generated artifacts:
-
-```sh
-relayctl package "$project" --output "$project/package"
-```
-
-The abridged report records both revisions and the source schema fingerprint:
-
-```text
-relayctl package
-{
-  "status": "success",
-  "diagnostics": [],
   "details": {
     "kind": "package",
     "manifest": {
       "packageRevision": "sha256:<package-digest>",
       "contractRevision": "sha256:<contract-digest>",
-      "sourceSchemaFingerprints": {"companies": "sha256:<schema-digest>"}
+      "sourceSchemaFingerprints": {
+        "registry": "sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18"
+      }
     }
   }
 }
 ```
 
-The package also inventories governed-file digests, media types, and artifact
-visibility. Relay verifies that inventory before opening the database, audit
-file, token issuer, or listener. It starts from this complete package only and
-does not reload, merge, or fall back to a different interpretation.
+The package holds the compiled contract, the generated artifacts, and the governed files, with a
+digest for each. It does not hold the database. Packaging recompiles under the production
+profile, so a package cannot be produced from a revision that would fail `check --production`.
 
-## Verify the minimized request boundary
+## Serve it
 
-The supplied `filtered-page` fixture requests active registrations, applies the declared
-jurisdiction filter, and narrows `domainData` to `registrationNumber` and `legalName`.
-Run that one case again through the same Relay router used by the service:
+`runtime.yaml` from `relayctl init` already points at `registry.sqlite` and `package`, so it
+needs no edit. Read it once:
 
-```sh
-relayctl test "$project" --fixture filtered-page
+```yaml
+apiVersion: relay.registrystack.org/v2alpha1
+kind: RelayRuntime
+server: {bind: "127.0.0.1:8080"}
+packagePath: package
+sources: {registry: {path: registry.sqlite}}
+authentication: {issuer: null}
+audit: {sink: var/audit.jsonl, integrityKeyRef: secret:env/RELAY_AUDIT_KEY}
+limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 8}
 ```
 
-The report contains one successful step with `actualStatus: 200` and `passed: true`.
-The fixture expectation also requires complete Registry Core context and exactly the two requested
-domain properties. An unknown field, SQLite column, sort, or undeclared filter is a separate
-refusal case in the full journey and cannot change the compiled query.
+`authentication: {issuer: null}` works here only because every access profile in the contract is
+public. Add one protected profile and Relay refuses to start without a reachable token issuer,
+even for requests that would have been anonymous.
 
-The contract also defines protected `registrar` access profiles for read and list operations. The
-full fixture journey proves their distinct scopes, no-store cache posture, denied requests, and an
-unknown access profile. The unknown and scope-hidden cases use the same generic
-`404 resource.not_found` response. Relay authorizes the requested access profile exactly and never
-falls back to the public default.
-
-## Verify the spatial response boundary
-
-The supplied project also contains a `registered-premises` resource with one reviewed Point and a
-bounded bbox query. Its JSON-FG step declares `recordsEquivalentTo: premises-first-page`, so it
-cannot be replayed on its own: `--fixture` runs exactly the named step and expands no
-prerequisites, and an equivalence expectation whose referenced observation was never recorded
-fails as `fixture.representation_mismatch`. Run the whole journey instead:
+Create the audit directory and the integrity key, then start the service:
 
 ```sh
-relayctl test "$project"
+mkdir -m 700 var
+export RELAY_AUDIT_KEY="$(openssl rand -base64 32)"
+relay serve --runtime runtime.yaml
 ```
 
-The report lists every step. The JSON-FG one is:
+Mode `700` is required, not tidiness. The audit directory must be owner-only, and Relay refuses
+to start when any group or other bit is set on it. Keep the key for the life of the deployment,
+too. The chain is bound to it, so a new key against an existing `var/audit.jsonl` is a startup
+failure rather than a fresh start.
+
+Leave that running and open a second shell in the same directory.
+
+## Ask the register a question
+
+```sh
+curl -s http://127.0.0.1:8080/ready
+curl -s http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001
+```
+
+The record answer, abridged to the part that matters:
 
 ```json
 {
-  "id": "premises-feature-collection-jsonfg",
-  "expectedStatus": 200,
-  "actualStatus": 200,
-  "passed": true
+  "data": {
+    "recordIdentifier": "BIZ-0001",
+    "revisionIdentifier": "3",
+    "lifecycleState": "ACTIVE",
+    "recordedAt": "2026-02-11T09:00:00Z",
+    "registryIdentifier": "urn:example:registry:businesses",
+    "authorityIdentifier": "urn:example:authority:registrar",
+    "domainData": {
+      "legalName": "Aurora Freight Cooperative",
+      "legalForm": "COOPERATIVE"
+    }
+  },
+  "meta": {
+    "accessProfile": "public",
+    "disclosureProfile": "public",
+    "selectedFields": ["legalName", "legalForm"],
+    "contractRevision": "sha256:<digest>",
+    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"}
+  }
 }
 ```
 
-Selecting a single step is for cases that stand alone, like `filtered-page` above. Cross-format
-equivalence is a claim about two responses, so it is only provable in a run that produces both.
+`domainData` carries the two disclosed fields. The address is in the view and in the contract,
+and it is not here. Every answer also states which contract revision produced it and which
+source revision it read, so a caller can tell two answers apart without asking you.
 
-The request uses `Accept: application/geo+json`, `formatProfile=jsonfg`, and a bounded CRS84
-`bbox` on the named `within-bbox` search. `Accept` and `formatProfile` select serialization. The
-named search fixes the query shape, while the `public-premises` access profile supplies the access
-rule and maximum disclosure.
+## Ask for less, then try to ask for more
 
-The full journey also checks the RFC 7946 profile, JSON and JSON-LD record equivalence, field
-minimization to `geometry: null`, invalid bbox refusal, cursor binding, nonspatial negotiation
-refusal, and value-free coordinate failure. The list and search operations have independent access
-profiles. A client with only the protected list scope cannot call the named search, and a client
-with only the protected search scope cannot list. The bbox capability does not create another
-authorization plane.
-
-Starting the packaged service requires the configured token issuer to be reachable because the
-package contains protected access profiles, even when the request you plan to send is public.
-Continue with [Operate Registry Relay](../../operate/relay/) to bind a real institutional issuer,
-trusted paths, audit retention, and a private listener.
-
-## Remove the disposable project
-
-Return to the repository root and remove the tutorial copy:
+A caller can narrow the answer:
 
 ```sh
-cd "$repo_root"
-rm -rf -- "$reader_root"
+curl -s 'http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001?fields=legalName'
 ```
 
-The cleanup commands print nothing when they succeed.
+`domainData` now contains `legalName` alone, and `meta.selectedFields` says so.
+
+A caller cannot widen it:
+
+```sh
+curl -s 'http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001?fields=registeredAddress'
+```
+
+```json
+{
+  "type": "https://id.registrystack.org/problems/registry-relay/request/fields_invalid",
+  "title": "Field selection is invalid",
+  "status": 400,
+  "code": "request.fields_invalid"
+}
+```
+
+The refusal is a request error, not a permission error, because from this audience's side the
+field does not exist. An unknown record is a separate refusal:
+
+```sh
+curl -s http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-9999
+```
+
+```json
+{
+  "title": "Requested record was not resolved",
+  "status": 404,
+  "code": "consultation.unresolved"
+}
+```
+
+Two more routes are worth a look. `GET /v2` returns the register's own description, authority,
+and capability list. `GET /v2/resources` returns the resources this audience may call. Both
+answer anonymously here because `metadataVisibility` said they may.
+
+## Read the audit entry
+
+Stop the service with `Ctrl+C` and read the first audit line:
+
+```sh
+head -n 1 var/audit.jsonl
+```
+
+```json
+{
+  "envelope_id": "...",
+  "prev_hash": null,
+  "record": {
+    "operationIdentifier": "registered-business.read",
+    "resourceIdentifier": "registered-business",
+    "principalKind": "anonymous",
+    "accessProfile": "public",
+    "disclosureProfile": "public",
+    "selectedProperties": ["legalName", "legalForm"],
+    "processingDescriptionIdentifiers": ["consultation"],
+    "contractRevision": "sha256:<digest>",
+    "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
+    "phase": "attempt"
+  },
+  "record_hash": "..."
+}
+```
+
+Read what is not there. The line records that an anonymous caller was answered with the
+properties `legalName` and `legalForm` under the `consultation` processing description. It does
+not record what the values were. `prev_hash` is `null` on the first line and links each
+subsequent line to the one before it, which is what the integrity key protects.
+
+## Clean up
+
+```sh
+cd ..
+rm -rf business-registry
+unset RELAY_AUDIT_KEY
+```
 
 ## What you built
 
-- One reviewed contract produced the API package, semantic artifacts, access profiles, disclosure
-  rules, and capability inventory.
-- SQLite tables and columns did not become routes by convention.
-- Generated identification and classification material remained suggestions
-  until the governed review accepted it.
-- The caller selected fewer properties but could not select more.
-- The Point used the same access-profile and disclosure boundary in JSON, JSON-LD, RFC 7946
-  GeoJSON, and JSON-FG.
-- Mandatory Registry and Record context remained present in every result.
-- The shared Relay router verified the public, protected, and refusal behavior against synthetic
-  source data.
-
-## Next
-
-- [Understand Relay's product boundary](../../explanation/governed-registry-publication/)
-  to decide whether Relay fits an institutional Registry.
-- [Review semantics, classification, and disclosure](../../explanation/relay-semantics-and-disclosure/)
-  before assigning published names and handling levels to real fields.
-- [Author a Registry Relay project](../../configure/relay/) to bind an
-  institution-owned SQLite view.
-- Start from `products/relay-v2/acceptance/labour-statistics` to adapt the separate governed
-  statistical-dataset profile, fixed access rule, and SDMX binding.
-- [Operate Registry Relay](../../operate/relay/) to prepare source files,
-  authentication, audit, limits, and deployment permissions.
+- A public read-only API whose whole surface came from one reviewed contract, with no route,
+  filter, or field created by convention from the database.
+- Two boundaries under separate control: a SQL view the institution owns, and a disclosure
+  profile the contract owns.
+- A production gate that refused the register until a named reviewer, a date, a rationale, and a
+  digest of the exact inventory they reviewed were on file.
+- A caller who can narrow an answer and cannot widen it.
+- An audit chain that records which properties were released, to whom, under which contract
+  revision, without recording the values.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `cargo build` cannot find a package | The command is outside the Registry Stack root or the checkout predates Relay | Return to the source root and confirm that `crates/registry-relay-v2` exists. |
-| Relay refuses a path containing `/tmp` | On macOS, `/tmp` is a symlink | Keep the `pwd -P` assignment so the runtime receives the physical path. |
-| `relayctl check` returns diagnostics | A governed input or SQLite schema does not match the reviewed contract | Read the diagnostic identifiers, fix the authored input, and run `check --production` again. |
+| `project.destination_not_empty` from `relayctl init` | The target directory already has files | Initialize into a new directory name. |
+| `contract.yaml_invalid` from `relayctl check` | A required key is missing, an unknown key is present, or the YAML does not parse | Every key in the contract above is required. `registry.alignmentTargets` needs at least one entry. |
+| `resource.view_unknown` | `source.view` names something that is not a view in the database | Relay binds to views only. Add a `CREATE VIEW` for the columns you intend to publish. |
+| `metadata.reference_visibility_invalid` | A public audience cannot resolve the schema or vocabulary the answer points at | Set `metadataVisibility.resources` and `.semantics` to `public` when any access profile is public. |
+| `classification.review_inventory_stale` | The contract changed after the review was recorded | Run `relayctl generate .` again and copy the new digest from `generated/governance/classification-review-starter.yaml`. |
+| `the required audit sink is not ready` at startup | `var/` is not owner-only, or `RELAY_AUDIT_KEY` differs from the key that started the existing chain | `chmod 700 var`, and either restore the original key or remove `var/audit.jsonl` to start a new chain. |
+
+## Next
+
+- [Understand Relay's product boundary](../../explanation/governed-registry-publication/) to
+  decide whether Relay fits an institutional register.
+- [Author a Registry Relay project](../../configure/relay/) to add list and search operations,
+  protected access profiles, and a second disclosure profile for a named audience.
+- [Review semantics, classification, and disclosure](../../explanation/relay-semantics-and-disclosure/)
+  before assigning published names and handling levels to real fields.
+- [Operate Registry Relay](../../operate/relay/) to bind a real token issuer, trusted paths,
+  audit retention, and a private listener.

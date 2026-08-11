@@ -289,11 +289,14 @@ export default defineConfig({
           label: 'Answer with Evidence Gateway',
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
+            // The first hands-on tutorial stays in the open beside the
+            // overview: a first-time reader should not have to open a group to
+            // find where to start.
+            { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
             {
               label: 'Learn locally',
               collapsed: true,
               items: [
-                { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
                 { label: 'Explore SD-JWT VC locally', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
                 { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
                 { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
@@ -332,16 +335,25 @@ export default defineConfig({
                 { label: 'Call Mint from application code', slug: 'configure/request-an-access-token' },
               ],
             },
+            // Two audiences that used to share one group: a relying party
+            // calling the HTTP contract, and a deployment delivering the same
+            // assertion to a wallet. Each reads only its own half.
             {
-              label: 'Verify and trust',
+              label: 'Verify as a relying party',
               collapsed: true,
               items: [
                 { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
                 { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
+                { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
+              ],
+            },
+            {
+              label: 'Deliver to wallets',
+              collapsed: true,
+              items: [
                 { label: 'Enable SD-JWT VC in a deployment', slug: 'configure/enable-sd-jwt-vc' },
                 { label: 'Configure OID4VCI wallet delivery', slug: 'configure/evidence-oid4vci' },
                 { label: 'Run OID4VCI interoperability checks', slug: 'tutorials/run-oid4vci-interoperability-checks' },
-                { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
               ],
             },
             {
@@ -352,37 +364,51 @@ export default defineConfig({
                 { label: 'Verify the audit chain', slug: 'operate/evidence-audit' },
               ],
             },
+            // Product-scoped, so it sits with the product rather than in the
+            // cross-product Security section.
+            { label: 'Security model', slug: 'security/evidence' },
           ],
         },
         {
           // Relay V2 is the shipped runtime, so its pages are the section
-          // itself rather than a collapsed preview inside it.
+          // itself rather than a collapsed preview inside it. The section
+          // follows the same shape as Evidence Gateway above: overview, first
+          // tutorial, then the later phases collapsed behind the phase they
+          // belong to.
           label: 'Connect an existing registry',
           items: [
             { label: 'Overview', slug: 'configure' },
             { label: 'How governed publication works', slug: 'explanation/governed-registry-publication' },
             { label: 'Publish a SQLite registry', slug: 'tutorials/publish-governed-sqlite-registry' },
-            { label: 'Author a Relay project', slug: 'configure/relay' },
-            { label: 'Semantics and disclosure', slug: 'explanation/relay-semantics-and-disclosure' },
-            { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
-            { label: 'Operate Relay', slug: 'operate/relay' },
+            {
+              label: 'Author a project',
+              collapsed: true,
+              items: [
+                { label: 'Author a Relay project', slug: 'configure/relay' },
+                { label: 'Semantics and disclosure', slug: 'explanation/relay-semantics-and-disclosure' },
+                { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
+              ],
+            },
+            {
+              label: 'Operate Relay',
+              collapsed: true,
+              items: [
+                { label: 'Prepare the operator handoff', slug: 'operate' },
+                { label: 'Run a Relay deployment', slug: 'operate/relay' },
+              ],
+            },
           ],
         },
         {
-          label: 'Operate',
+          // Only what applies to more than one product. Anything that names a
+          // single product lives in that product's section.
+          label: 'Operate across products',
           collapsed: true,
           items: [
-            { label: 'Overview', slug: 'operate' },
+            { label: 'Overview', slug: 'operate/advanced' },
             { label: 'Retention and persistent state', slug: 'operate/retention-and-persistent-state' },
-            {
-              label: 'Advanced',
-              collapsed: true,
-              items: [
-                { label: 'Overview', slug: 'operate/advanced' },
-                { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
-                { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
-              ],
-            },
+            { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
+            { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
           ],
         },
         {
@@ -390,9 +416,9 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'security' },
-            { label: 'Evidence Gateway security model', slug: 'security/evidence' },
             { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
             { label: 'Security support window', slug: 'security/support-window' },
+            { label: 'Security self-assessment', slug: 'security/self-assessment' },
             { label: 'Release trust', slug: 'security/openssf-evidence' },
           ],
         },

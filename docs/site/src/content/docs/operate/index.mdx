@@ -37,15 +37,15 @@ a binding cannot be observed.
 
 ## Obtain the runtime
 
-The `relay` binary has a published installer. The published platform is Linux
-amd64:
+One installer publishes both binaries, `relay` and `relayctl`, for Linux amd64,
+Linux arm64, and macOS arm64:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 ```
 
-The installer verifies the downloaded binary against the release `SHA256SUMS`.
-It does not verify release authenticity.
+The installer verifies each downloaded binary against the release `SHA256SUMS`
+and installs both or neither. It does not verify release authenticity.
 For a higher-assurance installation, follow
 [release verification](https://github.com/registrystack/registry-stack/blob/v0.19.0/release/VERIFY.md)
 for the pinned tag, then rerun the installer with `RELAY_ASSET_DIR` pointing at
@@ -57,9 +57,9 @@ The container image is `ghcr.io/registrystack/relay:v0.19.0`, built on
 distroless nonroot. It exposes port 8080, runs `relay serve --runtime
 /etc/relay/runtime.yaml` by default, and probes itself with `relay healthcheck`.
 
-`relayctl` has no installer. Operators who need it take the
-`relayctl-<tag>-linux-amd64`, `relayctl-<tag>-linux-arm64`, or
-`relayctl-<tag>-macos-arm64` release binary, or build it from source.
+Operators who prefer to place the binaries themselves take the
+`relay-<tag>-<platform>` and `relayctl-<tag>-<platform>` release assets
+directly, or build them from source.
 
 ## Record operator-owned inputs
 
