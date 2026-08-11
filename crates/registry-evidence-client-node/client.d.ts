@@ -102,7 +102,7 @@ export interface EvidenceRequestBatchSpec {
  *   is `protocol`
  * - `code`: `denied`, `protocol` (optional), `verification`, and any `token`
  *   failure whose `tokenKind` is `refused`
- * - `operation`: `denied`, `not_available`, `protocol` (all optional)
+ * - `traceId`: `denied`, `not_available`, `protocol` (all optional)
  * - `retryAfterSeconds`: `denied`, `protocol` (both optional)
  * - `transportKind`: `transport`, and any `token` failure whose `tokenKind`
  *   is `transport`
@@ -112,7 +112,7 @@ export declare class EvidenceClientError extends Error {
   readonly kind: string
   readonly status?: number
   readonly code?: string
-  readonly operation?: string
+  readonly traceId?: string
   readonly retryAfterSeconds?: number
   readonly transportKind?: string
   readonly tokenKind?: string

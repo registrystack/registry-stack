@@ -189,13 +189,13 @@ mod tests {
             IssuanceError::from(EvidenceClientError::Denied {
                 status: 403,
                 code: "forbidden".to_owned(),
-                operation: None,
+                trace_id: None,
                 retry_after_seconds: None,
             }),
             IssuanceError::Refused
         );
         assert_eq!(
-            IssuanceError::from(EvidenceClientError::NotAvailable { operation: None }),
+            IssuanceError::from(EvidenceClientError::NotAvailable { trace_id: None }),
             IssuanceError::NotAvailable
         );
         assert!(!IssuanceError::Refused.to_string().contains("forbidden"));

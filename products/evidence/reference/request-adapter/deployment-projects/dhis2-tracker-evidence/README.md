@@ -51,7 +51,7 @@ posture. Extraction carries the returned `trackedEntity` only as a transient
 fact, and each derivation requires its exact equality with the authorized
 subject selector before evaluating anything else. A returned-record mismatch
 fails closed as the internal `derivation_input_error` category and collapses
-publicly into the same `evidence_not_available` problem as an unresolved
+publicly into the same `evidence.unavailable` problem as an unresolved
 lookup, so the caller cannot learn that a record was found. The raw tracked
 entity reference is never included in evidence.
 

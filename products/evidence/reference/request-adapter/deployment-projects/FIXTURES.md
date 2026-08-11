@@ -270,7 +270,7 @@ fixture rather than passing a case that could never occur:
 | `statement-budget` | `sqlite-extract` | Statement execution exceeded its virtual-machine step budget. |
 | `statement-result` | `sqlite-extract` | The result exceeded `maximumRows`, `maximumCellBytes`, or `maximumResponseBytes`, or result typing or execution failed. |
 
-Every one of them collapses into the same `dependency_unavailable` public
+Every one of them collapses into the same `source.unavailable` public
 class, which is the point: what a caller learns from a source that did not
 answer is that it did not answer.
 
@@ -339,17 +339,17 @@ noticed.
 
 | Internal outcome or signal | Public result | Fixture use |
 |---|---|---|
-| `no_match` | `evidence_not_available`, HTTP 422 | Authoritative lookup found no unique record. |
-| `ambiguous` | `evidence_not_available`, HTTP 422 | Authoritative lookup found multiple records; no candidate is selected. |
-| Host-private `required_fact_missing` | `evidence_not_available`, HTTP 422 | A uniquely matched record legitimately lacks a requirement fact that the derivation marks required. |
-| `adapter_input_error` | `service_unavailable`, HTTP 503 | Trusted preparation or its closed inputs violate the adapter contract. Credential acquisition and source access must not occur. |
-| `source_protocol_error` | `dependency_unavailable`, HTTP 503 | The projected provider response violates its protocol, type, count, completeness, or fact-shape contract. |
-| `derivation_input_error` | `evidence_not_available`, HTTP 422 | Matched facts, returned-subject binding, governed namespace/contract, or derivation parameters are inconsistent. A returned-child mismatch is this class. It collapses publicly with the unresolved classes so a caller cannot learn that a record exists, and it is never an authoritative no-match or a signed `false`. |
-| Source transport failure | `dependency_unavailable`, HTTP 503 | Credential, concurrency, timeout, redirect, status, media type, size, JSON, projection, or source transport failure stopped the lookup. An unopenable or too-old extract, and a statement the authorizer refused, that lacked a parameter, that exceeded a budget, or whose result exceeded a declared bound, are this class. |
-| Audit, signing, output-gate, or other script failure | `service_unavailable`, HTTP 503 | Evidence failed closed within the Evidence service or one of its required release dependencies. A script fault raised while derivation is running reports the internal `derivation_input_error` category and stays in this public class. |
+| `no_match` | `evidence.unavailable`, HTTP 422 | Authoritative lookup found no unique record. |
+| `ambiguous` | `evidence.unavailable`, HTTP 422 | Authoritative lookup found multiple records; no candidate is selected. |
+| Host-private `required_fact_missing` | `evidence.unavailable`, HTTP 422 | A uniquely matched record legitimately lacks a requirement fact that the derivation marks required. |
+| `adapter_input_error` | `service.unavailable`, HTTP 503 | Trusted preparation or its closed inputs violate the adapter contract. Credential acquisition and source access must not occur. |
+| `source_protocol_error` | `source.unavailable`, HTTP 503 | The projected provider response violates its protocol, type, count, completeness, or fact-shape contract. |
+| `derivation_input_error` | `evidence.unavailable`, HTTP 422 | Matched facts, returned-subject binding, governed namespace/contract, or derivation parameters are inconsistent. A returned-child mismatch is this class. It collapses publicly with the unresolved classes so a caller cannot learn that a record exists, and it is never an authoritative no-match or a signed `false`. |
+| Source transport failure | `source.unavailable`, HTTP 503 | Credential, concurrency, timeout, redirect, status, media type, size, JSON, projection, or source transport failure stopped the lookup. An unopenable or too-old extract, and a statement the authorizer refused, that lacked a parameter, that exceeded a budget, or whose result exceeded a declared bound, are this class. |
+| Audit, signing, output-gate, or other script failure | `service.unavailable`, HTTP 503 | Evidence failed closed within the Evidence service or one of its required release dependencies. A script fault raised while derivation is running reports the internal `derivation_input_error` category and stays in this public class. |
 
 Each 503 class is pinned by the fixture's exact `publicProblem` expectation.
-Both 503 codes share the safe title and disclose no provider, selector, fact,
+The two 503 codes have distinct static, value-free titles and disclose no provider, selector, fact,
 script, or comparison detail. `no_match`, `ambiguous`, the host-private
 required-value outcome, and derivation-input inconsistency over a uniquely
 found record all collapse into the same 422 public shape, so a fixture can

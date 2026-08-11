@@ -88,7 +88,7 @@ cases:
       results: []
     expected:
       lookup: no_match
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
   - id: ambiguous
@@ -101,7 +101,7 @@ cases:
           status: REGISTERED
     expected:
       lookup: ambiguous
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
   - id: fractional-total
@@ -139,7 +139,7 @@ cases:
   - id: source-failure
     sourceFailure: timeout
     expected:
-      publicProblem: dependency_unavailable
+      publicProblem: source.unavailable
       signed: false
   - id: anti-reconstruction
     bundleMutation: duplicate-disclosure-family

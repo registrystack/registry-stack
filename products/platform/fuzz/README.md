@@ -7,7 +7,8 @@ crates. These live outside the main workspace (see the root `Cargo.toml`
 
 ## Targets
 
-- `authcommon_parsers` — bearer token and API key fingerprint parsing
+- `authcommon_parsers` — Bearer, compact access-token, and API-key fingerprint
+  parsing
   (`registry-platform-authcommon`).
 - `sdjwt_holder_proof` — SD-JWT holder-proof JWT verification
   (`registry-platform-sdjwt`).

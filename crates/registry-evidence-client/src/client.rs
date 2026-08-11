@@ -14,7 +14,7 @@ use registry_evidence_verifier::{
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{
-    header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER},
+    header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER},
     Method, StatusCode,
 };
 use url::Url;
@@ -30,7 +30,7 @@ use crate::{
         EvidenceRequestSpec, HolderBoundRequestSpec, PreparedEvidenceRequest,
         PreparedHolderBoundRequest,
     },
-    problem::{essence, map_problem, sanitized_operation},
+    problem::{essence, map_problem, trace_id_from_traceparent, TRACEPARENT_HEADER},
     request_batch::{
         EvidenceRequestBatchSpec, PreparedEvidenceRequestBatch, RawEvidenceRequestBatchResponse,
         VerifiedEvidenceRequestBatch, VerifiedEvidenceRequestBatchItem,
@@ -51,9 +51,6 @@ const JWKS_PATH: &str = ".well-known/evidence/jwks.json";
 
 const JSON_MEDIA_TYPE: &str = "application/json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
-
-/// The opaque per-request identifier the deployment returns.
-const CORRELATION_HEADER: &str = "x-request-id";
 
 /// Longest `Retry-After` wait this client reports as actionable.
 ///
@@ -88,7 +85,7 @@ pub struct EvidenceClient {
 #[derive(Clone)]
 pub struct RawEvidenceResponse {
     body: Vec<u8>,
-    operation: Option<String>,
+    trace_id: Option<String>,
 }
 
 impl RawEvidenceResponse {
@@ -98,11 +95,13 @@ impl RawEvidenceResponse {
         &self.body
     }
 
-    /// The deployment's opaque identifier for this exchange, for support
-    /// correlation.
+    /// The validated W3C trace identifier for this exchange.
+    ///
+    /// It is support correlation only, not an Evidence audit operation
+    /// identity.
     #[must_use]
-    pub fn operation(&self) -> Option<&str> {
-        self.operation.as_deref()
+    pub fn trace_id(&self) -> Option<&str> {
+        self.trace_id.as_deref()
     }
 }
 
@@ -113,7 +112,7 @@ impl std::fmt::Debug for RawEvidenceResponse {
         formatter
             .debug_struct("RawEvidenceResponse")
             .field("body_bytes", &self.body.len())
-            .field("operation", &self.operation)
+            .field("trace_id", &self.trace_id)
             .finish_non_exhaustive()
     }
 }
@@ -122,7 +121,7 @@ impl std::fmt::Debug for RawEvidenceResponse {
 #[derive(Debug, Clone)]
 pub struct VerifiedEvidence {
     pub(crate) evidence: Evidence,
-    pub(crate) operation: Option<String>,
+    pub(crate) trace_id: Option<String>,
 }
 
 impl VerifiedEvidence {
@@ -132,11 +131,12 @@ impl VerifiedEvidence {
         &self.evidence
     }
 
-    /// The deployment's opaque identifier for the exchange that produced this
-    /// payload.
+    /// The validated W3C trace identifier for the exchange that produced this
+    /// payload. It is support correlation only, not an Evidence audit operation
+    /// identity.
     #[must_use]
-    pub fn operation(&self) -> Option<&str> {
-        self.operation.as_deref()
+    pub fn trace_id(&self) -> Option<&str> {
+        self.trace_id.as_deref()
     }
 
     /// The role-bound subject bindings this payload carries, as pinned
@@ -248,7 +248,7 @@ impl EvidenceClient {
     /// party what it may ask for; it never supplies verification expectations
     /// for a request already in flight.
     pub async fn discover(&self) -> Result<EvidenceDefinitionsDocument, EvidenceClientError> {
-        let (document, operation): (EvidenceDefinitionsDocument, _) = self
+        let (document, trace_id): (EvidenceDefinitionsDocument, _) = self
             .get_json(DEFINITIONS_PATH, JSON_MEDIA_TYPE, Credential::Required)
             .await?;
         // These types would accept a later document that happened to fit them, and
@@ -259,7 +259,7 @@ impl EvidenceClient {
             return Err(EvidenceClientError::Protocol {
                 status: StatusCode::OK.as_u16(),
                 code: None,
-                operation,
+                trace_id,
                 retry_after_seconds: None,
             });
         }
@@ -277,7 +277,7 @@ impl EvidenceClient {
         // The published key set is public, and it is not a trust anchor here, so
         // there is nothing to gain by presenting the relying party's credential
         // to fetch it.
-        let (document, _operation) = self
+        let (document, _trace_id) = self
             .get_json(JWKS_PATH, JWKS_MEDIA_TYPE, Credential::None)
             .await?;
         Ok(document)
@@ -406,7 +406,7 @@ impl EvidenceClient {
             .await?;
         Ok(RawEvidenceRequestBatchResponse {
             body: response.body,
-            operation: response.operation,
+            trace_id: response.trace_id,
         })
     }
 
@@ -433,11 +433,11 @@ impl EvidenceClient {
         now: DateTime<Utc>,
     ) -> Result<VerifiedEvidenceRequestBatch, EvidenceClientError> {
         let envelope: EvidenceRequestBatchResponse = serde_json::from_slice(&response.body)
-            .map_err(|_| batch_protocol_failure(response.operation.clone()))?;
+            .map_err(|_| batch_protocol_failure(response.trace_id.clone()))?;
         if envelope.schema != EVIDENCE_REQUEST_BATCH_SCHEMA_V1
             || envelope.items.len() != prepared.items().len()
         {
-            return Err(batch_protocol_failure(response.operation.clone()));
+            return Err(batch_protocol_failure(response.trace_id.clone()));
         }
 
         let mut verified = Vec::with_capacity(envelope.items.len());
@@ -445,10 +445,10 @@ impl EvidenceClient {
             match response_item {
                 EvidenceRequestBatchResponseItem::Evidence { evidence } => {
                     let body = serde_json::to_vec(&evidence)
-                        .map_err(|_| batch_protocol_failure(response.operation.clone()))?;
+                        .map_err(|_| batch_protocol_failure(response.trace_id.clone()))?;
                     let raw = RawEvidenceResponse {
                         body,
-                        operation: response.operation.clone(),
+                        trace_id: response.trace_id.clone(),
                     };
                     verified.push(VerifiedEvidenceRequestBatchItem::Available(
                         self.verify_as_of(prepared_item, &raw, now)?,
@@ -462,7 +462,7 @@ impl EvidenceClient {
 
         Ok(VerifiedEvidenceRequestBatch {
             items: verified,
-            operation: response.operation.clone(),
+            trace_id: response.trace_id.clone(),
         })
     }
 
@@ -545,7 +545,7 @@ impl EvidenceClient {
             &response.body,
             now,
             Some(&self.config.revoked_key_ids),
-            response.operation.clone(),
+            response.trace_id.clone(),
         )
     }
 
@@ -555,9 +555,9 @@ impl EvidenceClient {
     /// both authoring input rather than verification input, and a body that does
     /// not parse is a protocol failure rather than a refusal: the deployment
     /// answered, and the answer was not the document it promised.
-    /// The deployment's own identifier for the exchange is returned beside the
-    /// document, so a caller that refuses the parsed document still has the one
-    /// value the problem contract calls safe for support correlation.
+    /// The response trace identifier is returned beside the document, so a
+    /// caller that refuses the parsed document still has the one value the
+    /// problem contract calls safe for support correlation.
     async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
@@ -577,10 +577,10 @@ impl EvidenceClient {
             serde_json::from_slice(&body.body).map_err(|_| EvidenceClientError::Protocol {
                 status: StatusCode::OK.as_u16(),
                 code: None,
-                operation: body.operation.clone(),
+                trace_id: body.trace_id.clone(),
                 retry_after_seconds: None,
             })?;
-        Ok((document, body.operation))
+        Ok((document, body.trace_id))
     }
 
     /// Resolve one endpoint under the configured base URL.
@@ -647,11 +647,7 @@ impl EvidenceClient {
         max_bytes: u64,
     ) -> Result<RawEvidenceResponse, EvidenceClientError> {
         let status = response.status().as_u16();
-        let operation = response
-            .headers()
-            .get(CORRELATION_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(sanitized_operation);
+        let trace_id = response_trace_id(response.headers());
         let media_type = response
             .headers()
             .get(CONTENT_TYPE)
@@ -664,6 +660,15 @@ impl EvidenceClient {
             .and_then(|value| value.trim().parse::<u64>().ok())
             .filter(|seconds| (1..=MAXIMUM_RETRY_AFTER_SECONDS).contains(seconds));
 
+        if trace_id.is_none() {
+            return Err(EvidenceClientError::Protocol {
+                status,
+                code: None,
+                trace_id: None,
+                retry_after_seconds: None,
+            });
+        }
+
         let body = match read_bounded(response, max_bytes).await {
             Ok(body) => body,
             // The status and the correlation identifier arrived before the body
@@ -674,7 +679,7 @@ impl EvidenceClient {
                 return Err(EvidenceClientError::Protocol {
                     status,
                     code: None,
-                    operation,
+                    trace_id,
                     retry_after_seconds: None,
                 })
             }
@@ -693,7 +698,7 @@ impl EvidenceClient {
                 media_type.as_deref(),
                 &body,
                 retry_after_seconds,
-                operation.as_deref(),
+                trace_id.as_deref(),
             ));
         }
         if status != StatusCode::OK.as_u16()
@@ -704,11 +709,11 @@ impl EvidenceClient {
             return Err(EvidenceClientError::Protocol {
                 status,
                 code: None,
-                operation,
+                trace_id,
                 retry_after_seconds: None,
             });
         }
-        Ok(RawEvidenceResponse { body, operation })
+        Ok(RawEvidenceResponse { body, trace_id })
     }
 }
 
@@ -802,12 +807,22 @@ impl NonVerifyingEvidenceClient {
     }
 }
 
-fn batch_protocol_failure(operation: Option<String>) -> EvidenceClientError {
+fn batch_protocol_failure(trace_id: Option<String>) -> EvidenceClientError {
     EvidenceClientError::Protocol {
         status: StatusCode::OK.as_u16(),
         code: None,
-        operation,
+        trace_id,
         retry_after_seconds: None,
+    }
+}
+
+/// Read exactly one strict response trace context. Multiple field lines are an
+/// ambiguous provenance claim, so they are rejected rather than first-wins.
+fn response_trace_id(headers: &HeaderMap) -> Option<String> {
+    let mut traceparents = headers.get_all(TRACEPARENT_HEADER).iter();
+    match (traceparents.next(), traceparents.next()) {
+        (Some(value), None) => value.to_str().ok().and_then(trace_id_from_traceparent),
+        _ => None,
     }
 }
 
@@ -856,8 +871,9 @@ mod tests {
         Mock, MockServer, ResponseTemplate,
     };
 
-    /// The identifier shape the deployment publishes: a ULID.
-    const OPERATION: &str = "01JQ0QZ8YHZ0000000000000AB";
+    /// A canonical lower-case W3C trace context for HTTP fixtures.
+    const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
+    const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
     fn config_for(base_url: &str, fixture: &SignedEvidenceFixture) -> EvidenceClientConfig {
         EvidenceClientConfig::new(
@@ -922,7 +938,7 @@ mod tests {
     fn raw(body: Vec<u8>) -> RawEvidenceResponse {
         RawEvidenceResponse {
             body,
-            operation: Some("01JZZZOPERATION".to_owned()),
+            trace_id: Some(TRACE_ID.to_owned()),
         }
     }
 
@@ -969,8 +985,17 @@ mod tests {
     fn raw_request_batch(items: Vec<serde_json::Value>) -> RawEvidenceRequestBatchResponse {
         RawEvidenceRequestBatchResponse {
             body: request_batch_envelope(items),
-            operation: Some("01JZZZBATCHOPERATION".to_owned()),
+            trace_id: Some(TRACE_ID.to_owned()),
         }
+    }
+
+    #[test]
+    fn a_response_traceparent_must_appear_exactly_once() {
+        let mut headers = HeaderMap::new();
+        headers.append(TRACEPARENT_HEADER, HeaderValue::from_static(TRACEPARENT));
+        assert_eq!(response_trace_id(&headers), Some(TRACE_ID.to_owned()));
+        headers.append(TRACEPARENT_HEADER, HeaderValue::from_static(TRACEPARENT));
+        assert_eq!(response_trace_id(&headers), None);
     }
 
     #[test]
@@ -1027,7 +1052,7 @@ mod tests {
         let verified = client
             .verify_as_of(&prepared, &response, fixture.now)
             .expect("the response verifies");
-        assert_eq!(verified.operation(), Some("01JZZZOPERATION"));
+        assert_eq!(verified.trace_id(), Some(TRACE_ID));
         assert_eq!(
             verified.evidence().request_nonce,
             Some(prepared.request_nonce().to_owned())
@@ -1288,10 +1313,14 @@ mod tests {
             .expect("the specification is accepted");
         Mock::given(method("POST"))
             .and(path("/v1/evidence"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                fixture.sign(prepared.request_nonce()),
-                EVIDENCE_JWS_MEDIA_TYPE,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(
+                        fixture.sign(prepared.request_nonce()),
+                        EVIDENCE_JWS_MEDIA_TYPE,
+                    ),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1339,13 +1368,17 @@ mod tests {
             .and(header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE))
             .and(header("content-type", JSON_MEDIA_TYPE))
             .and(wiremock::matchers::body_json(expected_body))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                request_batch_envelope(vec![
-                    serde_json::json!({"result": "evidence_not_available"}),
-                    serde_json::json!({"result": "evidence_not_available"}),
-                ]),
-                EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(
+                        request_batch_envelope(vec![
+                            serde_json::json!({"result": "evidence_not_available"}),
+                            serde_json::json!({"result": "evidence_not_available"}),
+                        ]),
+                        EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+                    ),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1375,12 +1408,16 @@ mod tests {
             .expect("the request batch is prepared");
         Mock::given(method("POST"))
             .and(path("/v1/evidence/batch"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                request_batch_envelope(vec![
-                    serde_json::json!({"result": "evidence_not_available"}),
-                ]),
-                EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(
+                        request_batch_envelope(vec![
+                            serde_json::json!({"result": "evidence_not_available"}),
+                        ]),
+                        EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+                    ),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1422,7 +1459,7 @@ mod tests {
             verified.item(1),
             Some(VerifiedEvidenceRequestBatchItem::NotAvailable)
         ));
-        assert_eq!(verified.operation(), Some("01JZZZBATCHOPERATION"));
+        assert_eq!(verified.trace_id(), Some(TRACE_ID));
     }
 
     #[test]
@@ -1482,7 +1519,7 @@ mod tests {
         let responses = [
             RawEvidenceRequestBatchResponse {
                 body: b"not json".to_vec(),
-                operation: Some("01JZZZBATCHOPERATION".to_owned()),
+                trace_id: Some(TRACE_ID.to_owned()),
             },
             raw_request_batch(vec![unavailable()]),
             raw_request_batch(vec![unavailable(), unavailable(), unavailable()]),
@@ -1493,7 +1530,7 @@ mod tests {
                     "items": [unavailable(), unavailable()],
                 }))
                 .expect("the wrong-schema response serializes"),
-                operation: Some("01JZZZBATCHOPERATION".to_owned()),
+                trace_id: Some(TRACE_ID.to_owned()),
             },
             RawEvidenceRequestBatchResponse {
                 body: serde_json::to_vec(&serde_json::json!({
@@ -1503,7 +1540,7 @@ mod tests {
                     "extra": true,
                 }))
                 .expect("the malformed response serializes"),
-                operation: Some("01JZZZBATCHOPERATION".to_owned()),
+                trace_id: Some(TRACE_ID.to_owned()),
             },
         ];
 
@@ -1529,10 +1566,14 @@ mod tests {
             .expect("the request batch is prepared");
         Mock::given(method("POST"))
             .and(path("/v1/evidence/batch"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                vec![b'x'; MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES + 1],
-                EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(
+                        vec![b'x'; MAX_EVIDENCE_REQUEST_BATCH_RESPONSE_BYTES + 1],
+                        EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
+                    ),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1568,6 +1609,7 @@ mod tests {
                 .and(path("/v1/evidence"))
                 .respond_with(
                     ResponseTemplate::new(200)
+                        .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
                         .set_body_raw(fixture.sign(prepared.request_nonce()), media_type),
                 )
                 .mount(&server)
@@ -1595,7 +1637,9 @@ mod tests {
             .and(path("/v1/evidence"))
             .and(header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE))
             .respond_with(
-                ResponseTemplate::new(200).set_body_raw(response, EVIDENCE_SD_JWT_VC_MEDIA_TYPE),
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(response, EVIDENCE_SD_JWT_VC_MEDIA_TYPE),
             )
             .expect(1)
             .mount(&server)
@@ -1633,6 +1677,7 @@ mod tests {
             .and(header("accept", EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE))
             .respond_with(
                 ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
                     .set_body_raw(envelope, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE),
             )
             .expect(1)
@@ -1689,7 +1734,7 @@ mod tests {
     async fn a_failure_carries_the_correlation_identifier_even_with_an_unreadable_body() {
         let fixture = signed_evidence();
         for (sent, expected) in [
-            (OPERATION, Some(OPERATION.to_owned())),
+            (TRACEPARENT, Some(TRACE_ID.to_owned())),
             ("01AB role=subject", None),
         ] {
             let server = MockServer::start().await;
@@ -1701,7 +1746,7 @@ mod tests {
                 .and(path("/v1/evidence"))
                 .respond_with(
                     ResponseTemplate::new(400)
-                        .insert_header(CORRELATION_HEADER, sent)
+                        .insert_header(TRACEPARENT_HEADER, sent)
                         .set_body_raw(b"<html>a gateway wrote this</html>".to_vec(), "text/html"),
                 )
                 .mount(&server)
@@ -1715,7 +1760,7 @@ mod tests {
                 EvidenceClientError::Protocol {
                     status: 400,
                     code: None,
-                    operation: expected,
+                    trace_id: expected,
                     retry_after_seconds: None,
                 },
                 "the header carried {sent:?}"
@@ -1747,7 +1792,11 @@ mod tests {
         let fixture = signed_evidence();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_delay(Duration::from_secs(2)),
+            )
             .mount(&server)
             .await;
         let http = build_client(
@@ -1811,7 +1860,7 @@ mod tests {
             .and(path("/v1/evidence-definitions"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .insert_header(CORRELATION_HEADER, OPERATION)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
                     .set_body_raw(body.into_bytes(), JSON_MEDIA_TYPE),
             )
             .mount(server)
@@ -1881,9 +1930,9 @@ mod tests {
             EvidenceClientError::Protocol {
                 status: 200,
                 code: None,
-                // The deployment's own identifier for the exchange survives, so an
-                // adopter has something to quote when the versions disagree.
-                operation: Some(OPERATION.to_owned()),
+                // The response trace identifier survives, so an adopter has
+                // something to quote when the versions disagree.
+                trace_id: Some(TRACE_ID.to_owned()),
                 retry_after_seconds: None,
             }
         );
@@ -1928,7 +1977,7 @@ mod tests {
                 EvidenceClientError::Protocol {
                     status: 200,
                     code: None,
-                    operation: Some(OPERATION.to_owned()),
+                    trace_id: Some(TRACE_ID.to_owned()),
                     retry_after_seconds: None,
                 },
                 "a ceiling of {value} must be refused"
@@ -1963,11 +2012,11 @@ mod tests {
                 .and(path("/v1/evidence"))
                 .respond_with(
                     ResponseTemplate::new(429)
-                        .insert_header(CORRELATION_HEADER, OPERATION)
+                        .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
                         .insert_header(RETRY_AFTER.as_str(), header)
                         .set_body_raw(
                             format!(
-                                r#"{{"type":"https://registrystack.org/problems/evidence/rate_limited","title":"Request rate exceeded","status":429,"code":"rate_limited","operation":"{OPERATION}"}}"#
+                                r#"{{"type":"https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited","title":"Evidence request rate is exhausted","status":429,"detail":"the Evidence request rate is exhausted","code":"evidence.rate_limited","traceId":"{TRACE_ID}"}}"#
                             )
                             .into_bytes(),
                             "application/problem+json",
@@ -1983,8 +2032,8 @@ mod tests {
                     .expect_err("the deployment refused the request"),
                 EvidenceClientError::Denied {
                     status: 429,
-                    code: "rate_limited".to_owned(),
-                    operation: Some(OPERATION.to_owned()),
+                    code: "evidence.rate_limited".to_owned(),
+                    trace_id: Some(TRACE_ID.to_owned()),
                     retry_after_seconds: expected_wait,
                 },
                 "the wait reported for a `Retry-After` of {header}"
@@ -2010,7 +2059,7 @@ mod tests {
             .and(path("/v1/evidence"))
             .respond_with(
                 ResponseTemplate::new(502)
-                    .insert_header(CORRELATION_HEADER, OPERATION)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
                     .set_body_raw(vec![b'a'; 4096], "text/html"),
             )
             .mount(&server)
@@ -2024,7 +2073,7 @@ mod tests {
             EvidenceClientError::Protocol {
                 status: 502,
                 code: None,
-                operation: Some(OPERATION.to_owned()),
+                trace_id: Some(TRACE_ID.to_owned()),
                 retry_after_seconds: None,
             }
         );
@@ -2046,7 +2095,9 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/evidence"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_raw(vec![b'a'; 4096], EVIDENCE_JWS_MEDIA_TYPE),
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(vec![b'a'; 4096], EVIDENCE_JWS_MEDIA_TYPE),
             )
             .mount(&server)
             .await;
@@ -2087,7 +2138,11 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/evidence"))
-            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_delay(Duration::from_secs(2)),
+            )
             .mount(&server)
             .await;
         let client = EvidenceClient::new(
@@ -2172,7 +2227,7 @@ mod tests {
         let fixture = signed_evidence();
         let elsewhere = MockServer::start().await;
         Mock::given(any())
-            .respond_with(ResponseTemplate::new(200))
+            .respond_with(ResponseTemplate::new(200).insert_header(TRACEPARENT_HEADER, TRACEPARENT))
             .mount(&elsewhere)
             .await;
         let server = MockServer::start().await;
@@ -2197,7 +2252,7 @@ mod tests {
             EvidenceClientError::Protocol {
                 status: 302,
                 code: None,
-                operation: None,
+                trace_id: None,
                 retry_after_seconds: None,
             }
         );
@@ -2227,10 +2282,14 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/evidence"))
             .and(header("user-agent", "relying-party/1.0"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                fixture.sign(prepared.request_nonce()),
-                EVIDENCE_JWS_MEDIA_TYPE,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(
+                        fixture.sign(prepared.request_nonce()),
+                        EVIDENCE_JWS_MEDIA_TYPE,
+                    ),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -2296,10 +2355,14 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/evidence"))
             .and(header("accept", EVIDENCE_SD_JWT_VC_MEDIA_TYPE))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                b"a-holder-bound-credential~".to_vec(),
-                EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(
+                        b"a-holder-bound-credential~".to_vec(),
+                        EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+                    ),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -2321,10 +2384,14 @@ mod tests {
             .prepare_holder_bound(holder_bound_spec(EvidenceResponseFormat::SdJwtVc))
             .expect("the holder-bound request is prepared");
         Mock::given(any())
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                b"a-holder-bound-credential~".to_vec(),
-                EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(TRACEPARENT_HEADER, TRACEPARENT)
+                    .set_body_raw(
+                        b"a-holder-bound-credential~".to_vec(),
+                        EVIDENCE_SD_JWT_VC_MEDIA_TYPE,
+                    ),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -2356,7 +2423,7 @@ mod tests {
         let server = MockServer::start().await;
         let client = non_verifying_client(&server.uri());
         Mock::given(any())
-            .respond_with(ResponseTemplate::new(200))
+            .respond_with(ResponseTemplate::new(200).insert_header(TRACEPARENT_HEADER, TRACEPARENT))
             .expect(0)
             .mount(&server)
             .await;

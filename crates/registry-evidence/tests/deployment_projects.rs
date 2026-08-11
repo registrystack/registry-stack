@@ -748,14 +748,14 @@ async fn execute_response(
             assert_lookup(label, expected, "no_match");
             assert_derivation(label, expected, false);
             assert_not_signed(label, expected);
-            assert_public_problem(label, expected, "evidence_not_available");
+            assert_public_problem(label, expected, "evidence.unavailable");
             None
         }
         LookupResult::Ambiguous => {
             assert_lookup(label, expected, "ambiguous");
             assert_derivation(label, expected, false);
             assert_not_signed(label, expected);
-            assert_public_problem(label, expected, "evidence_not_available");
+            assert_public_problem(label, expected, "evidence.unavailable");
             None
         }
         LookupResult::Match(facts) => {
@@ -1016,7 +1016,7 @@ fn assert_source_error(label: &str, expected: &Expected, error: &SourceError) {
     );
     assert_eq!(
         expected.public_problem.as_deref(),
-        Some("dependency_unavailable"),
+        Some("source.unavailable"),
         "{label}: source failure public problem is not exact"
     );
     assert_derivation(label, expected, false);
@@ -1188,15 +1188,15 @@ fn assert_kernel_error_result(
 
 fn assert_kernel_error(label: &str, expected: &Expected, error: KernelError, derivation_ran: bool) {
     let (expected_signal, expected_problem) = match error {
-        KernelError::Preparation => ("adapter_input_error", "service_unavailable"),
-        KernelError::SourceProtocol => ("source_protocol_error", "dependency_unavailable"),
+        KernelError::Preparation => ("adapter_input_error", "service.unavailable"),
+        KernelError::SourceProtocol => ("source_protocol_error", "source.unavailable"),
         // The public class collapses with the unresolved lookup classes so a
         // uniquely found record with inconsistent derivation inputs is not
         // distinguishable from no match.
-        KernelError::DerivationInput => ("derivation_input_error", "evidence_not_available"),
-        KernelError::Script if derivation_ran => ("derivation_input_error", "service_unavailable"),
-        KernelError::Extraction => ("evidence_not_available", "evidence_not_available"),
-        _ => ("service_unavailable", "service_unavailable"),
+        KernelError::DerivationInput => ("derivation_input_error", "evidence.unavailable"),
+        KernelError::Script if derivation_ran => ("derivation_input_error", "service.unavailable"),
+        KernelError::Extraction => ("evidence_not_available", "evidence.unavailable"),
+        _ => ("service_unavailable", "service.unavailable"),
     };
     if let Some(signal) = expected.error.as_deref() {
         assert_eq!(

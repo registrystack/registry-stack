@@ -59,7 +59,7 @@ committed document cannot drift from the code. The docs build then pulls the com
 the pinned ref (`scripts/fetch-openapi.mjs`) and renders it as the generated operations pages.
 
 A running Evidence Gateway service publishes the same document at `GET /openapi.json` with media type
-`application/openapi+json`. The route requires no authentication and reaches no dependency; the
+`application/json`. The route requires no authentication and reaches no dependency; the
 handler in `crates/registry-evidence/src/server.rs` takes no credential, and the unit test
 `the_served_openapi_document_is_the_generated_release_artifact` in
 `crates/registry-evidence/src/contracts.rs` pins the served bytes to the generated artifact.
@@ -73,6 +73,12 @@ exact audience, token type, and algorithm allowlists, and one configured princip
 `client_id`, `azp`, header, or request fallback (`products/evidence/OPERATOR-CONTRACT.md`). There
 is no API-key mode. The operational routes take no credential and reveal no deployment
 definitions or entitlements.
+
+Every response carries `Cache-Control: no-store` and a W3C `traceparent`
+header. A problem response also carries the same trace identifier in its
+`traceId` member. Evidence Gateway may reuse a valid inbound trace identifier,
+but never echoes `tracestate`; the public trace is not its internal audit
+identifier.
 
 ## Singular response formats
 

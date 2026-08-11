@@ -6,13 +6,14 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(test)]
 use base64::Engine as _;
 use http::header::AUTHORIZATION;
 use http::HeaderMap;
-use registry_platform_authcommon::parse_bearer_token;
+use registry_platform_authcommon::{parse_bearer_token, validate_compact_access_token};
 use registry_platform_oidc::{Audience, TokenVerifier, VerifiedToken};
-use serde::de::{self, DeserializeSeed as _, Visitor};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -21,8 +22,6 @@ use std::collections::BTreeMap;
 
 use crate::model::{CompiledAccess, RowAuthoritySource};
 
-const MAX_TOKEN_BYTES: usize = 128 * 1024;
-const MAX_TOKEN_SEGMENT_BYTES: usize = 64 * 1024;
 const MAX_DIRECT_CLAIM_BYTES: usize = 512;
 
 /// Verified caller context. Its `Debug` implementation deliberately redacts
@@ -384,135 +383,7 @@ pub fn bearer_token(headers: &HeaderMap) -> Result<Option<&str>, AuthenticationE
 }
 
 fn strict_token_shape(token: &str) -> Result<(), AuthenticationError> {
-    if token.is_empty()
-        || token.len() > MAX_TOKEN_BYTES
-        || token.bytes().any(|byte| byte.is_ascii_whitespace())
-    {
-        return Err(AuthenticationError::Malformed);
-    }
-    let mut segments = token.split('.');
-    let header = segments.next().ok_or(AuthenticationError::Malformed)?;
-    let claims = segments.next().ok_or(AuthenticationError::Malformed)?;
-    let signature = segments.next().ok_or(AuthenticationError::Malformed)?;
-    if segments.next().is_some() || header.is_empty() || claims.is_empty() || signature.is_empty() {
-        return Err(AuthenticationError::Malformed);
-    }
-    let header = decode_segment(header)?;
-    let claims = decode_segment(claims)?;
-    let _signature = decode_segment(signature)?;
-    reject_duplicate_json_members(&header)?;
-    reject_duplicate_json_members(&claims)?;
-    Ok(())
-}
-
-fn decode_segment(segment: &str) -> Result<Vec<u8>, AuthenticationError> {
-    let decoded = URL_SAFE_NO_PAD
-        .decode(segment)
-        .map_err(|_| AuthenticationError::Malformed)?;
-    if decoded.is_empty() || decoded.len() > MAX_TOKEN_SEGMENT_BYTES {
-        return Err(AuthenticationError::Malformed);
-    }
-    Ok(decoded)
-}
-
-fn reject_duplicate_json_members(bytes: &[u8]) -> Result<(), AuthenticationError> {
-    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    StrictObject
-        .deserialize(&mut deserializer)
-        .map_err(|_| AuthenticationError::Malformed)?;
-    deserializer
-        .end()
-        .map_err(|_| AuthenticationError::Malformed)
-}
-
-struct StrictObject;
-
-impl<'de> de::DeserializeSeed<'de> for StrictObject {
-    type Value = ();
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: de::Deserializer<'de>,
-    {
-        deserializer.deserialize_map(StrictValueVisitor)
-    }
-}
-
-struct StrictValue;
-
-impl<'de> de::DeserializeSeed<'de> for StrictValue {
-    type Value = ();
-
-    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: de::Deserializer<'de>,
-    {
-        deserializer.deserialize_any(StrictValueVisitor)
-    }
-}
-
-struct StrictValueVisitor;
-
-impl<'de> Visitor<'de> for StrictValueVisitor {
-    type Value = ();
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON value without duplicate object members")
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::MapAccess<'de>,
-    {
-        let mut names = BTreeSet::new();
-        while let Some(name) = map.next_key::<String>()? {
-            if !names.insert(name) {
-                return Err(de::Error::custom("duplicate JSON object member"));
-            }
-            map.next_value_seed(StrictValue)?;
-        }
-        Ok(())
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: de::SeqAccess<'de>,
-    {
-        while sequence.next_element_seed(StrictValue)?.is_some() {}
-        Ok(())
-    }
-
-    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(())
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(())
-    }
+    validate_compact_access_token(token).map_err(|_| AuthenticationError::Malformed)
 }
 
 fn direct_string<'a>(claims: Option<&'a Map<String, Value>>, name: &str) -> Option<&'a str> {

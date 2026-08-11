@@ -2,8 +2,9 @@ contract: registry.evidence.public-problem/v1
 status: frozen
 media_type: application/problem+json
 body:
-  exact_members: [type, title, status, code, operation]
-  operation: opaque per-request identifier safe for support correlation
+  exact_members: [type, title, status, detail, code, traceId]
+  detail: Static, value-free text selected only by the service's closed problem code.
+  traceId: Lowercase 32-hex W3C trace identifier for caller correlation; it is not an audit operation identifier.
   prohibited:
     - request body or selector profile and values
     - principal, actor, grant, token, credential, or authorization inputs
@@ -12,28 +13,36 @@ body:
     - supported value or subject binding
     - candidate count, score, hint, or comparison detail
 codes:
-  malformed_request: {status: 400, title: Request is not valid}
-  invalid_selector: {status: 400, title: Request is not valid}
-  authentication_failed: {status: 401, title: Authentication failed}
-  not_authorized: {status: 403, title: Request is not authorized}
-  response_format_not_acceptable: {status: 406, title: Requested response format is not acceptable}
-  evidence_not_available: {status: 422, title: Evidence could not be produced}
-  rate_limited: {status: 429, title: Request rate exceeded}
-  dependency_unavailable: {status: 503, title: Service temporarily unavailable}
-  service_unavailable: {status: 503, title: Service temporarily unavailable}
+  evidence.invalid_request: {status: 400, title: Evidence request is invalid, detail: the Evidence request is invalid}
+  request.selector_invalid: {status: 400, title: Selector is invalid, detail: selector does not match an available request profile}
+  auth.invalid_credential: {status: 401, title: Bearer access token is invalid, detail: bearer access token validation failed}
+  evidence.denied: {status: 403, title: Evidence request is not permitted, detail: the Evidence request is not permitted}
+  resource.not_found: {status: 404, title: Requested resource was not found, detail: the requested resource was not found}
+  format.unsupported: {status: 406, title: Requested format is not supported, detail: the requested format is not supported}
+  evidence.unavailable: {status: 422, title: Evidence could not be produced, detail: evidence could not be produced for this request}
+  evidence.rate_limited: {status: 429, title: Evidence request rate is exhausted, detail: the Evidence request rate is exhausted}
+  source.unavailable: {status: 503, title: Authoritative source is unavailable, detail: the authoritative source is unavailable}
+  service.unavailable: {status: 503, title: Service is unavailable, detail: the request could not be served}
+type_uri_prefix: https://id.registrystack.org/problems/registry-evidence/
+response_headers:
+  cache_control: no-store
+  traceparent: Every response carries a W3C traceparent header whose trace identifier equals body.traceId for a problem response. A valid inbound traceparent may supply that trace identifier; otherwise Evidence mints one.
+  tracestate: Caller-supplied tracestate is never echoed.
+  www_authenticate: HTTP 401 carries Bearer realm="registry-evidence".
+  retry_after: "HTTP 429 alone carries Retry-After: 1."
 response_format_rules:
-  negotiation: Missing Accept, */*, and exact application/jose+json select signed JWS. Only exact application/vnd.registrystack.evidence-unsigned+json selects the unsigned envelope. Duplicate, combined, parameterized, quality-weighted, or unknown negotiation returns response_format_not_acceptable before source access.
-  request_batch_negotiation: POST /v1/evidence/batch requires the one exact application/vnd.registrystack.evidence.request-batch+json Accept value. Missing, wildcard, singular-format, holder-batch, duplicate, combined, parameterized, quality-weighted, or unknown negotiation returns response_format_not_acceptable before source access.
-  authorization: A recognized unsigned request that the immutable bundle or the complete matched grant does not permit durably appends the minimal authorization-refusal audit event, then returns the ordinary not_authorized problem before credential acquisition or source access, without revealing which layer withheld permission. Audit failure returns service_unavailable instead.
+  negotiation: Missing Accept, */*, and exact application/jose+json select signed JWS. Only exact application/vnd.registrystack.evidence-unsigned+json selects the unsigned envelope. Duplicate, combined, parameterized, quality-weighted, or unknown negotiation returns format.unsupported before source access.
+  request_batch_negotiation: POST /v1/evidence/batch requires the one exact application/vnd.registrystack.evidence.request-batch+json Accept value. Missing, wildcard, singular-format, holder-batch, duplicate, combined, parameterized, quality-weighted, or unknown negotiation returns format.unsupported before source access.
+  authorization: A recognized unsigned request that the immutable bundle or the complete matched grant does not permit durably appends the minimal authorization-refusal audit event, then returns the ordinary evidence.denied problem before credential acquisition or source access, without revealing which layer withheld permission. Audit failure returns service.unavailable instead.
 authorization_refusal_audit:
   applies_after: successful authentication when the authorization decision refuses the request
-  order: The minimal registry.evidence.audit.authorization-refusal/v1 event is durably accepted before the not_authorized response.
-  failure: An audit append failure replaces the not_authorized response with service_unavailable.
-  operational_only: [malformed_request, invalid_selector, authentication_failed]
+  order: The minimal registry.evidence.audit.authorization-refusal/v1 event is durably accepted before the evidence.denied response.
+  failure: An audit append failure replaces the evidence.denied response with service.unavailable.
+  operational_only: [evidence.invalid_request, request.selector_invalid, auth.invalid_credential]
 existence_disclosure:
   default_public_collapse:
     internal_classes: [no_match, ambiguous, required_fact_missing, derivation_input_unresolved]
-    public_code: evidence_not_available
+    public_code: evidence.unavailable
     same_status: 422
     same_title: Evidence could not be produced
     same_body_shape: true
@@ -46,6 +55,7 @@ request_batch:
   value_safety: The outer problem never includes item index, item count, nonce, selector, subject, authority, source, outcome, evidence identifier, or signed material.
 transient_failures:
   internal_classes: [source_unavailable, source_protocol_error, script_failure, signing_failure, authorization_refusal_audit_failure, access_audit_failure, release_audit_failure]
-  public_codes: [dependency_unavailable, service_unavailable]
-  retry_after: permitted only for bounded transient failures and never derived from protected source content
+  public_codes: [source.unavailable, service.unavailable]
+  retry_after: absent
 unknown_definition_rule: Unknown and unauthorized requirement identifiers must be indistinguishable to a caller lacking authorization.
+route_resolution: An unknown path or unsupported method returns resource.not_found.

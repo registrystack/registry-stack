@@ -339,12 +339,12 @@ fn round_trip_through_send_and_verify() {
             .expect("requestNonce is a string");
         assert_eq!(verified_nonce, nonce);
 
-        let operation: Option<String> = verified
-            .getattr("operation")
-            .expect("operation is exposed")
+        let trace_id: Option<String> = verified
+            .getattr("trace_id")
+            .expect("trace_id is exposed")
             .extract()
-            .expect("operation is a string or None");
-        assert_eq!(operation, None);
+            .expect("trace_id is a string or None");
+        assert_eq!(trace_id, None);
 
         let pinned = verified
             .getattr("pinned_subject_expectations")

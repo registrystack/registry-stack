@@ -26,7 +26,7 @@ use crate::{
     config::MAXIMUM_HOLDER_BOUND_BATCH_SIZE,
     model::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch, FlattenedJws,
-        JwksDocument, ProblemBody, SdJwtVcBatchEnvelope, UnsignedEvidenceEnvelope,
+        JwksDocument, SdJwtVcBatchEnvelope, UnsignedEvidenceEnvelope,
     },
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
@@ -64,36 +64,71 @@ const SD_JWT_VC_BATCH_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/sd-jwt-vc-batch-envelope-v1.json";
 const PROBLEM_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/problem-v1.json";
 const JWKS_SCHEMA_ID: &str = "https://registrystack.org/schemas/evidence/jwks-v1.json";
-/// Shape of the server-minted operation identifier, shared by the response
-/// header and the problem member so the two cannot describe different values.
-const OPERATION_PATTERN: &str = "^[0-9A-HJKMNP-TV-Z]{26}$";
+const TRACE_ID_PATTERN: &str = "^(?!0{32}$)[0-9a-f]{32}$";
+const TRACEPARENT_PATTERN: &str = "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$";
+const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-evidence/";
 /// Unpadded base64url encoding of exactly one 32-byte P-256 affine coordinate.
 const HOLDER_KEY_COORDINATE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
-const PROBLEM_VARIANTS: [(&str, u16, &str); 9] = [
-    ("malformed_request", 400, "Request is not valid"),
-    ("invalid_selector", 400, "Request is not valid"),
-    ("authentication_failed", 401, "Authentication failed"),
-    ("not_authorized", 403, "Request is not authorized"),
+const PROBLEM_VARIANTS: [(&str, u16, &str, &str); 10] = [
     (
-        "response_format_not_acceptable",
-        406,
-        "Requested response format is not acceptable",
+        "evidence.invalid_request",
+        400,
+        "Evidence request is invalid",
+        "the Evidence request is invalid",
     ),
     (
-        "evidence_not_available",
+        "request.selector_invalid",
+        400,
+        "Selector is invalid",
+        "selector does not match an available request profile",
+    ),
+    (
+        "auth.invalid_credential",
+        401,
+        "Bearer access token is invalid",
+        "bearer access token validation failed",
+    ),
+    (
+        "evidence.denied",
+        403,
+        "Evidence request is not permitted",
+        "the Evidence request is not permitted",
+    ),
+    (
+        "format.unsupported",
+        406,
+        "Requested format is not supported",
+        "the requested format is not supported",
+    ),
+    (
+        "evidence.unavailable",
         422,
         "Evidence could not be produced",
-    ),
-    ("rate_limited", 429, "Request rate exceeded"),
-    (
-        "dependency_unavailable",
-        503,
-        "Service temporarily unavailable",
+        "evidence could not be produced for this request",
     ),
     (
-        "service_unavailable",
+        "evidence.rate_limited",
+        429,
+        "Evidence request rate is exhausted",
+        "the Evidence request rate is exhausted",
+    ),
+    (
+        "source.unavailable",
         503,
-        "Service temporarily unavailable",
+        "Authoritative source is unavailable",
+        "the authoritative source is unavailable",
+    ),
+    (
+        "service.unavailable",
+        503,
+        "Service is unavailable",
+        "the request could not be served",
+    ),
+    (
+        "resource.not_found",
+        404,
+        "Requested resource was not found",
+        "the requested resource was not found",
     ),
 ];
 
@@ -142,7 +177,6 @@ pub fn documents() -> Result<BTreeMap<&'static str, String>, ContractGenerationE
     assert_model_shape::<FlattenedJws>("FlattenedJws", &jws, false)?;
     assert_model_shape::<UnsignedEvidenceEnvelope>("UnsignedEvidenceEnvelope", &unsigned, false)?;
     assert_model_shape::<SdJwtVcBatchEnvelope>("SdJwtVcBatchEnvelope", &batch, false)?;
-    assert_model_shape::<ProblemBody>("ProblemBody", &problem, false)?;
     assert_model_shape::<JwksDocument>("JwksDocument", &jwks, false)?;
     let openapi = openapi_document(
         &request,
@@ -702,49 +736,59 @@ fn problem_schema() -> Value {
         "title": "Evidence public problem Version 1",
         "type": "object",
         "additionalProperties": false,
-        "required": ["type", "title", "status", "code", "operation"],
+        "required": ["type", "title", "status", "detail", "code", "traceId"],
         "properties": {
             "type": {
                 "type": "string",
                 "enum": [
-                    "https://registrystack.org/problems/evidence/malformed_request",
-                    "https://registrystack.org/problems/evidence/invalid_selector",
-                    "https://registrystack.org/problems/evidence/authentication_failed",
-                    "https://registrystack.org/problems/evidence/not_authorized",
-                    "https://registrystack.org/problems/evidence/response_format_not_acceptable",
-                    "https://registrystack.org/problems/evidence/evidence_not_available",
-                    "https://registrystack.org/problems/evidence/rate_limited",
-                    "https://registrystack.org/problems/evidence/dependency_unavailable",
-                    "https://registrystack.org/problems/evidence/service_unavailable"
+                    "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request",
+                    "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid",
+                    "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential",
+                    "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
+                    "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
+                    "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
+                    "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited",
+                    "https://id.registrystack.org/problems/registry-evidence/source/unavailable",
+                    "https://id.registrystack.org/problems/registry-evidence/service/unavailable",
+                    "https://id.registrystack.org/problems/registry-evidence/resource/not_found"
                 ]
             },
             "title": {"type": "string", "enum": [
-                "Request is not valid", "Authentication failed", "Request is not authorized",
-                "Requested response format is not acceptable",
-                "Evidence could not be produced", "Request rate exceeded", "Service temporarily unavailable"
+                "Evidence request is invalid", "Selector is invalid", "Bearer access token is invalid",
+                "Evidence request is not permitted", "Requested format is not supported",
+                "Evidence could not be produced", "Evidence request rate is exhausted",
+                "Authoritative source is unavailable", "Service is unavailable", "Requested resource was not found"
             ]},
-            "status": {"type": "integer", "enum": [400, 401, 403, 406, 422, 429, 503]},
+            "status": {"type": "integer", "enum": [400, 401, 403, 404, 406, 422, 429, 503]},
             "code": {"type": "string", "enum": [
-                "malformed_request", "invalid_selector", "authentication_failed", "not_authorized",
-                "response_format_not_acceptable",
-                "evidence_not_available", "rate_limited", "dependency_unavailable", "service_unavailable"
+                "evidence.invalid_request", "request.selector_invalid", "auth.invalid_credential",
+                "evidence.denied", "format.unsupported", "evidence.unavailable",
+                "evidence.rate_limited", "source.unavailable", "service.unavailable", "resource.not_found"
             ]},
-            "operation": {"type": "string", "pattern": OPERATION_PATTERN}
+            "detail": {"type": "string", "enum": [
+                "the Evidence request is invalid", "selector does not match an available request profile",
+                "bearer access token validation failed", "the Evidence request is not permitted",
+                "the requested format is not supported", "evidence could not be produced for this request",
+                "the Evidence request rate is exhausted", "the authoritative source is unavailable",
+                "the request could not be served", "the requested resource was not found"
+            ]},
+            "traceId": {"type": "string", "pattern": TRACE_ID_PATTERN}
         },
         "$comment": "Problem members are a closed safe shape. No request, authority, source, script, supported-value, subject-binding, candidate, or credential detail is returned."
     });
     schema["oneOf"] = Value::Array(
         PROBLEM_VARIANTS
-        .into_iter()
-        .map(|(code, status, title)| {
-            json!({"properties": {
-                "type": {"const": format!("https://registrystack.org/problems/evidence/{code}")},
-                "title": {"const": title},
-                "status": {"const": status},
-                "code": {"const": code}
-            }})
-        })
-        .collect(),
+            .into_iter()
+            .map(|(code, status, title, detail)| {
+                json!({"properties": {
+                    "type": {"const": format!("{PROBLEM_TYPE_BASE}{}", code.replace('.', "/"))},
+                    "title": {"const": title},
+                    "status": {"const": status},
+                    "detail": {"const": detail},
+                    "code": {"const": code}
+                }})
+            })
+            .collect(),
     );
     schema
 }
@@ -887,9 +931,9 @@ fn problem_content(codes: &[&str]) -> Value {
     let variants = codes
         .iter()
         .map(|code| {
-            let (_, status, title) = PROBLEM_VARIANTS
+            let (_, status, title, detail) = PROBLEM_VARIANTS
                 .iter()
-                .find(|(variant, _, _)| variant == code)
+                .find(|(variant, _, _, _)| variant == code)
                 .unwrap_or_else(|| panic!("unknown public problem code {code}"));
             json!({
                 "allOf": [
@@ -897,9 +941,10 @@ fn problem_content(codes: &[&str]) -> Value {
                     {
                         "type": "object",
                         "properties": {
-                            "type": {"type": "string", "enum": [format!("https://registrystack.org/problems/evidence/{code}")]},
+                            "type": {"type": "string", "enum": [format!("{PROBLEM_TYPE_BASE}{}", code.replace('.', "/"))]},
                             "title": {"type": "string", "enum": [title]},
                             "status": {"type": "integer", "enum": [status]},
+                            "detail": {"type": "string", "enum": [detail]},
                             "code": {"type": "string", "enum": [code]}
                         }
                     }
@@ -925,10 +970,10 @@ fn response_headers(extra: Option<(&str, Value)>) -> Value {
         }),
     );
     headers.insert(
-        "X-Request-Id".to_string(),
+        "traceparent".to_string(),
         json!({
-            "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
-            "schema": {"type": "string", "pattern": OPERATION_PATTERN}
+            "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
+            "schema": {"type": "string", "pattern": TRACEPARENT_PATTERN}
         }),
     );
     if let Some((name, header)) = extra {
@@ -1160,41 +1205,41 @@ fn openapi_document(
                         "400": {
                             "description": "Malformed request or invalid selector",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["malformed_request", "invalid_selector"])
+                            "content": problem_content(&["evidence.invalid_request", "request.selector_invalid"])
                         },
                         "401": {
                             "description": "Authentication failed",
                             "headers": evidence_response_headers(Some(("WWW-Authenticate", json!({
                                 "schema": {"type": "string", "enum": ["Bearer"]}
                             })))),
-                            "content": problem_content(&["authentication_failed"])
+                            "content": problem_content(&["auth.invalid_credential"])
                         },
                         "403": {
                             "description": "Request is not authorized, including a recognized response format the bundle or matched grant does not permit",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["not_authorized"])
+                            "content": problem_content(&["evidence.denied"])
                         },
                         "406": {
                             "description": "Media negotiation is outside the closed Accept matrix",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["response_format_not_acceptable"])
+                            "content": problem_content(&["format.unsupported"])
                         },
                         "422": {
                             "description": "Evidence could not be produced",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["evidence_not_available"])
+                            "content": problem_content(&["evidence.unavailable"])
                         },
                         "429": {
                             "description": "Request rate exceeded",
                             "headers": evidence_response_headers(Some(("Retry-After", json!({
                                 "schema": {"type": "string", "enum": ["1"]}
                             })))),
-                            "content": problem_content(&["rate_limited"])
+                            "content": problem_content(&["evidence.rate_limited"])
                         },
                         "503": {
                             "description": "Dependency or service temporarily unavailable",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["dependency_unavailable", "service_unavailable"])
+                            "content": problem_content(&["source.unavailable", "service.unavailable"])
                         },
                     }
                 }
@@ -1220,36 +1265,36 @@ fn openapi_document(
                         "400": {
                             "description": "Malformed batch request or invalid selector",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["malformed_request", "invalid_selector"])
+                            "content": problem_content(&["evidence.invalid_request", "request.selector_invalid"])
                         },
                         "401": {
                             "description": "Authentication failed",
                             "headers": evidence_response_headers(Some(("WWW-Authenticate", json!({
                                 "schema": {"type": "string", "enum": ["Bearer"]}
                             })))),
-                            "content": problem_content(&["authentication_failed"])
+                            "content": problem_content(&["auth.invalid_credential"])
                         },
                         "403": {
                             "description": "At least one batch item is not authorized for signed audience-scoped evidence",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["not_authorized"])
+                            "content": problem_content(&["evidence.denied"])
                         },
                         "406": {
                             "description": "The exact request-batch response media type was not selected",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["response_format_not_acceptable"])
+                            "content": problem_content(&["format.unsupported"])
                         },
                         "429": {
                             "description": "Atomic item-count rate admission was refused",
                             "headers": evidence_response_headers(Some(("Retry-After", json!({
                                 "schema": {"type": "string", "enum": ["1"]}
                             })))),
-                            "content": problem_content(&["rate_limited"])
+                            "content": problem_content(&["evidence.rate_limited"])
                         },
                         "503": {
                             "description": "A dependency, protocol, signing, serialization, or audit failure aborted the complete request",
                             "headers": evidence_response_headers(None),
-                            "content": problem_content(&["dependency_unavailable", "service_unavailable"])
+                            "content": problem_content(&["source.unavailable", "service.unavailable"])
                         }
                     }
                 }
@@ -1268,26 +1313,26 @@ fn openapi_document(
                         "400": {
                             "description": "Malformed discovery request",
                             "headers": response_headers(None),
-                            "content": problem_content(&["malformed_request"])
+                            "content": problem_content(&["evidence.invalid_request"])
                         },
                         "401": {
                             "description": "Authentication failed",
                             "headers": response_headers(Some(("WWW-Authenticate", json!({
                                 "schema": {"type": "string", "enum": ["Bearer"]}
                             })))),
-                            "content": problem_content(&["authentication_failed"])
+                            "content": problem_content(&["auth.invalid_credential"])
                         },
                         "429": {
                             "description": "Request rate exceeded",
                             "headers": response_headers(Some(("Retry-After", json!({
                                 "schema": {"type": "string", "enum": ["1"]}
                             })))),
-                            "content": problem_content(&["rate_limited"])
+                            "content": problem_content(&["evidence.rate_limited"])
                         },
                         "503": {
                             "description": "Service temporarily unavailable",
                             "headers": response_headers(None),
-                            "content": problem_content(&["service_unavailable"])
+                            "content": problem_content(&["service.unavailable"])
                         }
                     }
                 }
@@ -1316,7 +1361,7 @@ fn openapi_document(
                         "503": {
                             "description": "Runtime is not ready",
                             "headers": response_headers(None),
-                            "content": problem_content(&["service_unavailable"])
+                            "content": problem_content(&["service.unavailable"])
                         }
                     }
                 }
@@ -1331,12 +1376,12 @@ fn openapi_document(
                         "200": {
                             "description": "The generated Version 1 OpenAPI document",
                             "headers": response_headers(None),
-                            "content": {"application/openapi+json": {"schema": {"type": "object"}}}
+                            "content": {"application/json": {"schema": {"type": "object"}}}
                         },
                         "503": {
                             "description": "The document could not be produced",
                             "headers": response_headers(None),
-                            "content": problem_content(&["service_unavailable"])
+                            "content": problem_content(&["service.unavailable"])
                         }
                     }
                 }
@@ -1514,7 +1559,7 @@ mod tests {
         );
         assert!(
             document["paths"]["/openapi.json"]["get"]["responses"]["200"]["content"]
-                ["application/openapi+json"]
+                ["application/json"]
                 .is_object()
         );
         assert_eq!(
@@ -1553,7 +1598,7 @@ mod tests {
         assert_eq!(
             document["paths"]["/v1/evidence"]["post"]["responses"]["406"]["content"]
                 ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
-            json!(["response_format_not_acceptable"])
+            json!(["format.unsupported"])
         );
         for response in document["paths"]["/v1/evidence"]["post"]["responses"]
             .as_object()
@@ -1611,12 +1656,12 @@ mod tests {
         assert_eq!(
             document["paths"]["/v1/evidence"]["post"]["responses"]["401"]["content"]
                 ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
-            json!(["authentication_failed"])
+            json!(["auth.invalid_credential"])
         );
         assert_eq!(
             document["paths"]["/ready"]["get"]["responses"]["503"]["content"]
                 ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
-            json!(["service_unavailable"])
+            json!(["service.unavailable"])
         );
     }
 
@@ -1639,7 +1684,7 @@ mod tests {
         assert_eq!(problem["additionalProperties"], json!(false));
         assert_eq!(
             problem["properties"].as_object().map(|value| value.len()),
-            Some(5)
+            Some(6)
         );
     }
 
@@ -1772,11 +1817,12 @@ mod tests {
             (
                 problem_schema(),
                 json!({
-                    "type": "https://registrystack.org/problems/evidence/evidence_not_available",
+                    "type": "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
                     "title": "Evidence could not be produced",
                     "status": 422,
-                    "code": "evidence_not_available",
-                    "operation": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+                    "detail": "evidence could not be produced for this request",
+                    "code": "evidence.unavailable",
+                    "traceId": "0123456789abcdef0123456789abcdef"
                 }),
             ),
             (
@@ -1808,12 +1854,42 @@ mod tests {
             .compile(&schema)
             .expect("problem schema compiles");
         let mismatched = json!({
-            "type": "https://registrystack.org/problems/evidence/dependency_unavailable",
-            "title": "Request is not valid",
+            "type": "https://id.registrystack.org/problems/registry-evidence/source/unavailable",
+            "title": "Evidence request is invalid",
             "status": 400,
-            "code": "dependency_unavailable",
-            "operation": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            "detail": "the Evidence request is invalid",
+            "code": "source.unavailable",
+            "traceId": "0123456789abcdef0123456789abcdef"
         });
         assert!(!compiled.is_valid(&mismatched));
+    }
+
+    #[test]
+    fn trace_contract_patterns_reject_zero_identifiers() {
+        for (pattern, valid, invalid) in [
+            (
+                TRACE_ID_PATTERN,
+                "0123456789abcdef0123456789abcdef",
+                vec!["00000000000000000000000000000000"],
+            ),
+            (
+                TRACEPARENT_PATTERN,
+                "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+                vec![
+                    "00-00000000000000000000000000000000-0123456789abcdef-01",
+                    "00-0123456789abcdef0123456789abcdef-0000000000000000-01",
+                ],
+            ),
+        ] {
+            let schema = json!({"type": "string", "pattern": pattern});
+            let compiled = JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .compile(&schema)
+                .expect("trace pattern compiles");
+            assert!(compiled.is_valid(&json!(valid)));
+            for value in invalid {
+                assert!(!compiled.is_valid(&json!(value)), "{value}");
+            }
+        }
     }
 }

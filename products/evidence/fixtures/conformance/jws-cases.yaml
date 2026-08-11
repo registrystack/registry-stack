@@ -25,4 +25,4 @@ negative:
   - signed payload violates the Evidence JSON Schema
   - duplicate evidence object beside payload
   - signing-provider failure
-expected_failure: no evidence release; safe service_unavailable where failure is runtime
+expected_failure: no evidence release; safe service.unavailable where failure is runtime

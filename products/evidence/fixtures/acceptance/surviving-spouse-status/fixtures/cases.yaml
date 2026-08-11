@@ -114,7 +114,7 @@ cases:
           - {union_start_date: '1994-09-17', union_end_reason: death-of-other-party, union_recognized: true}
         union_set_contract: urn:example:fixture:union-set:v1
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
-    expected_public_problem: dependency_unavailable
+    expected_public_problem: source.unavailable
     derivation_runs: false
     signed_success: false
   - id: missing-record
@@ -123,7 +123,7 @@ cases:
       union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
     expected_lookup: no_match
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: false
     signed_success: false
   - id: no-match
@@ -134,7 +134,7 @@ cases:
       union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
     expected_lookup: no_match
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: false
     signed_success: false
   - id: ambiguous
@@ -143,7 +143,7 @@ cases:
       union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
     expected_lookup: ambiguous
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: false
     signed_success: false
   - id: negative-search-namespace-mismatch
@@ -151,7 +151,7 @@ cases:
       civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:other-namespace}]}
       union-register: {record_found: true, union_events: [], union_set_contract: urn:example:fixture:union-set:v1, union_set_complete: true}
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
-    expected_public_problem: dependency_unavailable
+    expected_public_problem: source.unavailable
     derivation_runs: false
     signed_success: false
   - id: negative-union-register-unresolved
@@ -162,7 +162,7 @@ cases:
       civil-record-search: {total: 1, records: [{civil_record_reference: synthetic-civil-record-101, reference_namespace: urn:example:fixture:civil-record}]}
       union-register: {record_found: false}
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
-    expected_public_problem: dependency_unavailable
+    expected_public_problem: source.unavailable
     derivation_runs: false
     signed_success: false
   - id: negative-death-register-unresolved
@@ -178,7 +178,7 @@ cases:
         union_set_contract: urn:example:fixture:union-set:v1
         union_set_complete: true
       death-register: {record_found: false}
-    expected_public_problem: dependency_unavailable
+    expected_public_problem: source.unavailable
     derivation_runs: false
     signed_success: false
   - id: negative-two-recognized-unions-share-the-latest-date
@@ -196,7 +196,7 @@ cases:
         union_set_contract: urn:example:fixture:union-set:v1
         union_set_complete: true
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: true
     signed_success: false
   - id: negative-union-set-incomplete
@@ -211,7 +211,7 @@ cases:
         union_set_contract: urn:example:fixture:union-set:v1
         union_set_complete: false
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: true
     signed_success: false
   - id: negative-death-record-incomplete
@@ -224,7 +224,7 @@ cases:
         union_set_contract: urn:example:fixture:union-set:v1
         union_set_complete: true
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: false}
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: true
     signed_success: false
   - id: negative-death-subject-mismatch
@@ -240,7 +240,7 @@ cases:
         union_set_contract: urn:example:fixture:union-set:v1
         union_set_complete: true
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-999, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: true
     signed_success: false
   - id: negative-subject-deceased
@@ -273,7 +273,7 @@ cases:
         union_set_contract: urn:example:fixture:union-set:v1
         union_set_complete: true
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: false
     signed_success: false
   - id: negative-wrong-union-contract
@@ -286,7 +286,7 @@ cases:
         union_set_contract: urn:example:fixture:other-union-set:v1
         union_set_complete: true
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:death-register:v1, death_record_complete: true}
-    expected_public_problem: dependency_unavailable
+    expected_public_problem: source.unavailable
     derivation_runs: false
     signed_success: false
   - id: negative-wrong-death-contract
@@ -299,7 +299,7 @@ cases:
         union_set_contract: urn:example:fixture:union-set:v1
         union_set_complete: true
       death-register: {record_found: true, death_subject_reference: synthetic-civil-record-101, death_recorded: false, death_record_contract: urn:example:fixture:other-death-register:v1, death_record_complete: true}
-    expected_public_problem: dependency_unavailable
+    expected_public_problem: source.unavailable
     derivation_runs: false
     signed_success: false
   - id: negative-extra-source-field
@@ -328,12 +328,12 @@ cases:
   - id: source-failure
     # This acquisition makes three calls and has one failure answer. A register
     # that times out after the search resolved is the same public
-    # dependency_unavailable as the search timing out, the failure category
+    # source.unavailable as the search timing out, the failure category
     # names the transport fault rather than the stage, and which register
     # failed stays in the operator-private audit. Nothing about the subject,
     # and nothing about how far the acquisition got, leaves the service.
     source_failure: timeout
-    expected_public_problem: dependency_unavailable
+    expected_public_problem: source.unavailable
     signed_success: false
   - id: anti-reconstruction
     # One derivation sees a whole union history, a death attestation, and the

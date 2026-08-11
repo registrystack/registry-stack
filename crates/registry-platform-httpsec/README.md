@@ -12,6 +12,10 @@ Axum and Tower helpers for browser-facing HTTP security.
 - Request body limit layer construction.
 - RFC 9457 Problem Details responses with `application/problem+json`.
 - A standard body-limit problem response.
+- `TraceId` and `TraceContext`, the shared strict W3C `traceparent` transport
+  primitives for Registry service responses.
+- `ProblemBody`, the fixed value-free Registry Stack problem envelope with
+  `type`, `title`, `status`, `detail`, `code`, and `traceId` members.
 
 ## Typical Use
 
@@ -43,6 +47,9 @@ let _ = app;
 - HTTPS origins are accepted. HTTP origins are accepted only for loopback
   development origins.
 - Existing security headers are preserved when `security_headers` is applied.
+- Invalid, duplicate, or absent inbound `traceparent` values receive a fresh
+  server trace. One valid lower-case W3C version 0 `traceparent` is retained.
+  Caller `tracestate` is never echoed.
 
 ## Security Notes
 
@@ -50,6 +57,9 @@ let _ = app;
 - `CspBuilder::restrictive` is the safe baseline. Extend it in application code
   only for concrete frontend needs.
 - Body limits reduce risk but do not replace endpoint-level validation.
+- Product crates retain ownership of their closed problem-code mappings and
+  response policy. The shared envelope does not accept arbitrary extras or
+  caller-controlled diagnostic text.
 
 ## Testing
 

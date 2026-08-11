@@ -1,6 +1,28 @@
 {
   "version": 1,
   "baseUrl": "https://id.registrystack.org",
+  "problemSources": [
+    {
+      "owner": "relay-v2",
+      "status": "active",
+      "compatibilityLine": "relay-v2",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-relay/",
+      "sourcePath": "crates/registry-relay-v2/src/problem.rs",
+      "exporterPath": "crates/registry-relay-v2/examples/problem-catalog.rs",
+      "cargoPackage": "registry-relay-v2",
+      "cargoExample": "problem-catalog"
+    },
+    {
+      "owner": "evidence",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-evidence/",
+      "sourcePath": "crates/registry-evidence/src/problem.rs",
+      "exporterPath": "crates/registry-evidence/examples/problem-catalog.rs",
+      "cargoPackage": "registry-evidence",
+      "cargoExample": "problem-catalog"
+    }
+  ],
   "referenceExclusions": [
     {
       "glob": "crates/registry-config-report/**",

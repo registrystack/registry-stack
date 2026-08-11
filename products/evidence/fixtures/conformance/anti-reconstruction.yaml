@@ -52,7 +52,7 @@ existence_collapse:
   internal: [no_match, ambiguous, required_fact_missing]
   public:
     status: 422
-    code: evidence_not_available
+    code: evidence.unavailable
     title: Evidence could not be produced
     exact_body_shape_equal: true
   prohibited: [candidate_count, score, near_match_hint, field_comparison, class-specific-message]

@@ -30,7 +30,8 @@ REQUEST_BATCH_MEDIA_TYPE = (
     "application/vnd.registrystack.evidence.request-batch+json"
 )
 REQUEST_BATCH_SCHEMA = "registry.evidence-request-batch/v1"
-OPERATION = "01JQ0QZ8YHZ0000000000000AB"
+TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
+TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 
 def envelope(items: list[dict]) -> bytes:
@@ -90,7 +91,7 @@ class RequestBatchTest(unittest.TestCase):
             status=200,
             headers={
                 "Content-Type": REQUEST_BATCH_MEDIA_TYPE,
-                "X-Request-ID": OPERATION,
+                "traceparent": TRACEPARENT,
             },
             body=envelope(
                 [
@@ -112,7 +113,7 @@ class RequestBatchTest(unittest.TestCase):
 
         raw = self.client.send_batch(prepared)
         self.assertIsInstance(raw, revc.RawEvidenceRequestBatchResponse)
-        self.assertEqual(raw.operation, OPERATION)
+        self.assertEqual(raw.trace_id, TRACE_ID)
         self.assertEqual(
             json.loads(raw.body),
             json.loads(self.server.routes["POST /v1/evidence/batch"].body),
@@ -164,7 +165,7 @@ class RequestBatchTest(unittest.TestCase):
 
         verified = self.client.verify_batch(prepared, raw)
         self.assertIsInstance(verified, revc.VerifiedEvidenceRequestBatch)
-        self.assertEqual(verified.operation, OPERATION)
+        self.assertEqual(verified.trace_id, TRACE_ID)
         self.assertEqual(
             verified.items,
             [
@@ -174,7 +175,7 @@ class RequestBatchTest(unittest.TestCase):
         )
         retained = self.client.verify_batch_as_of(prepared, raw, 0.0)
         self.assertEqual(retained.items, verified.items)
-        self.assertEqual(retained.operation, OPERATION)
+        self.assertEqual(retained.trace_id, TRACE_ID)
 
         with self.assertRaises(revc.ConfigurationError) as raised:
             self.client.send_batch(prepared)

@@ -13,7 +13,7 @@ const native = require('./index');
  * `map_client_error`), as properties on a thrown `Error` rather than as JSON
  * text a caller has to `JSON.parse` out of `.message`.
  *
- * `kind` is always present; `status`, `code`, `operation`,
+ * `kind` is always present; `status`, `code`, `traceId`,
  * `retryAfterSeconds`, `transportKind`, and `tokenKind` are present only when
  * the underlying failure carries them.
  */
@@ -25,7 +25,7 @@ class EvidenceClientError extends Error {
     for (const field of [
       'status',
       'code',
-      'operation',
+      'traceId',
       'retryAfterSeconds',
       'transportKind',
       'tokenKind',
@@ -130,10 +130,10 @@ wrapGetter(native.PreparedEvidenceRequestBatch.prototype, 'subjectExpectations')
 wrapGetter(native.PreparedEvidenceRequestBatch.prototype, 'count');
 
 wrapGetter(native.RawEvidenceResponse.prototype, 'body');
-wrapGetter(native.RawEvidenceResponse.prototype, 'operation');
+wrapGetter(native.RawEvidenceResponse.prototype, 'traceId');
 
 wrapGetter(native.RawEvidenceRequestBatchResponse.prototype, 'body');
-wrapGetter(native.RawEvidenceRequestBatchResponse.prototype, 'operation');
+wrapGetter(native.RawEvidenceRequestBatchResponse.prototype, 'traceId');
 
 wrapSync(native.SdJwtVcBatchResponse.prototype, 'credentialForHolderKey');
 wrapGetter(native.SdJwtVcBatchResponse.prototype, 'credentials');

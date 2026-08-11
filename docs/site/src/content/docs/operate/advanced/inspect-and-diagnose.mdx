@@ -137,7 +137,7 @@ above.
 
 Evidence Gateway collapses every source-boundary failure (unreachable, timed out, wrong credential, wrong
 media type, an oversized response, malformed JSON, or an error envelope) into the single
-`dependency_unavailable` problem (`crates/registry-evidence/src/runtime.rs`,
+`source.unavailable` problem (`crates/registry-evidence/src/runtime.rs`,
 `source_failure_problem`; see the
 [Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)).
 
@@ -177,7 +177,7 @@ no separate ambiguous-outcome category the way Relay V1's consultation lane did.
 matches a compiled operation and access profile or it does not.
 
 Evidence Gateway keeps the ambiguity discipline for its own `POST /v1/evidence` request: an
-ambiguous source match is one of the conditions the `evidence_not_available` problem collapses
+ambiguous source match is one of the conditions the `evidence.unavailable` problem collapses
 into a single value-free response, so timing and status code do not reveal which condition
 occurred (`products/evidence/OPERATOR-CONTRACT.md`, Source and selector controls; see the
 [Evidence Gateway errors and problems reference](../../../reference/evidence-problems/)). Reproduce
@@ -250,8 +250,10 @@ Retain:
 - Stable public diagnostic codes and status classes.
 - Relay's package `packageRevision` digest and runtime file path identifying the deployed
   instance, rather than a signed bundle sequence.
-- Evidence Gateway's `operation` identifier from the problem response or `X-Request-Id` header, and the
-  output of `evidence verify-audit` when a signing or audit failure is suspected.
+- Evidence Gateway's `traceId` from a problem response or the W3C `traceparent`
+  response header, and the output of `evidence verify-audit` when a signing or
+  audit failure is suspected. The public trace is not the internal audit
+  operation identifier.
 - Registry Mint's operation identifier from its local log and the output of `mint verify-audit`
   when a token-decision audit failure is suspected. Do not retain the assertion or access token.
 - Redacted audit correlation ids and the tested synthetic canary outcome.

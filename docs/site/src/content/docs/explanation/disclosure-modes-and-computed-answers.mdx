@@ -139,7 +139,7 @@ Every requirement declares `existenceDisclosure: collapse-unresolved`, and that 
 one permitted value (`products/evidence/contracts/bundle.schema.yaml`).
 
 No match, ambiguity, a missing required fact, and an unresolved derivation input all collapse into
-one public problem, `evidence_not_available` with status 422, carrying the same title and the same
+one public problem, `evidence.unavailable` with status 422, carrying the same title and the same
 body shape. A caller cannot tell which of the four happened, so it cannot use the response to learn
 whether a record exists (`products/evidence/contracts/problem-contract.yaml`, invariant `V1-I16` in
 `products/evidence/contracts/security-invariant-matrix.yaml`).

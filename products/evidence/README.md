@@ -326,11 +326,11 @@ exact `application/jose+json` all select it. The exact
 unsigned envelope, and the exact `application/dc+sd-jwt` selects the same
 assertion serialized as an SD-JWT VC. Every format other than the default is
 released only when both the immutable bundle and the one complete matched grant
-permit it; otherwise the request is refused with the ordinary `not_authorized`
+permit it; otherwise the request is refused with the ordinary `evidence.denied`
 problem (HTTP 403) before credentials or source access, without revealing which
 layer refused. Every authorization refusal shares this one generic 403, so it is
 never an oracle for which check failed. A duplicate, combined, parameterized,
-weighted, or unknown `Accept` returns the `response_format_not_acceptable`
+weighted, or unknown `Accept` returns the `format.unsupported`
 problem with HTTP 406 before source access. Unsigned output is
 transport-authenticated convenience data for development and for consumers that
 cannot process JWS. It is never later-verifiable evidence and never a fallback

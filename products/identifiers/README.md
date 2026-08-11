@@ -7,8 +7,10 @@ configuration source, or trust anchor.
 
 The generated active-only catalog closes three maintained surfaces:
 
-- Relay V2 problem types come from `ProblemCode::ALL` and preserve the exact
-  public code, title, status, and value-free detail.
+- Product problem types come from each `ProblemCode::ALL` inventory declared
+  in `problemSources` and preserve the exact public code, title, status, and
+  value-free detail. Each source declares its URI prefix, ownership, and
+  compatibility line.
 - Public JSON Schemas come from the `$id` values in the source groups declared
   by `contracts/catalog-source.json`; their exact bytes are SHA-256 bound.
 - Namespace and vocabulary records come from the explicit entries in the same
@@ -48,7 +50,7 @@ or release blocker.
 - Threat: a removed, repurposed, or mismatched identifier can misdocument an
   authorization failure or give tooling schema bytes that do not match the
   reviewed source.
-- Enforcement point: the Relay inventory, catalog generator, source and
+- Enforcement point: the declared product problem inventories, catalog generator, source and
   artifact digests, exact publisher import, and publisher build check.
 - Negative case: generation fails when a tracked public schema is outside the
   closed source groups, a tracked repository identifier reference is neither
@@ -66,12 +68,12 @@ or release blocker.
 The identifier publication repair is complete when all of the following are
 true:
 
-- Registry Stack generates one catalog from the complete Relay V2 problem
+- Registry Stack generates one catalog from every declared product problem
   inventory, the declared public schema groups, and explicit namespace and
   vocabulary records.
 - Every catalog artifact records its source path, source digest, media type,
   and exact artifact digest.
-- Relay V2 problem generation preserves its closed value-free problem facts
+- Product problem generation preserves each closed value-free problem inventory
   and adds no authentication or disclosure behavior.
 - Retired Relay V1, Registry Notary, Registry Platform operations, registryctl,
   and release-lock identifiers are absent from the generated catalog and

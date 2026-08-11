@@ -30,9 +30,8 @@ The normative source set is:
 - `verification-policy.schema.yaml`: the closed all-required relying-procedure
   policy document consumed by the offline `evidence verify` command, its frozen
   command surface, exit codes, and no-network rule;
-- `problem-contract.yaml`: safe public failures, the
-  `response_format_not_acceptable` negotiation failure, and existence-collapse
-  rules;
+- `problem-contract.yaml`: safe public failures, the `format.unsupported`
+  negotiation failure, W3C trace correlation, and existence-collapse rules;
 - `authority-context.schema.yaml` and `selector-contract.yaml`: normalized
   authority, one-decision authorization inputs, exact selector profiles, and
   value-origin rules;

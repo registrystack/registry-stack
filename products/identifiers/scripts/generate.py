@@ -27,7 +27,6 @@ GENERATED_AUDIT_SCHEMA = (
     / "audit-event"
     / "v2alpha1.json"
 )
-PROBLEM_SOURCE = Path("crates/registry-relay-v2/src/problem.rs")
 REFERENCE_URI_RE = re.compile(
     r"https://id\.registrystack\.org/[^\s<>{}\"'`\\]+"
 )
@@ -36,7 +35,6 @@ REFERENCE_TEMPLATES = {
     f"{BASE_URL}/problems/...",
     f"{BASE_URL}/problems/..",
     f"{BASE_URL}/problems/",
-    f"{BASE_URL}/problems/registry-relay/",
     f"{BASE_URL}/schemas/",
 }
 
@@ -98,6 +96,7 @@ def load_source_config(config_path: Path) -> dict[str, Any]:
     if not isinstance(config, dict) or set(config) != {
         "version",
         "baseUrl",
+        "problemSources",
         "referenceExclusions",
         "schemaSources",
         "records",
@@ -106,11 +105,36 @@ def load_source_config(config_path: Path) -> dict[str, Any]:
     if config["version"] != 1 or config["baseUrl"] != BASE_URL:
         raise CatalogError("catalog source version or base URL is invalid")
     if (
-        not isinstance(config["referenceExclusions"], list)
+        not isinstance(config["problemSources"], list)
+        or not isinstance(config["referenceExclusions"], list)
         or not isinstance(config["schemaSources"], list)
         or not isinstance(config["records"], list)
     ):
         raise CatalogError("catalog source lists are invalid")
+    problem_source_fields = {
+        "owner",
+        "status",
+        "compatibilityLine",
+        "uriPrefix",
+        "sourcePath",
+        "exporterPath",
+        "cargoPackage",
+        "cargoExample",
+    }
+    for index, source in enumerate(config["problemSources"]):
+        if not isinstance(source, dict) or set(source) != problem_source_fields:
+            raise CatalogError(f"problemSources[{index}] has an invalid shape")
+        if not all(
+            isinstance(source[field], str) and source[field].strip()
+            for field in problem_source_fields
+        ):
+            raise CatalogError(f"problemSources[{index}] has a blank value")
+        if source["status"] != "active":
+            raise CatalogError(f"problemSources[{index}] has an invalid status")
+        if not source["uriPrefix"].startswith(f"{BASE_URL}/problems/") or not source[
+            "uriPrefix"
+        ].endswith("/"):
+            raise CatalogError(f"problemSources[{index}] has an invalid URI prefix")
     for index, exclusion in enumerate(config["referenceExclusions"]):
         if not isinstance(exclusion, dict) or set(exclusion) != {
             "glob",
@@ -298,29 +322,32 @@ def explicit_entries(
     return entries
 
 
-def problem_entries(repo_root: Path, problem_catalog_path: Path) -> list[dict[str, Any]]:
+def problem_entries(
+    repo_root: Path, source_config: dict[str, str], problem_catalog_path: Path
+) -> list[dict[str, Any]]:
     catalog = read_json(problem_catalog_path)
     raw_entries = catalog.get("entries") if isinstance(catalog, dict) else None
     if not isinstance(raw_entries, list) or not raw_entries:
-        raise CatalogError("Relay V2 problem catalog has no entries")
-    source = source_record(repo_root, repo_root / PROBLEM_SOURCE)
+        raise CatalogError(f"{source_config['owner']} problem catalog has no entries")
+    source = source_record(repo_root, repo_root / source_config["sourcePath"])
     entries: list[dict[str, Any]] = []
     expected = {"uri", "code", "title", "description", "httpStatuses"}
     for index, entry in enumerate(raw_entries):
         if not isinstance(entry, dict) or set(entry) != expected:
-            raise CatalogError(f"Relay V2 problem entry {index} has an invalid shape")
-        if entry["uri"] != (
-            f"{BASE_URL}/problems/registry-relay/"
-            + entry["code"].replace(".", "/")
-        ):
-            raise CatalogError(f"Relay V2 problem URI and code disagree: {entry}")
+            raise CatalogError(
+                f"{source_config['owner']} problem entry {index} has an invalid shape"
+            )
+        if entry["uri"] != source_config["uriPrefix"] + entry["code"].replace(".", "/"):
+            raise CatalogError(
+                f"{source_config['owner']} problem URI and code disagree: {entry}"
+            )
         entries.append(
             {
                 "uri": entry["uri"],
                 "kind": "problem",
-                "status": "active",
-                "compatibilityLine": "relay-v2",
-                "owner": "relay-v2",
+                "status": source_config["status"],
+                "compatibilityLine": source_config["compatibilityLine"],
+                "owner": source_config["owner"],
                 "title": entry["title"],
                 "description": entry["description"],
                 "source": source,
@@ -502,7 +529,7 @@ def reference_uris(path: Path) -> set[str]:
     except (OSError, UnicodeDecodeError):
         return set()
     return {
-        match.group(0).rstrip(".,;:)]")
+        match.group(0).rstrip(".,;:)]$")
         for match in REFERENCE_URI_RE.finditer(text)
     }
 
@@ -511,6 +538,7 @@ def validate_reference_closure(
     repo_root: Path,
     entries: list[dict[str, Any]],
     exclusions: list[dict[str, str]],
+    problem_sources: list[dict[str, str]],
     repository_paths: tuple[Path, ...],
 ) -> None:
     validate_reference_exclusions(repo_root, repository_paths, exclusions)
@@ -530,6 +558,7 @@ def validate_reference_closure(
             if (
                 uri in active_uris
                 or uri in REFERENCE_TEMPLATES
+                or uri in {source["uriPrefix"] for source in problem_sources}
                 or any(uri.startswith(prefix) for prefix in adopter_prefixes)
             ):
                 continue
@@ -543,20 +572,28 @@ def validate_reference_closure(
 
 
 def build_catalog(
-    repo_root: Path, config_path: Path, problem_catalog_path: Path
+    repo_root: Path, config_path: Path, problem_catalog_paths: dict[str, Path]
 ) -> dict[str, Any]:
     config = load_source_config(config_path)
     repository_paths = repository_files(repo_root)
-    entries = [
-        *problem_entries(repo_root, problem_catalog_path),
-        *schema_entries(
+    entries: list[dict[str, Any]] = []
+    for source in config["problemSources"]:
+        try:
+            problem_catalog_path = problem_catalog_paths[source["sourcePath"]]
+        except KeyError as error:
+            raise CatalogError(
+                f"problem catalog is missing for {source['sourcePath']}"
+            ) from error
+        entries.extend(problem_entries(repo_root, source, problem_catalog_path))
+    entries.extend(
+        schema_entries(
             repo_root,
             config["schemaSources"],
             repository_paths,
             config["referenceExclusions"],
-        ),
-        *explicit_entries(repo_root, config["records"]),
-    ]
+        )
+    )
+    entries.extend(explicit_entries(repo_root, config["records"]))
     entries.sort(key=lambda entry: entry["uri"])
     validate_entries(repo_root, entries)
     catalog = {"version": 1, "baseUrl": BASE_URL, "entries": entries}
@@ -565,6 +602,7 @@ def build_catalog(
         repo_root,
         entries,
         config["referenceExclusions"],
+        config["problemSources"],
         repository_paths,
     )
     return catalog
@@ -574,7 +612,9 @@ def render(catalog: dict[str, Any]) -> bytes:
     return (json.dumps(catalog, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 
-def generate_problem_catalog(repo_root: Path, output: Path) -> None:
+def generate_problem_catalog(
+    repo_root: Path, source_config: dict[str, str], output: Path
+) -> None:
     environment = os.environ.copy()
     environment.setdefault("CARGO_INCREMENTAL", "0")
     environment.setdefault("CARGO_PROFILE_DEV_DEBUG", "0")
@@ -586,9 +626,9 @@ def generate_problem_catalog(repo_root: Path, output: Path) -> None:
             "--locked",
             "--quiet",
             "-p",
-            "registry-relay-v2",
+            source_config["cargoPackage"],
             "--example",
-            "problem-catalog",
+            source_config["cargoExample"],
             "--",
             "--output",
             str(output),
@@ -630,7 +670,6 @@ def parse_args() -> argparse.Namespace:
     destination.add_argument("--write", action="store_true")
     destination.add_argument("--output", type=Path)
     destination.add_argument("--check-references", action="store_true")
-    parser.add_argument("--problem-catalog", type=Path)
     return parser.parse_args()
 
 
@@ -646,6 +685,7 @@ def main() -> None:
             REPO_ROOT,
             entries,
             config["referenceExclusions"],
+            config["problemSources"],
             repository_files(REPO_ROOT),
         )
         print("Registry Stack identifier reference closure is complete.")
@@ -664,10 +704,14 @@ def main() -> None:
                 "generated Relay V2 audit event schema is stale; run with --write"
             )
 
-        problem_catalog = args.problem_catalog or Path(temp) / "problems.json"
-        if args.problem_catalog is None:
-            generate_problem_catalog(REPO_ROOT, problem_catalog)
-        catalog = build_catalog(REPO_ROOT, SOURCE_CONFIG, problem_catalog)
+        problem_catalogs: dict[str, Path] = {}
+        for index, source in enumerate(
+            load_source_config(SOURCE_CONFIG)["problemSources"]
+        ):
+            problem_catalog = Path(temp) / f"problems-{index}.json"
+            generate_problem_catalog(REPO_ROOT, source, problem_catalog)
+            problem_catalogs[source["sourcePath"]] = problem_catalog
+        catalog = build_catalog(REPO_ROOT, SOURCE_CONFIG, problem_catalogs)
         output = GENERATED_CATALOG if args.write else args.output
         if output is None:
             print(render(catalog).decode("utf-8"), end="")

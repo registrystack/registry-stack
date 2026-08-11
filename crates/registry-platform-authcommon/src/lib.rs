@@ -8,6 +8,8 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_platform_crypto::parse_json_strict;
 use serde::{de, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -18,6 +20,10 @@ const BEARER_SCHEME: &str = "Bearer";
 const FINGERPRINT_PREFIX: &str = "sha256:";
 const SHA256_HEX_LEN: usize = 64;
 const MAX_FINGERPRINT_FILE_BYTES: u64 = (FINGERPRINT_PREFIX.len() + SHA256_HEX_LEN + 2) as u64;
+const MAX_COMPACT_ACCESS_TOKEN_BYTES: usize = 128 * 1024;
+const MAX_COMPACT_ACCESS_TOKEN_HEADER_BYTES: usize = 8 * 1024;
+const MAX_COMPACT_ACCESS_TOKEN_CLAIMS_BYTES: usize = 64 * 1024;
+const MAX_COMPACT_ACCESS_TOKEN_SIGNATURE_BYTES: usize = 8 * 1024;
 
 /// Minimum raw API-key size accepted by [`validate_api_key_entropy`].
 ///
@@ -46,6 +52,9 @@ pub enum BearerParseError {
     /// The token contains whitespace, which would create ambiguous extras.
     #[error("Bearer token must not contain whitespace")]
     TokenContainsWhitespace,
+    /// A comma could combine multiple credentials in one header value.
+    #[error("Bearer token must not contain a comma")]
+    TokenContainsComma,
 }
 
 /// Parse `Authorization: Bearer <token>`.
@@ -89,8 +98,71 @@ pub fn parse_bearer_token(header: &str) -> Result<&str, BearerParseError> {
     if token.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return Err(BearerParseError::TokenContainsWhitespace);
     }
+    if token.contains(',') {
+        return Err(BearerParseError::TokenContainsComma);
+    }
 
     Ok(token)
+}
+
+/// Error returned when an access token fails the common compact-JWT admission
+/// profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CompactAccessTokenError {
+    /// The token is not a bounded, strict compact JWT with object header and
+    /// claims segments.
+    #[error("compact access token is malformed")]
+    Malformed,
+}
+
+/// Validate the common hostile-input admission profile for a compact access
+/// token.
+///
+/// The fixed bounds are intentionally private so services cannot drift on the
+/// amount of unverified token material admitted before OIDC verification.
+/// Header and claims JSON are parsed through the platform's strict JSON owner,
+/// which rejects duplicate object members at every depth.
+pub fn validate_compact_access_token(token: &str) -> Result<(), CompactAccessTokenError> {
+    if token.is_empty()
+        || token.len() > MAX_COMPACT_ACCESS_TOKEN_BYTES
+        || token.bytes().any(|byte| byte.is_ascii_whitespace())
+    {
+        return Err(CompactAccessTokenError::Malformed);
+    }
+
+    let mut segments = token.split('.');
+    let header = segments.next().ok_or(CompactAccessTokenError::Malformed)?;
+    let claims = segments.next().ok_or(CompactAccessTokenError::Malformed)?;
+    let signature = segments.next().ok_or(CompactAccessTokenError::Malformed)?;
+    if segments.next().is_some() || header.is_empty() || claims.is_empty() || signature.is_empty() {
+        return Err(CompactAccessTokenError::Malformed);
+    }
+
+    decode_strict_json_object(header, MAX_COMPACT_ACCESS_TOKEN_HEADER_BYTES)?;
+    decode_strict_json_object(claims, MAX_COMPACT_ACCESS_TOKEN_CLAIMS_BYTES)?;
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature)
+        .map_err(|_| CompactAccessTokenError::Malformed)?;
+    if signature.is_empty() || signature.len() > MAX_COMPACT_ACCESS_TOKEN_SIGNATURE_BYTES {
+        return Err(CompactAccessTokenError::Malformed);
+    }
+
+    Ok(())
+}
+
+fn decode_strict_json_object(segment: &str, maximum: usize) -> Result<(), CompactAccessTokenError> {
+    let decoded = URL_SAFE_NO_PAD
+        .decode(segment)
+        .map_err(|_| CompactAccessTokenError::Malformed)?;
+    if decoded.is_empty() || decoded.len() > maximum {
+        return Err(CompactAccessTokenError::Malformed);
+    }
+    let value = parse_json_strict(&decoded).map_err(|_| CompactAccessTokenError::Malformed)?;
+    if !value.is_object() {
+        return Err(CompactAccessTokenError::Malformed);
+    }
+    Ok(())
 }
 
 /// Error returned for malformed API-key fingerprints.
@@ -437,6 +509,109 @@ mod tests {
         assert_eq!(
             parse_bearer_token("Bearer abc\tdef"),
             Err(BearerParseError::TokenContainsWhitespace)
+        );
+        assert_eq!(
+            parse_bearer_token("Bearer abc,def"),
+            Err(BearerParseError::TokenContainsComma)
+        );
+    }
+
+    fn compact_access_token(header: &[u8], claims: &[u8], signature: &[u8]) -> String {
+        format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(header),
+            URL_SAFE_NO_PAD.encode(claims),
+            URL_SAFE_NO_PAD.encode(signature)
+        )
+    }
+
+    #[test]
+    fn compact_access_token_accepts_bounded_strict_jwt() {
+        let token = compact_access_token(
+            br#"{"alg":"EdDSA","kid":"key","typ":"at+jwt"}"#,
+            br#"{"iss":"https://issuer.invalid","sub":"caller","exp":2000000000}"#,
+            &[1_u8; 64],
+        );
+        assert_eq!(validate_compact_access_token(&token), Ok(()));
+    }
+
+    #[test]
+    fn compact_access_token_rejects_ambiguous_or_invalid_shape() {
+        let malformed = CompactAccessTokenError::Malformed;
+        for token in ["", "a.b", "a.b.c.d", "a..c", " a.b.c"] {
+            assert_eq!(validate_compact_access_token(token), Err(malformed));
+        }
+
+        let duplicate_header = compact_access_token(
+            br#"{"alg":"EdDSA","alg":"none"}"#,
+            br#"{"iss":"https://issuer.invalid"}"#,
+            &[1_u8; 64],
+        );
+        assert_eq!(
+            validate_compact_access_token(&duplicate_header),
+            Err(malformed)
+        );
+
+        let nested_duplicate_claims = compact_access_token(
+            br#"{"alg":"EdDSA"}"#,
+            br#"{"authority":{"region":"one","region":"two"}}"#,
+            &[1_u8; 64],
+        );
+        assert_eq!(
+            validate_compact_access_token(&nested_duplicate_claims),
+            Err(malformed)
+        );
+
+        let array_header = compact_access_token(
+            br#"["not","an","object"]"#,
+            br#"{"iss":"https://issuer.invalid"}"#,
+            &[1_u8; 64],
+        );
+        assert_eq!(validate_compact_access_token(&array_header), Err(malformed));
+
+        let padded = compact_access_token(
+            br#"{"alg":"EdDSA"}"#,
+            br#"{"iss":"https://issuer.invalid"}"#,
+            &[1_u8; 64],
+        );
+        let padded = padded.replacen('.', "=.", 1);
+        assert_eq!(validate_compact_access_token(&padded), Err(malformed));
+    }
+
+    #[test]
+    fn compact_access_token_enforces_fixed_decoded_bounds() {
+        let header = format!(
+            "{{\"alg\":\"{}\"}}",
+            "a".repeat(MAX_COMPACT_ACCESS_TOKEN_HEADER_BYTES)
+        );
+        let token = compact_access_token(
+            header.as_bytes(),
+            br#"{"iss":"https://issuer.invalid"}"#,
+            &[1_u8; 64],
+        );
+        assert_eq!(
+            validate_compact_access_token(&token),
+            Err(CompactAccessTokenError::Malformed)
+        );
+
+        let claims = format!(
+            "{{\"sub\":\"{}\"}}",
+            "a".repeat(MAX_COMPACT_ACCESS_TOKEN_CLAIMS_BYTES)
+        );
+        let token = compact_access_token(br#"{"alg":"EdDSA"}"#, claims.as_bytes(), &[1_u8; 64]);
+        assert_eq!(
+            validate_compact_access_token(&token),
+            Err(CompactAccessTokenError::Malformed)
+        );
+
+        let token = compact_access_token(
+            br#"{"alg":"EdDSA"}"#,
+            br#"{"iss":"https://issuer.invalid"}"#,
+            &vec![1_u8; MAX_COMPACT_ACCESS_TOKEN_SIGNATURE_BYTES + 1],
+        );
+        assert_eq!(
+            validate_compact_access_token(&token),
+            Err(CompactAccessTokenError::Malformed)
         );
     }
 
@@ -820,6 +995,7 @@ mod tests {
         #[test]
         fn parse_bearer_token_round_trips_non_whitespace_tokens(token in "[!-~]{1,128}") {
             prop_assume!(!token.bytes().any(|byte| byte.is_ascii_whitespace()));
+            prop_assume!(!token.contains(','));
             let header = format!("Bearer {token}");
             prop_assert_eq!(parse_bearer_token(&header), Ok(token.as_str()));
         }

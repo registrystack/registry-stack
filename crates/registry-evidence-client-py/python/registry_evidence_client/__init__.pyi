@@ -168,7 +168,7 @@ class EvidenceClientError(Exception):
     `kind` is always present, one of "configuration", "nonce", "token",
     "transport", "denied", "not_available", "protocol", or "verification".
     Branch on `kind`, never on the rendered message, which this crate does
-    not freeze. `status`, `code`, `operation`, `retry_after_seconds`,
+    not freeze. `status`, `code`, `trace_id`, `retry_after_seconds`,
     `transport_kind`, and `token_kind` are present only when the underlying
     failure carries them; every other case leaves them `None`.
 
@@ -184,7 +184,7 @@ class EvidenceClientError(Exception):
     kind: str
     status: Optional[int]
     code: Optional[str]
-    operation: Optional[str]
+    trace_id: Optional[str]
     retry_after_seconds: Optional[int]
     transport_kind: Optional[str]
     token_kind: Optional[str]
@@ -265,14 +265,14 @@ class RawEvidenceResponse:
     trustworthy."""
 
     body: bytes
-    operation: Optional[str]
+    trace_id: Optional[str]
 
 class RawEvidenceRequestBatchResponse:
     """A request-batch envelope read but not yet judged. No public
     constructor: obtain one only from `EvidenceClient.send_batch`."""
 
     body: bytes
-    operation: Optional[str]
+    trace_id: Optional[str]
 
 class SdJwtVcBatchResponse:
     """The issuance envelope answering one request that presented several
@@ -291,7 +291,7 @@ class VerifiedEvidence:
     """A response that satisfied every expectation."""
 
     evidence: Any
-    operation: Optional[str]
+    trace_id: Optional[str]
     pinned_subject_expectations: Any
 
 AvailableEvidenceRequestBatchItem = TypedDict(
@@ -310,7 +310,7 @@ class VerifiedEvidenceRequestBatch:
     """Every ordered item of an atomically verified request-batch response."""
 
     items: Sequence[VerifiedEvidenceRequestBatchItem]
-    operation: Optional[str]
+    trace_id: Optional[str]
 
 class EvidenceClient:
     """A relying party's connection to one Evidence deployment."""

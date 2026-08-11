@@ -820,7 +820,7 @@ pub fn evidence_to_json(evidence: &Evidence) -> Result<Value, ConversionError> {
 /// Unlike the Node binding, which serializes this shape into one JSON string
 /// and uses it as the thrown error's `message` (so a caller can
 /// `JSON.parse(error.message)`), the Python exception classes carry `kind`,
-/// `status`, `code`, `operation`, `retry_after_seconds`, `transport_kind`, and
+/// `status`, `code`, `trace_id`, `retry_after_seconds`, `transport_kind`, and
 /// `token_kind` as separate attributes, and `message` is always `Display`
 /// text over the source failure, never a JSON envelope. `src/lib.rs` reads
 /// this struct's fields directly when constructing the exception instance.
@@ -830,7 +830,7 @@ pub struct MappedError {
     pub message: String,
     pub status: Option<u16>,
     pub code: Option<String>,
-    pub operation: Option<String>,
+    pub trace_id: Option<String>,
     pub retry_after_seconds: Option<u64>,
     pub transport_kind: Option<&'static str>,
     pub token_kind: Option<&'static str>,
@@ -843,7 +843,7 @@ impl MappedError {
             message,
             status: None,
             code: None,
-            operation: None,
+            trace_id: None,
             retry_after_seconds: None,
             transport_kind: None,
             token_kind: None,
@@ -878,11 +878,10 @@ pub fn map_config_error(error: &ConfigError) -> MappedError {
 /// [`TokenError::kind`], alongside whichever further sub-fields
 /// (`transport_kind`, `code`, `status`) that specific variant also carries.
 ///
-/// `code` and `operation` are already bounded by the wrapped crate before
+/// `code` and `trace_id` are already bounded by the wrapped crate before
 /// either ever reaches an `EvidenceClientError` variant
-/// (`evidence_client_sdk::problem::is_contract_code` and
-/// `sanitized_operation`, at most 64 bytes of lowercase snake case and 64
-/// ASCII alphanumerics respectively): this function passes them through
+/// (`evidence_client_sdk::problem` validates the exact code and trace ID
+/// contracts): this function passes them through
 /// unchanged rather than re-bounding them.
 ///
 /// Never included: response bytes, a credential, a header value, a selector
@@ -890,7 +889,7 @@ pub fn map_config_error(error: &ConfigError) -> MappedError {
 /// fixed, non-secret reasons; none of the eight kinds can carry one of those.
 pub fn map_client_error(error: &EvidenceClientError) -> MappedError {
     let mut mapped = MappedError::bare(error.kind(), error.to_string());
-    mapped.operation = error.operation().map(str::to_owned);
+    mapped.trace_id = error.trace_id().map(str::to_owned);
 
     match error {
         // Deliberately no `nonce_kind` field: `NonceError::NotCanonical` is
@@ -928,7 +927,7 @@ pub fn map_client_error(error: &EvidenceClientError) -> MappedError {
         }
         // `EvidenceClientError` is `#[non_exhaustive]`: a variant this crate
         // does not yet know about still maps, with only `kind`, `message`, and
-        // whatever `operation()` reports for it.
+        // whatever `trace_id()` reports for it.
         _ => {}
     }
 
@@ -1757,21 +1756,21 @@ mod tests {
             (
                 EvidenceClientError::Denied {
                     status: 403,
-                    code: "not_authorized".to_owned(),
-                    operation: None,
+                    code: "evidence.denied".to_owned(),
+                    trace_id: None,
                     retry_after_seconds: None,
                 },
                 "denied",
             ),
             (
-                EvidenceClientError::NotAvailable { operation: None },
+                EvidenceClientError::NotAvailable { trace_id: None },
                 "not_available",
             ),
             (
                 EvidenceClientError::Protocol {
                     status: 500,
                     code: None,
-                    operation: None,
+                    trace_id: None,
                     retry_after_seconds: None,
                 },
                 "protocol",
@@ -1792,16 +1791,16 @@ mod tests {
     fn map_client_error_carries_the_denied_fields() {
         let error = EvidenceClientError::Denied {
             status: 429,
-            code: "rate_limited".to_owned(),
-            operation: Some("01JQ0QZ8YHZ0000000000000AB".to_owned()),
+            code: "evidence.rate_limited".to_owned(),
+            trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
             retry_after_seconds: Some(30),
         };
         let mapped = map_client_error(&error);
         assert_eq!(mapped.status, Some(429));
-        assert_eq!(mapped.code.as_deref(), Some("rate_limited"));
+        assert_eq!(mapped.code.as_deref(), Some("evidence.rate_limited"));
         assert_eq!(
-            mapped.operation.as_deref(),
-            Some("01JQ0QZ8YHZ0000000000000AB")
+            mapped.trace_id.as_deref(),
+            Some("4bf92f3577b34da6a3ce929d0e0e4736")
         );
         assert_eq!(mapped.retry_after_seconds, Some(30));
     }
@@ -1864,22 +1863,21 @@ mod tests {
         assert_eq!(protocol.status, Some(500));
     }
 
-    /// `code` and `operation` are already bounded upstream
-    /// (`evidence_client_sdk::problem::is_contract_code` and
-    /// `sanitized_operation`), so this only proves the mapping does not
+    /// `code` and `trace_id` are already bounded upstream
+    /// (the wrapped client's exact code and trace ID validators), so this only proves the mapping does not
     /// re-encode, truncate, or otherwise alter an already-bounded value.
     #[test]
-    fn map_client_error_passes_already_bounded_code_and_operation_through_unchanged() {
+    fn map_client_error_passes_an_already_valid_trace_id_through_unchanged() {
         let code = "a".repeat(64);
-        let operation = "B".repeat(64);
+        let trace_id = "4bf92f3577b34da6a3ce929d0e0e4736".to_owned();
         let mapped = map_client_error(&EvidenceClientError::Denied {
             status: 401,
             code: code.clone(),
-            operation: Some(operation.clone()),
+            trace_id: Some(trace_id.clone()),
             retry_after_seconds: None,
         });
         assert_eq!(mapped.code, Some(code));
-        assert_eq!(mapped.operation, Some(operation));
+        assert_eq!(mapped.trace_id, Some(trace_id));
     }
 
     /// Mirrors the wrapped crate's own redaction tests and the Node binding's
@@ -1919,11 +1917,8 @@ mod tests {
             if let Some(code) = &mapped.code {
                 assert!(!code.contains(CANARY), "leaked in code: {code}");
             }
-            if let Some(operation) = &mapped.operation {
-                assert!(
-                    !operation.contains(CANARY),
-                    "leaked in operation: {operation}"
-                );
+            if let Some(trace_id) = &mapped.trace_id {
+                assert!(!trace_id.contains(CANARY), "leaked in trace_id: {trace_id}");
             }
         }
 

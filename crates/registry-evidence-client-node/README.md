@@ -81,7 +81,7 @@ never a partial result. The exported `EvidenceRequestBatchSpec` and
 
 A mapped failure surfaces to a caller as an `EvidenceClientError`, exported
 from the package root. Its `kind` is always present; `status`, `code`,
-`operation`, `retryAfterSeconds`, `transportKind`, and `tokenKind` are present
+`traceId`, `retryAfterSeconds`, `transportKind`, and `tokenKind` are present
 when the underlying failure carries them. `message` is human prose, not JSON:
 read it, do not parse it. `kind` is one of: `configuration`, `nonce`, `token`,
 `transport`, `denied`, `not_available`, `protocol`, `verification`.
@@ -172,9 +172,9 @@ workspace-wide forbid would reject outright.
   caller-supplied custom token provider is out of scope for this binding.
 - Holder-bound issuance is supported: `prepare` accepts public `holderKeys`,
   and `SdJwtVcBatchResponse` parses the ordered credential envelope returned
-  for them. The binding stops at issuance. It exposes no operation for a
+  for them. The binding stops at issuance. It exposes no traceId for a
   holder to create a selective-disclosure presentation or key-binding proof,
-  and no relying-party operation to verify that presentation. Use the
+  and no relying-party traceId to verify that presentation. Use the
   `registry-evidence-verifier` Rust crate or `evidence verify-presentation` for
   the verification half of that workflow.
 - `verifyAsOf(prepared, response, asOfMillis)` judges a response as of an

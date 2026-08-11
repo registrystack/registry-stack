@@ -260,16 +260,16 @@ extraction:
   declaration_rule: The broader declaration and record are transient source data. Each adapter exposes only its declared facts.
   projection_rule: Rust removes ids, contact channels, display names, timestamps, and every unrelated field before extract/2.
 failures:
-  - {case: http-401, public: dependency_unavailable}
-  - {case: http-403, public: dependency_unavailable}
-  - {case: http-429, public: dependency_unavailable, retry_after: bounded}
-  - {case: http-500, public: dependency_unavailable, stands_for: a filter on an unindexed field}
-  - {case: timeout, public: dependency_unavailable}
+  - {case: http-401, public: source.unavailable}
+  - {case: http-403, public: source.unavailable}
+  - {case: http-429, public: source.unavailable, retry_after: bounded}
+  - {case: http-500, public: source.unavailable, stands_for: a filter on an unindexed field}
+  - {case: timeout, public: source.unavailable}
   - {case: redirect, expected: reject-without-follow}
-  - {case: invalid-json, public: dependency_unavailable}
-  - {case: wrong-media-type, public: dependency_unavailable}
-  - {case: oversized-response, public: dependency_unavailable}
-  - {case: error-envelope, public: dependency_unavailable}
+  - {case: invalid-json, public: source.unavailable}
+  - {case: wrong-media-type, public: source.unavailable}
+  - {case: oversized-response, public: source.unavailable}
+  - {case: error-envelope, public: source.unavailable}
 redaction_canaries:
   committed_source_and_selector:
     - REF-SELECTOR-CANARY-0001

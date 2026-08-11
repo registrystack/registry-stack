@@ -172,9 +172,14 @@ def identifier_catalog_inputs(
     """Derive every source path that can change the public identifier catalog."""
 
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    problem_sources = contract.get("problemSources")
     schema_groups = contract.get("schemaSources")
     records = contract.get("records")
-    if not isinstance(schema_groups, list) or not isinstance(records, list):
+    if (
+        not isinstance(problem_sources, list)
+        or not isinstance(schema_groups, list)
+        or not isinstance(records, list)
+    ):
         raise ValueError(
             f"identifier catalog has an invalid source contract: {contract_path}"
         )
@@ -182,10 +187,18 @@ def identifier_catalog_inputs(
     inputs = [
         "products/identifiers/**",
         "crates/registry-relay-v2/examples/audit-event-schema.rs",
-        "crates/registry-relay-v2/examples/problem-catalog.rs",
         "crates/registry-relay-v2/src/audit.rs",
-        "crates/registry-relay-v2/src/problem.rs",
     ]
+    for index, source in enumerate(problem_sources):
+        if not isinstance(source, dict):
+            raise ValueError(f"identifier problemSources[{index}] is invalid")
+        for field in ("sourcePath", "exporterPath"):
+            path = source.get(field)
+            if not isinstance(path, str) or not path:
+                raise ValueError(
+                    f"identifier problemSources[{index}] has no {field}"
+                )
+            inputs.append(path)
     for index, group in enumerate(schema_groups):
         pattern = group.get("glob") if isinstance(group, dict) else None
         if not isinstance(pattern, str) or not pattern:

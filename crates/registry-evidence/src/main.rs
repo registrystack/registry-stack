@@ -3062,7 +3062,7 @@ fn validate_reference_unresolved(
     if expected.get("lookup").and_then(Value::as_str) != Some(lookup)
         || expected.get("derivationRuns").and_then(Value::as_bool) != Some(false)
         || expected.get("signed").and_then(Value::as_bool) != Some(false)
-        || expected.get("publicProblem").and_then(Value::as_str) != Some("evidence_not_available")
+        || expected.get("publicProblem").and_then(Value::as_str) != Some("evidence.unavailable")
     {
         return Err(CliError("reference unresolved outcome did not match"));
     }
@@ -3111,15 +3111,15 @@ fn validate_reference_error(
     derivation_ran: bool,
 ) -> Result<(), CliError> {
     let (internal, public_problem) = match error {
-        KernelError::Preparation => ("adapter_input_error", "service_unavailable"),
-        KernelError::SourceProtocol => ("source_protocol_error", "dependency_unavailable"),
+        KernelError::Preparation => ("adapter_input_error", "service.unavailable"),
+        KernelError::SourceProtocol => ("source_protocol_error", "source.unavailable"),
         // Derivation-input inconsistency over a uniquely found record
         // collapses publicly with the unresolved classes; the internal
         // category stays a value-free operator diagnostic.
-        KernelError::DerivationInput => ("derivation_input_error", "evidence_not_available"),
-        KernelError::Script if derivation_ran => ("derivation_input_error", "service_unavailable"),
-        KernelError::Extraction => ("evidence_not_available", "evidence_not_available"),
-        _ => ("service_unavailable", "service_unavailable"),
+        KernelError::DerivationInput => ("derivation_input_error", "evidence.unavailable"),
+        KernelError::Script if derivation_ran => ("derivation_input_error", "service.unavailable"),
+        KernelError::Extraction => ("evidence_not_available", "evidence.unavailable"),
+        _ => ("service_unavailable", "service.unavailable"),
     };
     let expected_error = expected.get("error").and_then(Value::as_str);
     let expected_problem = expected.get("publicProblem").and_then(Value::as_str);
@@ -3422,7 +3422,7 @@ fn validate_reference_source_error(
     error: &SourceError,
 ) -> Result<(), CliError> {
     if source_failure_problem(error) != ProblemCode::DependencyUnavailable
-        || expected.get("publicProblem").and_then(Value::as_str) != Some("dependency_unavailable")
+        || expected.get("publicProblem").and_then(Value::as_str) != Some("source.unavailable")
         || expected.get("signed").and_then(Value::as_bool) != Some(false)
         || expected
             .get("derivationRuns")
@@ -3854,7 +3854,7 @@ fn compare_case_outcome(
                 "unresolved fixture must deny derivation and signed success",
             ));
         }
-        if expected_problem != Some("evidence_not_available") {
+        if expected_problem != Some("evidence.unavailable") {
             return Err(CliError("unresolved fixture public problem is not exact"));
         }
         return Ok(None);
@@ -3867,14 +3867,14 @@ fn compare_case_outcome(
         let exact = matches!(
             (problem, &outcome),
             (
-                "evidence_not_available",
+                "evidence.unavailable",
                 Err(registry_evidence::kernel::KernelError::Extraction
                     | registry_evidence::kernel::KernelError::DerivationInput)
             ) | (
-                "dependency_unavailable",
+                "source.unavailable",
                 Err(registry_evidence::kernel::KernelError::SourceProtocol)
             ) | (
-                "service_unavailable",
+                "service.unavailable",
                 Err(registry_evidence::kernel::KernelError::Script
                     | registry_evidence::kernel::KernelError::Output
                     | registry_evidence::kernel::KernelError::Bundle
@@ -3972,7 +3972,7 @@ fn validate_source_failure(
         Some("wrong-media-type") => SourceError::WrongMediaType,
         _ => return Err(CliError("fixture source-failure category is invalid")),
     };
-    if optional_string(case, "expected_public_problem")? != Some("dependency_unavailable")
+    if optional_string(case, "expected_public_problem")? != Some("source.unavailable")
         || optional_boolean(case, "signed_success")? != Some(false)
         || source_failure_problem(&failure) != ProblemCode::DependencyUnavailable
     {
@@ -4591,7 +4591,7 @@ mod tests {
         for category in ["timeout", "redirect", "http-503", "wrong-media-type"] {
             let case = serde_json::json!({
                 "source_failure": category,
-                "expected_public_problem": "dependency_unavailable",
+                "expected_public_problem": "source.unavailable",
                 "signed_success": false
             });
             let object = case.as_object().expect("object");
@@ -4605,7 +4605,7 @@ mod tests {
     #[test]
     fn public_unavailability_requires_an_extraction_failure() {
         let case = serde_json::json!({
-            "expected_public_problem": "evidence_not_available",
+            "expected_public_problem": "evidence.unavailable",
             "derivation_runs": false,
             "signed_success": false
         });
@@ -4635,7 +4635,7 @@ mod tests {
     #[test]
     fn service_unavailability_requires_an_internal_kernel_failure() {
         let case = serde_json::json!({
-            "expected_public_problem": "service_unavailable",
+            "expected_public_problem": "service.unavailable",
             "derivation_runs": true,
             "signed_success": false
         });
@@ -4661,12 +4661,12 @@ mod tests {
         for declaration in [
             serde_json::json!({
                 "expected_lookup": "no_match",
-                "expected_public_problem": "evidence_not_available",
+                "expected_public_problem": "evidence.unavailable",
                 "derivation_runs": true
             }),
             serde_json::json!({
                 "expected_lookup": "no_match",
-                "expected_public_problem": "evidence_not_available",
+                "expected_public_problem": "evidence.unavailable",
                 "signed_success": true
             }),
         ] {
@@ -4734,7 +4734,7 @@ mod tests {
     fn reference_failures_require_exact_unsigned_stage_expectations() {
         let exact = serde_json::json!({
             "error": "source_protocol_error",
-            "publicProblem": "dependency_unavailable",
+            "publicProblem": "source.unavailable",
             "derivationRuns": false,
             "signed": false
         });
@@ -4749,7 +4749,7 @@ mod tests {
 
         let wrong_public = serde_json::json!({
             "error": "source_protocol_error",
-            "publicProblem": "service_unavailable",
+            "publicProblem": "service.unavailable",
             "derivationRuns": false,
             "signed": false
         });

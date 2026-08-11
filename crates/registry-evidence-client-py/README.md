@@ -72,9 +72,9 @@ out of scope for this binding, same as the Node binding.
 
 Holder-bound issuance is supported: `prepare()` accepts public `holder_keys`,
 and `SdJwtVcBatchResponse` parses the ordered credential envelope returned for
-them. The binding stops at issuance. It exposes no operation for a holder to
+them. The binding stops at issuance. It exposes no trace_id for a holder to
 create a selective-disclosure presentation or key-binding proof, and no
-relying-party operation to verify that presentation. Use the
+relying-party trace_id to verify that presentation. Use the
 `registry-evidence-verifier` Rust crate or `evidence verify-presentation` for
 the verification half of that workflow.
 
@@ -91,7 +91,7 @@ A mapped failure surfaces to a caller as an `EvidenceClientError`, exported
 from the package root, with one subclass per stable kind:
 `ConfigurationError`, `NonceError`, `TokenError`, `TransportError`,
 `DeniedError`, `NotAvailableError`, `ProtocolError`, `VerificationError`. Every
-instance carries `kind`; `status`, `code`, `operation`,
+instance carries `kind`; `status`, `code`, `trace_id`,
 `retry_after_seconds`, `transport_kind` (on a `TransportError`, and on a
 `TokenError` whose `token_kind` is `"transport"`), and `token_kind` (only on a
 `TokenError`) are set as attributes only when the underlying failure carries

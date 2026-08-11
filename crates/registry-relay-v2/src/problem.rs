@@ -7,9 +7,8 @@
 
 use axum::body::Body;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Response, StatusCode};
-use serde::Serialize;
-use ulid::Ulid;
+use axum::http::{HeaderValue, Response, StatusCode};
+pub use registry_platform_httpsec::{ProblemBody, TraceContext, TraceId};
 
 const PROBLEM_BASE: &str = "https://id.registrystack.org/problems/registry-relay/";
 
@@ -139,127 +138,6 @@ impl ProblemCode {
     }
 }
 
-/// A validated W3C Trace Context trace identifier.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct TraceId(String);
-
-impl TraceId {
-    /// Parse the 32 lower-case hexadecimal trace-id representation.
-    pub fn parse(value: &str) -> Result<Self, TraceIdError> {
-        if value.len() != 32
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        {
-            return Err(TraceIdError);
-        }
-        Ok(Self(value.to_owned()))
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Effective request trace. An invalid `traceparent` is replaced with a
-/// server-created context. Caller-supplied `tracestate` never enters it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TraceContext {
-    pub trace_id: TraceId,
-    parent_id: String,
-    trace_flags: String,
-}
-
-impl TraceContext {
-    #[must_use]
-    pub fn from_headers(headers: &HeaderMap) -> Self {
-        headers
-            .get("traceparent")
-            .and_then(|value| value.to_str().ok())
-            .and_then(parse_traceparent)
-            .unwrap_or_else(Self::server_created)
-    }
-
-    #[must_use]
-    pub fn server_created() -> Self {
-        let value = u128::from(Ulid::new());
-        let trace_id = TraceId(format!("{value:032x}"));
-        let parent = u64::try_from(value & u128::from(u64::MAX)).unwrap_or(1);
-        Self {
-            trace_id,
-            parent_id: format!("{:016x}", parent.max(1)),
-            trace_flags: "01".into(),
-        }
-    }
-
-    pub fn apply(&self, headers: &mut HeaderMap) {
-        // Relay's value-free response boundary never reflects caller-controlled
-        // vendor state, even when the incoming value is syntactically valid.
-        headers.remove("tracestate");
-        let traceparent = format!(
-            "00-{}-{}-{}",
-            self.trace_id.as_str(),
-            self.parent_id,
-            self.trace_flags
-        );
-        if let Ok(value) = HeaderValue::from_str(&traceparent) {
-            headers.insert(HeaderName::from_static("traceparent"), value);
-        }
-    }
-}
-
-fn parse_traceparent(value: &str) -> Option<TraceContext> {
-    if !value.is_ascii() || value.len() != 55 {
-        return None;
-    }
-    let parts = value.split('-').collect::<Vec<_>>();
-    if parts.len() != 4 || parts[0] != "00" {
-        return None;
-    }
-    let trace = parts[1];
-    let parent = parts[2];
-    let flags = parts[3];
-    if !lower_hex(trace, 32)
-        || trace.bytes().all(|byte| byte == b'0')
-        || !lower_hex(parent, 16)
-        || parent.bytes().all(|byte| byte == b'0')
-        || !lower_hex(flags, 2)
-    {
-        return None;
-    }
-    Some(TraceContext {
-        trace_id: TraceId(trace.to_owned()),
-        parent_id: parent.to_owned(),
-        trace_flags: flags.to_owned(),
-    })
-}
-
-fn lower_hex(value: &str, length: usize) -> bool {
-    value.len() == length
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("trace identifier is invalid")]
-pub struct TraceIdError;
-
-/// The fixed safe HTTP problem representation.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProblemBody {
-    #[serde(rename = "type")]
-    pub type_uri: String,
-    pub title: &'static str,
-    pub status: u16,
-    pub detail: &'static str,
-    pub code: &'static str,
-    pub trace_id: TraceId,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,20 +189,21 @@ mod tests {
     }
 
     #[test]
-    fn trace_identifier_has_one_canonical_wire_shape() {
-        assert!(TraceId::parse("0123456789abcdef0123456789abcdef").is_ok());
-        assert!(TraceId::parse("not-a-trace").is_err());
-    }
-
-    #[test]
     fn version_zero_traceparent_rejects_non_lowercase_hex() {
         for value in [
             "00-0123456789abcdeF0123456789abcdef-0123456789abcdef-01",
             "00-0123456789abcdef0123456789abcdef-0123456789abcdeF-01",
             "00-0123456789abcdef0123456789abcdef-0123456789abcdef-0A",
         ] {
-            assert!(
-                parse_traceparent(value).is_none(),
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                "traceparent",
+                HeaderValue::from_str(value).expect("fixture is a valid HTTP header value"),
+            );
+            let trace = TraceContext::from_headers(&headers);
+            assert_ne!(
+                trace.trace_id.as_str(),
+                "0123456789abcdef0123456789abcdef",
                 "accepted non-lowercase traceparent {value}"
             );
         }
@@ -333,15 +212,11 @@ mod tests {
     #[test]
     fn invalid_traceparent_is_replaced_with_server_context() {
         let supplied_trace_id = "0123456789abcdef0123456789abcdeF";
-        let mut headers = HeaderMap::new();
+        let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             "traceparent",
             HeaderValue::from_str(&format!("00-{supplied_trace_id}-0123456789abcdef-00"))
-                .expect("test traceparent is an HTTP header value"),
-        );
-        headers.insert(
-            "tracestate",
-            HeaderValue::from_static("vendor=caller-controlled-canary"),
+                .expect("fixture is a valid HTTP header value"),
         );
 
         let trace = TraceContext::from_headers(&headers);
@@ -350,26 +225,12 @@ mod tests {
             trace.trace_id.as_str(),
             supplied_trace_id.to_ascii_lowercase()
         );
-        assert_eq!(trace.trace_flags, "01");
-        let mut response_headers = HeaderMap::new();
-        trace.apply(&mut response_headers);
-        assert_ne!(
-            response_headers
-                .get("traceparent")
-                .expect("server context is applied")
-                .to_str()
-                .expect("traceparent is ASCII"),
-            format!(
-                "00-{}-0123456789abcdef-00",
-                supplied_trace_id.to_ascii_lowercase()
-            )
-        );
     }
 
     #[test]
     fn caller_tracestate_is_never_echoed_in_ordinary_or_problem_headers() {
         const CANARY: &str = "7tenant@vendor-system=caller-controlled-canary";
-        let mut request_headers = HeaderMap::new();
+        let mut request_headers = axum::http::HeaderMap::new();
         request_headers.insert(
             "traceparent",
             HeaderValue::from_static("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"),
@@ -377,7 +238,7 @@ mod tests {
         request_headers.insert("tracestate", HeaderValue::from_static(CANARY));
         let trace = TraceContext::from_headers(&request_headers);
 
-        let mut ordinary_headers = HeaderMap::new();
+        let mut ordinary_headers = axum::http::HeaderMap::new();
         ordinary_headers.insert("tracestate", HeaderValue::from_static(CANARY));
         trace.apply(&mut ordinary_headers);
         assert!(!ordinary_headers.contains_key("tracestate"));

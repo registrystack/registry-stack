@@ -291,6 +291,10 @@ cross_cutting:
     threat: Public binding or proxy-provided identity bypasses Evidence token validation.
     enforcement: Loopback or private HTTP listener behind operator-controlled HTTPS termination; Evidence validates strict OIDC bearer tokens and never trusts proxy identity headers.
     negative_test: sec-proxy-identity-header-rejected
+  trace_context:
+    threat: Caller-controlled tracing metadata is reflected as an unbounded response channel or becomes the durable audit identity, allowing correlation injection or collapsing distinct requests into one accountable operation.
+    enforcement: The HTTP boundary accepts only one valid bounded W3C traceparent trace identifier, replaces invalid or duplicate values with server context, never reflects tracestate, emits the effective trace identifier in the response traceparent and problem traceId, and always mints a distinct internal audit operation.
+    negative_test: sec-trace-context-bounded-and-audit-distinct
   exact_decimal:
     threat: Binary floating-point conversion changes a disclosed value or bypasses precision and range bounds.
     enforcement: Rhai creates a Rust-owned coefficient-and-scale Decimal from canonical text with precision 28 and scale 9; public wire value is that canonical JSON string.

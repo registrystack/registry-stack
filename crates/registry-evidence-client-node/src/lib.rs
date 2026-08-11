@@ -251,12 +251,12 @@ impl RawEvidenceResponse {
         })
     }
 
-    /// The deployment's opaque identifier for this exchange, for support
-    /// correlation.
+    /// The validated W3C trace identifier for this exchange. It is support
+    /// correlation only, not an Evidence audit operation identity.
     #[napi(getter)]
-    pub fn operation(&self) -> Result<Option<String>> {
-        catch_panic("reading the response operation", || {
-            Ok(self.inner.operation().map(str::to_owned))
+    pub fn trace_id(&self) -> Result<Option<String>> {
+        catch_panic("reading the response trace_id", || {
+            Ok(self.inner.trace_id().map(str::to_owned))
         })
     }
 }
@@ -282,9 +282,9 @@ impl RawEvidenceRequestBatchResponse {
 
     /// Deployment correlation identifier for the whole batch exchange.
     #[napi(getter)]
-    pub fn operation(&self) -> Result<Option<String>> {
-        catch_panic("reading the request batch response operation", || {
-            Ok(self.inner.operation().map(str::to_owned))
+    pub fn trace_id(&self) -> Result<Option<String>> {
+        catch_panic("reading the request batch response trace_id", || {
+            Ok(self.inner.trace_id().map(str::to_owned))
         })
     }
 }
@@ -367,9 +367,10 @@ impl SdJwtVcBatchResponse {
 pub struct VerifiedEvidence {
     /// The verified payload, serialized field for field with no hand mapping.
     pub evidence: serde_json::Value,
-    /// The deployment's opaque identifier for the exchange that produced this
-    /// payload.
-    pub operation: Option<String>,
+    /// The validated W3C trace identifier for the exchange that produced this
+    /// payload. It is support correlation only, not an Evidence audit operation
+    /// identity.
+    pub trace_id: Option<String>,
     /// The role-bound subject bindings this payload carries. Persist these
     /// after a first-use acceptance and pass them back as `subjectExpectations:
     /// { pinned: [...] }` from then on.
@@ -383,7 +384,7 @@ fn verified_evidence_to_napi(verified: &RealVerifiedEvidence) -> Result<Verified
         .map_err(|error| to_napi_serialization_error("the pinned subject expectations", error))?;
     Ok(VerifiedEvidence {
         evidence,
-        operation: verified.operation().map(str::to_owned),
+        trace_id: verified.trace_id().map(str::to_owned),
         pinned_subject_expectations,
     })
 }
@@ -402,7 +403,7 @@ pub enum VerifiedEvidenceRequestBatchItem {
 #[napi(object)]
 pub struct VerifiedEvidenceRequestBatch {
     pub items: Vec<VerifiedEvidenceRequestBatchItem>,
-    pub operation: Option<String>,
+    pub trace_id: Option<String>,
 }
 
 fn verified_request_batch_to_napi(
@@ -423,7 +424,7 @@ fn verified_request_batch_to_napi(
         .collect::<Result<Vec<_>>>()?;
     Ok(VerifiedEvidenceRequestBatch {
         items,
-        operation: verified.operation().map(str::to_owned),
+        trace_id: verified.trace_id().map(str::to_owned),
     })
 }
 
@@ -708,10 +709,10 @@ mod tests {
 
     #[test]
     fn an_ordinary_result_passes_through_catch_panic_unchanged() {
-        let ok: Result<i32> = catch_panic("a synthetic operation", || Ok(42));
+        let ok: Result<i32> = catch_panic("a synthetic trace_id", || Ok(42));
         assert_eq!(ok.unwrap(), 42);
 
-        let err: Result<i32> = catch_panic("a synthetic operation", || {
+        let err: Result<i32> = catch_panic("a synthetic trace_id", || {
             Err(NapiError::from_reason("an ordinary refusal".to_owned()))
         });
         assert_eq!(err.unwrap_err().reason, "an ordinary refusal");
@@ -729,13 +730,13 @@ mod tests {
     fn a_caught_panic_becomes_an_ordinary_error_rather_than_an_abort() {
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let result: Result<()> = catch_panic("a synthetic operation", || {
+        let result: Result<()> = catch_panic("a synthetic trace_id", || {
             panic!("a synthetic panic carrying a canary-value that must not surface")
         });
         std::panic::set_hook(previous_hook);
 
         let error = result.expect_err("the panic is caught and reported as an error");
-        assert!(error.reason.contains("a synthetic operation"));
+        assert!(error.reason.contains("a synthetic trace_id"));
         assert!(error.reason.contains("failed unexpectedly"));
         assert!(
             !error.reason.contains("canary-value"),

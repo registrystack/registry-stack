@@ -713,7 +713,7 @@ derivation_input_error
 `derivation_input_error` rejects an
 inconsistent selector/fact/policy contract without including any input value.
 Its public collapse is deliberate: a uniquely found record whose derivation
-inputs are inconsistent returns the same `evidence_not_available` problem as
+inputs are inconsistent returns the same `evidence.unavailable` problem as
 `no_match` and `ambiguous`, so a caller cannot learn from the response that a
 record exists. The internal category stays a value-free operator diagnostic in
 audit. The `required` primitive uses another,

@@ -1025,7 +1025,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "malformed_request"
+                  "evidence.invalid_request"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "the Evidence request is invalid"
                 ],
                 "type": "string"
               },
@@ -1037,13 +1043,13 @@
               },
               "title": {
                 "enum": [
-                  "Request is not valid"
+                  "Evidence request is invalid"
                 ],
                 "type": "string"
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/malformed_request"
+                  "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
                 ],
                 "type": "string"
               }
@@ -1053,7 +1059,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "invalid_selector"
+                  "request.selector_invalid"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "selector does not match an available request profile"
                 ],
                 "type": "string"
               },
@@ -1065,13 +1077,13 @@
               },
               "title": {
                 "enum": [
-                  "Request is not valid"
+                  "Selector is invalid"
                 ],
                 "type": "string"
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/invalid_selector"
+                  "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid"
                 ],
                 "type": "string"
               }
@@ -1081,7 +1093,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "authentication_failed"
+                  "auth.invalid_credential"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "bearer access token validation failed"
                 ],
                 "type": "string"
               },
@@ -1093,13 +1111,13 @@
               },
               "title": {
                 "enum": [
-                  "Authentication failed"
+                  "Bearer access token is invalid"
                 ],
                 "type": "string"
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/authentication_failed"
+                  "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
                 ],
                 "type": "string"
               }
@@ -1109,7 +1127,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "not_authorized"
+                  "evidence.denied"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "the Evidence request is not permitted"
                 ],
                 "type": "string"
               },
@@ -1121,13 +1145,13 @@
               },
               "title": {
                 "enum": [
-                  "Request is not authorized"
+                  "Evidence request is not permitted"
                 ],
                 "type": "string"
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/not_authorized"
+                  "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
                 ],
                 "type": "string"
               }
@@ -1137,7 +1161,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "response_format_not_acceptable"
+                  "format.unsupported"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "the requested format is not supported"
                 ],
                 "type": "string"
               },
@@ -1149,13 +1179,13 @@
               },
               "title": {
                 "enum": [
-                  "Requested response format is not acceptable"
+                  "Requested format is not supported"
                 ],
                 "type": "string"
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/response_format_not_acceptable"
+                  "https://id.registrystack.org/problems/registry-evidence/format/unsupported"
                 ],
                 "type": "string"
               }
@@ -1165,7 +1195,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "evidence_not_available"
+                  "evidence.unavailable"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "evidence could not be produced for this request"
                 ],
                 "type": "string"
               },
@@ -1183,7 +1219,7 @@
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/evidence_not_available"
+                  "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable"
                 ],
                 "type": "string"
               }
@@ -1193,7 +1229,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "rate_limited"
+                  "evidence.rate_limited"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "the Evidence request rate is exhausted"
                 ],
                 "type": "string"
               },
@@ -1205,13 +1247,13 @@
               },
               "title": {
                 "enum": [
-                  "Request rate exceeded"
+                  "Evidence request rate is exhausted"
                 ],
                 "type": "string"
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/rate_limited"
+                  "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
                 ],
                 "type": "string"
               }
@@ -1221,7 +1263,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "dependency_unavailable"
+                  "source.unavailable"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "the authoritative source is unavailable"
                 ],
                 "type": "string"
               },
@@ -1233,13 +1281,13 @@
               },
               "title": {
                 "enum": [
-                  "Service temporarily unavailable"
+                  "Authoritative source is unavailable"
                 ],
                 "type": "string"
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/dependency_unavailable"
+                  "https://id.registrystack.org/problems/registry-evidence/source/unavailable"
                 ],
                 "type": "string"
               }
@@ -1249,7 +1297,13 @@
             "properties": {
               "code": {
                 "enum": [
-                  "service_unavailable"
+                  "service.unavailable"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "the request could not be served"
                 ],
                 "type": "string"
               },
@@ -1261,13 +1315,47 @@
               },
               "title": {
                 "enum": [
-                  "Service temporarily unavailable"
+                  "Service is unavailable"
                 ],
                 "type": "string"
               },
               "type": {
                 "enum": [
-                  "https://registrystack.org/problems/evidence/service_unavailable"
+                  "https://id.registrystack.org/problems/registry-evidence/service/unavailable"
+                ],
+                "type": "string"
+              }
+            }
+          },
+          {
+            "properties": {
+              "code": {
+                "enum": [
+                  "resource.not_found"
+                ],
+                "type": "string"
+              },
+              "detail": {
+                "enum": [
+                  "the requested resource was not found"
+                ],
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  404
+                ],
+                "type": "integer"
+              },
+              "title": {
+                "enum": [
+                  "Requested resource was not found"
+                ],
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "https://id.registrystack.org/problems/registry-evidence/resource/not_found"
                 ],
                 "type": "string"
               }
@@ -1277,20 +1365,32 @@
         "properties": {
           "code": {
             "enum": [
-              "malformed_request",
-              "invalid_selector",
-              "authentication_failed",
-              "not_authorized",
-              "response_format_not_acceptable",
-              "evidence_not_available",
-              "rate_limited",
-              "dependency_unavailable",
-              "service_unavailable"
+              "evidence.invalid_request",
+              "request.selector_invalid",
+              "auth.invalid_credential",
+              "evidence.denied",
+              "format.unsupported",
+              "evidence.unavailable",
+              "evidence.rate_limited",
+              "source.unavailable",
+              "service.unavailable",
+              "resource.not_found"
             ],
             "type": "string"
           },
-          "operation": {
-            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "detail": {
+            "enum": [
+              "the Evidence request is invalid",
+              "selector does not match an available request profile",
+              "bearer access token validation failed",
+              "the Evidence request is not permitted",
+              "the requested format is not supported",
+              "evidence could not be produced for this request",
+              "the Evidence request rate is exhausted",
+              "the authoritative source is unavailable",
+              "the request could not be served",
+              "the requested resource was not found"
+            ],
             "type": "string"
           },
           "status": {
@@ -1298,6 +1398,7 @@
               400,
               401,
               403,
+              404,
               406,
               422,
               429,
@@ -1307,27 +1408,35 @@
           },
           "title": {
             "enum": [
-              "Request is not valid",
-              "Authentication failed",
-              "Request is not authorized",
-              "Requested response format is not acceptable",
+              "Evidence request is invalid",
+              "Selector is invalid",
+              "Bearer access token is invalid",
+              "Evidence request is not permitted",
+              "Requested format is not supported",
               "Evidence could not be produced",
-              "Request rate exceeded",
-              "Service temporarily unavailable"
+              "Evidence request rate is exhausted",
+              "Authoritative source is unavailable",
+              "Service is unavailable",
+              "Requested resource was not found"
             ],
+            "type": "string"
+          },
+          "traceId": {
+            "pattern": "^(?!0{32}$)[0-9a-f]{32}$",
             "type": "string"
           },
           "type": {
             "enum": [
-              "https://registrystack.org/problems/evidence/malformed_request",
-              "https://registrystack.org/problems/evidence/invalid_selector",
-              "https://registrystack.org/problems/evidence/authentication_failed",
-              "https://registrystack.org/problems/evidence/not_authorized",
-              "https://registrystack.org/problems/evidence/response_format_not_acceptable",
-              "https://registrystack.org/problems/evidence/evidence_not_available",
-              "https://registrystack.org/problems/evidence/rate_limited",
-              "https://registrystack.org/problems/evidence/dependency_unavailable",
-              "https://registrystack.org/problems/evidence/service_unavailable"
+              "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request",
+              "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid",
+              "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential",
+              "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
+              "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
+              "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
+              "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited",
+              "https://id.registrystack.org/problems/registry-evidence/source/unavailable",
+              "https://id.registrystack.org/problems/registry-evidence/service/unavailable",
+              "https://id.registrystack.org/problems/registry-evidence/resource/not_found"
             ],
             "type": "string"
           }
@@ -1336,8 +1445,9 @@
           "type",
           "title",
           "status",
+          "detail",
           "code",
-          "operation"
+          "traceId"
         ],
         "title": "Evidence public problem Version 1",
         "type": "object"
@@ -1599,10 +1709,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -1636,10 +1746,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -1672,10 +1782,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -1692,7 +1802,7 @@
         "responses": {
           "200": {
             "content": {
-              "application/openapi+json": {
+              "application/json": {
                 "schema": {
                   "type": "object"
                 }
@@ -1709,10 +1819,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -1730,7 +1840,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "service_unavailable"
+                            "service.unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the request could not be served"
                           ],
                           "type": "string"
                         },
@@ -1742,13 +1858,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Service temporarily unavailable"
+                            "Service is unavailable"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/service_unavailable"
+                            "https://id.registrystack.org/problems/registry-evidence/service/unavailable"
                           ],
                           "type": "string"
                         }
@@ -1770,10 +1886,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -1807,10 +1923,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -1828,7 +1944,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "service_unavailable"
+                            "service.unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the request could not be served"
                           ],
                           "type": "string"
                         },
@@ -1840,13 +1962,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Service temporarily unavailable"
+                            "Service is unavailable"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/service_unavailable"
+                            "https://id.registrystack.org/problems/registry-evidence/service/unavailable"
                           ],
                           "type": "string"
                         }
@@ -1868,10 +1990,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -1939,10 +2061,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -1962,7 +2084,13 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "malformed_request"
+                                "evidence.invalid_request"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the Evidence request is invalid"
                               ],
                               "type": "string"
                             },
@@ -1974,13 +2102,13 @@
                             },
                             "title": {
                               "enum": [
-                                "Request is not valid"
+                                "Evidence request is invalid"
                               ],
                               "type": "string"
                             },
                             "type": {
                               "enum": [
-                                "https://registrystack.org/problems/evidence/malformed_request"
+                                "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
                               ],
                               "type": "string"
                             }
@@ -1998,7 +2126,13 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "invalid_selector"
+                                "request.selector_invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "selector does not match an available request profile"
                               ],
                               "type": "string"
                             },
@@ -2010,13 +2144,13 @@
                             },
                             "title": {
                               "enum": [
-                                "Request is not valid"
+                                "Selector is invalid"
                               ],
                               "type": "string"
                             },
                             "type": {
                               "enum": [
-                                "https://registrystack.org/problems/evidence/invalid_selector"
+                                "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid"
                               ],
                               "type": "string"
                             }
@@ -2049,10 +2183,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2070,7 +2204,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "authentication_failed"
+                            "auth.invalid_credential"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "bearer access token validation failed"
                           ],
                           "type": "string"
                         },
@@ -2082,13 +2222,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Authentication failed"
+                            "Bearer access token is invalid"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/authentication_failed"
+                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
                           ],
                           "type": "string"
                         }
@@ -2127,10 +2267,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2148,7 +2288,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "not_authorized"
+                            "evidence.denied"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the Evidence request is not permitted"
                           ],
                           "type": "string"
                         },
@@ -2160,13 +2306,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Request is not authorized"
+                            "Evidence request is not permitted"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/not_authorized"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
                           ],
                           "type": "string"
                         }
@@ -2197,10 +2343,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2218,7 +2364,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "response_format_not_acceptable"
+                            "format.unsupported"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the requested format is not supported"
                           ],
                           "type": "string"
                         },
@@ -2230,13 +2382,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Requested response format is not acceptable"
+                            "Requested format is not supported"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/response_format_not_acceptable"
+                            "https://id.registrystack.org/problems/registry-evidence/format/unsupported"
                           ],
                           "type": "string"
                         }
@@ -2267,10 +2419,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2288,7 +2440,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "evidence_not_available"
+                            "evidence.unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "evidence could not be produced for this request"
                           ],
                           "type": "string"
                         },
@@ -2306,7 +2464,7 @@
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/evidence_not_available"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable"
                           ],
                           "type": "string"
                         }
@@ -2337,10 +2495,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2358,7 +2516,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "rate_limited"
+                            "evidence.rate_limited"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the Evidence request rate is exhausted"
                           ],
                           "type": "string"
                         },
@@ -2370,13 +2534,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Request rate exceeded"
+                            "Evidence request rate is exhausted"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/rate_limited"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
                           ],
                           "type": "string"
                         }
@@ -2415,10 +2579,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2438,7 +2602,13 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "dependency_unavailable"
+                                "source.unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the authoritative source is unavailable"
                               ],
                               "type": "string"
                             },
@@ -2450,13 +2620,13 @@
                             },
                             "title": {
                               "enum": [
-                                "Service temporarily unavailable"
+                                "Authoritative source is unavailable"
                               ],
                               "type": "string"
                             },
                             "type": {
                               "enum": [
-                                "https://registrystack.org/problems/evidence/dependency_unavailable"
+                                "https://id.registrystack.org/problems/registry-evidence/source/unavailable"
                               ],
                               "type": "string"
                             }
@@ -2474,7 +2644,13 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "service_unavailable"
+                                "service.unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the request could not be served"
                               ],
                               "type": "string"
                             },
@@ -2486,13 +2662,13 @@
                             },
                             "title": {
                               "enum": [
-                                "Service temporarily unavailable"
+                                "Service is unavailable"
                               ],
                               "type": "string"
                             },
                             "type": {
                               "enum": [
-                                "https://registrystack.org/problems/evidence/service_unavailable"
+                                "https://id.registrystack.org/problems/registry-evidence/service/unavailable"
                               ],
                               "type": "string"
                             }
@@ -2525,10 +2701,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2566,10 +2742,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2587,7 +2763,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "malformed_request"
+                            "evidence.invalid_request"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the Evidence request is invalid"
                           ],
                           "type": "string"
                         },
@@ -2599,13 +2781,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Request is not valid"
+                            "Evidence request is invalid"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/malformed_request"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
                           ],
                           "type": "string"
                         }
@@ -2627,10 +2809,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2648,7 +2830,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "authentication_failed"
+                            "auth.invalid_credential"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "bearer access token validation failed"
                           ],
                           "type": "string"
                         },
@@ -2660,13 +2848,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Authentication failed"
+                            "Bearer access token is invalid"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/authentication_failed"
+                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
                           ],
                           "type": "string"
                         }
@@ -2696,10 +2884,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2717,7 +2905,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "rate_limited"
+                            "evidence.rate_limited"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the Evidence request rate is exhausted"
                           ],
                           "type": "string"
                         },
@@ -2729,13 +2923,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Request rate exceeded"
+                            "Evidence request rate is exhausted"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/rate_limited"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
                           ],
                           "type": "string"
                         }
@@ -2765,10 +2959,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2786,7 +2980,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "service_unavailable"
+                            "service.unavailable"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the request could not be served"
                           ],
                           "type": "string"
                         },
@@ -2798,13 +2998,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Service temporarily unavailable"
+                            "Service is unavailable"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/service_unavailable"
+                            "https://id.registrystack.org/problems/registry-evidence/service/unavailable"
                           ],
                           "type": "string"
                         }
@@ -2826,10 +3026,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2887,10 +3087,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -2910,7 +3110,13 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "malformed_request"
+                                "evidence.invalid_request"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the Evidence request is invalid"
                               ],
                               "type": "string"
                             },
@@ -2922,13 +3128,13 @@
                             },
                             "title": {
                               "enum": [
-                                "Request is not valid"
+                                "Evidence request is invalid"
                               ],
                               "type": "string"
                             },
                             "type": {
                               "enum": [
-                                "https://registrystack.org/problems/evidence/malformed_request"
+                                "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request"
                               ],
                               "type": "string"
                             }
@@ -2946,7 +3152,13 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "invalid_selector"
+                                "request.selector_invalid"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "selector does not match an available request profile"
                               ],
                               "type": "string"
                             },
@@ -2958,13 +3170,13 @@
                             },
                             "title": {
                               "enum": [
-                                "Request is not valid"
+                                "Selector is invalid"
                               ],
                               "type": "string"
                             },
                             "type": {
                               "enum": [
-                                "https://registrystack.org/problems/evidence/invalid_selector"
+                                "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid"
                               ],
                               "type": "string"
                             }
@@ -2997,10 +3209,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -3018,7 +3230,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "authentication_failed"
+                            "auth.invalid_credential"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "bearer access token validation failed"
                           ],
                           "type": "string"
                         },
@@ -3030,13 +3248,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Authentication failed"
+                            "Bearer access token is invalid"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/authentication_failed"
+                            "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential"
                           ],
                           "type": "string"
                         }
@@ -3075,10 +3293,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -3096,7 +3314,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "not_authorized"
+                            "evidence.denied"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the Evidence request is not permitted"
                           ],
                           "type": "string"
                         },
@@ -3108,13 +3332,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Request is not authorized"
+                            "Evidence request is not permitted"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/not_authorized"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/denied"
                           ],
                           "type": "string"
                         }
@@ -3145,10 +3369,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -3166,7 +3390,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "response_format_not_acceptable"
+                            "format.unsupported"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the requested format is not supported"
                           ],
                           "type": "string"
                         },
@@ -3178,13 +3408,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Requested response format is not acceptable"
+                            "Requested format is not supported"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/response_format_not_acceptable"
+                            "https://id.registrystack.org/problems/registry-evidence/format/unsupported"
                           ],
                           "type": "string"
                         }
@@ -3215,10 +3445,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -3236,7 +3466,13 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "rate_limited"
+                            "evidence.rate_limited"
+                          ],
+                          "type": "string"
+                        },
+                        "detail": {
+                          "enum": [
+                            "the Evidence request rate is exhausted"
                           ],
                           "type": "string"
                         },
@@ -3248,13 +3484,13 @@
                         },
                         "title": {
                           "enum": [
-                            "Request rate exceeded"
+                            "Evidence request rate is exhausted"
                           ],
                           "type": "string"
                         },
                         "type": {
                           "enum": [
-                            "https://registrystack.org/problems/evidence/rate_limited"
+                            "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited"
                           ],
                           "type": "string"
                         }
@@ -3293,10 +3529,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }
@@ -3316,7 +3552,13 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "dependency_unavailable"
+                                "source.unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the authoritative source is unavailable"
                               ],
                               "type": "string"
                             },
@@ -3328,13 +3570,13 @@
                             },
                             "title": {
                               "enum": [
-                                "Service temporarily unavailable"
+                                "Authoritative source is unavailable"
                               ],
                               "type": "string"
                             },
                             "type": {
                               "enum": [
-                                "https://registrystack.org/problems/evidence/dependency_unavailable"
+                                "https://id.registrystack.org/problems/registry-evidence/source/unavailable"
                               ],
                               "type": "string"
                             }
@@ -3352,7 +3594,13 @@
                           "properties": {
                             "code": {
                               "enum": [
-                                "service_unavailable"
+                                "service.unavailable"
+                              ],
+                              "type": "string"
+                            },
+                            "detail": {
+                              "enum": [
+                                "the request could not be served"
                               ],
                               "type": "string"
                             },
@@ -3364,13 +3612,13 @@
                             },
                             "title": {
                               "enum": [
-                                "Service temporarily unavailable"
+                                "Service is unavailable"
                               ],
                               "type": "string"
                             },
                             "type": {
                               "enum": [
-                                "https://registrystack.org/problems/evidence/service_unavailable"
+                                "https://id.registrystack.org/problems/registry-evidence/service/unavailable"
                               ],
                               "type": "string"
                             }
@@ -3403,10 +3651,10 @@
                   "type": "string"
                 }
               },
-              "X-Request-Id": {
-                "description": "Server-minted operation identifier for this request. It is generated by Evidence, never taken from the caller, and is the identifier a caller quotes to an operator. Problem responses repeat it in the operation member.",
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
                 "schema": {
-                  "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
                   "type": "string"
                 }
               }

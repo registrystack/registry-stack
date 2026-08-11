@@ -1,6 +1,6 @@
 ---
 title: Evidence Gateway errors and problems reference
-description: What each application/problem+json response from the Evidence Gateway assertion service means and how to respond to it.
+description: Evidence Gateway problem responses, their stable codes, and safe recovery actions.
 status: current
 owner: registry-docs
 source_repos: [registry-stack]
@@ -10,60 +10,68 @@ locale: en
 standards_referenced: []
 ---
 
-Evidence Gateway returns errors as problem details with the media type `application/problem+json`. The closed set of problem types, their HTTP status, and their exact body shape are frozen in `products/evidence/contracts/problem-contract.yaml` (contract `registry.evidence.public-problem/v1`) and generated into `products/evidence/generated/problem-v1.schema.json`; both files are the source of truth for this page. The `evidence-contracts` CI job byte-diffs a freshly regenerated copy of both files against the committed copies on every change (`products/evidence/scripts/check-contracts.sh`, wired into `.github/workflows/ci.yml`), so this reference cannot drift from a released Evidence Gateway binary without the build failing.
+Evidence Gateway returns RFC 9457 problem details as `application/problem+json`.
+The frozen source contract is
+`products/evidence/contracts/problem-contract.yaml`.
+The generated schema and OpenAPI documents are reproduced from the runtime and
+must not be edited by hand.
 
-`POST /v1/evidence` can return any problem documented on this page.
-`POST /v1/evidence/batch` can return every problem except `evidence_not_available`, which becomes
-an ordered item result inside a successful batch response. `GET /v1/evidence-definitions` returns a
-narrower subset: `malformed_request`, `authentication_failed`, `rate_limited`, and
-`service_unavailable`.
+## Read a problem response
 
-## Reading a problem response
-
-A problem body carries exactly five members: `type`, `title`, `status`, `code`, and `operation`, and no others. There is no `detail` member. Evidence Gateway's contract closes the body with `additionalProperties: false` and explicitly excludes request bodies or selector values, principal or credential inputs, source URLs or responses, script input or output, and any candidate count, score, hint, or comparison detail. Branch client code on the stable `code` member; `type` follows the fixed pattern `https://registrystack.org/problems/evidence/<code>`.
+Every problem body has exactly these six members: `type`, `title`, `status`,
+`detail`, `code`, and `traceId`.
+`detail` is static and value-free.
+It never includes a selector, token, source value, audit operation, or internal
+failure category.
+`type` always begins with
+`https://id.registrystack.org/problems/registry-evidence/`.
 
 ```json
 {
-  "type": "https://registrystack.org/problems/evidence/evidence_not_available",
+  "type": "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
   "title": "Evidence could not be produced",
   "status": 422,
-  "code": "evidence_not_available",
-  "operation": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+  "detail": "evidence could not be produced for this request",
+  "code": "evidence.unavailable",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
 }
 ```
 
-The `operation` member is a ULID-shaped opaque identifier (pattern `^[0-9A-HJKMNP-TV-Z]{26}$`) that Evidence Gateway generates for the request; it is never taken from the caller. It matches the `X-Request-Id` response header on both successful and failing responses, and it is the identifier to quote to a deployment operator for support correlation.
+Every response carries a W3C `traceparent` header.
+For a problem response, its trace identifier is the same value as `traceId`.
+Evidence Gateway accepts a valid inbound trace identifier for correlation or
+mints one, but does not echo `tracestate`.
+The trace identifier is not the internal server-minted audit operation
+identifier.
+All responses use `Cache-Control: no-store`.
 
-## Caller request problems
+## Problem code matrix
 
-These problem types indicate something about the request itself. Correct the request and resubmit; retrying an unchanged request returns the same problem.
-
-| Code | Status | Meaning | Retry helps | What to do |
+| Code | Status | Title | Detail | Recovery |
 | --- | --- | --- | --- | --- |
-| `malformed_request` | 400 | The request body is not valid JSON, or it does not match the operation's documented schema. On `POST /v1/evidence`, examples include an unknown field, a wrong type, a structurally invalid request nonce, or an unusable `holderKeys` entry. On `POST /v1/evidence/batch`, examples include an item count outside one through sixteen, a malformed or repeated item nonce, a missing subject set, or a `holderKeys` member. | No | Validate the body against the operation schema published at `/openapi.json`, and remove any field that schema does not declare. For holder-bound issuance on `POST /v1/evidence`, supply public JSON Web Keys distinct by RFC 7638 thumbprint. For request batching, supply one common requirement and purpose plus ordered items with pairwise-distinct nonces and complete subject sets. |
-| `invalid_selector` | 400 | A singular request's selector, or any item selector in a request batch, does not match a configured alternative profile for the requested requirement. A failed batch item aborts admission before source access. | No | Fetch `/v1/evidence-definitions` and match every subject selector to one of the profiles listed there for the requirement. |
-| `authentication_failed` | 401 | No credential was supplied, more than one was supplied, the credential could not be parsed, or the bearer token did not verify. Evidence Gateway returns a `WWW-Authenticate: Bearer` header alongside this problem. | No | Supply exactly one `Authorization: Bearer` token, and confirm it has not expired and was issued for this deployment. |
-| `response_format_not_acceptable` | 406 | The `Accept` header fell outside the route's closed negotiation matrix. On `POST /v1/evidence`, missing `Accept`, `*/*`, and exactly `application/jose+json` select the default signed response. On `POST /v1/evidence/batch`, only exact `application/vnd.registrystack.evidence.request-batch+json` is accepted. Duplicate, combined, parameterized, quality-weighted, and unknown values are rejected on both routes. | No | For a singular request, send at most one recognized media type: `application/jose+json`, `application/vnd.registrystack.evidence-unsigned+json`, `application/dc+sd-jwt`, or `application/vnd.registrystack.evidence.batch+json`. For a request batch, send the exact request-batch media type. A recognized but unpermitted singular format is refused as `not_authorized`, so denial never reveals which layer withheld it. |
-| `rate_limited` | 429 | The caller exceeded the configured per-principal request rate, or the separate per-principal-authority failed-selector rate (`crates/registry-evidence/src/rate_limit.rs`). A request batch is charged atomically for its complete item count. | Yes, after backoff | Wait for the duration in the `Retry-After` header (this deployment sends `1` second) before retrying. Reduce a request batch only when each smaller request still represents the intended independent operation. |
+| `evidence.invalid_request` | 400 | Evidence request is invalid | the Evidence request is invalid | Correct the request body or headers. |
+| `request.selector_invalid` | 400 | Selector is invalid | selector does not match an available request profile | Fetch authenticated definitions and use an available selector profile. |
+| `auth.invalid_credential` | 401 | Bearer access token is invalid | bearer access token validation failed | Supply one valid Bearer access token. The response also carries `WWW-Authenticate: Bearer realm="registry-evidence"`. |
+| `evidence.denied` | 403 | Evidence request is not permitted | the Evidence request is not permitted | Obtain an appropriate entitlement. The response does not identify the failed authorization condition. |
+| `resource.not_found` | 404 | Requested resource was not found | the requested resource was not found | Check the route and HTTP method. Unknown paths and unsupported methods use this code. |
+| `format.unsupported` | 406 | Requested format is not supported | the requested format is not supported | Send one exact supported `Accept` value. |
+| `evidence.unavailable` | 422 | Evidence could not be produced | evidence could not be produced for this request | Do not retry an unchanged request. The service does not disclose whether the cause was no match, ambiguity, a missing fact, or unresolved derivation input. |
+| `evidence.rate_limited` | 429 | Evidence request rate is exhausted | the Evidence request rate is exhausted | Wait one second, as stated in `Retry-After: 1`, then retry. |
+| `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable | Retry with backoff or contact the source operator. |
+| `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff or contact the Evidence Gateway operator. |
 
-## Requests Evidence Gateway cannot satisfy
+`Retry-After` is present only on `429` responses.
 
-A well-formed, authenticated request can still fail to produce evidence. Both problem types below intentionally withhold the specific reason: Evidence Gateway collapses several internal conditions into one public shape so that a response cannot be used to learn whether a record, grant, or requirement exists.
+## Request batches
 
-| Code | Status | Meaning | Retry helps | What to do |
-| --- | --- | --- | --- | --- |
-| `not_authorized` | 403 | The authenticated caller's grant does not permit the requirement, a subject binding, the requirement's binding mode, or the negotiated response format, or the requirement identifier is unknown. On the request-batch route, any unauthorized item aborts the complete request without identifying that item. Evidence Gateway does not reveal which condition applied. | No, without a grant change | Confirm the requirement identifier against `/v1/evidence-definitions` for the authenticated caller. If present, ask the deployment operator to verify the grant covers every subject set, the binding mode, and the response format. Request batching permits signed audience-scoped evidence only. |
-| `evidence_not_available` | 422 | On `POST /v1/evidence`, the source produced no unique matching record, the match was ambiguous, a required fact was missing, or a derivation input could not be resolved. Evidence Gateway collapses all four conditions into this one code and applies uniform, bounded processing so response timing does not indicate which condition occurred. On `POST /v1/evidence/batch`, the corresponding ordinary unavailable classes produce a positional `evidence_not_available` item in an HTTP 200 envelope, not this problem. | No, not by resubmitting the same request unchanged | Confirm with the subject that the requested fact exists in the source system. Report a persistent, unexpected result to the deployment operator with the `operation` value; Evidence Gateway does not reveal which internal condition produced it. |
-
-## Source and deployment availability
-
-Both problem types below are transient 503 responses. Evidence Gateway assigns them by where the failure occurred, not by how long it lasted.
-
-| Code | Status | Meaning | Retry helps | What to do |
-| --- | --- | --- | --- | --- |
-| `dependency_unavailable` | 503 | The configured external source did not respond usably: unreachable, timed out, wrong credential, wrong media type, an oversized response, malformed JSON, or an error envelope. Evidence Gateway maps every source-boundary failure to this one code (`crates/registry-evidence/src/runtime.rs`, `source_failure_problem`). On a request batch, one such failure aborts the complete envelope. | Yes, after backoff | Retry with backoff. If it persists, report it to the deployment operator with the `operation` value: the connected source system is unavailable, not the request. |
-| `service_unavailable` | 503 | A transient failure inside the Evidence Gateway deployment itself: script execution, signing, serialization, audit-log writes, or discovery and configuration lookups. On a request batch, one such failure aborts the complete envelope. This code is also returned by the unauthenticated `/openapi.json` and `/ready` endpoints when the document or readiness state cannot be produced. | Yes, after backoff | Retry with backoff. If it persists, report it to the deployment operator with the `operation` value. |
+`POST /v1/evidence/batch` uses the same outer problem contract for any failure
+that aborts the batch.
+Its successful envelope keeps the item discriminator
+`evidence_not_available` unchanged for the closed unavailable outcome.
+It is not the outer `evidence.unavailable` problem code.
 
 ## Source
 
-This page transcribes `products/evidence/contracts/problem-contract.yaml` and `products/evidence/generated/problem-v1.schema.json`, and the runtime decisions in `crates/registry-evidence/src/problem.rs`, `crates/registry-evidence/src/runtime.rs`, and `crates/registry-evidence/src/server.rs` that choose which code a given failure returns. The full negotiation and per-operation status mapping is in `products/evidence/generated/registry-evidence.openapi.json`.
+This page transcribes `products/evidence/contracts/problem-contract.yaml`.
+The complete generated route mapping is in
+`products/evidence/generated/registry-evidence.openapi.json`.

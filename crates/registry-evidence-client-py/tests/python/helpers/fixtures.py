@@ -96,22 +96,65 @@ def request_batch_spec() -> dict:
     }
 
 
-def problem_body(
-    status: int, code: str, operation: str = "01JQ0QZ8YHZ0000000000000AB"
-) -> bytes:
+TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
+TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+
+def problem_body(status: int, code: str, trace_id: str = TRACE_ID) -> bytes:
     """A body satisfying the Evidence problem contract exactly: `type`,
-    `title`, `status`, `code`, and `operation`, and nothing else (the server
+    `title`, `status`, `detail`, `code`, and `traceId`, and nothing else (the server
     side, `crates/registry-evidence-client/src/problem.rs`, denies unknown
-    fields). `operation` defaults to the same fixed value
-    `problem.rs`'s own tests use, bounded alphanumeric, so tests can assert
-    it survives unchanged into the mapped exception's `operation` attribute.
+    fields). `trace_id` defaults to the same fixed value
+    `problem.rs`'s own tests use, canonical lower-case hex, so tests can assert
+    it survives unchanged into the mapped exception's `trace_id` attribute.
     """
+    title, detail = {
+        "evidence.invalid_request": (
+            "Evidence request is invalid",
+            "the Evidence request is invalid",
+        ),
+        "request.selector_invalid": (
+            "Selector is invalid",
+            "selector does not match an available request profile",
+        ),
+        "auth.invalid_credential": (
+            "Bearer access token is invalid",
+            "bearer access token validation failed",
+        ),
+        "evidence.denied": (
+            "Evidence request is not permitted",
+            "the Evidence request is not permitted",
+        ),
+        "format.unsupported": (
+            "Requested format is not supported",
+            "the requested format is not supported",
+        ),
+        "evidence.unavailable": (
+            "Evidence could not be produced",
+            "evidence could not be produced for this request",
+        ),
+        "evidence.rate_limited": (
+            "Evidence request rate is exhausted",
+            "the Evidence request rate is exhausted",
+        ),
+        "source.unavailable": (
+            "Authoritative source is unavailable",
+            "the authoritative source is unavailable",
+        ),
+        "service.unavailable": ("Service is unavailable", "the request could not be served"),
+        "resource.not_found": (
+            "Requested resource was not found",
+            "the requested resource was not found",
+        ),
+    }[code]
     return json.dumps(
         {
-            "type": "https://registrystack.org/problems/evidence",
-            "title": "stub problem",
+            "type": "https://id.registrystack.org/problems/registry-evidence/"
+            + code.replace(".", "/"),
+            "title": title,
             "status": status,
+            "detail": detail,
             "code": code,
-            "operation": operation,
+            "traceId": trace_id,
         }
     ).encode("utf-8")

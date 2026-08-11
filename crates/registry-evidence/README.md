@@ -34,7 +34,7 @@ GET  /.well-known/evidence/jwks.json
 ```
 
 `GET /openapi.json` returns the generated public contract as
-`application/openapi+json`. It is unauthenticated and byte-identical to the
+`application/json`. It is unauthenticated and byte-identical to the
 released artifact under `products/evidence/generated/`, so it describes no
 deployment, definition, or authority.
 

@@ -54,7 +54,7 @@ returned record identifier only as a transient fact, and the derivation
 requires its exact equality with the authorized subject selector before
 evaluating anything else. A returned-record mismatch fails closed as the
 internal `derivation_input_error` category and collapses publicly into the same
-`evidence_not_available` problem as an unresolved lookup, so the caller cannot
+`evidence.unavailable` problem as an unresolved lookup, so the caller cannot
 learn that a record was found.
 
 `providerFields` and `resultLimit` are strings because they become lexical URL

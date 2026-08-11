@@ -81,8 +81,8 @@ impl RetainedEvidenceVerification {
 
     /// Verify retained response bytes against this pre-response context.
     ///
-    /// This operation is synchronous, offline, and idempotent. The returned
-    /// value has no HTTP operation identifier because only response bytes were
+    /// This verification is synchronous, offline, and idempotent. The returned
+    /// value has no HTTP trace identifier because only response bytes were
     /// retained here.
     pub fn verify(&self, response: &[u8]) -> Result<VerifiedEvidence, EvidenceClientError> {
         self.verify_as_of(response, Utc::now())
@@ -106,7 +106,7 @@ impl RetainedEvidenceVerification {
         response: &[u8],
         now: DateTime<Utc>,
         revoked_key_ids: Option<&[String]>,
-        operation: Option<String>,
+        trace_id: Option<String>,
     ) -> Result<VerifiedEvidence, EvidenceClientError> {
         self.validate()?;
         let mut policy_document = self.verification_policy.clone();
@@ -139,10 +139,7 @@ impl RetainedEvidenceVerification {
             EvidenceResponseFormat::SdJwtVcBatch => return Err(batch_is_not_one_response()),
         }
         .map_err(EvidenceClientError::Verification)?;
-        Ok(VerifiedEvidence {
-            evidence,
-            operation,
-        })
+        Ok(VerifiedEvidence { evidence, trace_id })
     }
 
     fn validate(&self) -> Result<(), EvidenceClientError> {
@@ -391,7 +388,7 @@ mod tests {
             verified.evidence().request_nonce,
             Some(prepared.request_nonce().to_owned())
         );
-        assert_eq!(verified.operation(), None);
+        assert_eq!(verified.trace_id(), None);
         assert_eq!(verified.pinned_subject_expectations().len(), 1);
     }
 

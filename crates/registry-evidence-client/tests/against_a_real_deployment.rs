@@ -164,10 +164,13 @@ async fn first_use_acceptance_then_pinning_completes_two_verified_exchanges() {
         PublicValue::Boolean(true)
     );
     assert!(
-        accepted
-            .operation()
-            .is_some_and(|operation| operation.bytes().all(|byte| byte.is_ascii_alphanumeric())),
-        "the exchange carries an opaque correlation identifier"
+        accepted.trace_id().is_some_and(|trace_id| {
+            trace_id.len() == 32
+                && trace_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }),
+        "the exchange carries a canonical trace identifier"
     );
 
     // Persisting the accepted bindings and pinning them is what turns the next
@@ -317,15 +320,15 @@ async fn a_tampered_credential_is_refused_without_detail() {
     let EvidenceClientError::Denied {
         status,
         code,
-        operation,
+        trace_id,
         retry_after_seconds,
     } = error
     else {
         panic!("the refusal maps onto the denied failure");
     };
     assert_eq!(status, 401);
-    assert_eq!(code, "authentication_failed");
-    assert!(operation.is_some_and(|operation| !operation.is_empty()));
+    assert_eq!(code, "auth.invalid_credential");
+    assert!(trace_id.is_some_and(|trace_id| !trace_id.is_empty()));
     assert_eq!(retry_after_seconds, None);
 }
 
@@ -360,7 +363,7 @@ async fn a_credential_without_the_configured_tag_is_refused() {
         panic!("the refusal maps onto the denied failure");
     };
     assert_eq!(status, 403);
-    assert_eq!(code, "not_authorized");
+    assert_eq!(code, "evidence.denied");
 }
 
 /// The unavailable answer is its own failure, distinct from a refusal, and it
@@ -382,12 +385,12 @@ async fn a_request_the_deployment_cannot_answer_reports_no_evidence() {
     .await;
     let refusal = proof.expect("the deployment answers");
 
-    let EvidenceClientError::NotAvailable { operation } =
+    let EvidenceClientError::NotAvailable { trace_id } =
         refusal.expect_err("an unresolved request produces no evidence")
     else {
         panic!("the unavailable answer maps onto its own failure");
     };
-    assert!(operation.is_some_and(|operation| !operation.is_empty()));
+    assert!(trace_id.is_some_and(|trace_id| !trace_id.is_empty()));
 }
 
 /// A nonce identifies exactly one request. A real signed response that verifies
