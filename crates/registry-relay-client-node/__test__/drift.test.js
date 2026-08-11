@@ -42,6 +42,16 @@ test('the handwritten facade declares every method', () => {
   }
 });
 
+test('continuation format literals match the core wire projection', () => {
+  const declaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
+  const continuation = declaration.match(
+    /export interface CollectionContinuation[\s\S]*?\n}/,
+  );
+  assert.ok(continuation);
+  assert.match(continuation[0], /'geojson-rfc7946'/);
+  assert.doesNotMatch(continuation[0], /'geo-json-rfc7946'/);
+});
+
 test('only the normalized package entry point is exported', () => {
   assert.equal(require('@registrystack/relay-client').RelayClient, wrapper.RelayClient);
   assert.throws(

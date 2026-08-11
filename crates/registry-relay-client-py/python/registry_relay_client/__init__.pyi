@@ -1,6 +1,6 @@
 """Types for the synchronous Registry Relay V2 client binding."""
 
-from typing import Any, Literal, Mapping, Optional, Sequence, TypedDict, Union
+from typing import Any, Literal, Optional, Sequence, TypedDict, Union
 
 RecordFormat = Literal["json", "json-ld", "geojson", "json-fg"]
 SdmxDataFormat = Literal["json", "csv"]
@@ -10,7 +10,7 @@ Selector = Union[str, int, bool]
 class _PrivateKeyJwtRequired(TypedDict):
     token_endpoint: str
     client_id: str
-    client_key: Mapping[str, Any]
+    client_key: dict[str, Any]
 
 
 class PrivateKeyJwtConfig(_PrivateKeyJwtRequired, total=False):
@@ -152,7 +152,7 @@ class RelayClient:
         fields: Optional[Sequence[str]] = ...,
         access_profile: Optional[str] = ...,
         format: RecordFormat = ...,
-        filters: Optional[Mapping[str, str]] = ...,
+        filters: Optional[dict[str, str]] = ...,
         bbox: Optional[Sequence[float]] = ...,
         etag: Optional[str] = ...,
     ) -> CollectionPageOutcome: ...
@@ -175,7 +175,7 @@ class RelayClient:
         self,
         resource: str,
         lookup: str,
-        selectors: Mapping[str, Selector],
+        selectors: dict[str, Selector],
         *,
         fields: Optional[Sequence[str]] = ...,
         access_profile: Optional[str] = ...,
@@ -191,7 +191,7 @@ class RelayClient:
         fields: Optional[Sequence[str]] = ...,
         access_profile: Optional[str] = ...,
         format: RecordFormat = ...,
-        filters: Optional[Mapping[str, str]] = ...,
+        filters: Optional[dict[str, str]] = ...,
         bbox: Optional[Sequence[float]] = ...,
         etag: Optional[str] = ...,
     ) -> CollectionPageOutcome: ...
@@ -210,7 +210,7 @@ class RelayClient:
         version: str,
         *,
         key: Optional[str] = ...,
-        constraints: Optional[Mapping[str, str]] = ...,
+        constraints: Optional[dict[str, str]] = ...,
         offset: Optional[int] = ...,
         limit: Optional[int] = ...,
         dimension_at_observation: Optional[str] = ...,

@@ -105,7 +105,7 @@ test('every endpoint accepts its documented plain input graph', async () => {
   await expectNotModified(client.continueListRecords({
     route: { kind: 'records', resource: 'people' },
     cursor: 'records-cursor',
-    format: 'json',
+    format: 'geojson-rfc7946',
     accessProfile: 'public',
   }, ETAG));
   await expectNotModified(client.readRecord('people', 'person-1', {

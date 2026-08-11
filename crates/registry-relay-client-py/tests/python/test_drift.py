@@ -119,6 +119,12 @@ class DriftTest(unittest.TestCase):
             )
         )
 
+    def test_stub_promises_only_plain_mapping_inputs(self):
+        tree = ast.parse(STUB.read_text(encoding="utf-8"))
+        self.assertFalse(
+            any(isinstance(node, ast.Name) and node.id == "Mapping" for node in ast.walk(tree))
+        )
+
     def test_pep_561_and_package_metadata_files_exist(self):
         self.assertTrue((PACKAGE / "py.typed").is_file())
         self.assertTrue((PACKAGE / "__init__.py").is_file())

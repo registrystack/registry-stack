@@ -75,7 +75,7 @@ export interface SearchRoute {
 export interface CollectionContinuation<Route extends RecordsRoute | SearchRoute = RecordsRoute | SearchRoute> {
   route: Route
   cursor: string
-  format: 'json' | 'json-ld' | 'geo-json-rfc7946' | 'json-fg'
+  format: 'json' | 'json-ld' | 'geojson-rfc7946' | 'json-fg'
   accessProfile?: string
 }
 
