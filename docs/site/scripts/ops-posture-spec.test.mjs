@@ -10,9 +10,14 @@ const siteRoot = resolve(here, '..');
 const repositoryRoot = resolve(siteRoot, '../..');
 const specPath = resolve(siteRoot, 'src/content/docs/spec/rs-op-posture.mdx');
 const relayCrate = resolve(repositoryRoot, 'crates/registry-relay-v2/src');
+const relayHttpContract = resolve(
+  repositoryRoot,
+  'crates/registry-relay-http-contract/src/lib.rs',
+);
 
 const page = readFileSync(specPath, 'utf8');
 const serverSource = readFileSync(resolve(relayCrate, 'server.rs'), 'utf8');
+const httpContractSource = readFileSync(relayHttpContract, 'utf8');
 const mainSource = readFileSync(resolve(relayCrate, 'main.rs'), 'utf8');
 const contractSource = readFileSync(resolve(relayCrate, 'contract.rs'), 'utf8');
 const startupSource = readFileSync(resolve(relayCrate, 'startup.rs'), 'utf8');
@@ -52,8 +57,10 @@ test('RS-OP-POSTURE retires the admin posture requirements without reusing ident
 });
 
 test('RS-OP-POSTURE states the operational probe inventory the runtime serves', () => {
-  assert.match(serverSource, /\.route\("\/health", get\(crate::api::health\)\)/);
-  assert.match(serverSource, /\.route\("\/ready", get\(crate::api::ready\)\)/);
+  assert.match(httpContractSource, /pub const HEALTH: &str = "\/health";/);
+  assert.match(httpContractSource, /pub const READY: &str = "\/ready";/);
+  assert.match(serverSource, /\.route\(routes::HEALTH, get\(crate::api::health\)\)/);
+  assert.match(serverSource, /\.route\(routes::READY, get\(crate::api::ready\)\)/);
   assert.doesNotMatch(serverSource, /\.route\("\/admin/);
   assert.doesNotMatch(serverSource, /\.route\("\/metrics/);
 
