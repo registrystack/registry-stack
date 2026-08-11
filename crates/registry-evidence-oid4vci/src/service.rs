@@ -374,6 +374,11 @@ where
             let _ = tokio::join!(&mut public, &mut cleanup);
             result
         }
+        () = &mut cleanup => {
+            let _ = stop.send(true);
+            let (public, metrics) = tokio::join!(&mut public, &mut metrics);
+            public.and(metrics)
+        }
         () = &mut shutdown => {
             let _ = stop.send(true);
             let (public, metrics, _) = tokio::join!(&mut public, &mut metrics, &mut cleanup);
@@ -2805,6 +2810,57 @@ mod tests {
             }
         };
         drop(connected);
+
+        stop.send(()).expect("request shutdown");
+        serving
+            .await
+            .expect("the serving task joins")
+            .expect("serving ends cleanly");
+    }
+
+    #[tokio::test]
+    async fn serve_polls_periodic_cleanup_while_the_listeners_are_running() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let port = {
+            let probe = StdTcpListener::bind(("127.0.0.1", 0)).expect("probe a free port");
+            probe.local_addr().expect("read the probed port").port()
+        };
+        let path = write_deployment(directory.path(), port, 0o600);
+        let config = DeliveryConfig::load(&path).expect("the configuration loads");
+        let expired_at = now()
+            .saturating_sub(config.store.offer_lifetime_seconds as i64)
+            .saturating_sub(1);
+        let (service, _) = wired_service_over(config);
+        service
+            .store
+            .remember_offer(
+                "expired-before-serving",
+                None,
+                PreparedRequest::new("urn:example:kind", "{}", 1),
+                expired_at,
+            )
+            .expect("seed an expired offer");
+
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let serving_service = Arc::clone(&service);
+        let serving = tokio::spawn(serve(serving_service, async move {
+            let _ = stopped.await;
+        }));
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if service
+                    .metrics
+                    .render()
+                    .contains("evidence_oid4vci_cleanup_expired_total 2")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the running service polls the cleanup interval");
 
         stop.send(()).expect("request shutdown");
         serving
