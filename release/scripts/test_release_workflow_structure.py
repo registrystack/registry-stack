@@ -420,6 +420,31 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             assemble,
         )
 
+    def test_next_release_embeds_and_smokes_relay_installer_aliases(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        assemble = step_run(
+            document,
+            "assemble",
+            "Assemble public payload and validate version-appropriate install inputs",
+        )
+        self.assertIn(
+            'relay_installer="relay-${{ needs.validate.outputs.tag }}-install.sh"',
+            assemble,
+        )
+        self.assertIn("crates/registry-relay-v2/install.sh", assemble)
+        self.assertIn(
+            'cp "candidate/bundle-root/${relay_installer}" \\\n'
+            "    candidate/bundle-root/relay-install.sh",
+            assemble,
+        )
+        self.assertIn(
+            'RELAY_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root"',
+            assemble,
+        )
+        self.assertIn('RELAY_INSTALL_DIR="${relay_install_dir}"', assemble)
+        self.assertIn('"${relay_install_dir}/relay" --version', assemble)
+        self.assertIn("relay_patch >= 1", assemble)
+
     def test_builds_and_smokes_stable_evidence_client_packages(self) -> None:
         text, document = workflow("release-candidate.yml")
         clients = document["jobs"]["clients"]

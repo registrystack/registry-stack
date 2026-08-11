@@ -51,6 +51,7 @@ CURRENT_IMAGE_NAMES = {"registry-relay"}
 NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
 CANDIDATE_V2_MINIMUM_VERSION = (0, 16, 0)
 RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
+RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
 RELAY_V2_IMAGE_NAMES = {"relay"}
 ATTEMPT_ARTIFACT_PREFIXES = {
     "registry-stack-candidate-build-a",
@@ -189,6 +190,12 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             ),
         }
     )
+    if (
+        tuple(int(part) for part in version.split("."))
+        >= RELAY_INSTALLER_MINIMUM_VERSION
+    ):
+        inventory[f"relay-{tag}-install.sh"] = "installer"
+        inventory["relay-install.sh"] = "installer"
     return inventory
 
 

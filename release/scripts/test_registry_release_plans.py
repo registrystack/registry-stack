@@ -40,6 +40,7 @@ RELAY_V2_ARTIFACT_INVENTORY = (
     "mint",
     "registry-manifest",
     "relay",
+    "relay-installer",
     "relayctl",
 )
 
@@ -79,7 +80,11 @@ def git(repo: Path, *args: str) -> str:
 def manifest(version: str, release_id: str, source_ref: str, status: str) -> dict:
     version_tuple = tuple(int(part) for part in version.split("."))
     inventory = (
-        RELAY_V2_ARTIFACT_INVENTORY
+        tuple(
+            artifact
+            for artifact in RELAY_V2_ARTIFACT_INVENTORY
+            if artifact != "relay-installer" or version_tuple >= (0, 19, 1)
+        )
         if version_tuple >= (0, 19, 0)
         else LEGACY_ARTIFACT_INVENTORY
     )
