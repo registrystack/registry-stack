@@ -16,9 +16,10 @@ use registry_platform_audit::{
     AuditChainProfile, AuditSink, ChainState, DurableSegmentedJsonlSink,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifier,
-    TokenVerifierConfig,
+    fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    TokenVerifier, TokenVerifierConfig,
 };
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -29,7 +30,7 @@ use crate::audit::RelayAudit;
 use crate::auth::RelayAuthenticator;
 use crate::contract::{
     contract_has_protected_access, runtime_cursor_configuration_is_valid, IssuerAlgorithm,
-    IssuerRuntime, RegistryContract, RelayRuntime, MAXIMUM_RUNTIME_BYTES,
+    IssuerProfile, IssuerRuntime, RegistryContract, RelayRuntime, MAXIMUM_RUNTIME_BYTES,
 };
 use crate::cursor::CursorKey;
 use crate::package::{load_package, VerifiedPackage};
@@ -511,24 +512,47 @@ async fn build_authenticator(
     let Some(issuer) = issuer else {
         return Ok(None);
     };
-    let (issuer_identifier, algorithm) = verifier_issuer_profile(issuer)?;
-    let discovery = fetch_discovery(&OidcDiscoveryConfig {
-        issuer: issuer_identifier.clone(),
-        jwks_uri_override: None,
-        discovery_timeout: ISSUER_NETWORK_TIMEOUT,
-        max_doc_bytes: 1024 * 1024,
-    })
+    let profile = verifier_issuer_profile(issuer)?;
+    build_authenticator_with_profile(issuer, profile, &FetchUrlPolicy::strict())
+        .await
+        .map(Some)
+}
+
+async fn build_authenticator_with_profile(
+    issuer: &IssuerRuntime,
+    profile: IssuerProfile,
+    fetch_url_policy: &FetchUrlPolicy,
+) -> Result<RelayAuthenticator, StartupError> {
+    let IssuerProfile {
+        issuer_identifier,
+        algorithm,
+    } = profile;
+    let algorithm = match algorithm {
+        IssuerAlgorithm::EdDsa => Algorithm::EdDSA,
+        IssuerAlgorithm::Es256 => Algorithm::ES256,
+        IssuerAlgorithm::Rs256 => Algorithm::RS256,
+    };
+    let discovery = fetch_discovery_with_policy(
+        &OidcDiscoveryConfig {
+            issuer: issuer_identifier.clone(),
+            jwks_uri_override: None,
+            discovery_timeout: ISSUER_NETWORK_TIMEOUT,
+            max_doc_bytes: 1024 * 1024,
+        },
+        fetch_url_policy,
+    )
     .await
     .map_err(|_| StartupError::IssuerUnavailable)?;
     if discovery.issuer != issuer_identifier {
         return Err(StartupError::IssuerUnavailable);
     }
-    let fetcher = Arc::new(JwksFetcher::new(
+    let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         discovery.jwks_uri,
         JwksFetcherConfig {
             request_timeout: ISSUER_NETWORK_TIMEOUT,
             ..JwksFetcherConfig::defaults()
         },
+        fetch_url_policy.clone(),
     ));
     fetcher
         .ensure_key_set()
@@ -545,21 +569,30 @@ async fn build_authenticator(
         .with_leeway(TOKEN_CLOCK_LEEWAY),
         fetcher,
     );
-    Ok(Some(RelayAuthenticator::new(
+    Ok(RelayAuthenticator::new(
         Arc::new(verifier),
         issuer.audience.clone(),
         TOKEN_CLOCK_LEEWAY,
-    )))
+    ))
 }
 
-fn verifier_issuer_profile(issuer: &IssuerRuntime) -> Result<(String, Algorithm), StartupError> {
-    let profile = issuer.profile().ok_or(StartupError::RuntimeInvalid)?;
-    let algorithm = match profile.algorithm {
-        IssuerAlgorithm::EdDsa => Algorithm::EdDSA,
-        IssuerAlgorithm::Es256 => Algorithm::ES256,
-        IssuerAlgorithm::Rs256 => Algorithm::RS256,
-    };
-    Ok((profile.issuer_identifier, algorithm))
+/// Build the exact production authenticator over a supervised loopback issuer.
+///
+/// This exists only with the `tooling` feature so integration tests can prove
+/// discovery, JWKS loading, and verifier construction against a real local
+/// issuer without weakening the production HTTPS and SSRF policy.
+#[cfg(feature = "tooling")]
+pub async fn build_authenticator_for_supervised_local_development(
+    issuer: &IssuerRuntime,
+) -> Result<RelayAuthenticator, StartupError> {
+    let profile = issuer
+        .supervised_local_profile()
+        .ok_or(StartupError::RuntimeInvalid)?;
+    build_authenticator_with_profile(issuer, profile, &FetchUrlPolicy::dev()).await
+}
+
+fn verifier_issuer_profile(issuer: &IssuerRuntime) -> Result<IssuerProfile, StartupError> {
+    issuer.profile().ok_or(StartupError::RuntimeInvalid)
 }
 
 async fn build_audit(
@@ -744,13 +777,12 @@ mod tests {
             .expect("issuer shape parses")
         };
         let valid = "https://identity.example.invalid/.well-known/openid-configuration";
+        let profile = verifier_issuer_profile(&issuer(valid)).expect("issuer profile validates");
         assert_eq!(
-            verifier_issuer_profile(&issuer(valid)),
-            Ok((
-                "https://identity.example.invalid".to_owned(),
-                Algorithm::EdDSA
-            ))
+            profile.issuer_identifier,
+            "https://identity.example.invalid"
         );
+        assert_eq!(profile.algorithm, IssuerAlgorithm::EdDsa);
 
         for invalid in [
             "https://operator:credential@identity.example.invalid/.well-known/openid-configuration",
@@ -759,10 +791,30 @@ mod tests {
             "https://identity.example.invalid/.well-known/oauth-authorization-server",
             "https:///.well-known/openid-configuration",
         ] {
-            assert_eq!(
+            assert!(matches!(
                 verifier_issuer_profile(&issuer(invalid)),
                 Err(StartupError::RuntimeInvalid)
-            );
+            ));
+        }
+
+        #[cfg(feature = "tooling")]
+        {
+            let loopback = issuer("http://127.0.0.1:18080/.well-known/openid-configuration");
+            assert!(matches!(
+                verifier_issuer_profile(&loopback),
+                Err(StartupError::RuntimeInvalid)
+            ));
+            let profile = loopback
+                .supervised_local_profile()
+                .expect("tooling accepts one canonical loopback issuer");
+            assert_eq!(profile.issuer_identifier, "http://127.0.0.1:18080");
+            for invalid in [
+                "http://localhost:18080/.well-known/openid-configuration",
+                "http://127.0.0.1/.well-known/openid-configuration",
+                "http://10.0.0.1:18080/.well-known/openid-configuration",
+            ] {
+                assert!(issuer(invalid).supervised_local_profile().is_none());
+            }
         }
     }
 

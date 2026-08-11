@@ -561,19 +561,24 @@ async fn the_published_metadata_points_at_the_endpoints_that_exist() {
     let deployment = deployment().await;
     let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
 
-    let metadata = http.get("/.well-known/oauth-authorization-server").await;
-    metadata.assert_status_ok();
-    let document = metadata.json::<Value>();
-    assert_eq!(document["issuer"], json!(ISSUER));
-    assert_eq!(document["token_endpoint"], json!(ASSERTION_AUDIENCE));
-    assert_eq!(
-        document["jwks_uri"],
-        json!(format!("{ISSUER}/.well-known/jwks.json"))
-    );
-    assert_eq!(
-        document["token_endpoint_auth_methods_supported"],
-        json!(["private_key_jwt"])
-    );
+    for path in [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/openid-configuration",
+    ] {
+        let metadata = http.get(path).await;
+        metadata.assert_status_ok();
+        let document = metadata.json::<Value>();
+        assert_eq!(document["issuer"], json!(ISSUER));
+        assert_eq!(document["token_endpoint"], json!(ASSERTION_AUDIENCE));
+        assert_eq!(
+            document["jwks_uri"],
+            json!(format!("{ISSUER}/.well-known/jwks.json"))
+        );
+        assert_eq!(
+            document["token_endpoint_auth_methods_supported"],
+            json!(["private_key_jwt"])
+        );
+    }
 
     // The metadata must describe routes this router actually serves.
     http.get("/.well-known/jwks.json").await.assert_status_ok();

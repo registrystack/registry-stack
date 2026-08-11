@@ -40,6 +40,7 @@ registry-platform-buildinfo.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-config.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-sqlite.workspace = true
 registry-relay-http-contract.workspace = true
@@ -66,7 +67,6 @@ async-trait.workspace = true
 futures.workspace = true
 jsonschema.workspace = true
 oxjsonld = "0.2.5"
-registry-platform-httputil.workspace = true
 registry-platform-sqlite = { workspace = true, features = ["fixture"] }
 registry-platform-testing.workspace = true
 registry-mint.workspace = true
@@ -75,6 +75,10 @@ registry-relay-client.workspace = true
 p256.workspace = true
 tempfile.workspace = true
 utoipa.workspace = true
+
+[[test]]
+name = "acceptance_http"
+required-features = ["tooling"]
 
 [[test]]
 name = "process_http"

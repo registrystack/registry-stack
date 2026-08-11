@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-08-12"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -122,8 +122,9 @@ clients:
 ```
 
 `issuer` must be an `https` URL with a host and no credentials, query, or fragment; resource
-servers compare it exactly. `accessTokens.lifetimeSeconds` is bounded to `60..=3600`: short
-enough that a leaked token expires quickly, long enough to survive verifier clock skew.
+servers compare it exactly. `accessTokens.lifetimeSeconds` is bounded to `60..=3600` for
+Evidence-only deployments. A standard authorization registration reduces the maximum to 900
+seconds so the token cannot exceed Registry Relay's fixed lifetime ceiling.
 `accessTokens.claims` must match Evidence Gateway's own claim names field for field. A deployment
 may omit `accessTokens.claims` only when every registered client uses standard authorization.
 `clientAssertion.audience` is the value every client's signed request must carry as its own
@@ -209,6 +210,8 @@ Each direct value is a non-empty string of at most 512 bytes. Claim names cannot
 `aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`, `sub`, or `scope`.
 When `accessTokens.claims` is configured for Evidence clients in the same deployment, a scoped
 client's direct claims cannot reuse any of those configured Evidence names.
+Mint projects the complete signed response and refuses a standard registration whose token
+response could exceed the shared client's 16 KiB read ceiling.
 
 Registry Relay validates the resulting token through its standard OAuth JWT verifier. It has no
 Registry Mint-specific authentication branch. The Relay client library's private-key-JWT token

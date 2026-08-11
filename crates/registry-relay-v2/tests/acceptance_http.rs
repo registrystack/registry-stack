@@ -27,7 +27,7 @@ use registry_platform_audit::{
 };
 use registry_platform_crypto::PublicJwk;
 use registry_platform_httputil::FetchUrlPolicy;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier, TokenVerifierConfig};
+use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
 use registry_platform_sqlite::{
     inspect_schema, materialize_fixture, CapturedSnapshot, DatabaseProfile, InspectionLimits,
     SchemaObjectKind,
@@ -68,6 +68,7 @@ use registry_relay_v2::server::{
     router, AlignmentMetadata, InstitutionMetadata, QuotaConfig, RelayService, ServiceMetadata,
 };
 use registry_relay_v2::sqlite_runtime::{RuntimeSourceBinding, SqliteRuntime, SqliteRuntimeLimits};
+use registry_relay_v2::startup::build_authenticator_for_supervised_local_development;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -162,7 +163,6 @@ impl ClientLoopback {
 
 struct MintLoopback {
     issuer: String,
-    jwks_uri: String,
     token_provider: Arc<dyn TokenProvider>,
     shutdown: tokio::sync::oneshot::Sender<()>,
     server: tokio::task::JoinHandle<Result<(), std::io::Error>>,
@@ -181,7 +181,6 @@ impl MintLoopback {
             .expect("Mint acceptance address resolves");
         let issuer = format!("http://{address}");
         let token_endpoint = format!("{issuer}/token");
-        let jwks_uri = format!("{issuer}/.well-known/jwks.json");
 
         let temp = tempfile::tempdir().expect("Mint acceptance deployment creates");
         let root = temp.path();
@@ -309,7 +308,6 @@ clients:
 
         Self {
             issuer,
-            jwks_uri,
             token_provider: provider,
             shutdown,
             server,
@@ -971,31 +969,18 @@ async fn mint_registered_authority_drives_a_protected_relay_lookup() {
     if let Some(fixture_idp) = relay.idp.take() {
         fixture_idp.stop().await;
     }
-    let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
-        mint.jwks_uri.clone(),
-        JwksFetcherConfig::defaults(),
-        FetchUrlPolicy::dev(),
-    ));
-    fetcher
-        .ensure_key_set()
+    let mut issuer = relay
+        .runtime
+        .authentication
+        .issuer
+        .clone()
+        .expect("social-assistance declares an issuer");
+    issuer.discovery_url = format!("{}/.well-known/openid-configuration", mint.issuer);
+    issuer.algorithms = vec!["ES256".into()];
+    let authenticator = build_authenticator_for_supervised_local_development(&issuer)
         .await
-        .expect("Relay loads Mint's signing key");
-    let verifier = TokenVerifier::new(
-        TokenVerifierConfig::registry_relay_access_profile(
-            mint.issuer.clone(),
-            vec![audience.clone()],
-            vec![jsonwebtoken::Algorithm::ES256],
-            vec!["at+jwt".into()],
-        )
-        .with_max_token_lifetime(Some(Duration::from_secs(300)))
-        .with_leeway(Duration::from_secs(30)),
-        fetcher,
-    );
-    relay.replace_authenticator(RelayAuthenticator::new(
-        Arc::new(verifier),
-        audience,
-        Duration::from_secs(30),
-    ));
+        .expect("Relay startup discovers Mint and loads its signing key");
+    relay.replace_authenticator(authenticator);
 
     let loopback =
         ClientLoopback::start_with_provider(&relay, Some(Arc::clone(&mint.token_provider))).await;

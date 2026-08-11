@@ -1,9 +1,10 @@
 //! The Mint HTTP boundary.
 //!
-//! Four routes: the token endpoint, the published key set, authorization server
-//! metadata, and the two liveness probes. Everything a caller sends is treated
-//! as an unauthenticated claim about identity until the client assertion has
-//! been verified against that client's own registered keys.
+//! The boundary serves the token endpoint, published key set, equivalent OAuth
+//! authorization-server and OpenID Provider metadata resources, and two
+//! liveness probes. Everything a caller sends is treated as an unauthenticated
+//! claim about identity until the client assertion has been verified against
+//! that client's own registered keys.
 //!
 //! The service holds two kinds of state with deliberately different lifetimes.
 //! Issuer identity, signing and audit keys, listener, and token policy are startup-only:
@@ -30,6 +31,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use registry_platform_httputil::MAXIMUM_TOKEN_RESPONSE_BYTES;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -38,12 +40,21 @@ use crate::{
     assertion::ClientAuthenticator,
     audit::{MintAuditError, MintAuditLog},
     clients::{ClientRegistry, ClientRegistryError},
-    config::{MintConfig, MINT_HEALTH_PATH, MINT_METADATA_PATH, MINT_READY_PATH, MINT_TOKEN_PATH},
+    config::{
+        MintConfig, MINT_HEALTH_PATH, MINT_METADATA_PATH, MINT_OIDC_METADATA_PATH, MINT_READY_PATH,
+        MINT_TOKEN_PATH,
+    },
     error::TokenError,
     replay::ReplayCache,
-    token::{MinterError, TokenMinter},
+    token::{projected_standard_token_response_bytes, MinterError, TokenMinter},
     CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS,
 };
+
+/// Relay's verifier accepts access tokens for at most fifteen minutes. Keeping
+/// this bound on the standard profile makes every accepted registration usable
+/// by the resource server that profile was introduced to support, while the
+/// existing Evidence profile retains Mint's wider configured range.
+const MAXIMUM_STANDARD_TOKEN_LIFETIME_SECONDS: u64 = 15 * 60;
 
 const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -90,11 +101,7 @@ impl MintService {
     pub async fn load(config: MintConfig) -> Result<Self, ServiceError> {
         let minter = TokenMinter::new(&config).await?;
         let registry = Arc::new(ClientRegistry::load(&config.clients.directory)?);
-        check_client_profiles(
-            &registry,
-            minter.claims(),
-            config.access_tokens.audiences.len(),
-        )?;
+        check_client_profiles(&registry, &config)?;
         let replay = Arc::new(ReplayCache::new(
             config.client_assertion.replay_cache_entries,
         ));
@@ -120,13 +127,9 @@ impl MintService {
     /// so an operator can check an edited configuration against the deployment
     /// it is about to replace. Returns the number of registered clients.
     pub async fn check(config: &MintConfig) -> Result<usize, ServiceError> {
-        let minter = TokenMinter::new(config).await?;
+        let _minter = TokenMinter::new(config).await?;
         let registry = ClientRegistry::load(&config.clients.directory)?;
-        check_client_profiles(
-            &registry,
-            minter.claims(),
-            config.access_tokens.audiences.len(),
-        )?;
+        check_client_profiles(&registry, config)?;
         MintAuditLog::check(&config.audit, &config.secret_providers)?;
         Ok(registry.len())
     }
@@ -139,11 +142,7 @@ impl MintService {
         let registry = Arc::new(ClientRegistry::load(&self.config.clients.directory)?);
         // Checked on every reload, not only at startup: a registration dropped
         // into the directory later must clear the same bar.
-        check_client_profiles(
-            &registry,
-            self.minter.claims(),
-            self.config.access_tokens.audiences.len(),
-        )?;
+        check_client_profiles(&registry, &self.config)?;
         let count = registry.len();
         let authenticator = Arc::new(ClientAuthenticator::new(
             registry,
@@ -248,9 +247,9 @@ impl MintService {
 /// an unusable token.
 fn check_client_profiles(
     registry: &ClientRegistry,
-    claims: Option<&crate::config::ClaimNames>,
-    audience_count: usize,
+    config: &MintConfig,
 ) -> Result<(), ServiceError> {
+    let claims = config.access_tokens.claims.as_ref();
     let evidence_claim_names = claims.map(|claims| {
         let mut names = vec![
             claims.principal.as_str(),
@@ -266,11 +265,32 @@ fn check_client_profiles(
         let client = registry
             .get(client_id)
             .expect("client id came from this registry");
-        if client.authorization().is_some() && audience_count != 1 {
-            return Err(ServiceError::Registration(
-                client_id.to_owned(),
-                "standard authorization requires exactly one access-token audience",
-            ));
+        if client.authorization().is_some() {
+            if config.access_tokens.audiences.len() != 1 {
+                return Err(ServiceError::Registration(
+                    client_id.to_owned(),
+                    "standard authorization requires exactly one access-token audience",
+                ));
+            }
+            if config.access_tokens.lifetime_seconds > MAXIMUM_STANDARD_TOKEN_LIFETIME_SECONDS {
+                return Err(ServiceError::Registration(
+                    client_id.to_owned(),
+                    "standard authorization requires an access-token lifetime of at most 900 seconds",
+                ));
+            }
+            let projected =
+                projected_standard_token_response_bytes(config, client).map_err(|_| {
+                    ServiceError::Registration(
+                        client_id.to_owned(),
+                        "the standard token response could not be projected",
+                    )
+                })?;
+            if projected > MAXIMUM_TOKEN_RESPONSE_BYTES {
+                return Err(ServiceError::Registration(
+                    client_id.to_owned(),
+                    "standard authorization would exceed the shared client token-response bound",
+                ));
+            }
         }
         if let (Some(authorization), Some(evidence_claim_names)) =
             (client.authorization(), evidence_claim_names.as_ref())
@@ -401,6 +421,7 @@ pub fn build_app(service: Arc<MintService>) -> Router {
         .route(MINT_TOKEN_PATH, post(token))
         .route(&jwks_path, get(jwks))
         .route(MINT_METADATA_PATH, get(metadata))
+        .route(MINT_OIDC_METADATA_PATH, get(metadata))
         .route(MINT_HEALTH_PATH, get(health))
         .route(MINT_READY_PATH, get(ready))
         .fallback(unknown_route)
@@ -643,6 +664,29 @@ mod tests {
             .expect("the Evidence sample names its claims")
     }
 
+    fn check_profiles(
+        registry: &ClientRegistry,
+        claims: Option<&crate::config::ClaimNames>,
+        audience_count: usize,
+    ) -> Result<(), ServiceError> {
+        check_profiles_with_lifetime(registry, claims, audience_count, 300)
+    }
+
+    fn check_profiles_with_lifetime(
+        registry: &ClientRegistry,
+        claims: Option<&crate::config::ClaimNames>,
+        audience_count: usize,
+        lifetime_seconds: u64,
+    ) -> Result<(), ServiceError> {
+        let mut config = crate::config::tests::sample_config();
+        config.access_tokens.claims = claims.cloned();
+        config.access_tokens.audiences = (0..audience_count)
+            .map(|index| format!("audience-{index}"))
+            .collect();
+        config.access_tokens.lifetime_seconds = lifetime_seconds;
+        check_client_profiles(registry, &config)
+    }
+
     const DELEGATION: &str = "delegation:\n  subjectClaims:\n    given_name: identity.given_name\n";
 
     /// The registry and the claim-name configuration are loaded independently,
@@ -652,12 +696,12 @@ mod tests {
     fn a_delegation_without_a_configured_actor_claim_refuses_to_load() {
         let mut claims = claim_names();
         claims.actor = None;
-        let error = check_client_profiles(&registry_with(DELEGATION), Some(&claims), 1)
+        let error = check_profiles(&registry_with(DELEGATION), Some(&claims), 1)
             .expect_err("an unconfigured actor claim must refuse the registry");
         assert!(matches!(error, ServiceError::Registration(client, _) if client == "client-a"));
 
         claims.actor = Some("evidence_actor".to_owned());
-        assert!(check_client_profiles(&registry_with(DELEGATION), Some(&claims), 1).is_ok());
+        assert!(check_profiles(&registry_with(DELEGATION), Some(&claims), 1).is_ok());
     }
 
     /// A subject path rooted at a claim Mint writes itself would let the caller
@@ -682,7 +726,7 @@ mod tests {
                 "delegation:\n  subjectClaims:\n    given_name: {root}.given_name\n"
             ));
             assert!(
-                check_client_profiles(&registry, Some(&claims), 1).is_err(),
+                check_profiles(&registry, Some(&claims), 1).is_err(),
                 "a subject path rooted at {root} must be refused"
             );
         }
@@ -694,13 +738,13 @@ mod tests {
     fn an_undelegated_registry_loads_without_an_actor_claim() {
         let mut claims = claim_names();
         claims.actor = None;
-        assert!(check_client_profiles(&registry_with(""), Some(&claims), 1).is_ok());
+        assert!(check_profiles(&registry_with(""), Some(&claims), 1).is_ok());
     }
 
     #[test]
     fn evidence_registrations_require_claim_names_but_scoped_registrations_do_not() {
         assert!(matches!(
-            check_client_profiles(&registry_with(""), None, 1),
+            check_profiles(&registry_with(""), None, 1),
             Err(ServiceError::Registration(client, _)) if client == "client-a"
         ));
 
@@ -714,7 +758,7 @@ mod tests {
         )
         .expect("write scoped registration");
         let registry = ClientRegistry::load(directory.path()).expect("registry loads");
-        assert!(check_client_profiles(&registry, None, 1).is_ok());
+        assert!(check_profiles(&registry, None, 1).is_ok());
     }
 
     #[test]
@@ -744,7 +788,7 @@ mod tests {
             .expect("write scoped registration");
             let registry = ClientRegistry::load(directory.path()).expect("registry loads");
             assert!(matches!(
-                check_client_profiles(&registry, Some(&claims), 1),
+                check_profiles(&registry, Some(&claims), 1),
                 Err(ServiceError::Registration(client, _)) if client == "client-a"
             ));
         }
@@ -763,13 +807,58 @@ mod tests {
         .expect("write scoped registration");
         let registry = ClientRegistry::load(directory.path()).expect("registry loads");
 
-        assert!(check_client_profiles(&registry, None, 1).is_ok());
+        assert!(check_profiles(&registry, None, 1).is_ok());
         for audience_count in [0, 2] {
             assert!(matches!(
-                check_client_profiles(&registry, None, audience_count),
+                check_profiles(&registry, None, audience_count),
                 Err(ServiceError::Registration(client, _)) if client == "client-a"
             ));
         }
+    }
+
+    #[test]
+    fn standard_authorization_requires_a_relay_compatible_lifetime() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let public = crate::assertion::tests::test_key(1).1;
+        std::fs::write(
+            directory.path().join("client-a.yaml"),
+            format!(
+                "clientId: client-a\nprincipal: urn:example:client-a\nauthorization: {{scopes: [registry:read]}}\nkeys: [{public}]\n"
+            ),
+        )
+        .expect("write scoped registration");
+        let registry = ClientRegistry::load(directory.path()).expect("registry loads");
+
+        assert!(check_profiles_with_lifetime(&registry, None, 1, 900).is_ok());
+        assert!(matches!(
+            check_profiles_with_lifetime(&registry, None, 1, 901),
+            Err(ServiceError::Registration(client, _)) if client == "client-a"
+        ));
+    }
+
+    #[test]
+    fn standard_authorization_must_fit_the_shared_token_response_bound() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let public = crate::assertion::tests::test_key(1).1;
+        let claims = (0..32)
+            .map(|index| format!("    claim{index}: '{}'", "x".repeat(512)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            directory.path().join("client-a.yaml"),
+            format!(
+                "clientId: client-a\nprincipal: urn:example:client-a\nauthorization:\n  scopes: [registry:read]\n  claims:\n{claims}\nkeys: [{public}]\n"
+            ),
+        )
+        .expect("write oversized scoped registration");
+        let registry = ClientRegistry::load(directory.path())
+            .expect("per-field-valid standard authority loads");
+
+        assert!(matches!(
+            check_profiles(&registry, None, 1),
+            Err(ServiceError::Registration(client, reason))
+                if client == "client-a" && reason.contains("token-response bound")
+        ));
     }
 
     #[test]

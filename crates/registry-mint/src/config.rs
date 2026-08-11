@@ -62,6 +62,7 @@ fn default_jwks_path() -> String {
 pub(crate) const MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
 pub(crate) const MINT_TOKEN_PATH: &str = "/token";
 pub(crate) const MINT_METADATA_PATH: &str = "/.well-known/oauth-authorization-server";
+pub(crate) const MINT_OIDC_METADATA_PATH: &str = "/.well-known/openid-configuration";
 pub(crate) const MINT_HEALTH_PATH: &str = "/health";
 pub(crate) const MINT_READY_PATH: &str = "/ready";
 
@@ -69,9 +70,10 @@ pub(crate) const MINT_READY_PATH: &str = "/ready";
 ///
 /// The router panics when one path is registered twice, so the configured
 /// JWKS path is checked against this list where the configuration is read.
-pub(crate) const MINT_FIXED_ROUTES: [&str; 4] = [
+pub(crate) const MINT_FIXED_ROUTES: [&str; 5] = [
     MINT_TOKEN_PATH,
     MINT_METADATA_PATH,
+    MINT_OIDC_METADATA_PATH,
     MINT_HEALTH_PATH,
     MINT_READY_PATH,
 ];

@@ -15,6 +15,7 @@ pub use client::{
     ServiceBaseUrlError, ServiceBaseUrlJoinError, StaticToken, TokenError, TokenProvider,
     TransportKind, DEFAULT_ASSERTION_LIFETIME_SECONDS, DEFAULT_REFRESH_MARGIN_SECONDS,
     MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
+    MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
 
 /// Maximum number of response header field lines accepted by shared transports.

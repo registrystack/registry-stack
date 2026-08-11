@@ -69,6 +69,7 @@ Endpoints:
 | `POST /token` | Issue an access token |
 | `GET /.well-known/jwks.json` | Public keys for verifying minted tokens (path is configurable) |
 | `GET /.well-known/oauth-authorization-server` | Metadata pointing at the above |
+| `GET /.well-known/openid-configuration` | Equivalent discovery metadata for OIDC-compatible resource servers |
 | `GET /health`, `GET /ready` | Liveness, and readiness (503 without clients, a ready signer, or a writable audit chain) |
 
 ## Configuration
@@ -252,6 +253,12 @@ direct claims. It cannot use `evidenceAudience`, `requesterTags`, `grant`, or
 `nbf`, `jti`, `client_id`, `sub`, or `scope`.
 When the deployment also configures Evidence claim names, a scoped client's
 direct claims cannot reuse any of those names.
+
+Standard-profile tokens have a maximum configured lifetime of 900 seconds.
+Mint also projects the complete signed token response at startup and reload and
+refuses a registration that would exceed the shared client's 16 KiB response
+ceiling. Evidence-profile deployments retain the general 60 to 3600 second
+range.
 
 For Registry Relay, configure `accessTokens.audiences` with the one exact
 audience from the Relay runtime. Register only scopes and direct claims that

@@ -124,18 +124,7 @@ impl TokenMinter {
         self_test(signer.as_ref(), &active).await?;
         let jwks = json!({ "keys": public_keys });
 
-        let audience = if config.access_tokens.audiences.len() == 1 {
-            Value::String(config.access_tokens.audiences[0].clone())
-        } else {
-            Value::Array(
-                config
-                    .access_tokens
-                    .audiences
-                    .iter()
-                    .map(|audience| Value::String(audience.clone()))
-                    .collect(),
-            )
-        };
+        let audience = configured_audience(&config.access_tokens.audiences);
 
         Ok(Self {
             issuer: config.issuer.clone(),
@@ -158,12 +147,6 @@ impl TokenMinter {
     #[must_use]
     pub fn issuer(&self) -> &str {
         &self.issuer
-    }
-
-    /// The claim names this minter writes authority into.
-    #[must_use]
-    pub fn claims(&self) -> Option<&ClaimNames> {
-        self.claims.as_ref()
     }
 
     /// Current availability of the active signing provider.
@@ -197,72 +180,15 @@ impl TokenMinter {
         let client: &RegisteredClient = &authenticated.client;
         let expires_at = now + self.lifetime_seconds;
         let token_id = ulid::Ulid::new().to_string();
-        let mut claims = Map::new();
-        claims.insert("iss".to_owned(), Value::String(self.issuer.clone()));
-        claims.insert("aud".to_owned(), self.audience.clone());
-        claims.insert("iat".to_owned(), json!(now));
-        claims.insert("nbf".to_owned(), json!(now));
-        claims.insert("exp".to_owned(), json!(expires_at));
-        claims.insert("jti".to_owned(), Value::String(token_id.clone()));
-        // `client_id` records which registration authenticated; the principal
-        // is what the resource server acts on. They are allowed to differ.
-        claims.insert(
-            "client_id".to_owned(),
-            Value::String(client.client_id().to_owned()),
-        );
-
-        // `sub` always carries the principal so the token is meaningful to a
-        // standard OAuth consumer, even when the resource server reads the
-        // principal from a differently named claim.
-        claims.insert(
-            "sub".to_owned(),
-            Value::String(client.principal().to_owned()),
-        );
-        let scope = if let Some(authorization) = client.authorization() {
-            let scope = authorization.scopes.join(" ");
-            claims.insert("scope".to_owned(), Value::String(scope.clone()));
-            for (name, value) in &authorization.claims {
-                claims.insert(name.clone(), Value::String(value.clone()));
-            }
-            Some(scope)
-        } else {
-            let names = self.claims.as_ref().ok_or_else(|| {
-                TokenError::server_error("Evidence claim names are not configured")
-            })?;
-            let requester_tags = client.requester_tags().ok_or_else(|| {
-                TokenError::server_error("an Evidence registration has no requester tags")
-            })?;
-            let evidence_audience = client.evidence_audience().ok_or_else(|| {
-                TokenError::server_error("an Evidence registration has no evidence audience")
-            })?;
-            claims.insert(
-                names.principal.clone(),
-                Value::String(client.principal().to_owned()),
-            );
-            claims.insert(
-                names.requester_tags.clone(),
-                Value::Array(
-                    requester_tags
-                        .iter()
-                        .map(|tag| Value::String(tag.clone()))
-                        .collect(),
-                ),
-            );
-            claims.insert(
-                names.evidence_audience.clone(),
-                Value::String(evidence_audience.to_owned()),
-            );
-            // Evidence requires the grant id and authority together or not at
-            // all, which the registry already guarantees by construction.
-            if let Some(grant) = client.grant() {
-                claims.insert(names.grant_id.clone(), Value::String(grant.id.clone()));
-                claims.insert(
-                    names.grant_authority.clone(),
-                    Value::String(grant.authority.clone()),
-                );
-            }
-            None
-        };
+        let (mut claims, scope) = registered_claims(
+            &self.issuer,
+            &self.audience,
+            self.claims.as_ref(),
+            client,
+            now,
+            expires_at,
+            &token_id,
+        )?;
 
         if let Some(delegation) = &authenticated.delegation {
             let registered = client.delegation().ok_or_else(|| {
@@ -284,16 +210,7 @@ impl TokenMinter {
             write_subject_claims(&mut claims, registered, delegation)?;
         }
 
-        let header = json!({
-            "alg": "ES256",
-            "typ": ACCESS_TOKEN_TYP,
-            "kid": self.signer.key_id(),
-        });
-        let signing_input = format!(
-            "{}.{}",
-            encode_json(&header)?,
-            encode_json(&Value::Object(claims))?
-        );
+        let signing_input = signing_input(self.signer.key_id(), claims)?;
         let signature = self
             .signer
             .sign(signing_input.as_bytes())
@@ -310,6 +227,156 @@ impl TokenMinter {
             expires_at_unix: expires_at,
         })
     }
+}
+
+/// Project the largest token response this standard registration can produce.
+///
+/// The shared client reads at most 16 KiB. Startup and reload use this exact
+/// serialization path with maximum-width timestamps and the fixed ES256
+/// signature width so Mint cannot accept authority that its paired client must
+/// reject after issuance.
+pub(crate) fn projected_standard_token_response_bytes(
+    config: &MintConfig,
+    client: &RegisteredClient,
+) -> Result<u64, TokenError> {
+    if client.authorization().is_none() {
+        return Err(TokenError::server_error(
+            "a standard token response was projected for an Evidence registration",
+        ));
+    }
+    let lifetime = i64::try_from(config.access_tokens.lifetime_seconds)
+        .map_err(|_| TokenError::server_error("the access token lifetime is invalid"))?;
+    let expires_at = i64::MAX;
+    let now = expires_at - lifetime;
+    let token_id = "Z".repeat(26);
+    let key_id = "Z".repeat(43);
+    let (claims, scope) = registered_claims(
+        &config.issuer,
+        &configured_audience(&config.access_tokens.audiences),
+        config.access_tokens.claims.as_ref(),
+        client,
+        now,
+        expires_at,
+        &token_id,
+    )?;
+    let signing_input = signing_input(&key_id, claims)?;
+    let response = MintedToken {
+        access_token: format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode([0_u8; 64])),
+        token_type: "Bearer",
+        expires_in: config.access_tokens.lifetime_seconds,
+        scope,
+        token_id,
+        signing_key_id: key_id,
+        expires_at_unix: expires_at,
+    };
+    let bytes = serde_json::to_vec(&response)
+        .map_err(|_| TokenError::server_error("the token response could not be projected"))?
+        .len();
+    u64::try_from(bytes)
+        .map_err(|_| TokenError::server_error("the token response size could not be represented"))
+}
+
+fn configured_audience(audiences: &[String]) -> Value {
+    if audiences.len() == 1 {
+        Value::String(audiences[0].clone())
+    } else {
+        Value::Array(
+            audiences
+                .iter()
+                .map(|audience| Value::String(audience.clone()))
+                .collect(),
+        )
+    }
+}
+
+fn registered_claims(
+    issuer: &str,
+    audience: &Value,
+    evidence_names: Option<&ClaimNames>,
+    client: &RegisteredClient,
+    now: i64,
+    expires_at: i64,
+    token_id: &str,
+) -> Result<(Map<String, Value>, Option<String>), TokenError> {
+    let mut claims = Map::new();
+    claims.insert("iss".to_owned(), Value::String(issuer.to_owned()));
+    claims.insert("aud".to_owned(), audience.clone());
+    claims.insert("iat".to_owned(), json!(now));
+    claims.insert("nbf".to_owned(), json!(now));
+    claims.insert("exp".to_owned(), json!(expires_at));
+    claims.insert("jti".to_owned(), Value::String(token_id.to_owned()));
+    // `client_id` records which registration authenticated; the principal is
+    // what the resource server acts on. They are allowed to differ.
+    claims.insert(
+        "client_id".to_owned(),
+        Value::String(client.client_id().to_owned()),
+    );
+    // `sub` always carries the principal so the token is meaningful to a
+    // standard OAuth consumer, even when the resource server reads the
+    // principal from a differently named claim.
+    claims.insert(
+        "sub".to_owned(),
+        Value::String(client.principal().to_owned()),
+    );
+
+    let scope = if let Some(authorization) = client.authorization() {
+        let scope = authorization.scopes.join(" ");
+        claims.insert("scope".to_owned(), Value::String(scope.clone()));
+        for (name, value) in &authorization.claims {
+            claims.insert(name.clone(), Value::String(value.clone()));
+        }
+        Some(scope)
+    } else {
+        let names = evidence_names
+            .ok_or_else(|| TokenError::server_error("Evidence claim names are not configured"))?;
+        let requester_tags = client.requester_tags().ok_or_else(|| {
+            TokenError::server_error("an Evidence registration has no requester tags")
+        })?;
+        let evidence_audience = client.evidence_audience().ok_or_else(|| {
+            TokenError::server_error("an Evidence registration has no evidence audience")
+        })?;
+        claims.insert(
+            names.principal.clone(),
+            Value::String(client.principal().to_owned()),
+        );
+        claims.insert(
+            names.requester_tags.clone(),
+            Value::Array(
+                requester_tags
+                    .iter()
+                    .map(|tag| Value::String(tag.clone()))
+                    .collect(),
+            ),
+        );
+        claims.insert(
+            names.evidence_audience.clone(),
+            Value::String(evidence_audience.to_owned()),
+        );
+        // Evidence requires the grant id and authority together or not at all,
+        // which the registry already guarantees by construction.
+        if let Some(grant) = client.grant() {
+            claims.insert(names.grant_id.clone(), Value::String(grant.id.clone()));
+            claims.insert(
+                names.grant_authority.clone(),
+                Value::String(grant.authority.clone()),
+            );
+        }
+        None
+    };
+    Ok((claims, scope))
+}
+
+fn signing_input(key_id: &str, claims: Map<String, Value>) -> Result<String, TokenError> {
+    let header = json!({
+        "alg": "ES256",
+        "typ": ACCESS_TOKEN_TYP,
+        "kid": key_id,
+    });
+    Ok(format!(
+        "{}.{}",
+        encode_json(&header)?,
+        encode_json(&Value::Object(claims))?
+    ))
 }
 
 /// Write each subject selector value at the claim path its registration

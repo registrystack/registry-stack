@@ -5919,6 +5919,7 @@ dependencies = [
  "registry-platform-canonical-json",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-httputil",
  "registry-platform-oidc",
  "reqwest 0.12.28",
  "rustix",

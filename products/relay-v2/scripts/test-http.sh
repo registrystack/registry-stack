@@ -8,7 +8,7 @@ cd "${REPO_ROOT}"
 CARGO_INCREMENTAL=0 \
 CARGO_PROFILE_DEV_DEBUG=0 \
 CARGO_PROFILE_TEST_DEBUG=0 \
-  cargo test --locked -p registry-relay-v2 --test acceptance_http
+  cargo test --locked -p registry-relay-v2 --features tooling --test acceptance_http
 
 CARGO_INCREMENTAL=0 \
 CARGO_PROFILE_DEV_DEBUG=0 \
