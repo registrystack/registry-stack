@@ -83,6 +83,7 @@ const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 const RETRY_AFTER_SECONDS: &str = "1";
+pub(crate) const BEARER_AUTH_CHALLENGE: &str = "Bearer realm=\"registry-evidence\"";
 
 #[derive(Clone)]
 struct ServerState {
@@ -954,7 +955,7 @@ fn problem_response(
     if code == ProblemCode::AuthenticationFailed {
         response.headers_mut().insert(
             axum::http::header::WWW_AUTHENTICATE,
-            HeaderValue::from_static("Bearer realm=\"registry-evidence\""),
+            HeaderValue::from_static(BEARER_AUTH_CHALLENGE),
         );
     }
     if code == ProblemCode::RateLimited {

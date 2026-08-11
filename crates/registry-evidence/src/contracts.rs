@@ -28,6 +28,7 @@ use crate::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch, FlattenedJws,
         JwksDocument, SdJwtVcBatchEnvelope, UnsignedEvidenceEnvelope,
     },
+    server::BEARER_AUTH_CHALLENGE,
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
 };
@@ -1210,7 +1211,7 @@ fn openapi_document(
                         "401": {
                             "description": "Authentication failed",
                             "headers": evidence_response_headers(Some(("WWW-Authenticate", json!({
-                                "schema": {"type": "string", "enum": ["Bearer"]}
+                                "schema": {"type": "string", "enum": [BEARER_AUTH_CHALLENGE]}
                             })))),
                             "content": problem_content(&["auth.invalid_credential"])
                         },
@@ -1270,7 +1271,7 @@ fn openapi_document(
                         "401": {
                             "description": "Authentication failed",
                             "headers": evidence_response_headers(Some(("WWW-Authenticate", json!({
-                                "schema": {"type": "string", "enum": ["Bearer"]}
+                                "schema": {"type": "string", "enum": [BEARER_AUTH_CHALLENGE]}
                             })))),
                             "content": problem_content(&["auth.invalid_credential"])
                         },
@@ -1318,7 +1319,7 @@ fn openapi_document(
                         "401": {
                             "description": "Authentication failed",
                             "headers": response_headers(Some(("WWW-Authenticate", json!({
-                                "schema": {"type": "string", "enum": ["Bearer"]}
+                                "schema": {"type": "string", "enum": [BEARER_AUTH_CHALLENGE]}
                             })))),
                             "content": problem_content(&["auth.invalid_credential"])
                         },
@@ -1663,6 +1664,34 @@ mod tests {
                 ["application/problem+json"]["schema"]["allOf"][1]["properties"]["code"]["enum"],
             json!(["service.unavailable"])
         );
+    }
+
+    #[test]
+    fn generated_auth_challenge_matches_the_runtime_challenge_exactly() {
+        let document = openapi_document(
+            &request_schema(),
+            &request_batch_schema(),
+            &request_batch_response_schema(),
+            &evidence_schema(),
+            &definitions_schema(),
+            &jws_schema(),
+            &unsigned_envelope_schema(),
+            &sd_jwt_vc_batch_envelope_schema(),
+            &problem_schema(),
+            &jwks_schema(),
+        );
+        for (path, method) in [
+            ("/v1/evidence", "post"),
+            ("/v1/evidence/batch", "post"),
+            ("/v1/evidence-definitions", "get"),
+        ] {
+            assert_eq!(
+                document["paths"][path][method]["responses"]["401"]["headers"]["WWW-Authenticate"]
+                    ["schema"]["enum"],
+                json!([BEARER_AUTH_CHALLENGE]),
+                "{method} {path}"
+            );
+        }
     }
 
     #[test]

@@ -2262,7 +2262,7 @@
               "WWW-Authenticate": {
                 "schema": {
                   "enum": [
-                    "Bearer"
+                    "Bearer realm=\"registry-evidence\""
                   ],
                   "type": "string"
                 }
@@ -2879,7 +2879,7 @@
               "WWW-Authenticate": {
                 "schema": {
                   "enum": [
-                    "Bearer"
+                    "Bearer realm=\"registry-evidence\""
                   ],
                   "type": "string"
                 }
@@ -3288,7 +3288,7 @@
               "WWW-Authenticate": {
                 "schema": {
                   "enum": [
-                    "Bearer"
+                    "Bearer realm=\"registry-evidence\""
                   ],
                   "type": "string"
                 }
