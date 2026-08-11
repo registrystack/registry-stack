@@ -5,11 +5,12 @@
 //! must agree with the response's `traceparent`; otherwise neither correlation
 //! nor the problem classification is trustworthy.
 
-use serde::Deserialize;
+use registry_platform_httpsec::ProblemDocument;
 
 use crate::error::EvidenceClientError;
 
 pub(crate) const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
+#[cfg(test)]
 pub(crate) const TRACEPARENT_HEADER: &str = "traceparent";
 const PROBLEM_TYPE_PREFIX: &str = "https://id.registrystack.org/problems/registry-evidence/";
 const EVIDENCE_NOT_AVAILABLE: &str = "evidence.unavailable";
@@ -80,19 +81,6 @@ const REGISTERED_PROBLEMS: [(u16, &str, &str, &str); 10] = [
     ),
 ];
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct ProblemBody {
-    #[serde(rename = "type")]
-    type_uri: String,
-    title: String,
-    status: u16,
-    detail: String,
-    code: String,
-    #[serde(rename = "traceId")]
-    trace_id: String,
-}
-
 /// Map a refused or failed exchange onto one coarse client failure.
 ///
 /// `Retry-After` is actionable only for a registered 429 response. The caller
@@ -121,11 +109,11 @@ pub(crate) fn map_problem(
         (401 | 403 | 429, Some(code)) => EvidenceClientError::Denied {
             status,
             code: code.to_owned(),
-            trace_id: Some(problem.trace_id),
+            trace_id: Some(problem.trace_id.as_str().to_owned()),
             retry_after_seconds: retry_after_seconds.filter(|_| status == 429),
         },
         (422, Some(EVIDENCE_NOT_AVAILABLE)) => EvidenceClientError::NotAvailable {
-            trace_id: Some(problem.trace_id),
+            trace_id: Some(problem.trace_id.as_str().to_owned()),
         },
         (_, code) => protocol(status, header_trace_id, code.map(str::to_owned)),
     }
@@ -141,23 +129,22 @@ fn protocol(status: u16, trace_id: Option<&str>, code: Option<String>) -> Eviden
 }
 
 /// Parse an exact six-member problem body, including its registered type URI.
-fn parse_problem(media_type: Option<&str>, body: &[u8]) -> Option<ProblemBody> {
+fn parse_problem(media_type: Option<&str>, body: &[u8]) -> Option<ProblemDocument> {
     if !media_type.is_some_and(|value| essence(value).eq_ignore_ascii_case(PROBLEM_MEDIA_TYPE))
         || body.is_empty()
         || body.len() > MAXIMUM_PROBLEM_BYTES
     {
         return None;
     }
-    let problem: ProblemBody = serde_json::from_slice(body).ok()?;
-    if !is_canonical_trace_id(&problem.trace_id)
-        || !REGISTERED_PROBLEMS
-            .iter()
-            .any(|(status, code, title, detail)| {
-                *status == problem.status
-                    && *code == problem.code
-                    && *title == problem.title
-                    && *detail == problem.detail
-            })
+    let problem = ProblemDocument::parse_exact(body, MAXIMUM_PROBLEM_BYTES).ok()?;
+    if !REGISTERED_PROBLEMS
+        .iter()
+        .any(|(status, code, title, detail)| {
+            *status == problem.status
+                && *code == problem.code
+                && *title == problem.title
+                && *detail == problem.detail
+        })
         || problem.type_uri != expected_type_uri(&problem.code)
     {
         return None;
@@ -176,34 +163,16 @@ pub(crate) fn essence(value: &str) -> &str {
 
 /// Parse one exact lower-case W3C Trace Context version 0 header and return
 /// its canonical 32-character trace ID.
-pub(crate) fn trace_id_from_traceparent(value: &str) -> Option<String> {
-    let mut parts = value.split('-');
-    let [version, trace_id, parent_id, flags] =
-        [parts.next()?, parts.next()?, parts.next()?, parts.next()?];
-    if parts.next().is_some()
-        || version != "00"
-        || !is_canonical_trace_id(trace_id)
-        || !is_nonzero_lower_hex(parent_id, 16)
-        || !is_lower_hex(flags, 2)
-    {
-        return None;
-    }
-    Some(trace_id.to_owned())
-}
-
-pub(crate) fn is_canonical_trace_id(value: &str) -> bool {
-    is_nonzero_lower_hex(value, 32)
-}
-
-fn is_nonzero_lower_hex(value: &str, length: usize) -> bool {
-    is_lower_hex(value, length) && value.bytes().any(|byte| byte != b'0')
-}
-
-fn is_lower_hex(value: &str, length: usize) -> bool {
-    value.len() == length
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+#[cfg(test)]
+fn trace_id_from_traceparent(value: &str) -> Option<String> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        "traceparent",
+        reqwest::header::HeaderValue::from_str(value).ok()?,
+    );
+    registry_platform_httpsec::response_trace_id(&headers)
+        .ok()
+        .map(|trace_id| trace_id.as_str().to_owned())
 }
 
 #[cfg(test)]

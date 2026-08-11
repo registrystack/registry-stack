@@ -52,6 +52,7 @@ NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
 CANDIDATE_V2_MINIMUM_VERSION = (0, 16, 0)
 RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
+RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
 RELAY_V2_IMAGE_NAMES = {"relay"}
 ATTEMPT_ARTIFACT_PREFIXES = {
     "registry-stack-candidate-build-a",
@@ -196,6 +197,16 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
     ):
         inventory[f"relay-{tag}-install.sh"] = "installer"
         inventory["relay-install.sh"] = "installer"
+    if (
+        tuple(int(part) for part in version.split("."))
+        >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION
+    ):
+        for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
+            inventory[f"relay-client-node-{tag}-{platform}.tgz"] = "client-package"
+        for platform in ("linux_x86_64", "linux_aarch64", "macosx_11_0_arm64"):
+            inventory[
+                f"registry_relay_client-{version}-cp310-abi3-{platform}.whl"
+            ] = "client-package"
     return inventory
 
 

@@ -1,0 +1,58 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { test } = require('node:test');
+
+const wrapper = require('..');
+const native = require('../index.js');
+
+const METHODS = [
+  'health',
+  'ready',
+  'openapi',
+  'serviceMetadata',
+  'resources',
+  'continueResources',
+  'resource',
+  'listRecords',
+  'continueListRecords',
+  'readRecord',
+  'lookup',
+  'search',
+  'continueSearch',
+  'artifact',
+  'sdmxData',
+  'sdmxStructure',
+];
+
+test('the error wrapper accounts for every native client method', () => {
+  const actual = Object.getOwnPropertyNames(native.RelayClient.prototype)
+    .filter((name) => name !== 'constructor')
+    .filter((name) => typeof Object.getOwnPropertyDescriptor(native.RelayClient.prototype, name).value === 'function')
+    .sort();
+  assert.deepEqual(actual, [...METHODS].sort());
+});
+
+test('the handwritten facade declares every method', () => {
+  const declaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
+  for (const name of METHODS) {
+    assert.match(declaration, new RegExp(`\\b${name}\\(`));
+  }
+});
+
+test('only the normalized package entry point is exported', () => {
+  assert.equal(require('@registrystack/relay-client').RelayClient, wrapper.RelayClient);
+  assert.throws(
+    () => require('@registrystack/relay-client/index.js'),
+    (error) => error.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  );
+});
+
+test('the package carries its declared Apache license', () => {
+  const packageJson = require('../package.json');
+  assert.equal(packageJson.license, 'Apache-2.0');
+  const license = fs.readFileSync(path.join(__dirname, '..', 'LICENSE'), 'utf8');
+  assert.match(license, /Apache License/);
+});

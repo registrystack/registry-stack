@@ -512,6 +512,28 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
+    def test_missing_relay_client_contract_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "relay-client-contracts:",
+                "relay-client-disabled:",
+                "Relay client contract gate",
+            ),
+            (
+                "run: products/relay-v2/scripts/check-client-contract.sh",
+                "run: true # Relay client contracts disabled",
+                "Relay client contract consistency",
+            ),
+            (
+                "run: products/relay-v2/scripts/check-source-neutrality.sh",
+                "run: true # Relay client neutrality disabled",
+                "Relay client source neutrality",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement)
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_missing_debian13_image_contract_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: python3 release/scripts/check-debian13-images.py",

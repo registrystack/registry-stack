@@ -10,6 +10,7 @@ use registry_evidence_verifier::verifier::VerificationError;
 use thiserror::Error;
 
 use crate::{nonce::NonceError, token::TokenError};
+pub use registry_platform_httputil::TransportKind;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -70,45 +71,6 @@ pub enum EvidenceClientError {
     /// coarse reason, passed through unchanged.
     #[error("the Evidence response failed verification: {0}")]
     Verification(VerificationError),
-}
-
-/// Coarse reason an exchange did not complete.
-///
-/// TLS failures are reported as `Connect`: distinguishing them would mean
-/// reading a transport error chain whose text this crate must not copy into a
-/// diagnostic.
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum TransportKind {
-    #[error("connection setup failed")]
-    Connect,
-    #[error("the configured timeout elapsed")]
-    Timeout,
-    #[error("the exchange failed")]
-    Exchange,
-    #[error("the response body exceeded the configured maximum")]
-    ResponseTooLarge,
-}
-
-impl TransportKind {
-    /// A stable, machine-readable name for which kind of transport failure
-    /// this is.
-    ///
-    /// It exists for callers that have to branch or aggregate without matching
-    /// an enum this crate may extend: a metric label, a structured log field, or
-    /// a language binding that carries the discriminant across a boundary. The
-    /// rendered message is for people and may be reworded; these names are part
-    /// of the crate's contract and will not be renamed. A variant added later
-    /// brings a new name rather than reusing one of these.
-    #[must_use]
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Self::Connect => "connect",
-            Self::Timeout => "timeout",
-            Self::Exchange => "exchange",
-            Self::ResponseTooLarge => "response_too_large",
-        }
-    }
 }
 
 impl EvidenceClientError {

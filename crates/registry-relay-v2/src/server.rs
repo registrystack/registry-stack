@@ -9,6 +9,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use axum::{body::Body, http::Request};
 use registry_platform_httpsec::{security_headers, CspBuilder};
+use registry_relay_http_contract::routes;
 use tower_http::trace::TraceLayer;
 
 use crate::artifacts::ArtifactSet;
@@ -110,47 +111,20 @@ impl RelayService {
 /// compiler-confined by handler dispatch against the immutable model.
 pub fn router(service: Arc<RelayService>) -> Router {
     Router::new()
-        .route("/health", get(crate::api::health))
-        .route("/ready", get(crate::api::ready))
-        .route("/openapi.json", get(crate::api::openapi))
-        .route("/v2", get(crate::api::service_metadata))
-        .route("/v2/resources", get(crate::api::resource_list))
-        .route(
-            "/v2/resources/{resource}",
-            get(crate::api::resource_metadata),
-        )
-        .route(
-            "/v2/resources/{resource}/records",
-            get(crate::api::record_list),
-        )
-        .route(
-            "/v2/resources/{resource}/records/{record_identifier}",
-            get(crate::api::record_read),
-        )
-        .route(
-            "/v2/resources/{resource}/lookups/{lookup}",
-            post(crate::api::record_lookup),
-        )
-        .route(
-            "/v2/resources/{resource}/searches/{search}",
-            get(crate::api::record_search),
-        )
-        .route(
-            "/v2/artifacts/{artifact_identifier}",
-            get(crate::api::artifact),
-        )
-        .route(
-            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}",
-            get(crate::sdmx_http::data_keyed),
-        )
-        .route(
-            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}",
-            get(crate::sdmx_http::data_omitted_key),
-        )
-        .route(
-            "/sdmx/v2/structure/{artefact_type}/{agency}/{resource}/{version}",
-            get(crate::sdmx_http::structure),
-        )
+        .route(routes::HEALTH, get(crate::api::health))
+        .route(routes::READY, get(crate::api::ready))
+        .route(routes::OPENAPI, get(crate::api::openapi))
+        .route(routes::SERVICE, get(crate::api::service_metadata))
+        .route(routes::RESOURCES, get(crate::api::resource_list))
+        .route(routes::RESOURCE, get(crate::api::resource_metadata))
+        .route(routes::RECORDS, get(crate::api::record_list))
+        .route(routes::RECORD, get(crate::api::record_read))
+        .route(routes::LOOKUP, post(crate::api::record_lookup))
+        .route(routes::SEARCH, get(crate::api::record_search))
+        .route(routes::ARTIFACT, get(crate::api::artifact))
+        .route(routes::SDMX_DATA_KEY, get(crate::sdmx_http::data_keyed))
+        .route(routes::SDMX_DATA, get(crate::sdmx_http::data_omitted_key))
+        .route(routes::SDMX_STRUCTURE, get(crate::sdmx_http::structure))
         .fallback(crate::api::not_found)
         .method_not_allowed_fallback(crate::api::not_found)
         .with_state(service)
@@ -212,15 +186,15 @@ fn operational_route(uri: &http::Uri) -> &'static str {
         return "unmatched";
     }
     match parts {
-        (Some("health"), None, None, None, None, None, None, None) => "/health",
-        (Some("ready"), None, None, None, None, None, None, None) => "/ready",
-        (Some("openapi.json"), None, None, None, None, None, None, None) => "/openapi.json",
-        (Some("v2"), None, None, None, None, None, None, None) => "/v2",
-        (Some("v2"), Some("resources"), None, None, None, None, None, None) => "/v2/resources",
+        (Some("health"), None, None, None, None, None, None, None) => routes::HEALTH,
+        (Some("ready"), None, None, None, None, None, None, None) => routes::READY,
+        (Some("openapi.json"), None, None, None, None, None, None, None) => routes::OPENAPI,
+        (Some("v2"), None, None, None, None, None, None, None) => routes::SERVICE,
+        (Some("v2"), Some("resources"), None, None, None, None, None, None) => routes::RESOURCES,
         (Some("v2"), Some("resources"), Some(resource), None, None, None, None, None)
             if !resource.is_empty() =>
         {
-            "/v2/resources/{resource}"
+            routes::RESOURCE
         }
         (
             Some("v2"),
@@ -231,7 +205,7 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             None,
             None,
             None,
-        ) if !resource.is_empty() => "/v2/resources/{resource}/records",
+        ) if !resource.is_empty() => routes::RECORDS,
         (
             Some("v2"),
             Some("resources"),
@@ -241,9 +215,7 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             None,
             None,
             None,
-        ) if !resource.is_empty() && !record_identifier.is_empty() => {
-            "/v2/resources/{resource}/records/{record_identifier}"
-        }
+        ) if !resource.is_empty() && !record_identifier.is_empty() => routes::RECORD,
         (
             Some("v2"),
             Some("resources"),
@@ -253,9 +225,7 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             None,
             None,
             None,
-        ) if !resource.is_empty() && !lookup.is_empty() => {
-            "/v2/resources/{resource}/lookups/{lookup}"
-        }
+        ) if !resource.is_empty() && !lookup.is_empty() => routes::LOOKUP,
         (
             Some("v2"),
             Some("resources"),
@@ -265,9 +235,7 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             None,
             None,
             None,
-        ) if !resource.is_empty() && !search.is_empty() => {
-            "/v2/resources/{resource}/searches/{search}"
-        }
+        ) if !resource.is_empty() && !search.is_empty() => routes::SEARCH,
         (
             Some("v2"),
             Some("artifacts"),
@@ -277,7 +245,7 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             None,
             None,
             None,
-        ) if !artifact_identifier.is_empty() => "/v2/artifacts/{artifact_identifier}",
+        ) if !artifact_identifier.is_empty() => routes::ARTIFACT,
         (
             Some("sdmx"),
             Some("v2"),
@@ -292,7 +260,7 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             && !resource.is_empty()
             && !version.is_empty() =>
         {
-            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}"
+            routes::SDMX_DATA
         }
         (
             Some("sdmx"),
@@ -309,7 +277,7 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             && !version.is_empty()
             && !key.is_empty() =>
         {
-            "/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}"
+            routes::SDMX_DATA_KEY
         }
         (
             Some("sdmx"),
@@ -325,7 +293,7 @@ fn operational_route(uri: &http::Uri) -> &'static str {
             && !resource.is_empty()
             && !version.is_empty() =>
         {
-            "/sdmx/v2/structure/{artefact_type}/{agency}/{resource}/{version}"
+            routes::SDMX_STRUCTURE
         }
         _ => "unmatched",
     }

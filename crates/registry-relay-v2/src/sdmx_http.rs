@@ -29,7 +29,7 @@ use crate::contract::Handling;
 use crate::model::{
     CompiledAccess, CompiledRegistry, CompiledStatisticalDataset, RowAuthoritySource,
 };
-use crate::problem::{ProblemCode, TraceContext};
+use crate::problem::{ProblemCode, ProblemCodeResponseExt, TraceContext};
 use crate::sdmx::{
     parse_data_query, serialize_data_csv, serialize_data_json, DataQueryError,
     DimensionAtObservation, RepresentationError, StatisticalRow, StatisticalValue,

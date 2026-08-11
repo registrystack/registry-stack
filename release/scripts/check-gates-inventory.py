@@ -179,6 +179,15 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Relay V2 coequal HTTP journeys",
         "run: products/relay-v2/scripts/test-http.sh",
     ),
+    ("Relay client contract gate", "relay-client-contracts:"),
+    (
+        "Relay client contract consistency",
+        "run: products/relay-v2/scripts/check-client-contract.sh",
+    ),
+    (
+        "Relay client source neutrality",
+        "run: products/relay-v2/scripts/check-source-neutrality.sh",
+    ),
     (
         "Release helper tests",
         "run: python3 -m unittest release/scripts/test_registry_release.py",

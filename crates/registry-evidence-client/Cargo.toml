@@ -12,13 +12,12 @@ publish = false
 workspace = true
 
 [dependencies]
-async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 getrandom.workspace = true
 registry-evidence-verifier.workspace = true
-registry-platform-authcommon.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-httpsec = { workspace = true, default-features = false }
 registry-platform-httputil.workspace = true
 reqwest.workspace = true
 serde.workspace = true
