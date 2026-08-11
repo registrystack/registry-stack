@@ -26,8 +26,9 @@ use tower_lsp_server::{
 };
 
 use crate::{
-    evidence::layout::watched_globs,
+    evidence::layout::watched_globs as evidence_watched_globs,
     refs::{CompletionCandidate, IndexedLocation, IndexedSymbol},
+    relay_v2,
     workspace::Workspace,
 };
 
@@ -246,11 +247,14 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _params: InitializedParams) {
         if self.supports_dynamic_file_watching.load(Ordering::Relaxed) {
-            // The globs cover every file an Evidence index resolves against, so a Relay project
-            // document (always `.yaml`), an Evidence derivation (`.rhai`), and a source's own
-            // artifact all fire a watched-file event. Relay reads only `.yaml` project documents,
-            // which the extension half covers, so this list still covers Relay's own watcher.
-            let watchers = watched_globs()
+            // Evidence registers its authored extensions and source-artifact
+            // directories. Relay V2 accepts governed files at any safe
+            // relative path, so its recursive glob covers the rest of that
+            // compiler closure before registry.yaml has been parsed.
+            let watchers = evidence_watched_globs()
+                .into_iter()
+                .chain(relay_v2::watched_globs())
+                .collect::<BTreeSet<_>>()
                 .into_iter()
                 .map(|glob| FileSystemWatcher {
                     glob_pattern: GlobPattern::String(glob),

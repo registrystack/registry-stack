@@ -13,6 +13,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 mod shared;
+mod tooling_editor;
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 const USAGE_EXIT: u8 = 2;
@@ -49,6 +50,17 @@ enum Command {
     Diff(DiffArgs),
     /// Build a deterministic sealed deployment package.
     Package(PackageArgs),
+    /// Advanced editor and language-server integration surfaces.
+    #[command(subcommand)]
+    Tooling(ToolingCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum ToolingCommand {
+    /// Write project-local schema mappings for VS Code and Zed.
+    Editor(tooling_editor::EditorArgs),
+    /// Run Relay V2 authoring support over the Language Server Protocol.
+    LanguageServer,
 }
 
 #[derive(Debug, Args)]
@@ -186,8 +198,14 @@ where
         }
     };
 
-    let command_name = cli.command.name();
-    let report = match shared::execute(cli.command) {
+    let Cli { json, command } = cli;
+    let command = match command {
+        Command::Tooling(command) => return run_tooling(command, json, stdout, stderr),
+        command => command,
+    };
+
+    let command_name = command.name();
+    let report = match shared::execute(command) {
         Ok(report) => report,
         Err(error) => {
             let _ = writeln!(stderr, "relayctl: {}", error.safe_message());
@@ -195,7 +213,7 @@ where
         }
     };
 
-    if render_report(command_name, &report, cli.json, stdout).is_err() {
+    if render_report(command_name, &report, json, stdout).is_err() {
         let _ = writeln!(stderr, "relayctl: output could not be written");
         return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
     }
@@ -217,6 +235,56 @@ impl Command {
             Self::Test(_) => "test",
             Self::Diff(_) => "diff",
             Self::Package(_) => "package",
+            Self::Tooling(_) => "tooling",
+        }
+    }
+}
+
+fn run_tooling(
+    command: ToolingCommand,
+    json: bool,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    match command {
+        ToolingCommand::Editor(args) => match tooling_editor::setup_project_editor(&args.project) {
+            Ok(report) => {
+                let rendered = if json {
+                    serde_json::to_string_pretty(&report).map(|document| format!("{document}\n"))
+                } else {
+                    Ok(report.render_human())
+                };
+                match rendered.and_then(|document| {
+                    stdout
+                        .write_all(document.as_bytes())
+                        .map_err(serde_json::Error::io)
+                }) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(_) => {
+                        let _ = writeln!(stderr, "relayctl: output could not be written");
+                        ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+                    }
+                }
+            }
+            Err(error) => {
+                let _ = writeln!(stderr, "relayctl: {error}");
+                ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+            }
+        },
+        ToolingCommand::LanguageServer => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            match runtime {
+                Ok(runtime) => {
+                    runtime.block_on(registry_language_server::run_stdio());
+                    ExitCode::SUCCESS
+                }
+                Err(_) => {
+                    let _ = writeln!(stderr, "relayctl: language server could not start");
+                    ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+                }
+            }
         }
     }
 }

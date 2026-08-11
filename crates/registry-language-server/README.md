@@ -8,15 +8,16 @@ completion, and formatting to the editor's YAML language server: the authoring f
 already complete the keys through the project-local `yaml.schemas` mapping `evidencectl` writes, and
 a second list of the same keys would be a second list to disagree with the first.
 
-## Two document families
+## Three document families
 
-The server reads two unrelated authoring surfaces and keeps them apart. Each root belongs to exactly
+The server reads three unrelated authoring surfaces and keeps them apart. Each root belongs to exactly
 one family, and a diagnostic names the family that produced it in its `source` field, so a workspace
 holding both can be read without guessing which tool is talking.
 
 | Family | A directory is a root when it holds | Diagnostic source |
 |---|---|---|
 | Relay | `registry-stack.yaml` | `registry-stack` |
+| Relay V2 | `registry.yaml` | `relay-v2` |
 | Evidence | `evidence-project.yaml`, or both `source.openapi.yaml` and a `questions/` directory | `evidence` |
 
 Evidence accepts the second marker because an authoring project has always carried one OpenAPI
@@ -87,6 +88,16 @@ Beyond those edges, the server deserializes each question with the same reader t
 runs `registry-evidence-authoring`'s own validation, placing each finding at the field it names. A
 question the reader cannot parse at all is reported once, carrying the reader's message.
 
+### Relay V2
+
+Relay V2 indexes the governed Registry, sources, Record resources, statistical
+datasets, properties and components, disclosure and access profiles,
+operations, runtime source bindings, and governed-file references. It runs
+`registry-relay-v2::authoring` over the current in-memory `registry.yaml`,
+optional `runtime.yaml`, and exact governed closure. Those are the same strict
+types and compiler checks `relayctl check` uses. The editor never opens SQLite
+or observes source rows.
+
 ## Diagnostics
 
 Every diagnostic this server publishes has severity `Error`. Semantic diagnostics carry what the
@@ -134,10 +145,12 @@ in-progress edit in one file never blinds the rest of the project.
 cargo run -p registry-language-server
 ```
 
-The same server is available from a release installation as:
+The same server is available from a release installation through the
+supported adopter CLIs:
 
 ```console
-registryctl tooling language-server
+evidencectl tooling language-server
+relayctl tooling language-server
 ```
 
 The server communicates over standard input and output and expects the opened workspace (or a

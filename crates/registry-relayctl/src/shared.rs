@@ -45,5 +45,8 @@ pub(crate) fn execute(command: Command) -> Result<ToolingReport, ToolingError> {
             project_root: args.project,
             output_dir: args.output,
         }),
+        Command::Tooling(_) => {
+            unreachable!("tooling commands are handled before the product facade")
+        }
     }
 }

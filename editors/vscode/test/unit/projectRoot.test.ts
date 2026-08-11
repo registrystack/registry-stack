@@ -26,6 +26,20 @@ test('a symlinked registry-stack.yaml does not declare a project root', () => {
   assert.strictEqual(isProjectRoot(directory), false);
 });
 
+test('a plain registry.yaml declares a Relay V2 project root', () => {
+  const directory = tempDirectory();
+  fs.writeFileSync(path.join(directory, 'registry.yaml'), 'kind: RegistryContract\n');
+  assert.strictEqual(isProjectRoot(directory), true);
+});
+
+test('a symlinked registry.yaml does not declare a Relay V2 project root', () => {
+  const directory = tempDirectory();
+  const real = path.join(directory, 'real-registry.yaml');
+  fs.writeFileSync(real, 'kind: RegistryContract\n');
+  fs.symlinkSync(real, path.join(directory, 'registry.yaml'));
+  assert.strictEqual(isProjectRoot(directory), false);
+});
+
 test('a plain evidence-project.yaml declares a project root', () => {
   const directory = tempDirectory();
   fs.writeFileSync(path.join(directory, 'evidence-project.yaml'), 'version: 1\n');

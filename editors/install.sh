@@ -29,8 +29,7 @@ The installer never trusts a workspace automatically. Installing for VS Code
 updates the active profile unless --profile selects an existing profile. Zed
 requires one final command-palette action because its CLI cannot install a
 local development extension. Project configuration remains a separate
-registryctl init or registryctl -C <project> tooling editor operation
-(evidencectl provides equivalent commands for an Evidence project).
+evidencectl or relayctl tooling editor operation.
 EOF
 }
 
@@ -117,9 +116,9 @@ verify_registry_stack_cli() {
   [[ -n "${expected_version}" ]] ||
     fail "could not read the workspace version from ${REPO_ROOT}/Cargo.toml"
 
-  # registryctl is tried first so a Relay adopter, who has never heard of
-  # evidencectl, sees no change from before this fallback existed.
-  local -a candidate_names=(registryctl evidencectl)
+  # Evidence and Relay V2 are the supported product families for this shared
+  # editor integration. Keep their adopter CLIs in deterministic order.
+  local -a candidate_names=(evidencectl relayctl)
   local -a candidate_errors=()
   local candidate_name
 
@@ -134,7 +133,7 @@ verify_registry_stack_cli() {
     fi
     local installed_version="${REGISTRY_STACK_CLI_VERSION}"
 
-    # registryctl and evidencectl ship from this same workspace and share its
+    # Both adopter CLIs ship from this same workspace and share its
     # version. A CLI built from a source checkout reports a development version
     # of the workspace version it was built from, so both spellings match this
     # checkout. Only the version itself has to agree.
@@ -155,7 +154,7 @@ verify_registry_stack_cli() {
   done
 
   if ((${#candidate_errors[@]} == 0)); then
-    fail "required external command 'registryctl' or 'evidencectl' was not found on PATH"
+    fail "required external command 'evidencectl' or 'relayctl' was not found on PATH"
   fi
 
   local candidate_error
@@ -221,7 +220,7 @@ install_vscode() {
   code "${profile_args[@]}" --install-extension "${vsix}" --force
 
   printf '\nRegistry Stack editor support is installed for VS Code.\n'
-  printf 'Project setup remains a separate registryctl or evidencectl operation.\n'
+  printf 'Project setup remains a separate evidencectl or relayctl operation.\n'
   printf 'Workspace trust remains your decision when a project opens.\n'
   if [[ -n "${open_path}" ]]; then
     printf 'Opening %s with the VS Code %s.\n' "${open_path}" "${profile_label}"
@@ -254,7 +253,7 @@ install_zed() {
   fi
 
   printf '\nRegistry Stack editor support is prepared for Zed.\n'
-  printf 'Project setup remains a separate registryctl or evidencectl operation.\n'
+  printf 'Project setup remains a separate evidencectl or relayctl operation.\n'
   printf 'Zed requires one manual installation step:\n'
   printf '  1. Run "Zed: Install Dev Extension" from the command palette.\n'
   printf '  2. Select %s\n' "${zed_root}"

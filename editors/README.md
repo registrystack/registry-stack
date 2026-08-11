@@ -2,8 +2,9 @@
 
 Semantic navigation for VS Code and Zed is installable from a Registry Stack source release.
 The integrations are beta features and are not yet marketplace extensions or release assets.
-Use `registryctl init <directory> --template http` and its generated editor schema setup as the
-stable beta path for YAML validation, completion, hover, and formatting.
+Use `evidencectl tooling editor` or `relayctl tooling editor` and its generated
+schema setup as the stable beta path for YAML validation, completion, hover,
+and formatting.
 Install the editor integration when you also want optional cross-file semantic navigation.
 
 The Registry Stack editor support is split into one reusable language server and thin editor
@@ -24,14 +25,15 @@ cannot replace unsaved content.
 
 ## Install
 
-Project setup and editor installation are separate operations. `registryctl init` configures new
-projects automatically. For an existing project, refresh its version-matched schema settings with:
+Project setup and editor installation are separate operations. Refresh a
+project's version-matched schema settings with its adopter CLI:
 
 ```console
-registryctl -C /path/to/registry-stack-project tooling editor
+evidencectl tooling editor --project /path/to/evidence-project
+relayctl tooling editor /path/to/relay-v2-project
 ```
 
-Install the `registryctl` or `evidencectl` version that matches this source checkout, then install
+Install the `evidencectl` or `relayctl` version that matches this source checkout, then install
 an integration once from the repository root:
 
 ```console
@@ -40,9 +42,8 @@ an integration once from the repository root:
 ```
 
 The installer verifies a CLI's version and embedded language server without reading or changing a
-project. It tries `registryctl` first and `evidencectl` next, and a candidate that fails either
-check does not stop the one behind it, so an Evidence adopter holding an older `registryctl` still
-installs. VS Code is packaged and installed into the active profile. Pass
+project. It tries `evidencectl` and `relayctl` in that order, and a candidate that
+fails either check does not stop the one behind it. VS Code is packaged and installed into the active profile. Pass
 `--profile <existing-name>` to select another VS Code profile. The local VSIX records the verified
 CLI path, so an already-running VS Code process does not need to inherit the installer's `PATH`.
 Zed is compiled, then requires the command-palette selection that its CLI cannot perform.
@@ -64,17 +65,32 @@ workspace/document symbols, and reference diagnostics over its authoring documen
 questions, sources, access policies, and the schemas they cite) that a `registry-stack.yaml` root
 gets for Relay.
 
-Project setup and schema refresh mirror the Relay commands, spelled with `evidencectl` instead of
-`registryctl`:
+Project setup and schema refresh use `evidencectl`:
 
 ```console
 evidencectl new /path/to/evidence-project
 evidencectl tooling editor --project /path/to/evidence-project
 ```
 
-`evidencectl tooling editor` writes the same kind of project-local, version-matched YAML schema
-mappings that `registryctl tooling editor` writes for a Relay project. Run it again after changing
-the authoring project's shape.
+`evidencectl tooling editor` writes project-local, version-matched YAML schema
+mappings. Run it again after changing the authoring project's shape.
+
+## Relay V2 projects
+
+A Relay V2 project is rooted by a regular `registry.yaml`; `runtime.yaml` and
+the exact governed files named by the contract join the same bounded index.
+Configure version-matched schemas and refresh them after upgrading Relay V2:
+
+```console
+relayctl tooling editor /path/to/relay-v2-project
+```
+
+The language server validates the current buffers through the shared Relay V2
+authoring compiler, navigates the contract's named sources, resources,
+Record properties, statistical components, disclosure and access profiles,
+operations, runtime bindings, and
+governed files, and reports diagnostics under the `relay-v2` source. It never
+opens the project's SQLite source.
 
 Two gaps to know about before relying on this for Evidence work:
 
@@ -102,8 +118,9 @@ outside the checkout, so the diagnostic checks below cannot modify a tracked gol
 ```console
 export REGISTRY_STACK_SMOKE_ROOT="$(mktemp -d)"
 export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/project"
-registryctl --version
-registryctl init "$REGISTRY_STACK_SMOKE_PROJECT" --template http
+relayctl --version
+relayctl init "$REGISTRY_STACK_SMOKE_PROJECT"
+relayctl tooling editor "$REGISTRY_STACK_SMOKE_PROJECT"
 ```
 
 Keep that terminal open so the two variables remain available. Then follow the editor-specific
@@ -117,21 +134,16 @@ installation and launch instructions:
 Use the following checks in either editor:
 
 1. Confirm the Registry Stack language-server output or log says that the project was indexed.
-2. In `registry-stack.yaml`, invoke **Go to Definition** on `person-record` in the consultation's
-   `integration: person-record` field. It must open the `id` in
-   `integrations/person-record/integration.yaml`.
-3. Invoke **Go to Definition** on `person-record` under the manifest's top-level `integrations:`
-   mapping. It must open the same integration definition.
-4. Open `environments/local.yaml` and invoke **Go to Definition** on the `person-record` key under
-   `integrations:`. It must open the same integration definition.
-5. Open `integrations/person-record/integration.yaml` and invoke **Find References** on
-   `person-record` in the `id` field. Results must include the manifest alias, the consultation's
-   integration reference, and the environment binding.
-6. Search workspace symbols for `person`. Results must include the integration, service,
-   consultation, and fixture symbols. The document outline for `registry-stack.yaml` must list its
-   registry, service, and consultation symbols.
-7. Temporarily change `integration: person-record` to `integration: missing-source`. The editor
-   must report `Unknown integration reference 'missing-source'`. Restore `person-record` and
+2. In `registry.yaml`, invoke **Go to Definition** on `registry` in the resource's
+   `source: {source: registry, ...}` binding. It must open the `registry` key under `sources`.
+3. Invoke **Find References** on that source definition. Results must include the resource binding.
+4. Invoke **Go to Definition** on `default` in `defaultAccessProfile: default`. It must open the
+   `default` key under the operation's `accessProfiles`.
+5. Search workspace symbols for `record`. Results must include the Record resource and its
+   `recordValue` property. The document outline for `registry.yaml` must list the Registry, source,
+   resource, property, disclosure profile, access profile, and read operation.
+6. Temporarily change the resource's source reference to `source: missing-source`. The editor
+   must report an unknown Relay V2 source reference. Restore `registry` and
    confirm that the diagnostic clears.
 
 The YAML language server may report additional schema or syntax diagnostics. Those are expected
@@ -144,7 +156,7 @@ The same core behavior has non-GUI coverage:
 ```console
 bash editors/tests/install_test.sh
 cargo test --locked -p registry-language-server
-cargo test --locked -p registryctl --test language_server
+cargo test --locked -p registry-relayctl --test language_server
 cargo build --locked -p registry-language-server
 cd editors/vscode && npm ci && npm test
 ```
@@ -159,7 +171,7 @@ When finished, close the smoke project and remove the temporary directory shown 
 
 ## Develop the language server from source
 
-The installer deliberately uses the matching `registryctl` from `PATH`, which exercises the
+The installer deliberately uses a matching `evidencectl` or `relayctl` from `PATH`, which exercises the
 language server embedded in the installed release. To iterate on language-server source changes,
 build the standalone server and configure the editor to use it explicitly:
 

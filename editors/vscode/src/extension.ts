@@ -210,7 +210,7 @@ function resolveServerCommand(
     return onPath;
   }
   throw new Error(
-    'No Registry Stack language server was found. Reinstall the integration with a matching registryctl or evidencectl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl or evidencectl to PATH so it can run "<cli> tooling language-server".',
+    'No Registry Stack language server was found. Reinstall the integration with a matching evidencectl or relayctl; set registryStack.languageServer.path to an executable; add registry-language-server to PATH; or add a matching adopter CLI to PATH so it can run "<cli> tooling language-server".',
   );
 }
 

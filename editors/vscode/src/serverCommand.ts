@@ -14,10 +14,9 @@ export interface ServerCommand {
 // halves of the integration ask a candidate the same question.
 const HOSTED_SERVER_ARGUMENTS = ['tooling', 'language-server'];
 
-// The adopter CLIs that may host the server, in the order a Relay adopter's
-// PATH is expected to answer them. Both are tried: an Evidence adopter can
-// have an older registryctl on PATH that this extension is not installed for.
-const HOSTING_CLI_NAMES = ['registryctl', 'evidencectl'];
+// The adopter CLIs that may host the server, in product order. A matching
+// relayctl must remain reachable when an older evidencectl is also on PATH.
+const HOSTING_CLI_NAMES = ['evidencectl', 'relayctl'];
 
 const PROBE_TIMEOUT_MILLISECONDS = 5000;
 

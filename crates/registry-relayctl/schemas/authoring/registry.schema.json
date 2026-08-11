@@ -1,0 +1,1608 @@
+{
+  "$defs": {
+    "AccessProfileDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/AccessRule"
+        },
+        "disclosureProfile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "access",
+        "disclosureProfile"
+      ],
+      "type": "object"
+    },
+    "AccessRule": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ProtectedAccess"
+        }
+      ]
+    },
+    "AlignmentTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "cfrTarget": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "status"
+      ],
+      "type": "object"
+    },
+    "AuthorityRowBinding": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ClaimRowBinding"
+        },
+        {
+          "$ref": "#/$defs/PrincipalRowBinding"
+        }
+      ]
+    },
+    "ClaimRowBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "type": "string"
+        },
+        "sourceColumn": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim",
+        "sourceColumn"
+      ],
+      "type": "object"
+    },
+    "ClassificationCatalog": {
+      "additionalProperties": false,
+      "properties": {
+        "handling": {
+          "$ref": "#/$defs/SchemeVersion"
+        },
+        "institutional": {
+          "$ref": "#/$defs/SchemeVersion"
+        },
+        "privacy": {
+          "$ref": "#/$defs/SchemeVersion"
+        },
+        "provenanceRef": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "privacy",
+        "institutional",
+        "handling",
+        "provenanceRef"
+      ],
+      "type": "object"
+    },
+    "ClassificationPartial": {
+      "additionalProperties": false,
+      "properties": {
+        "handling": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Handling"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "institutional": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "privacy": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "CodelistColumnBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "codelist": {
+          "type": "string"
+        },
+        "sourceColumn": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceColumn",
+        "codelist"
+      ],
+      "type": "object"
+    },
+    "ColumnBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "sourceColumn": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceColumn"
+      ],
+      "type": "object"
+    },
+    "ContractMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "title"
+      ],
+      "type": "object"
+    },
+    "DataType": {
+      "enum": [
+        "string",
+        "boolean",
+        "integer",
+        "date",
+        "date-time",
+        "year",
+        "year-month",
+        "controlled-code"
+      ],
+      "type": "string"
+    },
+    "DateInputType": {
+      "enum": [
+        "date",
+        "date-time"
+      ],
+      "type": "string"
+    },
+    "DatePrecision": {
+      "enum": [
+        "year",
+        "year-month"
+      ],
+      "type": "string"
+    },
+    "DisclosureProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "properties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "properties"
+      ],
+      "type": "object"
+    },
+    "FilterDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "property": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/DataType"
+        }
+      },
+      "required": [
+        "name",
+        "property",
+        "type"
+      ],
+      "type": "object"
+    },
+    "Governance": {
+      "additionalProperties": false,
+      "properties": {
+        "auditOwner": {
+          "type": "string"
+        },
+        "controller": {
+          "type": "string"
+        },
+        "publisher": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "controller",
+        "publisher",
+        "auditOwner"
+      ],
+      "type": "object"
+    },
+    "Handling": {
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ],
+      "type": "string"
+    },
+    "Institution": {
+      "additionalProperties": false,
+      "properties": {
+        "identifier": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "identifier",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ListOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AccessProfileDefinition"
+          },
+          "type": "object"
+        },
+        "allowUnfiltered": {
+          "type": "boolean"
+        },
+        "defaultAccessProfile": {
+          "type": "string"
+        },
+        "filters": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FilterDefinition"
+          },
+          "type": "array"
+        },
+        "orderBy": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pagination": {
+          "$ref": "#/$defs/Pagination"
+        }
+      },
+      "required": [
+        "defaultAccessProfile",
+        "accessProfiles",
+        "allowUnfiltered",
+        "orderBy",
+        "pagination"
+      ],
+      "type": "object"
+    },
+    "LookupOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AccessProfileDefinition"
+          },
+          "type": "object"
+        },
+        "defaultAccessProfile": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "requestBody": {
+          "$ref": "#/$defs/LookupRequestBody"
+        }
+      },
+      "required": [
+        "id",
+        "requestBody",
+        "defaultAccessProfile",
+        "accessProfiles"
+      ],
+      "type": "object"
+    },
+    "LookupRequestBody": {
+      "additionalProperties": false,
+      "properties": {
+        "maximumBytes": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "selectors": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SelectorDefinition"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "maximumBytes",
+        "selectors"
+      ],
+      "type": "object"
+    },
+    "MetadataVisibility": {
+      "additionalProperties": false,
+      "properties": {
+        "classifications": {
+          "$ref": "#/$defs/Visibility"
+        },
+        "processing": {
+          "$ref": "#/$defs/Visibility"
+        },
+        "resources": {
+          "$ref": "#/$defs/Visibility"
+        },
+        "semantics": {
+          "$ref": "#/$defs/Visibility"
+        },
+        "service": {
+          "$ref": "#/$defs/Visibility"
+        },
+        "statisticalDatasets": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Visibility"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "service",
+        "resources",
+        "semantics",
+        "classifications",
+        "processing"
+      ],
+      "type": "object"
+    },
+    "Operations": {
+      "additionalProperties": false,
+      "properties": {
+        "list": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListOperation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lookups": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LookupOperation"
+          },
+          "type": "array"
+        },
+        "read": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecordOperation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "searches": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SearchOperation"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Pagination": {
+      "additionalProperties": false,
+      "properties": {
+        "defaultPageSize": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumPageSize": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "defaultPageSize",
+        "maximumPageSize"
+      ],
+      "type": "object"
+    },
+    "PartialStringReveal": {
+      "enum": [
+        "prefix",
+        "suffix"
+      ],
+      "type": "string"
+    },
+    "PointPropertyDefinitionSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ClassificationPartial",
+          "default": {
+            "handling": null,
+            "institutional": null,
+            "privacy": null,
+            "status": null
+          }
+        },
+        "crs": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "semanticTerm": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/PointSourceDefinition"
+        },
+        "sourceRequired": {
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/PointPropertyType"
+        }
+      },
+      "required": [
+        "label",
+        "description",
+        "type",
+        "crs",
+        "source",
+        "sourceRequired",
+        "semanticTerm"
+      ],
+      "type": "object"
+    },
+    "PointPropertyType": {
+      "enum": [
+        "point"
+      ],
+      "type": "string"
+    },
+    "PointSourceDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "latitudeColumn": {
+          "type": "string"
+        },
+        "longitudeColumn": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "longitudeColumn",
+        "latitudeColumn"
+      ],
+      "type": "object"
+    },
+    "PrincipalRowBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "principal": {
+          "type": "boolean"
+        },
+        "sourceColumn": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "principal",
+        "sourceColumn"
+      ],
+      "type": "object"
+    },
+    "ProcessingDescription": {
+      "additionalProperties": false,
+      "properties": {
+        "dpvProfileRef": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "legalBasisRef": {
+          "type": "string"
+        },
+        "operationRefs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "recipientClass": {
+          "type": "string"
+        },
+        "safeguards": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "operationRefs",
+        "purpose",
+        "recipientClass",
+        "legalBasisRef",
+        "dpvProfileRef",
+        "safeguards"
+      ],
+      "type": "object"
+    },
+    "PropertyDefinition": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ScalarPropertyDefinitionSchema"
+        },
+        {
+          "$ref": "#/$defs/PointPropertyDefinitionSchema"
+        }
+      ]
+    },
+    "ProtectedAccess": {
+      "additionalProperties": false,
+      "properties": {
+        "authorityRowBinding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthorityRowBinding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PurposeConstraint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope"
+      ],
+      "type": "object"
+    },
+    "PurposeConstraint": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "claim": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim",
+        "allowed"
+      ],
+      "type": "object"
+    },
+    "RecordContext": {
+      "additionalProperties": false,
+      "properties": {
+        "lifecycleState": {
+          "$ref": "#/$defs/CodelistColumnBinding"
+        },
+        "recordIdentifier": {
+          "$ref": "#/$defs/ColumnBinding"
+        },
+        "recordedAt": {
+          "$ref": "#/$defs/ColumnBinding"
+        },
+        "revisionIdentifier": {
+          "$ref": "#/$defs/ColumnBinding"
+        }
+      },
+      "required": [
+        "recordIdentifier",
+        "revisionIdentifier",
+        "lifecycleState",
+        "recordedAt"
+      ],
+      "type": "object"
+    },
+    "RecordOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AccessProfileDefinition"
+          },
+          "type": "object"
+        },
+        "defaultAccessProfile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "defaultAccessProfile",
+        "accessProfiles"
+      ],
+      "type": "object"
+    },
+    "RegistryDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "alignmentTargets": {
+          "items": {
+            "$ref": "#/$defs/AlignmentTarget"
+          },
+          "type": "array"
+        },
+        "authoritativeScope": {
+          "type": "string"
+        },
+        "authority": {
+          "$ref": "#/$defs/Institution"
+        },
+        "baseUri": {
+          "type": "string"
+        },
+        "identifierLifecyclePolicyRef": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Institution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "registryIdentifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "registryIdentifier",
+        "name",
+        "authority",
+        "authoritativeScope",
+        "baseUri",
+        "identifierLifecyclePolicyRef",
+        "alignmentTargets"
+      ],
+      "type": "object"
+    },
+    "ResourceDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "classificationDefaults": {
+          "$ref": "#/$defs/ClassificationPartial"
+        },
+        "description": {
+          "type": "string"
+        },
+        "disclosureProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DisclosureProfile"
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "operations": {
+          "$ref": "#/$defs/Operations"
+        },
+        "primaryGeometry": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processingDescriptions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProcessingDescription"
+          },
+          "type": "array"
+        },
+        "properties": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PropertyDefinition"
+          },
+          "type": "object"
+        },
+        "recordContext": {
+          "$ref": "#/$defs/RecordContext"
+        },
+        "semanticClass": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ResourceSource"
+        },
+        "sourceColumnClassifications": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ClassificationPartial"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "semanticClass",
+        "source",
+        "classificationDefaults",
+        "recordContext",
+        "properties",
+        "disclosureProfiles",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "ResourceSource": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "view": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "view"
+      ],
+      "type": "object"
+    },
+    "ReviewStatus": {
+      "enum": [
+        "reviewed",
+        "suggested",
+        "uncertain"
+      ],
+      "type": "string"
+    },
+    "ScalarPropertyDefinitionSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ClassificationPartial",
+          "default": {
+            "handling": null,
+            "institutional": null,
+            "privacy": null,
+            "status": null
+          }
+        },
+        "codelist": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "semanticTerm": {
+          "type": "string"
+        },
+        "sourceColumn": {
+          "type": "string"
+        },
+        "sourceRequired": {
+          "type": "boolean"
+        },
+        "transform": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransformDefinition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "type": {
+          "$ref": "#/$defs/DataType"
+        }
+      },
+      "required": [
+        "label",
+        "description",
+        "sourceColumn",
+        "type",
+        "sourceRequired",
+        "semanticTerm"
+      ],
+      "type": "object"
+    },
+    "SchemeVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "scheme": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "scheme",
+        "version"
+      ],
+      "type": "object"
+    },
+    "SdmxBindingDefinition": {
+      "additionalProperties": false,
+      "description": "Optional identity overrides for the fixed compiler-owned SDMX profile.",
+      "properties": {
+        "agencyId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conceptSchemeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dataStructureId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dataflowId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SearchOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "accessProfiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AccessProfileDefinition"
+          },
+          "type": "object"
+        },
+        "defaultAccessProfile": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "orderBy": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pagination": {
+          "$ref": "#/$defs/Pagination"
+        },
+        "query": {
+          "$ref": "#/$defs/SearchQueryDefinition"
+        }
+      },
+      "required": [
+        "id",
+        "query",
+        "defaultAccessProfile",
+        "accessProfiles",
+        "orderBy",
+        "pagination"
+      ],
+      "type": "object"
+    },
+    "SearchQueryDefinition": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "point-bbox",
+              "type": "string"
+            },
+            "maximumLatitudeSpanDegrees": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maximumLongitudeSpanDegrees": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "maximumLongitudeSpanDegrees",
+            "maximumLatitudeSpanDegrees"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SelectorDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "codelist": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximumBytes": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minimumBytes": {
+          "default": null,
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sourceColumn": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/DataType"
+        }
+      },
+      "required": [
+        "sourceColumn",
+        "type"
+      ],
+      "type": "object"
+    },
+    "SemanticAlignment": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "profileRef": {
+          "type": "string"
+        },
+        "relationRequired": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "profileRef",
+        "digest",
+        "relationRequired"
+      ],
+      "type": "object"
+    },
+    "Semantics": {
+      "additionalProperties": false,
+      "properties": {
+        "alignments": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/SemanticAlignment"
+          },
+          "type": "array"
+        },
+        "localVocabulary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "localVocabulary"
+      ],
+      "type": "object"
+    },
+    "SourceDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedSchemaFingerprint": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "profile": {
+          "$ref": "#/$defs/SourceProfile"
+        }
+      },
+      "required": [
+        "kind",
+        "profile",
+        "expectedSchemaFingerprint"
+      ],
+      "type": "object"
+    },
+    "SourceProfile": {
+      "enum": [
+        "snapshot",
+        "live-read-only"
+      ],
+      "type": "string"
+    },
+    "StatisticalAttributeDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ClassificationPartial",
+          "default": {
+            "handling": null,
+            "institutional": null,
+            "privacy": null,
+            "status": null
+          }
+        },
+        "column": {
+          "type": "string"
+        },
+        "concept": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/StatisticalValueType"
+        },
+        "vocabulary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "description",
+        "column",
+        "type",
+        "required",
+        "concept"
+      ],
+      "type": "object"
+    },
+    "StatisticalBindings": {
+      "additionalProperties": false,
+      "properties": {
+        "sdmx": {
+          "$ref": "#/$defs/SdmxBindingDefinition"
+        }
+      },
+      "required": [
+        "sdmx"
+      ],
+      "type": "object"
+    },
+    "StatisticalDatasetDefinition": {
+      "additionalProperties": false,
+      "description": "One governed, pre-aggregated statistical dataset. The authored shape is\nindependent of the fixed SDMX exchange binding compiled from it.",
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/AccessRule"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StatisticalAttributeDefinition"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "bindings": {
+          "$ref": "#/$defs/StatisticalBindings"
+        },
+        "classificationDefaults": {
+          "$ref": "#/$defs/ClassificationPartial"
+        },
+        "description": {
+          "type": "string"
+        },
+        "dimensions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/StatisticalDimensionDefinition"
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "measure": {
+          "$ref": "#/$defs/StatisticalMeasureDefinition"
+        },
+        "processingDescriptions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProcessingDescription"
+          },
+          "type": "array"
+        },
+        "publication": {
+          "$ref": "#/$defs/StatisticalPublication"
+        },
+        "query": {
+          "$ref": "#/$defs/StatisticalQueryProfile"
+        },
+        "source": {
+          "$ref": "#/$defs/ResourceSource"
+        },
+        "sourceColumnClassifications": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ClassificationPartial"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "time": {
+          "$ref": "#/$defs/StatisticalTimeDimensionDefinition"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "publication",
+        "source",
+        "classificationDefaults",
+        "dimensions",
+        "time",
+        "measure",
+        "access",
+        "query",
+        "bindings"
+      ],
+      "type": "object"
+    },
+    "StatisticalDimensionDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ClassificationPartial",
+          "default": {
+            "handling": null,
+            "institutional": null,
+            "privacy": null,
+            "status": null
+          }
+        },
+        "column": {
+          "type": "string"
+        },
+        "concept": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/StatisticalValueType"
+        },
+        "vocabulary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "label",
+        "description",
+        "column",
+        "type",
+        "concept"
+      ],
+      "type": "object"
+    },
+    "StatisticalMeasureDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ClassificationPartial",
+          "default": {
+            "handling": null,
+            "institutional": null,
+            "privacy": null,
+            "status": null
+          }
+        },
+        "column": {
+          "type": "string"
+        },
+        "concept": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/StatisticalValueType"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "description",
+        "column",
+        "type",
+        "concept"
+      ],
+      "type": "object"
+    },
+    "StatisticalPublication": {
+      "additionalProperties": false,
+      "properties": {
+        "releaseAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "releaseAt"
+      ],
+      "type": "object"
+    },
+    "StatisticalQueryProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "allowUnfiltered": {
+          "type": "boolean"
+        },
+        "maximumObservations": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maximumOffset": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "allowUnfiltered",
+        "maximumObservations",
+        "maximumOffset"
+      ],
+      "type": "object"
+    },
+    "StatisticalTimeDimensionDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/ClassificationPartial",
+          "default": {
+            "handling": null,
+            "institutional": null,
+            "privacy": null,
+            "status": null
+          }
+        },
+        "column": {
+          "type": "string"
+        },
+        "concept": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "granularity": {
+          "$ref": "#/$defs/StatisticalTimeGranularity"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "description",
+        "column",
+        "granularity",
+        "concept"
+      ],
+      "type": "object"
+    },
+    "StatisticalTimeGranularity": {
+      "enum": [
+        "annual",
+        "quarterly",
+        "monthly",
+        "daily"
+      ],
+      "type": "string"
+    },
+    "StatisticalValueType": {
+      "enum": [
+        "code",
+        "string",
+        "integer",
+        "decimal",
+        "boolean"
+      ],
+      "type": "string"
+    },
+    "TransformDefinition": {
+      "oneOf": [
+        {
+          "properties": {
+            "characters": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "partial-string",
+              "type": "string"
+            },
+            "reveal": {
+              "$ref": "#/$defs/PartialStringReveal"
+            }
+          },
+          "required": [
+            "kind",
+            "reveal",
+            "characters"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "date-precision",
+              "type": "string"
+            },
+            "precision": {
+              "$ref": "#/$defs/DatePrecision"
+            },
+            "sourceType": {
+              "$ref": "#/$defs/DateInputType"
+            }
+          },
+          "required": [
+            "kind",
+            "sourceType",
+            "precision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Visibility": {
+      "enum": [
+        "public",
+        "operation-bound",
+        "operator-only"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/registry-relay/authoring/registry.v2alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Governed Relay-owned Registry input. Unknown fields are rejected at every\nnested structure rather than silently becoming deployment behavior.",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "classifications": {
+      "$ref": "#/$defs/ClassificationCatalog"
+    },
+    "governance": {
+      "$ref": "#/$defs/Governance"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/ContractMetadata"
+    },
+    "metadataVisibility": {
+      "$ref": "#/$defs/MetadataVisibility"
+    },
+    "registry": {
+      "$ref": "#/$defs/RegistryDefinition"
+    },
+    "resources": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ResourceDefinition"
+      },
+      "type": "array"
+    },
+    "semantics": {
+      "$ref": "#/$defs/Semantics"
+    },
+    "sources": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SourceDefinition"
+      },
+      "type": "object"
+    },
+    "statisticalDatasets": {
+      "items": {
+        "$ref": "#/$defs/StatisticalDatasetDefinition"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "registry",
+    "governance",
+    "semantics",
+    "classifications",
+    "sources",
+    "metadataVisibility"
+  ],
+  "title": "Relay V2 governed Registry contract",
+  "type": "object"
+}

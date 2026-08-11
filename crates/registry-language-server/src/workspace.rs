@@ -15,7 +15,7 @@ use crate::{
         document_diagnostic, document_rule_diagnostic, IndexedDiagnostic, IndexedProject,
         ProjectIndex, DOCUMENT_CEILING_RULE, PROJECT_CEILING_RULE,
     },
-    relay,
+    relay, relay_v2,
     safety::{secure_regular_file, SecureFileRead},
     yaml::ParsedDocument,
 };
@@ -95,6 +95,7 @@ impl DocumentCeiling {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProjectFamily {
     Relay,
+    RelayV2,
     Evidence,
 }
 
@@ -102,12 +103,13 @@ impl ProjectFamily {
     /// Every family discovery tests, in the order it tests them. The order decides a directory that
     /// somehow answers for two families, so it is fixed here rather than left to whichever test
     /// runs first.
-    const ALL: &'static [Self] = &[Self::Relay, Self::Evidence];
+    const ALL: &'static [Self] = &[Self::Relay, Self::RelayV2, Self::Evidence];
 
     /// Whether this family claims a directory as one of its roots.
     fn declares_root(self, directory: &Path) -> bool {
         match self {
             Self::Relay => relay::declares_root(directory),
+            Self::RelayV2 => relay_v2::declares_root(directory),
             Self::Evidence => evidence::declares_root(directory),
         }
     }
@@ -115,6 +117,7 @@ impl ProjectFamily {
     fn load_documents(self, root: &Path) -> Result<LoadedProjectDocuments> {
         match self {
             Self::Relay => relay::load_project_documents(root),
+            Self::RelayV2 => relay_v2::load_project_documents(root),
             Self::Evidence => evidence::load_project_documents(root),
         }
     }
@@ -122,6 +125,7 @@ impl ProjectFamily {
     fn owns_document(self, root: &Path, path: &Path) -> bool {
         match self {
             Self::Relay => relay::is_project_document(root, path),
+            Self::RelayV2 => relay_v2::is_project_document(root, path),
             Self::Evidence => evidence::is_project_document(root, path),
         }
     }
@@ -136,6 +140,9 @@ impl ProjectFamily {
     fn is_read_by_a_build(self, root: &Path, path: &Path) -> bool {
         match self {
             Self::Relay => false,
+            // A saved governed reference can change the closure the compiler
+            // reads, so Relay V2 settles the complete project after any save.
+            Self::RelayV2 => true,
             Self::Evidence => evidence::is_read_by_a_build(root, path),
         }
     }
@@ -143,6 +150,7 @@ impl ProjectFamily {
     fn is_safe_authored_file(self, root: &Path, path: &Path) -> bool {
         match self {
             Self::Relay => relay::is_safe_authored_file(root, path),
+            Self::RelayV2 => relay_v2::is_safe_authored_file(root, path),
             Self::Evidence => evidence::is_safe_authored_file(root, path),
         }
     }
@@ -155,6 +163,7 @@ impl ProjectFamily {
     fn document_ceiling(self, root: &Path, path: &Path) -> DocumentCeiling {
         match self {
             Self::Relay => DocumentCeiling::project_document(),
+            Self::RelayV2 => DocumentCeiling::project_document(),
             Self::Evidence => evidence::document_ceiling(root, path),
         }
     }
@@ -173,6 +182,7 @@ impl ProjectFamily {
     fn bounded_directory_of(self, root: &Path, path: &Path) -> Option<PathBuf> {
         match self {
             Self::Relay => None,
+            Self::RelayV2 => None,
             Self::Evidence => evidence::bounded_directory_of(root, path),
         }
     }
@@ -186,6 +196,7 @@ impl ProjectFamily {
     ) -> Result<Option<evidence::ScannedDirectory>> {
         match self {
             Self::Relay => Ok(None),
+            Self::RelayV2 => Ok(None),
             Self::Evidence => evidence::scan_bounded_directory(root, path),
         }
     }
@@ -221,6 +232,7 @@ impl ProjectFamily {
                     choices: Vec::new(),
                 }
             }
+            Self::RelayV2 => relay_v2::build_index(root, documents, parsed),
             Self::Evidence => evidence::build_index(root, documents, parsed, dropped),
         }
     }
@@ -233,6 +245,7 @@ impl ProjectFamily {
     pub(crate) fn diagnostic_source(self) -> &'static str {
         match self {
             Self::Relay => "registry-stack",
+            Self::RelayV2 => "relay-v2",
             Self::Evidence => "evidence",
         }
     }
@@ -242,7 +255,20 @@ impl ProjectFamily {
     pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
         match self {
             Self::Relay => None,
+            Self::RelayV2 => Some(format!("{}/{rule}", self.diagnostic_source())),
             Self::Evidence => Some(format!("{}/{rule}", self.diagnostic_source())),
+        }
+    }
+
+    /// Whether a document contributes a YAML syntax tree. Relay V2 also holds
+    /// governed Markdown rationale bytes for compiler closure validation; they
+    /// are project inputs but not YAML documents.
+    pub(crate) fn parses_as_yaml(self, path: &Path) -> bool {
+        match self {
+            Self::Relay | Self::Evidence => true,
+            Self::RelayV2 => path.extension().is_some_and(|extension| {
+                matches!(extension.to_str(), Some("yaml" | "yml" | "json"))
+            }),
         }
     }
 }
@@ -350,6 +376,11 @@ impl RootState {
                 ),
             );
         }
+        if self.family == ProjectFamily::RelayV2
+            && self.reload_relay_v2_with_open_documents().is_ok()
+        {
+            return;
+        }
         if was_blocked && self.reload_project_from_disk().is_ok() {
             return;
         }
@@ -369,7 +400,11 @@ impl RootState {
             return;
         }
         if self.family.is_read_by_a_build(&self.root, &path) {
-            self.rebuild();
+            if self.family == ProjectFamily::RelayV2 {
+                let _ = self.reload_relay_v2_with_open_documents();
+            } else {
+                self.rebuild();
+            }
         }
     }
 
@@ -391,7 +426,11 @@ impl RootState {
     /// this crate goes through, so a path that has left the project answers no here for exactly the
     /// reasons a first scan of the same tree would pass it by.
     fn project_holds(&self, path: &Path) -> bool {
-        self.family.is_safe_authored_file(&self.root, path)
+        if self.family == ProjectFamily::RelayV2 {
+            self.family.owns_document(&self.root, path)
+        } else {
+            self.family.is_safe_authored_file(&self.root, path)
+        }
     }
 
     /// Whether this root answers for `path` from a buffer the client has open rather than from the
@@ -479,7 +518,9 @@ impl RootState {
                 failure.get_or_insert(error);
             }
         }
-        if self.indexing_ceiling_path.is_some() {
+        if self.family == ProjectFamily::RelayV2 {
+            self.reload_relay_v2_with_open_documents()?;
+        } else if self.indexing_ceiling_path.is_some() {
             self.reload_project_from_disk()?;
         } else {
             self.rebuild();
@@ -522,7 +563,11 @@ impl RootState {
             return;
         }
         self.apply_from_disk(path);
-        self.rebuild();
+        if self.family == ProjectFamily::RelayV2 {
+            let _ = self.reload_relay_v2_with_open_documents();
+        } else {
+            self.rebuild();
+        }
     }
 
     /// Retries a project that crossed its aggregate indexing budget.
@@ -531,6 +576,9 @@ impl RootState {
     /// client is then overlaid where it remains available, and the aggregate ceiling is weighed
     /// again before anything is parsed.
     fn reload_project_from_disk(&mut self) -> Result<()> {
+        if self.family == ProjectFamily::RelayV2 {
+            return self.reload_relay_v2_with_open_documents();
+        }
         let open_text = self
             .open_versions
             .keys()
@@ -554,6 +602,44 @@ impl RootState {
             if self.project_holds(&path) {
                 self.absent_buffers.remove(&path);
                 self.documents.insert(path, text);
+            } else {
+                self.absent_buffers.insert(path, text);
+            }
+        }
+        self.rebuild();
+        Ok(())
+    }
+
+    /// Recompute Relay V2's exact governed-file closure around the revisions
+    /// held by the client, reading only newly referenced bounded files from
+    /// disk. This is what makes an unsaved `registry.yaml` or classification
+    /// review compile as one complete in-memory project.
+    fn reload_relay_v2_with_open_documents(&mut self) -> Result<()> {
+        debug_assert_eq!(self.family, ProjectFamily::RelayV2);
+        let overrides = self
+            .open_versions
+            .keys()
+            .filter_map(|path| {
+                self.documents
+                    .get(path)
+                    .or_else(|| self.absent_buffers.get(path))
+                    .map(|text| (path.clone(), text.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let loaded = relay_v2::load_project_documents_with_overrides(&self.root, &overrides)?;
+        self.documents = loaded.documents;
+        self.disk_diagnostics = loaded.diagnostics;
+        self.indexing_ceiling_path = loaded.indexing_ceiling_path;
+        for path in self.open_versions.keys() {
+            if !overrides.contains_key(path) {
+                self.documents.remove(path);
+                self.disk_diagnostics
+                    .retain(|diagnostic| diagnostic.path != *path);
+            }
+        }
+        for (path, text) in overrides {
+            if self.documents.contains_key(&path) {
+                self.absent_buffers.remove(&path);
             } else {
                 self.absent_buffers.insert(path, text);
             }
@@ -872,6 +958,15 @@ mod tests {
         fs::write(directory.join("registry-stack.yaml"), MANIFEST).unwrap();
     }
 
+    fn relay_v2_project_in(directory: &Path) {
+        fs::create_dir_all(directory).unwrap();
+        fs::write(
+            directory.join(relay_v2::PROJECT_FILE),
+            "apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\n",
+        )
+        .unwrap();
+    }
+
     /// An authoring project as `evidencectl` leaves it: a marker over the description and the
     /// questions.
     fn evidence_project_in(directory: &Path) {
@@ -1095,6 +1190,36 @@ mod tests {
             workspace.root_at(temp.path()),
             Some((temp.path().canonicalize().unwrap(), ProjectFamily::Evidence))
         );
+    }
+
+    #[test]
+    fn a_relay_v2_marker_declares_a_relay_v2_root() {
+        let temp = TempDir::new().unwrap();
+        relay_v2_project_in(temp.path());
+
+        let workspace = Workspace::default();
+
+        assert_eq!(
+            workspace.root_at(temp.path()),
+            Some((temp.path().canonicalize().unwrap(), ProjectFamily::RelayV2))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_relay_v2_marker_does_not_declare_a_root() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real");
+        let decoy = temp.path().join("decoy");
+        relay_v2_project_in(&real);
+        fs::create_dir_all(&decoy).unwrap();
+        std::os::unix::fs::symlink(
+            real.join(relay_v2::PROJECT_FILE),
+            decoy.join(relay_v2::PROJECT_FILE),
+        )
+        .unwrap();
+
+        assert_eq!(Workspace::default().root_at(&decoy), None);
     }
 
     #[test]

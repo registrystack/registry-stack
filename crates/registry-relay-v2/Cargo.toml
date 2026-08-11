@@ -18,6 +18,7 @@ workspace = true
 
 [features]
 default = []
+schema = ["dep:schemars"]
 tooling = ["dep:tempfile", "registry-platform-sqlite/fixture"]
 
 [dependencies]
@@ -43,6 +44,7 @@ registry-platform-oidc.workspace = true
 registry-platform-sqlite.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
@@ -72,3 +74,7 @@ utoipa.workspace = true
 [[test]]
 name = "process_http"
 required-features = ["tooling"]
+
+[[example]]
+name = "authoring-schema"
+required-features = ["schema"]

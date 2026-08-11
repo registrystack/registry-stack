@@ -7,10 +7,9 @@ struct RegistryStackExtension;
 // The subcommand an adopter CLI answers to when it hosts the language server.
 const HOSTED_SERVER_ARGS: [&str; 2] = ["tooling", "language-server"];
 
-// The adopter CLIs that may host the server, in the order a Relay adopter's
-// PATH is expected to answer them. Both are tried: an Evidence adopter can
-// have an older registryctl on PATH that this extension is not installed for.
-const HOSTING_CLI_NAMES: [&str; 2] = ["registryctl", "evidencectl"];
+// The adopter CLIs that may host the server, in product order. A matching
+// relayctl must remain reachable when an older evidencectl is also on PATH.
+const HOSTING_CLI_NAMES: [&str; 2] = ["evidencectl", "relayctl"];
 
 impl zed::Extension for RegistryStackExtension {
     fn new() -> Self {
@@ -57,12 +56,12 @@ impl zed::Extension for RegistryStackExtension {
 
         if hosting_errors.is_empty() {
             Err(
-                "neither registry-language-server, registryctl, nor evidencectl was found on PATH; install Registry Stack before enabling this extension"
+                "neither registry-language-server nor a supported Registry Stack adopter CLI was found on PATH; install evidencectl or relayctl before enabling this extension"
                     .to_owned(),
             )
         } else {
             Err(format!(
-                "registry-language-server was not found on PATH, and no CLI on PATH can host it: {}; install a matching registryctl or evidencectl",
+                "registry-language-server was not found on PATH, and no supported CLI on PATH can host it: {}; install a matching evidencectl or relayctl",
                 hosting_errors.join("; ")
             ))
         }
@@ -101,8 +100,8 @@ mod tests {
 
     #[test]
     fn hosting_probe_command_asks_for_tooling_language_server_help() {
-        let probe = hosting_probe_command("registryctl");
-        assert_eq!(probe.command, "registryctl");
+        let probe = hosting_probe_command("relayctl");
+        assert_eq!(probe.command, "relayctl");
         assert_eq!(probe.args, ["tooling", "language-server", "--help"]);
     }
 

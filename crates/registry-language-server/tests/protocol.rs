@@ -243,6 +243,7 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
     assert_eq!(
         watched_globs,
         BTreeSet::from([
+            "**/*".to_owned(),
             "**/*.yaml".to_owned(),
             "**/*.rhai".to_owned(),
             "**/adapters/*".to_owned(),

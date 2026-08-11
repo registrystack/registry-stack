@@ -11,7 +11,7 @@ suite('Registry Stack extension', () => {
     fs.rmSync(path.resolve(__dirname, '../../dist/registry-stack-cli-path'), { force: true });
   });
 
-  test('uses the installed registryctl or evidencectl for every trusted Registry Stack workspace folder', async () => {
+  test('uses the installed adopter CLI for legacy Relay, Relay V2, and Evidence folders', async () => {
     assert.strictEqual(vscode.workspace.isTrusted, true);
     assert.strictEqual(vscode.workspace.workspaceFolders?.length, 3);
 
@@ -24,6 +24,7 @@ suite('Registry Stack extension', () => {
     assert.strictEqual(extension.packageJSON.capabilities?.virtualWorkspaces?.supported, false);
     for (const activationEvent of [
       'workspaceContains:**/registry-stack.yaml',
+      'workspaceContains:**/registry.yaml',
       'workspaceContains:**/evidence-project.yaml',
       'workspaceContains:**/source.openapi.yaml',
     ]) {
@@ -35,9 +36,9 @@ suite('Registry Stack extension', () => {
     await assertExtensionActivated(extension);
 
     // One client per workspace folder serves both the Relay and Evidence
-    // project families; the alpha/beta folders are Relay manifests and
-    // evidence is an Evidence authoring project, all discovered through the
-    // same installer-selected registryctl.
+    // project families; alpha is legacy Relay, beta is Relay V2, and evidence
+    // is an Evidence authoring project, all discovered through the same
+    // installer-selected evidencectl.
     await assertWorkspaceSymbol('alpha-registry');
     await assertWorkspaceSymbol('beta-registry');
     await assertWorkspaceSymbol('smoke');
@@ -174,10 +175,10 @@ suite('Registry Stack extension', () => {
     await assertWorkspaceFolderCount(3);
 
     // Deleting the installer metadata and restarting proves the PATH
-    // fallback tier genuinely works: the registryctl that serves the metadata
-    // route is kept off PATH, and the registryctl that is on PATH refuses the
+    // fallback tier genuinely works: the evidencectl that serves the metadata
+    // route is kept off PATH, and the evidencectl that is on PATH refuses the
     // subcommand, so once the packaged-CLI metadata is gone every folder can
-    // only be served by the evidencectl standing behind it.
+    // only be served by the relayctl standing behind it.
     fs.rmSync(path.resolve(__dirname, '../../dist/registry-stack-cli-path'), { force: true });
     await configuration.update(
       'languageServer.path',

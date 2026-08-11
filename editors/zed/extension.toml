@@ -1,6 +1,6 @@
 id = "registry-stack"
 name = "Registry Stack"
-version = "0.1.0"
+version = "0.2.0"
 schema_version = 1
 authors = ["Registry Stack contributors"]
 description = "Cross-file navigation and reference diagnostics for Registry Stack YAML projects."

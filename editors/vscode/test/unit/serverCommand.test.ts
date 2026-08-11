@@ -43,9 +43,9 @@ function writeScript(directory: string, name: string, body: string[]): string {
   return script;
 }
 
-test('a legacy registryctl does not hide an evidencectl that hosts the server', () => {
+test('registryctl is not a supported language-server launcher', () => {
   const directory = pathDirectory();
-  writeLegacyCli(directory, 'registryctl');
+  writeHostingCli(directory, 'registryctl');
   const evidencectl = writeHostingCli(directory, 'evidencectl');
   assert.deepStrictEqual(findLanguageServerOnPath(), {
     command: evidencectl,
@@ -53,27 +53,38 @@ test('a legacy registryctl does not hide an evidencectl that hosts the server', 
   });
 });
 
-test('registryctl is preferred when both CLIs host the server', () => {
+test('evidencectl is preferred over relayctl', () => {
   const directory = pathDirectory();
-  const registryctl = writeHostingCli(directory, 'registryctl');
-  writeHostingCli(directory, 'evidencectl');
+  const evidencectl = writeHostingCli(directory, 'evidencectl');
+  writeHostingCli(directory, 'relayctl');
   assert.deepStrictEqual(findLanguageServerOnPath(), {
-    command: registryctl,
+    command: evidencectl,
     args: ['tooling', 'language-server'],
   });
 });
 
-test('a standalone server is preferred over either CLI', () => {
+test('relayctl hosts the server when evidencectl cannot', () => {
+  const directory = pathDirectory();
+  writeLegacyCli(directory, 'evidencectl');
+  const relayctl = writeHostingCli(directory, 'relayctl');
+  assert.deepStrictEqual(findLanguageServerOnPath(), {
+    command: relayctl,
+    args: ['tooling', 'language-server'],
+  });
+});
+
+test('a standalone server is preferred over adopter CLIs', () => {
   const directory = pathDirectory();
   const standalone = writeScript(directory, 'registry-language-server', ['exit 0']);
-  writeHostingCli(directory, 'registryctl');
+  writeHostingCli(directory, 'evidencectl');
   assert.deepStrictEqual(findLanguageServerOnPath(), { command: standalone, args: [] });
 });
 
 test('no candidate hosting the server resolves to nothing', () => {
   const directory = pathDirectory();
-  writeLegacyCli(directory, 'registryctl');
+  writeHostingCli(directory, 'registryctl');
   writeLegacyCli(directory, 'evidencectl');
+  writeLegacyCli(directory, 'relayctl');
   assert.strictEqual(findLanguageServerOnPath(), undefined);
 });
 

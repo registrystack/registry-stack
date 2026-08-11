@@ -2,8 +2,8 @@
 
 This beta integration is installed from a Registry Stack source release.
 It is not yet listed in Zed Extensions and no release artifact is provided.
-For the stable beta path, run `registryctl init <directory> --template http` or
-`registryctl -C <project> tooling editor` and use the generated YAML schema settings.
+For the stable beta path, run `evidencectl tooling editor` or
+`relayctl tooling editor <project>` and use the generated YAML schema settings.
 Install this integration for optional semantic navigation.
 
 This extension attaches `registry-language-server` to Zed's built-in YAML language. It adds
@@ -13,19 +13,19 @@ completion, formatting, and ordinary hover information.
 
 ## Install and launch
 
-Zed requires Rust installed through `rustup`, the `zed` command-line tool, and the `registryctl`
-version that matches this source checkout. Run the installer once from the repository root:
+Zed requires Rust installed through `rustup`, the `zed` command-line tool, and a matching
+`evidencectl` or `relayctl`. Run the installer once from the repository root:
 
 ```console
 ./editors/install.sh zed
 ```
 
-The installer checks the matching `registryctl` and embedded language server, installs the required
+The installer checks a matching adopter CLI and embedded language server, installs the required
 `wasm32-wasip2` target when missing, compile-checks the Zed extension, and prints its absolute path.
 It does not read or change a project.
 
 1. Complete the [shared smoke-project setup](../README.md#local-end-to-end-smoke-test), then open it
-   from the same shell so Zed inherits the matching `registryctl`:
+   from the same shell so Zed inherits the matching adopter CLI:
 
    ```console
    zed "$REGISTRY_STACK_SMOKE_PROJECT"
@@ -50,9 +50,8 @@ Zed trust boundary, not missing automation.
 
 This extension attaches to an Evidence authoring project the same way it attaches to a Relay
 project: one language-server client per worktree, found through the same
-`registry-language-server` / `registryctl` / `evidencectl` fallback chain described above.
-`evidencectl new` and `evidencectl tooling editor` are the Evidence-side equivalents of
-`registryctl init` and `registryctl -C <project> tooling editor` mentioned earlier.
+`registry-language-server` / `evidencectl` / `relayctl` fallback chain described above.
+`evidencectl new` and `evidencectl tooling editor` create and configure Evidence projects.
 
 Rhai request-preparation and derivation scripts (`*.rhai`) get no support from this extension: no
 `tree-sitter-rhai` grammar is bundled or referenced here, so an open `.rhai` file gets neither
@@ -66,7 +65,7 @@ what that means in practice.
 ## Iterate
 
 - After changing the Rust server, run `cargo build --locked -p registry-language-server`, then
-  put `target/debug` before `registryctl` on the environment inherited by Zed, then run
+  put `target/debug` first on the environment inherited by Zed, then run
   `editor: restart language server`.
 - After changing the Zed launcher, install the development extension again from the same directory
   and restart the language server.
@@ -77,21 +76,20 @@ what that means in practice.
   and that `cargo check` for `wasm32-wasip2` passes.
 - If Zed cannot find the server, close it, export the updated `PATH`, and relaunch it from that
   terminal. The launcher first looks for `registry-language-server`, which it trusts by name because
-  it has no subcommand to ask about. Failing that it asks each of `registryctl` and `evidencectl` on
-  `PATH` whether it answers `tooling language-server --help`, and runs the first that does, so a
-  `registryctl` too old to host the server is passed over rather than started. The executables must
+  it has no subcommand to ask about. Failing that it asks `evidencectl` and `relayctl` on
+  `PATH` whether they answer `tooling language-server --help`, and runs the first that does. The executables must
   come from the same checkout or beta build that you are testing.
 - Use `dev: open language server logs` to inspect how the server was launched. Use
   `zed: open log` for extension errors. For verbose extension output, close Zed and relaunch it with
   `zed --foreground "$REGISTRY_STACK_SMOKE_PROJECT"`.
-- Confirm the project root contains `registry-stack.yaml` and the active file language is YAML.
+- Confirm the project root contains `registry-stack.yaml`, `registry.yaml`, or an Evidence marker and the active file language is YAML.
 
 The Extensions page identifies a successful local install as a development extension. Remove it
 from that page after the smoke test if you do not want the override to remain active.
 
 Zed does not permit shipping an external language server inside the extension.
 The current Zed extension API registers a language server against a language name, but has no
-worktree-root predicate for `registry-stack.yaml` or `evidence-project.yaml`.
+worktree-root predicate for `registry-stack.yaml`, `registry.yaml`, or `evidence-project.yaml`.
 The integration therefore attaches to YAML while the development extension remains installed.
 It has no Registry Stack behavior without a server binary, but Zed can log a missing-server error
 when you open unrelated YAML in another worktree.

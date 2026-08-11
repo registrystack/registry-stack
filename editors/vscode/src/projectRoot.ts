@@ -5,6 +5,8 @@ import * as path from 'node:path';
 
 // Relay project root: a single manifest file.
 export const RELAY_MARKER_FILE = 'registry-stack.yaml';
+// Relay V2 is an additive project family with its own governed contract marker.
+export const RELAY_V2_MARKER_FILE = 'registry.yaml';
 // Evidence project root: the marker written by newer projects, or the
 // pre-marker pair of an OpenAPI description and a questions directory. This
 // mirrors declares_root() in crates/registry-language-server/src/evidence/mod.rs.
@@ -14,6 +16,9 @@ export const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
 
 export function isProjectRoot(directory: string): boolean {
   if (isFile(path.join(directory, RELAY_MARKER_FILE))) {
+    return true;
+  }
+  if (isFile(path.join(directory, RELAY_V2_MARKER_FILE))) {
     return true;
   }
   if (isFile(path.join(directory, EVIDENCE_MARKER_FILE))) {

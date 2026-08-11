@@ -5,6 +5,7 @@ pub mod api;
 pub mod artifacts;
 pub mod audit;
 pub mod auth;
+pub mod authoring;
 pub mod compiler;
 pub mod contract;
 pub mod cursor;
@@ -17,6 +18,8 @@ pub mod identification;
 pub mod model;
 pub mod package;
 pub mod problem;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod sdmx;
 mod sdmx_http;
 pub mod semantics;
