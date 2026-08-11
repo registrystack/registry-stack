@@ -11,7 +11,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-07"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -39,10 +39,11 @@ and to understand how the products and the external demo connect at runtime.
        alt="Four formal Registry Stack products, with Registry Mint as a supporting service and the
             separate Solmara Lab adopter demo. Registry Platform provides shared auth, audit, HTTP,
             crypto, SD-JWT, and test crates. Registry Manifest provides portable metadata contracts,
-            validation, and renderers. Registry Relay serves protected read-only APIs over sensitive
-            registry sources. Evidence Gateway answers one bounded question about one subject with a signed
-            assertion. Registry Mint issues the short-lived access tokens Evidence Gateway verifies. Solmara
-            Solmara Lab is an external synthetic-data adopter demo." />
+            validation, and renderers. Registry Relay compiles a reviewed registry contract into a
+            fixed set of protected read-only operations over local read-only SQLite sources. Evidence
+            Gateway answers one bounded question about one subject with a signed assertion. Registry
+            Mint issues the short-lived access tokens Evidence Gateway verifies. Solmara Lab is an
+            external synthetic-data adopter demo." />
 </figure>
 
 <ProjectMap />
@@ -60,7 +61,8 @@ For how the products connect at runtime and how Solmara Lab demonstrates them, s
 | Question | Owning project |
 | --- | --- |
 | Which shared Rust crate owns auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, or test fixtures? | [Registry Platform](https://github.com/registrystack/registry-stack) |
-| How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../products/registry-relay/) |
+| How is a SQLite extract or SQLite-backed registry exposed as a governed, read-only, authorized API? | [Registry Relay](../../products/registry-relay/) |
+| How is that registry contract authored, checked, and sealed into a package before it is served? | [`relayctl`](../../reference/relayctl/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/registrystack/registry-stack) |
 | How is one bounded question about one subject answered with a signed assertion that carries the answer and not the record? | [Evidence Gateway](../../products/registry-evidence/) |
 | How does a deployment with callers and no identity provider issue access tokens? | [Registry Mint](../../reference/mint/) |
@@ -103,9 +105,12 @@ Registry Manifest is a pure library and CLI with no runtime data dependencies.
 - Auth, audit, observability, or secret handling. These are intentionally excluded so the
   library can be used without running any runtime service.
   {/* Evidence: Boundary section, crates/registry-manifest-core/README.md:33-41 at tag v0.9.0. */}
-- Production source configuration. Source paths, table IDs, scopes, cache paths, and backend
-  runtime details belong in Registry Relay configuration, not in portable manifests.
-  {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note. */}
+- Production source configuration. Source file paths, source view and column names, scopes, and
+  other deployment details belong in the Registry Relay registry contract and runtime file, not in
+  a portable manifest. Relay does not read a manifest to find them.
+  {/* Evidence: contracts.yaml, registry-manifest.metadata-yaml consumer note; the V2 registry
+       contract and runtime schemas carry no manifest reference,
+       crates/registry-relay-v2/src/contract.rs. */}
 - Evidence Gateway deployment configuration. An Evidence Gateway process loads one immutable governed bundle and
   one closed runtime file mounted read-only at startup, and reads no portable manifest.
   {/* Evidence: "Governed bundle and operator runtime", products/evidence/OPERATOR-CONTRACT.md. */}
@@ -114,33 +119,63 @@ No HTTP serving, no database queries, no authorization scoping. The manifest com
 
 ## Registry Relay
 
-Registry Relay exposes protected read-only APIs over registry sources. It does not own:
+Registry Relay compiles a reviewed registry contract into a fixed set of read-only operations and
+serves them over the read-only SQLite sources it binds. It owns the compiled contract: which operations exist,
+which reviewed views and columns they may read, which access profile guards each one, which
+disclosure profile shapes each response, and what its audit record says. Everything on that list is
+decided before the process starts, sealed into a package, and re-derived and byte-compared at
+startup.
 
-- Record provisioning or writes. The README explicitly states write operations are out of scope
-  for v1.
-  {/* Evidence: "Provisioning and Write are intentionally out of scope for V1",
-       crates/registry-relay/README.md:20 at tag v0.9.0. */}
+{/* Evidence: RelayRuntime is a closed deny_unknown_fields schema and cannot widen the package,
+     crates/registry-relay-v2/src/contract.rs:1062-1079; startup verifies the package before
+     opening any other resource, crates/registry-relay-v2/src/startup.rs:96-104; the runtime
+     re-runs the compiler and generator and compares bytes,
+     crates/registry-relay-v2/src/package.rs. */}
+
+It does not own:
+
+- Record provisioning, writes, or any mutation path. This is not a scoping decision deferred to a
+  later version: the router is a fixed set of 14 routes with exactly one `POST` (a declared lookup)
+  and no `PUT`, `PATCH`, or `DELETE` anywhere.
+  {/* Evidence: router() in crates/registry-relay-v2/src/server.rs. */}
+- Source adaptation. Relay reads one local read-only SQLite file per binding, opened in place. It
+  speaks no source protocol, holds no source credential, and makes no outbound call to a source, so
+  a CSV, spreadsheet, Parquet, PostgreSQL, or HTTP registry has to be turned into SQLite by
+  something else before Relay can serve it.
+  {/* Evidence: SourceProfile has exactly two variants, Snapshot and LiveReadOnly,
+       crates/registry-relay-v2/src/contract.rs:323-325. */}
 - Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are
-  owned by Registry Manifest. Registry Relay may serve compiled artifacts over HTTP and scope
-  them for callers, but the schema is defined and versioned in Registry Manifest.
-  {/* Evidence: crates/registry-manifest-core/README.md:7-9 at tag v0.9.0 (schema ownership);
-       registry-relay evidence packet, metadata publication section. */}
-- Assertion evaluation, disclosure, and signing owned by Evidence Gateway. Registry Relay can declare
-  evidence offerings, but requirement evaluation, disclosure form, source access, and signing run
-  independently in Evidence Gateway.
-  {/* Evidence: registry-relay evidence packet, evidence offering verification section; contract
-       registry.evidence.fixed-http-json-source/v1,
+  owned by Registry Manifest. Relay does not consume a manifest and does not emit one: its artifact
+  generator produces no `registry-manifest.yaml`, and a test holds that.
+  {/* Evidence: crates/registry-manifest-core/README.md:7-9 at tag v0.9.0 (schema ownership); the
+       test generated_inventory_covers_required_v1_artifact_classes_only asserts
+       artifacts/registry-manifest.yaml is not generated,
+       crates/registry-relay-v2/src/artifacts.rs. */}
+- Assertion evaluation, disclosure, and signing owned by Evidence Gateway. Relay signs nothing. A
+  Relay response is a JSON document shaped by a disclosure profile, with no signature and no
+  assertion semantics, and Relay declares no evidence offering.
+  {/* Evidence: crates/registry-relay-v2/src/contract.rs contains no evidence or manifest
+       vocabulary; contract registry.evidence.fixed-http-json-source/v1,
        products/evidence/contracts/source-contract.yaml. */}
-- Shared auth, OIDC, audit, HTTP security, outbound HTTP, crypto, and SD-JWT helper primitives
-  owned by Registry Platform. Registry Relay owns how those primitives are configured and
-  enforced on Relay routes.
-- Storage table IDs or arbitrary SQL in public APIs. Public route paths use dataset and entity
-  identifiers; internal table names and query shapes are configuration internals.
-  {/* Evidence: projects.yaml, registry-relay does_not_own; registry-relay evidence packet
-       configuration surface. */}
+- Shared auth, OIDC, audit, HTTP security, crypto, secret-reference, and read-only SQLite primitives
+  owned by Registry Platform. Relay owns how those primitives are configured and enforced on its own
+  operations.
+- Storage internals in public APIs. Public route paths use resource and operation identifiers from
+  the contract; source view and column names stay inside the compiled statements and never appear in
+  a served response, an artifact, or an operational log line.
+- External policy evaluation. Relay carries no policy decision point and evaluates no ODRL,
+  consent, or jurisdiction rule. It checks the scope, purpose claim, and row authority its own
+  contract names, and nothing else.
+- The correctness or freshness of the data underneath. Relay returns what a reviewed view returns,
+  and attaches no observation time to it.
 
-Registry Relay is not an open-data portal. It publishes restricted consultation APIs for authorized
-systems only. {/* Evidence: crates/registry-relay/README.md:16 at tag v0.9.0. */}
+Registry Relay is not an open-data portal and not a query service. It publishes a closed set of
+governed reads for authorized systems, and a caller cannot widen one. A request may narrow a
+response, by selecting fewer fields or filtering on a declared filterable field, but a field or
+filter the contract did not declare is a stable 400 rather than a wider read.
+
+{/* Evidence: the closed ProblemCode set includes request.fields_invalid, filter.unknown_field, and
+     filter.invalid_value, crates/registry-relay-v2/src/problem.rs:14-45. */}
 
 ## Evidence Gateway
 

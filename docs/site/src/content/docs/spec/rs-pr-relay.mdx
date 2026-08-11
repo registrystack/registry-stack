@@ -1,12 +1,11 @@
 ---
-title: "RS-PR-RELAY: Registry Relay protocol"
-description: "The normative HTTP protocol contract for Registry Relay: authentication, per-dataset scopes, governed PDP enforcement, consultation and aggregate routes, scoped metadata publication, and audit behavior."
+title: "RS-PR-RELAY: Relay protocol"
+description: "The normative HTTP protocol contract for Relay: the fixed route set, the Registry Core response envelope, access and disclosure profiles, cursor pagination, the Point and SDMX read profiles, and the audit and error behavior every request carries."
 status: draft
 owner: registry-docs
 source_repos:
-  - registry-relay
-  - registry-platform
-last_reviewed: "2026-08-04"
+  - registry-stack
+last_reviewed: "2026-08-11"
 doc_type: specification
 doc_id: RS-PR-RELAY
 category: normative
@@ -14,17 +13,12 @@ evidence: verified
 locale: en
 standards_referenced:
   - openapi
-  - dcat
-  - bregdcat-ap
-  - shacl
   - json-schema
   - json-ld
-  - odrl
-  - ogc-api-records
-  - ogc-api-features
-  - ogc-api-edr
+  - shacl
+  - geojson
+  - json-fg
   - sdmx
-  - sp-dci
 layer:
   - consultation
 audience:
@@ -32,9 +26,9 @@ audience:
   - specification editor
 ---
 
-This document defines the HTTP protocol contract that Registry Relay exposes: the configuration-driven service model that fixes a gateway's surface, how a caller authenticates and is scoped per dataset, how governed Relay PDP enforcement applies to configured read routes, the consultation and aggregate routes that read configured sources, the scope-filtered metadata publication, the evidence-offering descriptors, the boundary that keeps credential issuance out of Relay, and the audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Relay API reference](../../reference/apis/registry-relay/) describes narratively.
+This document defines the HTTP protocol contract that Relay exposes: the sealed deployment model that fixes a service's surface before it accepts traffic, the fixed route set, how a caller authenticates and selects an access profile, how a disclosure profile bounds what a response may carry, the Registry Core response envelope and its wire formats, cursor pagination, the Point and SDMX read profiles, and the audit and error behavior every request carries.
 
-It refines the Registry Relay component defined in [RS-ARC-G](../rs-arc-g/) Section 3 (specifically REQ-ARC-G-003, REQ-ARC-G-004, REQ-ARC-G-006, and REQ-ARC-G-007) one level of detail down, from architectural boundary to wire behavior. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its protocol-level form.
+It refines the Relay component defined in [RS-ARC-G](../rs-arc-g/) Section 3 one level of detail down, from architectural boundary to wire behavior. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its protocol-level form. The adopter tooling that produces the sealed package a Relay service serves is specified by [RS-PR-RELAYCTL](../rs-pr-relayctl/).
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2. Defined terms are used per [RS-TERMS](../rs-terms/).
 
@@ -51,175 +45,208 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.3.0 | 2026-07-09 | draft | Removed Relay-local signed response credential requirements and made Registry Notary the only credential issuance surface. |
 | 0.3.1 | 2026-07-10 | draft | Scope-gated the remaining client-supplied trust-context headers, documented the policy-authoring boundary, and replaced exact trust values in audit records with keyed field-bound handles. |
 | 0.3.2 | 2026-08-04 | draft | Recorded that Registry Notary is retired: Sections 7 and 8 no longer name it as the destination of an evidence offering or as the credential issuer, and REQ-PR-RELAY-012 now states the `registry-notary` access kind that the runtime binding still requires. No Relay behavior changed. |
+| 1.0.0 | 2026-08-11 | draft | Rewritten for the Relay V2 runtime that replaced the V1 gateway. REQ-PR-RELAY-001 through REQ-PR-RELAY-023 are retired in full and MUST NOT be reused: they described a configuration-driven gateway over CSV, XLSX, Parquet, and PostgreSQL sources, per-dataset scopes, governed PDP enforcement, `/metadata/*` publication, evidence offerings, OGC and SP DCI adapters, and an admin listener, none of which exist in the current runtime. The V2 contract is numbered from REQ-PR-RELAY-101 so that no retired identifier carries a second meaning. |
 
 ## 1. Scope and references
 
-This specification covers Registry Relay's externally observable protocol behavior:
+This specification covers Relay's externally observable protocol behavior:
 
-- The configuration-driven service model and its fail-closed startup.
-- Authentication and per-dataset scope enforcement, including the purpose header.
-- Governed Relay PDP enforcement for configured read routes.
-- The consultation data routes (entities, records, relationships, schemas) and the aggregate routes.
-- Scope-filtered metadata publication at `/metadata/*`.
-- Evidence-offering descriptors and the boundary they draw around Relay.
-- The boundary that keeps credential issuance out of Relay.
-- The audit obligation, the error format, and the feature-gated surfaces.
+- The sealed deployment model and its fail-closed startup.
+- The fixed route set and the not-found behavior around it.
+- Authentication, access profiles, purpose, and row binding.
+- Disclosure profiles, field selection, and record transforms.
+- The Registry Core response envelope and its wire formats.
+- Cursor pagination.
+- The CRS84 Point profile and the SDMX read profile.
+- Metadata, generated artifacts, and the per-deployment OpenAPI description.
+- The audit obligation, the error format, and readiness.
 
 This specification does not define:
 
-- Exact routes and schemas: The generated OpenAPI document, rendered as the [Registry Relay API reference](../../reference/apis/registry-relay/), is the authoritative abstract route and schema reference. A configured gateway can also expose its instance-specific `GET /openapi.json` when `openapi_requires_auth` allows it. This document states behavior a schema cannot, and does not restate request and response shapes that would drift from the generated source.
-- The metadata manifest format: The `metadata.yaml` schema and its renderers are owned by Registry Manifest and specified by [RS-DM-MANIFEST](../rs-dm-manifest/). This document refers to the manifest only where Relay serves or scopes its compiled artifacts.
-- Security model internals: Key management, the OIDC trust configuration, and audit-envelope structure belong to [RS-SEC-G](../rs-sec-g/) and deeper security specifications. This document states the authorization behavior a caller observes.
-- Per-deployment shape: Concrete dataset ids, entity names, aggregate ids, scope strings, and evidence-offering ids are runtime configuration, not contract data.
+- Exact schemas: each deployment generates its own OpenAPI 3.1.0 description from its compiled contract. There is no product-wide OpenAPI document, so this specification states behavior a schema cannot and does not restate request and response shapes that vary by deployment.
+- The authoring form: the governed `registry.yaml` grammar an adopter writes, and the tooling that compiles and seals it, belong to [RS-PR-RELAYCTL](../rs-pr-relayctl/) and the [Relay authoring guide](../../configure/relay/).
+- Security model internals: token verification, audit chain integrity, and cursor key handling belong to [RS-SEC-G](../rs-sec-g/).
+- Per-deployment shape: concrete resource identifiers, operation identifiers, access profile names, scope strings, and statistical dataset identifiers are contract data, not protocol data.
 
-For how a manifest's compiled artifacts flow into the runtime services, see the [architecture overview](../../explanation/architecture/) and [RS-ARC-G](../rs-arc-g/) Section 4. For the component boundaries, see [RS-ARC-G](../rs-arc-g/) Section 3 and the [boundary map](../../map/boundaries-and-map/). Media types and feature names are used per [RS-TERMS](../rs-terms/).
+Relay returns unsigned responses. Portable, signed, minimum-disclosure assertions are a separate product specified by [RS-PR-EVIDENCE](../rs-pr-evidence/). Media types and standards names are used per [RS-TERMS](../rs-terms/) and the [standards register](../../reference/standards/).
 
-## 2. Service surface and configuration model
+## 2. Sealed deployment model
 
-Registry Relay turns sensitive government tabular files and database tables (CSV, XLSX, Parquet, PostgreSQL) into protected, read-only, domain-oriented consultation APIs. A gateway's reachable surface is fixed by its configuration: the routes, datasets, and scopes a caller can use are decided at startup, not at request time.
+A Relay service serves exactly one sealed package. The package is the governed trust root: it carries the authored contract, the compiled Registry derived from it, and every generated artifact, each bound to a SHA-256 digest over its canonical bytes.
 
-REQ-PR-RELAY-001: Registry Relay MUST NOT mutate source registry data in v1. Sources are read as batch snapshots or table scans; there is no event-stream backend and no source-registry write-back or domain-data mutation route. This is the protocol-level form of REQ-ARC-G-003.
+REQ-PR-RELAY-101: A Relay process MUST verify its sealed package before it opens an identity issuer connection, an audit sink, a SQLite source, or a listener. A package that fails verification MUST prevent the process from serving rather than degrade it.
 
-REQ-PR-RELAY-002: The routes, datasets, and scopes a gateway exposes MUST be fixed by configuration. Registry Relay MUST NOT widen a caller's reach at request time beyond what configuration grants.
+REQ-PR-RELAY-102: Package verification MUST re-derive the compiled Registry from the authored contract and the packaged source schema observations, and MUST re-derive every generated artifact from that compiled Registry, comparing both byte for byte against the packaged bytes. A mismatch MUST fail verification.
 
-REQ-PR-RELAY-003: At startup, Registry Relay MUST validate the compiled manifest and cross-check that every runtime binding resolves to a declared dataset and entity. It MUST exit non-zero when manifest validation fails (`metadata.manifest.validation_failed`) or a binding does not resolve (`runtime.binding.*`), so misconfiguration is visible before the service accepts traffic rather than as a runtime error.
+REQ-PR-RELAY-103: The package revision MUST be a SHA-256 digest over the canonical JSON of the package manifest. It is an integrity digest, not an authenticity proof: any party can recompute it. Relay packages are unsigned, and a deployment MUST NOT treat a matching package revision as evidence of who produced the package.
 
-REQ-PR-RELAY-004: Public route paths MUST identify resources by dataset and entity identifiers, not by storage table names or SQL. Internal source shapes are configuration internals and MUST NOT appear in the public surface.
+REQ-PR-RELAY-104: Governed contract input and deployment binding MUST be separate closed documents. The contract is `kind: RegistryContract`, the binding is `kind: RelayRuntime`, both at `apiVersion: relay.registrystack.org/v2alpha1`, and both MUST reject unknown fields at every nested structure rather than ignore them. A governed field MUST NOT be accepted from the deployment binding.
 
-## 3. Authentication and authorization
+REQ-PR-RELAY-105: Every source MUST be a SQLite database read through the shared bounded read-only boundary, opened read-only, and MUST declare exactly one source profile, either `snapshot` or `live-read-only`. Each resource MUST bind to one named view in one declared source. Table names, SQL text, and hidden source columns MUST NOT appear on the public surface.
 
-A Relay instance runs exactly one authentication mode, configured under `auth`. Access is scope-based per dataset.
+REQ-PR-RELAY-106: Relay MUST NOT write to a source. Statement execution runs behind an authorizer that denies every action other than the reviewed read set, and every caller-supplied value MUST reach SQLite as a bound parameter, never as statement text.
 
-```mermaid
-flowchart LR
-    caller["Caller"]
-    auth["Auth (one mode):<br/>API key OR OIDC/OAuth2"]
-    scope["Per-dataset scope check<br/>&lt;dataset&gt;:rows · &lt;dataset&gt;:aggregate · &lt;dataset&gt;:metadata"]
-    surface["Configured surface:<br/>data routes · aggregates · /metadata/* · evidence offerings"]
-    audit["JSONL audit record<br/>principal_id · scopes_used · request_id"]
-    caller --> auth --> scope --> surface --> audit
-```
+## 3. Route set
 
-The diagram restates the request path: a caller authenticates in the instance's single mode, the request is checked against the dataset-scoped permission for the surface it touches, the configured surface answers, and the request is recorded. Liveness and readiness probes sit outside this path and are unauthenticated.
+Relay serves a fixed route set. A deployment's contract decides which resource identifiers, lookup names, search names, artifact identifiers, and statistical datasets resolve inside that set; it never adds a route shape.
 
-REQ-PR-RELAY-005: A Registry Relay instance MUST run exactly one authentication mode, either API key or OIDC/OAuth2, configured under `auth`.
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/health` | Unauthenticated liveness. |
+| GET | `/ready` | Unauthenticated readiness. |
+| GET | `/openapi.json` | The deployment's public OpenAPI description. |
+| GET | `/v2` | Service metadata and the visible capability list. |
+| GET | `/v2/resources` | Visible resource collection. |
+| GET | `/v2/resources/{resource}` | One resource description and its visible operations. |
+| GET | `/v2/resources/{resource}/records` | Record list. |
+| GET | `/v2/resources/{resource}/records/{recordIdentifier}` | Single record read. |
+| POST | `/v2/resources/{resource}/lookups/{lookup}` | Exact lookup by declared match values. |
+| GET | `/v2/resources/{resource}/searches/{search}` | Declared bounded search. |
+| GET | `/v2/artifacts/{artifactIdentifier}` | One generated artifact. |
+| GET | `/sdmx/v2/data/dataflow/{agency}/{dataflow}/{version}/{key}` | Keyed statistical data. |
+| GET | `/sdmx/v2/data/dataflow/{agency}/{dataflow}/{version}` | Statistical data with the key omitted. |
+| GET | `/sdmx/v2/structure/{artefactType}/{agency}/{resource}/{version}` | Dataflow or data structure definition, where `{artefactType}` is `dataflow` or `datastructure`. |
 
-REQ-PR-RELAY-006: Access MUST be scope-checked per dataset: a caller MUST hold the dataset-scoped permission for the surface it reads (for example `<dataset_id>:rows` for record reads, `<dataset_id>:aggregate` for aggregate reads, or `<dataset_id>:metadata` for catalog artifacts). Liveness and readiness probes MUST be served without authentication.
+REQ-PR-RELAY-107: Relay MUST expose only the route shapes in the preceding table. An unmatched path and an unmatched method on a matched path MUST produce the same not-found response, so a caller cannot use method probing to learn that a path exists.
 
-REQ-PR-RELAY-007: Where an entity or aggregate source sets `api.require_purpose_header: true`, a request that omits the `Data-Purpose` header MUST be rejected with `400 auth.purpose_required`. Where the header is present, it MUST be recorded in the request's audit record.
+REQ-PR-RELAY-108: The lookup route MUST be the only route that accepts a request body, MUST require the `application/json` media type, and MUST accept only the exact match values its operation declares. It performs an exact match, not a similarity match or a record-linkage decision.
 
-Governed Relay PDP policy enforcement is an additional runtime decision, not a replacement for authentication or dataset scopes. Relay uses the supported PDP profile when runtime configuration selects a governed ecosystem binding or declares a governed policy for an entity or aggregate source. The supported profile covers policy identity and hash, supported ODRL purpose and spatial terms, purpose, jurisdiction, assurance allow-list and minimum assurance, source freshness, required legal basis and consent, redaction, requested fact and disclosure, source binding, route identity, and checked scope. Unsupported ODRL terms or invalid policy identity fail closed.
+REQ-PR-RELAY-109: A request URI longer than 16384 bytes MUST be refused with `internal.uri_too_long`, before the operation reads any source row.
 
-REQ-PR-RELAY-019: A governed Relay read MUST receive a PDP permit before returning entity-backed data or aggregate data. If the PDP denies the request, Relay MUST fail closed and return a stable `pdp.*` problem code rather than falling back to an ungoverned read. The stable denial codes include `pdp.purpose_not_permitted`, `pdp.assurance_insufficient`, `pdp.evidence_stale`, `pdp.legal_basis_required`, `pdp.consent_required`, `pdp.jurisdiction_not_permitted`, `pdp.unsupported_policy_term`, `pdp.policy_id_required`, and `pdp.policy_hash_invalid`.
+## 4. Authentication, access profiles, and row binding
 
-REQ-PR-RELAY-020: Relay MUST ignore request trust-context headers unless the authenticated principal is scoped to assert that exact trust value. The supported trust-context headers are `x-registry-trust-jurisdiction`, `x-registry-trust-assurance`, `x-registry-trust-legal-basis`, `x-registry-trust-consent`, `x-registry-subject-ref`, `x-registry-relationship`, `x-registry-on-behalf-of`, `x-registry-credential-format`, `x-registry-source-observed-age-seconds`, and `x-registry-source-observed-at-unix-seconds`. Unscoped or malformed trust metadata MUST NOT satisfy the PDP gate.
+An operation carries one or more access profiles. Each access profile pairs an access rule with a disclosure profile, so the authorization decision and the disclosure decision are one compiled unit rather than two independent runtime lookups.
 
-Policy authors MUST NOT treat client-supplied context as trust evidence unless Relay derives it from authenticated state or accepts it through the exact-value scope guard defined by REQ-PR-RELAY-020. `Data-Purpose` expresses the caller's requested use; it is not proof of identity, delegation, legal basis, consent, or source freshness.
+REQ-PR-RELAY-110: An access rule MUST be exactly one of two kinds. A `Public` rule requires no credential. A `Protected` rule requires an OIDC bearer access token carrying the rule's scope, and MAY additionally require a declared purpose and a row binding.
 
-REQ-PR-RELAY-021: Aggregate routes MUST perform ordinary aggregate and source-read scope authorization before invoking governed PDP enforcement. A scope denial MUST return `auth.scope_denied` and MUST NOT report PDP policy provenance. For aggregate execution, the PDP checked-scope value MUST be the source entity read scope unless the aggregate is configured for aggregate-only execution, in which case it MUST be the aggregate scope.
+REQ-PR-RELAY-111: A caller MAY select an access profile with the `accessProfile` query parameter. Where the parameter is absent, the operation's default access profile MUST apply. Relay MUST NOT widen a caller's reach beyond the selected profile at request time.
 
-REQ-PR-RELAY-022: A governed PDP decision MUST be audit-provenanced. Relay MUST attach the PDP policy id, policy hash, evaluated rule ids, stable problem code when denied, ecosystem binding id and version when selected, route identity, source binding, checked scopes, and trust provenance that the PDP evaluated to the request audit context.
+REQ-PR-RELAY-112: A row binding MUST restrict the rows an operation can return to those the authenticated caller is entitled to. The binding authority MUST come from the verified token, either from the principal itself or from one named verified claim. A caller-supplied request value MUST NOT satisfy a row binding.
 
-The internals of key handling and OIDC trust configuration are a security-model concern specified by [RS-SEC-G](../rs-sec-g/).
+REQ-PR-RELAY-113: Purpose MUST be contract-declared, not caller-asserted. A request carrying a `Purpose` or `X-Purpose` header MUST be refused as an invalid request.
 
-## 4. Consultation data routes
+REQ-PR-RELAY-114: Denials MUST NOT disclose the existence of a surface the caller cannot reach. An unauthenticated request that explicitly names a protected access profile, and an authenticated request whose token lacks the required scope, MUST both receive the same `resource.not_found` response an unknown resource receives. Only a purpose or row-binding denial on a profile the caller was otherwise entitled to select MUST return `consultation.denied`, and only a missing credential on the default profile MUST return `auth.missing_credential`.
 
-Registry Relay serves each configured entity as a domain-oriented read surface: a record collection, a single record, declared relationships between records, and the entity's JSON Schema. The crosswalk feature maps source field names and values to canonical domain terms, so a route returns domain fields rather than raw source columns.
+REQ-PR-RELAY-115: Metadata visibility MUST be governed independently for the service, resource, statistical dataset, semantics, classification, and processing surfaces. A metadata surface marked operator-only MUST NOT appear in any caller-visible response, and an operation-bound surface MUST appear only to a caller entitled to the operation it describes.
 
-REQ-PR-RELAY-008: Registry Relay MUST serve configured entities as read-only, domain-oriented routes covering record retrieval, single-record retrieval, declared relationships, and the entity JSON Schema. Only the entities, fields, and relationships the configuration binds are reachable; nothing outside the bound surface is exposed.
+## 5. Disclosure profiles and field selection
 
-## 5. Aggregate routes
+A disclosure profile names the exact properties a response may carry and the maximum handling those properties permit. It bounds the response before any caller preference is applied.
 
-A gateway may declare aggregates: configured numeric computations (`measures`) over dimensions, returned as statistical observations. The aggregate output follows an SDMX-JSON shape.
+REQ-PR-RELAY-116: A disclosure profile MUST enumerate the properties it discloses. A property outside the selected profile MUST NOT appear in a response, whatever the caller requests.
 
-REQ-PR-RELAY-009: A declared aggregate MUST return statistical observations computed from its configured `measures` over its dimensions, accompanied by the structure (dimensions and measures) needed to interpret them. The exact field layout is defined by the generated OpenAPI document, and the native and SDMX-JSON serializations differ in where they place that structure. When serialized as SDMX-JSON, the media type is `application/vnd.sdmx.data+json;version=2.1`. The aggregate's dimensions and measures are discoverable on their respective routes.
+REQ-PR-RELAY-117: The `fields` query parameter MUST narrow the response within the selected disclosure profile and MUST NOT widen it. A field selection naming a property the profile does not disclose MUST be refused with `request.fields_invalid`.
 
-Aggregate routes are statistical outputs, not a longitudinal privacy-budget mechanism. A deployment may configure suppression, minimum cell sizes, PDP policy, or downstream review around aggregate routes, but Relay v1 does not by itself track cumulative disclosure across repeated or overlapping aggregate queries. Documentation, data protection impact assessments, and client guidance must not describe a Relay aggregate route as privacy-budgeted unless a separate deployed control provides that guarantee.
+REQ-PR-RELAY-118: `fields` MUST narrow only the record's domain data. The Registry Core record context defined in Section 6 MUST remain complete in every record a response returns, so a caller cannot receive a value without the identity, revision, lifecycle, schema, and authority context that qualifies it.
 
-## 6. Metadata publication
+REQ-PR-RELAY-119: Where a disclosure profile declares a transform, the transform MUST be applied before the value leaves the process, and the transform inventory MUST be recorded in the request's audit record.
 
-Registry Relay can serve the manifest's standards-shaped metadata at `/metadata/*`, using the Registry Manifest renderers at request time. Unlike a static publication, the runtime view is filtered by the caller's identity: a caller sees only the datasets, entities, and aggregate metadata its `metadata` scope permits. This publication filtering is distinct from the governed PDP enforcement in Section 3: metadata routes reveal scoped descriptions of the configured surface, while PDP gates runtime reads of governed data.
+## 6. Response envelope and wire formats
 
-REQ-PR-RELAY-010: Where metadata publication is enabled, Registry Relay MAY serve catalog, DCAT, BRegDCAT-AP, SHACL, JSON Schema, ODRL, evidence-offering, and OGC API Records artifacts at `/metadata/*`. The runtime view MUST be filtered by the caller's `metadata` scope, so a caller whose scope covers one dataset does not receive metadata for datasets it cannot read. Relay does not expose a current CPSV-AP runtime metadata route.
+Every record Relay returns carries the same Registry Core record context: `registryIdentifier`, `recordIdentifier`, `revisionIdentifier`, `lifecycleState`, `schemaReference`, `semanticModelReference`, `authorityIdentifier`, `recordedAt`, and `domainData`.
 
-REQ-PR-RELAY-011: Registry Relay MUST NOT define or version the metadata manifest format. The schema and its renderers are owned by Registry Manifest; Registry Relay serves compiled artifacts and scopes them for callers but does not own the contract. This is the protocol-level form of REQ-ARC-G-006.
+REQ-PR-RELAY-120: A collection response MUST place its records under `items`. A single-record response, and a single resource description, MUST place its payload under `data`. A response MUST NOT use both keys.
 
-REQ-PR-RELAY-023: Metadata publication MUST remain an authorization-filtered publication surface. Relay MUST NOT treat publication of scoped ODRL, catalog, schema, or evidence-offering metadata as a PDP permit for a later data read, and MUST NOT treat a data-read PDP permit as authorization to publish metadata outside the caller's metadata scopes.
+REQ-PR-RELAY-121: Every record MUST carry the complete Registry Core record context, with the deployment's domain payload confined to `domainData`. Registry Core context property names MUST NOT be used for domain values.
 
-## 7. Evidence Gateway offerings
+REQ-PR-RELAY-122: Relay MUST negotiate exactly three record wire formats: `application/json`, `application/ld+json`, and `application/geo+json`. A caller requesting a format the resource and selected access profile do not offer MUST receive `format.unsupported`.
 
-Registry Relay publishes evidence-offering metadata describing where a caller reaches a separate evidence service. Relay routes the caller there; it does not perform the evaluation or the verification.
+REQ-PR-RELAY-123: A response MUST NOT be signed. A caller MUST NOT be able to make Relay produce a signed or credential-shaped response by content negotiation or by any other request-side choice.
 
-REQ-PR-RELAY-012: Registry Relay MAY publish evidence-offering metadata at `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`, naming the external endpoint, the offered claim ids, and the supported disclosure modes and formats for an offering. Registry Relay MUST NOT evaluate an offering or issue credentials itself. This is the protocol-level form of REQ-ARC-G-007.
+## 7. Pagination
 
-Relay's evidence-offering surface still carries a retired product's vocabulary: runtime binding validation accepts an offering only when `access.kind` is `registry-notary`, and it rejects the configuration otherwise. An operator therefore cannot publish an offering that points at an Evidence Gateway deployment without that access kind being widened first. Treat this section as describing published surface with no maintained destination behind it.
+REQ-PR-RELAY-124: List and search responses MUST paginate with an opaque cursor returned as `pageInfo.nextCursor`, and MUST report no cursor once the page set is exhausted. A caller MUST NOT construct a cursor.
 
-## 8. Credential issuance boundary
+REQ-PR-RELAY-125: A cursor MUST be integrity-protected under the deployment cursor key, MUST expire, and MUST be bound to the request it continues, including the operation, the contract revision, the access profile, the field selection, and the wire format. A cursor that is malformed, expired, or presented against a different request MUST be refused with `query.cursor_invalid`.
 
-Registry Relay does not issue credentials, host issuer DID documents, or manage issuer signing keys. Signing belongs to a separate evidence service; the product that used to own it is retired, and Evidence Gateway now signs its own assertions under its own contract.
+REQ-PR-RELAY-126: Page size MUST be bounded by the operation's compiled default and maximum. A `pageSize` outside that bound MUST be refused rather than silently clamped.
 
-REQ-PR-RELAY-013: Registry Relay MUST NOT issue response credentials, MUST NOT accept the legacy `provenance` configuration key, and MUST NOT accept entity-level `publicschema` credential mapping configuration. It MUST NOT serve the former credential-support routes `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`.
+REQ-PR-RELAY-127: A query parameter the operation does not declare MUST be refused with `filter.unknown_field`. Relay MUST NOT ignore an unrecognized parameter.
 
-REQ-PR-RELAY-014: A Relay entity or aggregate response MUST remain an ordinary negotiated data response. A caller request for `application/vc+jwt` MUST NOT cause Relay to sign the response. If a workflow needs a signed response, the workflow MUST use a configured evidence service reached outside Relay.
+## 8. Point profile
 
-## 9. Audit and error behavior
+REQ-PR-RELAY-128: Where a resource declares a primary geometry, Relay MUST serve it as a CRS84 Point in exact longitude and latitude order, as an RFC 7946 `Feature` for a single record and a `FeatureCollection` for a collection, under `application/geo+json`. The `formatProfile` query parameter MUST select between `rfc7946` and `jsonfg`, where `jsonfg` adds the JSON-FG identifiers and feature type to the same Point wire format.
 
-Registry Relay records every data and metadata read in a JSONL audit trail. Audit covers the principal, the scopes exercised, and the request, so a reviewer can reconstruct who read what under which permission.
+REQ-PR-RELAY-129: Spatial search MUST be limited to the declared inclusive point-within-bounding-box predicate, evaluated with a `bbox` parameter on a search operation that declares it. Relay MUST NOT offer a general geospatial query language, tiles, or an environmental data retrieval surface.
 
-REQ-PR-RELAY-015: Every record read and every metadata request MUST produce a JSONL audit record carrying the caller's `principal_id`, the `scopes_used`, and the `request_id`. Raw value-bearing `registry:trust:<field>:<value>` scopes MUST NOT appear in `scopes_used`; each such scope MUST be replaced by the canonical field-bound `registry:trust:<field>:hmac-sha256:<digest>` handle computed under the deployment audit key. The audit record MUST retain authenticated trust-context field names without their values in `pdp_trust_provenance`, including an authenticated freshness field whose malformed value causes denial before PDP evaluation. This is the protocol-level form of REQ-ARC-G-004.
+REQ-PR-RELAY-130: The geometry MUST be subject to the selected disclosure profile in the same way as any other property. Where the profile does not disclose the primary geometry, the GeoJSON representation MUST NOT carry a coordinate.
 
-REQ-PR-RELAY-016: Error responses MUST use the problem-details media type `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)).
+## 9. SDMX read profile
 
-## 10. Feature-gated surfaces
+A deployment MAY declare governed, pre-aggregated statistical datasets. These are served through a narrow aligned subset of SDMX, not a general SDMX registry.
 
-Several surfaces mount only when the gateway is built with the matching Cargo feature; others mount only when runtime configuration enables them. A reader MUST NOT infer their presence from the route catalog of a different build or a different configuration.
+REQ-PR-RELAY-131: The SDMX surface MUST be read-only and MUST be limited to keyed dataflow data, dataflow data with the key omitted, dataflow structure, and data structure definition. Relay MUST NOT offer the remaining SDMX REST resources, schema resources, or availability resources.
 
-REQ-PR-RELAY-017: The OGC API Features, Records, and EDR adapters, and the SP DCI sync routes, mount only when the gateway is built with the matching Cargo feature. A conformance claim against this specification MUST NOT imply a surface that the deployed build does not mount.
+REQ-PR-RELAY-132: Statistical responses MUST use the pinned exchange versions: `application/vnd.sdmx.data+json;version=2.1.0`, `application/vnd.sdmx.data+csv;version=2.1.0`, and `application/vnd.sdmx.structure+json;version=2.1.0`, aligned to SDMX REST 2.2.2.
 
-REQ-PR-RELAY-018: Admin routes MUST be served on a separate, optional admin listener and MUST NOT appear in the public OpenAPI document. Reload and configuration mutation routes MUST require the `registry_relay:admin` scope, metrics MUST require `registry_relay:metrics_read`, and operational posture reads MUST require `registry_relay:ops_read`. Runtime deployments gate the public OpenAPI document by default; it is exposed without authentication only when `openapi_requires_auth` is disabled for demos or controlled tooling.
+REQ-PR-RELAY-133: A statistical dataset MUST carry one fixed access rule for the whole dataset. It MUST NOT carry record access profiles, disclosure profiles, field selection, or row binding, which are Record-surface constructs. Relay MUST NOT claim SDMX conformance or certification.
 
-## 11. Limitations
+REQ-PR-RELAY-134: A deployment that declares no statistical dataset MUST report the `aggregate-data` capability family as unsupported.
+
+## 10. Metadata, artifacts, and OpenAPI
+
+REQ-PR-RELAY-135: Relay MUST publish a capability inventory naming, for every visible operation and access profile, the capability family, the pattern, the route, and the schema, semantic model, and context references that describe the response. The inventory MUST also name the families the runtime does not support: `provisioning`, `evidence`, `write`, `notification`, `access-transparency`, `identity-federation`, and `aggregate-data` where no statistical dataset is declared.
+
+REQ-PR-RELAY-136: Every generated artifact MUST be derived from the compiled Registry and carried inside the sealed package. Relay MUST NOT generate an artifact at request time. An operator-only artifact MUST NOT be served on `/v2/artifacts/{artifactIdentifier}`, and an operation-bound artifact MUST be served only to a caller the bound operation and access profile authorize.
+
+REQ-PR-RELAY-137: Each deployment MUST generate its own OpenAPI 3.1.0 description in two projections: a package-only operator projection carrying every operation, and a public projection served at `/openapi.json` carrying only the publicly reachable surface. `/openapi.json` MUST NOT reveal an operation the caller could not otherwise discover.
+
+## 11. Audit, errors, and readiness
+
+REQ-PR-RELAY-138: Relay MUST record an attempt event before it reads a source, and a refusal or terminal event when the request concludes. Audit MUST fail closed: where an audit event cannot be appended, Relay MUST return `audit.unavailable` and MUST NOT return the data the request asked for.
+
+REQ-PR-RELAY-139: Audit events MUST be value-free. An event MUST carry the closed vocabulary of the audit event schema, including the operation surface, the access and disclosure profile identifiers, the selected property names, the transform inventory, the row boundary kind, the contract revision, and the principal kind. An event MUST NOT carry a record value, a filter value, a token, a URI, or a request header.
+
+REQ-PR-RELAY-140: Error responses MUST use `application/problem+json` per [RFC 9457](https://www.rfc-editor.org/info/rfc9457), MUST carry a stable code from the closed problem vocabulary, MUST carry the effective W3C Trace Context trace identifier, and MUST NOT echo a rejected value back to the caller.
+
+REQ-PR-RELAY-141: `GET /health` and `GET /ready` MUST be the service's only operational probes. `GET /ready` MUST report ready only when audit-sink readiness, SQLite source readiness, and identity issuer readiness are all satisfied. `GET /health` MUST report liveness without authentication and without consulting those dependencies. Relay MUST NOT expose an administrative listener, an administrative route, or a posture document. This is the protocol-level form of the readiness composition specified by [RS-OP-POSTURE](../rs-op-posture/).
+
+REQ-PR-RELAY-142: Relay MUST apply a per-operation quota where the deployment configures one, and MUST refuse an exhausted quota with `consultation.rate_limited` or `aggregate-data.rate_limited` rather than by degrading the response.
+
+## 12. Limitations
 
 These constraints are stated so a reader does not infer a capability from the route list that the reviewed implementation does not provide.
 
-- No source mutation, no streaming: Registry Relay does not mutate source registry data in v1 and reads sources as batch snapshots or table scans; there is no event-stream backend (REQ-PR-RELAY-001).
-- Feature-gated surfaces: OGC adapters and SP DCI sync are present only in builds compiled with the matching Cargo feature (REQ-PR-RELAY-017).
-- No claim evaluation: Relay describes evidence offerings but never evaluates one or issues a credential. The product that formerly played that role is retired, and Relay's binding validation still requires its access kind (REQ-PR-RELAY-012).
-- Manifest format not owned here: The metadata schema and renderers belong to Registry Manifest; Relay serves and scopes the artifacts only (REQ-PR-RELAY-011).
-- PDP enforcement boundary: Governed PDP enforcement applies to configured runtime reads; scoped metadata publication remains a separate publication and discovery surface (REQ-PR-RELAY-019, REQ-PR-RELAY-023).
-- Aggregate disclosure boundary: Aggregate routes return configured statistical observations and may be protected by scopes and PDP policy, but they do not provide a built-in longitudinal privacy budget or cumulative differencing protection (REQ-PR-RELAY-009).
+- No writes and no provisioning: Relay reads governed SQLite views and nothing else (REQ-PR-RELAY-106, REQ-PR-RELAY-135).
+- No signatures: Relay responses are unsigned, and the package revision proves integrity, not authorship (REQ-PR-RELAY-103, REQ-PR-RELAY-123).
+- No general geospatial API: the Point profile covers exact CRS84 points and one inclusive bounding-box predicate (REQ-PR-RELAY-128, REQ-PR-RELAY-129).
+- No SDMX registry: the statistical surface is a four-resource read profile over pre-aggregated datasets (REQ-PR-RELAY-131, REQ-PR-RELAY-133).
+- No record linkage: the lookup route matches declared values exactly and returns no similarity score (REQ-PR-RELAY-108).
+- No administration surface: readiness is the whole operational surface a deployment exposes over HTTP (REQ-PR-RELAY-141).
+- No product-wide OpenAPI document: each deployment describes only itself (REQ-PR-RELAY-137).
 
 ## Conformance
 
-A Registry Relay deployment conforms to this specification when it:
+A Relay deployment conforms to this specification when it:
 
-- exposes no source-registry mutation route and never widens a caller's reach at request time (REQ-PR-RELAY-001, REQ-PR-RELAY-002);
-- fails closed at startup on manifest or binding errors, and keeps storage internals out of the public surface (REQ-PR-RELAY-003, REQ-PR-RELAY-004);
-- runs a single auth mode, scope-checks per dataset, leaves probes unauthenticated, and enforces the purpose header where configured (REQ-PR-RELAY-005, REQ-PR-RELAY-006, REQ-PR-RELAY-007);
-- enforces the supported Relay PDP profile for governed reads, filters trust metadata by principal scope, preserves aggregate authorization ordering, and audits PDP provenance (REQ-PR-RELAY-019, REQ-PR-RELAY-020, REQ-PR-RELAY-021, REQ-PR-RELAY-022);
-- serves only the bound entities, fields, and relationships as read-only routes (REQ-PR-RELAY-008);
-- returns aggregate observations computed from configured measures, in both native and SDMX-JSON serializations (REQ-PR-RELAY-009);
-- scope-filters the metadata it serves, does not own the manifest format, and keeps metadata publication separate from runtime PDP authorization (REQ-PR-RELAY-010, REQ-PR-RELAY-011, REQ-PR-RELAY-023);
-- describes evidence offerings without performing verification (REQ-PR-RELAY-012);
-- keeps credential issuance out of Relay and points signed-response workflows to a configured evidence service (REQ-PR-RELAY-013, REQ-PR-RELAY-014);
-- audits every data and metadata read, and reports errors as problem+json (REQ-PR-RELAY-015, REQ-PR-RELAY-016);
-- mounts Cargo-feature-gated, configuration-gated, and admin surfaces only as built and configured (REQ-PR-RELAY-017, REQ-PR-RELAY-018).
+- verifies and re-derives its sealed package before serving, and refuses to serve on a mismatch (REQ-PR-RELAY-101, REQ-PR-RELAY-102, REQ-PR-RELAY-103);
+- keeps governed contract and deployment binding in separate closed documents, reads SQLite views read-only through the shared boundary, and binds every caller value as a parameter (REQ-PR-RELAY-104, REQ-PR-RELAY-105, REQ-PR-RELAY-106);
+- exposes only the fixed route set, answers unmatched paths and methods identically, bounds the lookup body and the request URI (REQ-PR-RELAY-107, REQ-PR-RELAY-108, REQ-PR-RELAY-109);
+- enforces the two access-rule kinds, honors the selected access profile, binds rows from verified token material only, refuses caller-asserted purpose, and conceals surfaces a caller cannot reach (REQ-PR-RELAY-110 through REQ-PR-RELAY-115);
+- bounds disclosure by profile, narrows rather than widens with `fields`, keeps the Registry Core record context complete, and applies declared transforms before disclosure (REQ-PR-RELAY-116 through REQ-PR-RELAY-119);
+- returns the Registry Core envelope with `items` or `data`, negotiates the three record wire formats, and never signs a response (REQ-PR-RELAY-120 through REQ-PR-RELAY-123);
+- paginates with bound, expiring, integrity-protected cursors, bounds page size, and refuses undeclared parameters (REQ-PR-RELAY-124 through REQ-PR-RELAY-127);
+- serves the CRS84 Point profile with its two format profiles and its single spatial predicate, under disclosure control (REQ-PR-RELAY-128, REQ-PR-RELAY-129, REQ-PR-RELAY-130);
+- limits the SDMX surface to the four pinned read resources with fixed dataset access, and reports `aggregate-data` as unsupported when no dataset is declared (REQ-PR-RELAY-131 through REQ-PR-RELAY-134);
+- publishes the capability inventory and unsupported families, serves only packaged artifacts under their access binding, and generates its own two OpenAPI projections (REQ-PR-RELAY-135, REQ-PR-RELAY-136, REQ-PR-RELAY-137);
+- audits fail-closed with a value-free vocabulary, reports errors as problem+json with a trace identifier, composes readiness from its three dependencies, exposes no administrative surface, and refuses an exhausted quota (REQ-PR-RELAY-138 through REQ-PR-RELAY-142).
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field. Each standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 
-## Evidence Gateway
+## Evidence
 
 This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
 
-- The [Registry Relay API reference](../../reference/apis/registry-relay/) carries the narrative context and links the generated OpenAPI (Redoc) document, the authoritative route and schema reference for every route named here.
-- The [boundary map](../../map/boundaries-and-map/) records Registry Relay's boundaries with source citations, including the read-only, manifest-not-owned, no-claim-evaluation, and storage-internals-hidden constraints that Sections 2, 6, and 7 make precise.
-- The [architecture overview](../../explanation/architecture/) gives the narrative data and contract flow, including the scope-filtered runtime metadata views, that Sections 2 and 6 refine.
-- The [standards register](../../reference/standards/) records the adoption mode for DCAT, BRegDCAT-AP, SHACL, ODRL, OGC API Records, OGC API Features, OGC API EDR, SDMX, SP DCI, and the W3C standards listed in `standards_referenced`.
-- [RS-ARC-G](../rs-arc-g/) Section 3 and Section 5 hold the architectural invariants (REQ-ARC-G-003/004/006/007) that this document refines.
+- The [governed SQLite publication tutorial](../../tutorials/publish-governed-sqlite-registry/) walks one contract from authoring to a served deployment, exercising the routes, envelope, and access profiles specified here.
+- The [Relay authoring guide](../../configure/relay/) is the key-by-key reference for the governed contract and the deployment binding that Sections 2, 4, and 5 constrain.
+- [Relay semantics and disclosure](../../explanation/relay-semantics-and-disclosure/) explains why access profiles and disclosure profiles are one compiled unit, which Sections 4 and 5 make precise.
+- [Governed registry publication](../../explanation/governed-registry-publication/) explains the sealed package and the review it records, which Section 2 makes precise.
+- [Operating Relay](../../operate/relay/) covers readiness, audit, quotas, and logging, which Section 11 makes precise.
+- The [retirement decision record](../../decisions/relay-v1-and-registryctl-retirement-2026-08-11/) records why the V1 requirements in the version history are retired rather than revised.
 
 ## Next
 
-- [RS-PR-EVIDENCE](../rs-pr-evidence/) specifies Evidence Gateway, the separate runtime that returns signed, minimum-disclosure assertions.
-- [RS-ARC-G](../rs-arc-g/) places Registry Relay in the registry stack architecture.
-- [RS-TERMS](../rs-terms/) defines the consultation, metadata, and credential vocabulary used here.
-- [Registry Relay API reference](../../reference/apis/registry-relay/) is the route-level reference and the link to the generated OpenAPI document.
+- [RS-PR-RELAYCTL](../rs-pr-relayctl/) specifies the adopter tooling that produces the sealed package this document assumes.
+- [RS-PR-EVIDENCE](../rs-pr-evidence/) specifies Evidence, the separate runtime that returns signed, minimum-disclosure assertions.
+- [RS-ARC-G](../rs-arc-g/) places Relay in the registry stack architecture.
+- [RS-TERMS](../rs-terms/) defines the consultation, disclosure, and packaging vocabulary used here.

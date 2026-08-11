@@ -1,92 +1,123 @@
 ---
 title: Validate your project
-description: Test authored fixtures, inspect the derived plan, and verify local runtime readiness.
+description: Compile a Registry Relay project, prove its governance, replay its fixtures offline, and classify what changed since the last reviewed revision.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-  - registry-relay
-  - registry-evidence
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use these checks after you change a project, integration, environment, script,
-snapshot, or fixture.
-Run them from the project directory.
+Use these checks after you change a Registry Relay contract, a governance
+record, a codelist, a semantic mapping, or a fixture.
+Every check is read-only: none of them starts a service, resolves a secret, or
+writes to the institution's database.
+`relayctl` reads no environment variables, so what you pass on the command line
+is the whole input.
 
-## Test authored behavior offline
-
-```sh
-registryctl test
-```
-
-The command executes synthetic fixtures through the production evaluation
-semantics without contacting a live source.
-Use `--trace` to include the bounded synthetic interaction trace or `--watch`
-to rerun after authored files change.
-
-## Review the effective plan
+## Compile and validate
 
 ```sh
-registryctl check --environment local --explain
-registryctl review compare --environment local
+relayctl check ./business-registry
 ```
 
-`check` validates authored intent and prints a redacted effective plan.
-An initial `review compare` reports every required product lane as needing
-approval.
-For an update, pass the current approved set with `--against`.
+`check` parses the contract, validates it against the observed SQLite schema,
+expands classifications, and derives the access and disclosure plans.
+A successful report carries the contract revision and the compiled configuration
+key paths.
+A failed report carries diagnostics with a stable code and a location, and no
+source values.
 
-Both commands are read-only.
-They do not resolve secrets, contact a source, or start Docker.
-
-## Build unsigned product inputs
+## Require reviewed governance
 
 ```sh
-registryctl build --environment local
+relayctl check ./business-registry --production
 ```
 
-The build writes deterministic review material and lane-specific signing
-inputs under `.registry-stack/build/local/`.
-Do not edit generated product configuration.
+The production profile requires that every generated suggestion has been
+reviewed.
+It refuses unreviewed semantic or classification suggestions, a missing, stale,
+or digest-mismatched classification review, source-schema drift, and
+inconsistent access or disclosure rules.
+This is the same profile `relayctl package` compiles under, so a revision that
+fails here cannot be sealed.
 
-## Check development prerequisites
+## Replay fixtures offline
 
 ```sh
-registryctl doctor --environment local
+relayctl test ./business-registry
+relayctl test ./business-registry --fixture filtered-page
 ```
 
-Doctor reports host, released-artifact, Docker Compose, and project
-prerequisites without changing the project.
-It does not start the runtime.
+`test` runs the project's expected requests and responses through the same
+compiled router the service uses, against the synthetic fixture database.
+The report lists each step with its expected status, observed status, and a
+`passed` flag.
+`--fixture` runs exactly one step, named by its identifier, and refuses an
+identifier the journey does not declare.
+A step that compares itself to an earlier step, such as one asserting the same
+records across formats or the same entity tag, passes only in a full run.
 
-## Exercise the local product path
+{/* Evidence: crates/registry-relay-v2/src/fixtures.rs compile_fixture_plan()
+    skips every step whose id differs from the selection; assert_expectations()
+    fails recordsEquivalentTo and etagSameAs when the referenced observation is
+    absent. */}
+
+## Generate the review inputs
 
 ```sh
-registryctl dev --detach
-registryctl dev status
-registryctl dev smoke
-registryctl dev logs
-registryctl dev down
+relayctl generate ./business-registry
 ```
 
-`dev` rebuilds stale inputs and owns the disposable development environment.
-The nested commands inspect, exercise, or remove that same bound environment.
-Development credentials, trust material, and state are not production inputs.
+`generate` writes the artifact set and the deterministic value-free review
+reports.
+Without `--output` it writes to `generated/` inside the project.
+It refuses a destination that already holds content, so remove or rename the
+previous directory before regenerating.
+
+## Classify what changed
+
+```sh
+relayctl diff ./approved-business-registry ./business-registry
+```
+
+`diff` compiles both projects and reports each change with a class, a location,
+a description, and an impact of `informational`, `narrowing`, `widening`, or
+`breaking`.
+Widening covers the changes that let a caller reach more than the previous
+revision allowed, such as an added access profile, an expanded disclosure
+profile, or relaxed handling.
+Attach the report to the change review; `diff` approves nothing by itself.
+
+## Read the exit status
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | The command succeeded |
+| `1` | A domain refusal: a check, review, or fixture step failed |
+| `2` | A usage error in the command line |
+| `3` | An operational failure, such as an unreadable input or an unwritable output |
+
+Add the global `--json` flag to emit the report without the command header line
+for local automation.
 
 ## What these checks do not prove
 
-Local fixture and development success do not prove source interoperability,
-operator acceptance, or production readiness.
-The operator still reviews, signs, assembles, generates, verifies, and
-activates the governed deployment through separate product and operator
-boundaries.
+Local success does not prove source interoperability, operator acceptance, or
+production readiness.
+It says the reviewed contract compiles, that its governance inputs are complete,
+and that the supplied synthetic requests behave as the publisher expects.
+An institution still reviews meaning and disclosure, and an operator still binds
+and activates the sealed revision.
+
+Evidence Gateway projects are validated separately with their own toolset; see
+[test an Evidence Gateway project with fixtures](../tutorials/prove-an-evidence-project/).
 
 ## Next
 
 - [Understand generated files](../generated-artifacts/)
 - [Prepare the operator handoff](../operate/)
-- [Look up a diagnostic](../reference/diagnostics/operator/)
+- [Review the relayctl reference](../reference/relayctl/)

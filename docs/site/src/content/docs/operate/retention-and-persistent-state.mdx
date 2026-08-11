@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-evidence
   - registry-mint
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -21,8 +21,8 @@ Retention enforcement, record-level erasure, and data-subject-rights workflows a
 
 ## Operator boundary
 
-Registry Stack gives operators rotation knobs, TTL-bound protocol stores, pseudonymized audit
-handles, and deployment-posture gates.
+Registry Stack gives operators rotation knobs, TTL-bound protocol stores, and pseudonymized audit
+handles.
 It does not decide the legal retention period for a deployment, delete source-registry records,
 or prove that a local rotating file kept every historical audit event.
 
@@ -39,57 +39,52 @@ Two consequences follow from that boundary:
 
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
-| Relay audit sink | Chained audit envelopes with timestamps, event bodies, hashes, and HMAC-pseudonymized sensitive handles when configured. Operational metadata can still identify actors or actions. | The file sink defaults to `100 MB` and `14` retained files. `stdout` and `syslog` retention belongs to the collector. | Configure `audit.sink`, file path, rotation, `audit.hash_secret_env`, and off-host shipping. |
+| Relay audit sink | Chained attempt, terminal, and refusal envelopes binding the registry, resource, operation, access profile, disclosure profile, selected-field identifiers, contract revision, and source revision. It excludes tokens, selectors, raw principals, source values, response values, and raw identifiers. | Relay uses the same segmented, hash-chained JSONL sink Evidence Gateway and Registry Mint use. The active segment seals at a fixed `64 MiB` threshold and reopens under the next ascending sequence; Relay does not expose a configurable segment size or a retained-file count, and it never deletes a sealed segment itself. | Configure `audit.sink` and `audit.integrityKeyRef` in `runtime.yaml`. Archive sealed segments off host oldest sequence first; the shipping mechanics are identical to [Ship Evidence Gateway audit records off host](#ship-evidence-gateway-audit-records-off-host) below, since both sinks share the same segment-naming and hash-chain scheme. |
 | Evidence Gateway audit chain | A keyed, hash-chained JSONL log of the access-attempt event before every source read and the disclosure-release event before every response. Audit carries reviewed identifiers and decision categories, never raw selector values, source values, credentials, tokens, or raw subject identifiers. | `auditStorage.maximumFileBytes` is a per-segment rotation threshold, not a total ceiling. When an append would exceed it, the runtime seals the active segment as `<auditStorage.path>.<sequence>` and opens a new active segment online, with no operator action. Nothing in the runtime deletes or compacts a sealed segment; total retention is entirely operator-owned. | Set `auditStorage.path`, `auditStorage.maximumFileBytes`, and the hash secret in `runtime.yaml`. Archive sealed segments to cold storage oldest sequence first, never touch the active segment while the service runs, and run `evidence verify-audit` on the cadence the deployment's audit policy requires. |
 | Mint audit chain | A keyed, hash-chained JSONL log of token releases and denials. Records use keyed pseudonyms and omit raw assertions, access tokens, client ids, principals, authority values, actors, and subject values. | `audit.maximumFileBytes` is a per-segment threshold, not a total ceiling. Registry Mint seals full segments as `<audit.path>.<sequence>` online and never deletes or compacts them. | Set `audit.path`, `audit.maximumFileBytes`, and the hash key in `mint.yaml`. Archive sealed segments oldest first, never touch the active segment while Registry Mint runs, and run `mint verify-audit` on the deployment's verification cadence. |
-| Relay audit shipper cursor | Local `registry.audit.ack_cursor.v1` state with the acknowledgement time and last acknowledged chain hash, plus an optional shipper identifier. | The shipper atomically replaces the file after each successful hand-off. Relay does not expire or rewrite it. | Mount the file read-only for the Relay process, keep it on local storage and at or below 16 KiB, and configure `deployment.evidence.audit_ack_cursor_path`. |
-| Relay ingest cache | Normalized Parquet snapshots under `server.cache_dir`. These snapshots can contain full source rows from configured registries. | No time TTL. For audited SnapshotExact, the authored `retain_generations` value keeps between `1` and `16` completed cache generations, including the active generation, after successful publication. Ordinary sources keep the built-in current and previous generations. Older snapshots are removed best effort. | Place `server.cache_dir` on writable storage with the same data classification as the source rows. Treat authored retention as a bounded recovery set, not an API for selecting arbitrary rollback targets. |
-| Config-trust anti-rollback state | The last accepted sequence, config and bundle hashes, root version, and optional break-glass pin metadata. Operator names, approval references, and reasons can be sensitive. | The state file is rewritten atomically and has no normal TTL. Break-glass overrides require expiry, and consumed override files are renamed. | Preserve `antirollback_state_path` across upgrades and protect break-glass override files with local root controls. |
-| Relay consultation correctness state | Durable consultation audit, attempts and completions, dispatch permits, quota buckets, materialization publication history, batch-child replay bindings, serving-fence state, and audit-pseudonym keyring metadata. Pseudonymous handles and operational metadata can remain linkable. | Batch-child replay rows expire after `15 minutes` and are pruned on later reservations. Other Relay consultation tables have no general time-based pruning. Keyring retention controls when retired pseudonym key metadata can leave the retained set; it does not delete durable audit rows. | Back up the complete Relay database at a quiesced or coordinated recovery point. Preserve role bindings and key material, and keep any potentially stale restore offline until acknowledged writes are reconciled. |
-| Operator-owned config, source, and secret paths | Runtime configuration, signed Relay bundles and trust anchors, Evidence Gateway's governed bundle and runtime document, Registry Mint's governed public keys, signer configuration, and client registry, metadata manifests, source files, and secret references. Source files can contain personal data. | Registry Stack does not expire these files, except through the specific audit, cache, replay, and break-glass mechanics above. | Mount source data read-only where possible; back up config, trust anchors, anti-rollback state, and secrets through your platform controls. |
+| Operator-owned config, source, and secret paths | Relay's `runtime.yaml`, the sealed package at `packagePath`, and the bound SQLite source path; Evidence Gateway's governed bundle and runtime document; Registry Mint's governed public keys, signer configuration, and client registry; secret references for all three. Source files can contain personal data. | Registry Stack does not expire these files, except through the specific audit and cache mechanics above. | Mount source data read-only where possible; back up config, packages, and secrets through your platform controls. |
+
+Relay V2 keeps no other durable, product-owned state beyond the audit sink and the operator-owned
+paths above: no shipper-acknowledgement cursor file, no server-side ingest cache, no
+configuration-signing or anti-rollback state, and no separate consultation database. Relay V1 had
+all four; the [Relay recovery state](#relay-recovery-state) section explains why none of them carry
+forward.
 
 ## Process-local caches and client-held state
 
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
-| Relay OIDC JWKS cache | Issuer signing keys and negative lookup entries, not subject records. | In process only. Default positive cache TTL is `600` seconds and default negative cache TTL is `60` seconds. | Configure Relay OIDC `jwks_cache_ttl` where exposed. Restart clears the cache. |
+| Relay OIDC JWKS cache | Issuer signing keys and negative lookup entries, not subject records. Applies only when `authentication.issuer` is configured; a package where every access profile is public can run with `authentication.issuer: null` and no cache at all. | In process only. Relay V2 exposes no cache-lifetime override, so the shared platform defaults apply: `600` second positive cache TTL and `60` second negative cache TTL. | Restart clears the cache. |
 | Evidence Gateway OIDC JWKS cache | Issuer signing keys and negative lookup entries for the configured `authentication.jwksUri`, not subject records. | In process only. Evidence Gateway exposes no product-level override, so the shared platform defaults apply: `600` second positive cache TTL and `60` second negative cache TTL. | Restart clears the cache. An unreachable key set is retried and reported at a bounded interval rather than silently ignored. |
-| Relay auth-failure throttle | Process-local counters keyed by resolved client address. Client IP addresses can be personal data. | Fixed window when enabled; defaults are disabled, `20` failures, and `60` seconds. Restart clears counters. | Configure `auth.failure_throttle.*` and `server.trust_proxy` correctly behind proxies. |
-| Relay response headers | No Relay-owned response/result cache was found. Client and proxy caching follow HTTP headers. | Metadata and default release responses are `no-store`; successful release responses can opt into private max-age. | Configure release-profile response max age only when private client caching is acceptable. |
-| Relay pagination cursors | Client-held signed cursor payloads can include query context, filters, principal ID, ingest version, and position. | Not stored server-side and no product TTL. Cursors become invalid when signer, principal, query, config, or ingest version changes. | Treat cursor tokens as client-held request context and avoid logging them unnecessarily. |
-| Relay source OAuth token caches | Access tokens used by compiled Relay source credential providers. | In memory and bounded by the provider's token lifetime. | Configure the Relay integration credential binding and keep token secrets out of logs and config files. |
+| Relay response headers | No stored response cache. Relay validates certain public snapshot responses with a strong `ETag` and answers a matching conditional request with `304 Not Modified`; every other response, including metadata, defaults to `Cache-Control: no-store`. | Not time-bound; validators change when the underlying package, source revision, or requested representation changes. | Not configurable. Behavior follows the source profile and access profile compiled into the package. |
+| Relay pagination cursors | Client-held, authenticated, and encrypted cursor payloads binding the source and contract revisions, operation, access profile, disclosure profile, filters, order, selected fields, and authorization context. No plaintext filter, order, or bbox value. | Not stored server-side. Each cursor carries an expiry checked against `cursor.maximumAgeSeconds`, which the runtime defaults to `300` seconds only when the whole `cursor` section is absent, and becomes invalid immediately if the bound request context no longer matches. Cursors apply to snapshot-source list and search operations alike; live read-only sources do not support pagination. | Configure `cursor.integrityKeyRef` and, optionally, `cursor.maximumAgeSeconds` in `runtime.yaml`. Treat cursor tokens as opaque, client-held request context. |
 | Mint client-assertion replay cache | Seen `jti` values from presented client assertions, used to refuse a repeated assertion. | In memory only, bounded by `clientAssertion.replayCacheEntries` (default `8192`, minimum `256`). Restart clears it. | Size `replayCacheEntries` to the deployment's client population and assertion volume; there is no separate time-based expiry knob. |
+
+Relay V2 has no auth-failure throttle and no source-side OAuth token cache: caller authentication is
+a stateless bearer-token check against the configured OIDC issuer, and a source is a read-only
+SQLite file with no credential of its own to cache a token for.
 
 ## Audit retention
 
-Relay writes chained JSONL audit records.
-The product file-sink default retains `14` files at `100 MB` each.
-The shared platform sink has a smaller generic default, but Relay overrides it when its own audit
-config is used.
+Relay writes chained JSONL audit records through the same segmented sink Evidence Gateway and
+Registry Mint use, sealing full segments at a fixed `64 MiB` and never deleting a sealed segment
+itself.
 
 The chain detects edits, insertions, reordering, and deletion after the first retained record
-within the retained set.
-It does not prove that older rotated-away records, or earlier retained records, still exist.
-If a deployment uses a local rotating file sink without off-host shipping, Relay surfaces the
-deployment-posture finding `relay.audit.retention_local_only`.
-Under `evidence_grade`, that finding refuses startup.
-Set `deployment.evidence.audit_offhost_shipping` only after the deployment really ships audit
-records to external durable storage.
+within the retained set. It does not prove that older rotated-away records, or earlier retained
+records, still exist. Off-host durability is entirely the operator's responsibility: Relay V2 has
+no deployment-posture report, no `evidence_grade` startup mode, and no `doctor` command, so it
+never surfaces a finding about local-only retention risk the way Relay V1 did. There is also no
+shipper-acknowledgement cursor to check a shipper's progress against, and no `relay verify-audit`
+or `relayctl` command that replays the chain: unlike Evidence Gateway's `evidence verify-audit` and
+Registry Mint's `mint verify-audit`, Relay V2 has no offline chain-integrity command. Verify
+continuity by inspecting the sealed segment sequence directly, and treat a running deployment's
+`/ready` result as evidence the sink was writable at that moment, not as proof of complete off-host
+retention.
 
-An `evidence_grade` Relay also requires an acknowledgement cursor for every configured shipping
-target, including `stdout` and `syslog`.
-The cursor is healthy only when its timestamp is fresh and its last acknowledged hash equals the
-live keyed audit chain tail.
-That equality records the trusted shipper's claim that the local backlog is zero; the unsigned
-local cursor does not prove that external storage received or retained the records.
-The shipper must continue running while the application reports not ready, because the signed
-bundle acceptance event advances the audit tail before the service begins serving requests.
-Offline `doctor` commands cannot bind a cursor to a live tail and report a fresh cursor as
-`unverified`.
-
-Never truncate, rewrite, or reserialize audit files as part of cleanup.
-Back them up as files, keep old hash secrets for the audit retention period, and rotate hash
-secrets only as an intentional key-lifecycle event.
+Never truncate, rewrite, or reserialize audit files as part of cleanup. Back them up as files, keep
+old integrity keys for the audit retention period, and rotate `audit.integrityKeyRef` only as an
+intentional key-lifecycle event.
 
 ## Evidence Gateway and Registry Mint retention
 
@@ -163,57 +158,33 @@ active segment was verified. A running writer keeps the active segment out of th
 pass and produces `active-segment: not verified`; stop Registry Mint for a complete retained-chain
 pass.
 
-## Relay consultation-state retention
+## Relay recovery state
 
-When `consultation` is enabled, Registry Relay uses PostgreSQL transactions for durable audit,
-single-holder dispatch fencing, quota decisions, consultation completion, batch-child replay,
-materialization publication, and audit-pseudonym keyring authority. Process restart and fence
-takeover recover unfinished consultation attempts before admission opens.
+Relay V2 keeps no PostgreSQL-backed correctness state. It has no `consultation` lane, dispatch
+fencing, quota-bucket persistence, materialization publication history, batch-child replay, or
+audit-pseudonym keyring; those were Relay V1 concepts and none of them apply to Relay V2. A source
+is either an immutable snapshot file or a single read-only transaction against a live source, and
+Relay V2 keeps no separate database of its own. Its only durable, Relay-owned state is the package,
+the runtime file, the bound source path, and the audit sink already described in
+[Durable state and externally retained records](#durable-state-and-externally-retained-records).
 
-Relay owns `relay_state_private` and `relay_state_api`. No other product shares these tables,
-migrations, runtime roles, or keyrings.
-
-The Relay consultation store excludes registry source rows, raw selectors, source URLs, and source
-credentials. It retains bounded canonical operation state, keyed commitments and pseudonyms,
-audit envelopes, result and publication metadata, and keyring lifecycle metadata. Treat this as
-sensitive operational state. The 15-minute expiry for a batch-child replay row is the only fixed
-row-retention deletion in the consultation protocol. Relay does not automatically prune durable
-audit phases, completed consultation intent, materialization publication history, or quota rows as
-a general retention service.
-
-Set the keyring's audit-event retention interval to the deployment's audit policy. That interval
-prevents retired pseudonym key metadata from leaving the retained key set too early; it does not
-delete audit events or replace the operator's database retention policy. Keep every retained
-pseudonym key value in the secret manager for the same period as the corresponding database and
-audit records.
-
-Back up the complete Relay database after quiescing writers, or use a coordinated platform
-snapshot. Preserve the schema owner, runtime, keyring-maintenance, and keyring-reader role object
-identifiers with the backup. Relay startup and readiness attest schema and keyring consistency but
-cannot detect writes missing from a stale recovery point. The
-[Relay product documentation](../../products/registry-relay/) and
-[backup and restore procedure](../backup-and-restore/) define the recovery boundary.
-
-For audited SnapshotExact, the recoverable unit also includes the immutable source inputs and
-Relay ingest cache captured at the same quiesced point as the Relay database. Bind the source and
-cache artifact hashes to the database active-pointer and history state, exact generation, and
-restricted content digest in access-controlled recovery evidence. `retain_generations` keeps a
-bounded set of cache files available for recovery and readers. It does not expose an operation
-that activates any retained generation as an arbitrary rollback target.
+Because a package is not signed and carries no anti-rollback ratchet, Relay V2 has no rollback
+boundary to preserve across a recovery. Recovery is the same procedure as an ordinary deployment
+change: install the reviewed package, source, and runtime file at new revisioned paths and replace
+the complete revision. See [Replace complete revisions](../relay/#replace-complete-revisions) for
+the exact steps.
 
 ## What remains outside the product
 
-Registry Stack does not implement a general erasure workflow for source records, audit records,
-or cache entries.
-It also does not prune operator-owned config files, source files, old release artifacts, or
-break-glass evidence after the product-level expiry checks have run.
+Registry Stack does not implement a general erasure workflow for source records, audit records, or
+cache entries.
+It also does not prune operator-owned config files, source files, or old release artifacts after
+the product-level expiry checks above have run.
 Those controls belong in the operator's storage, backup, incident-response, and data-protection
 processes.
 
 ## Next
 
-- [Run single-node Compose behind your reverse proxy](../single-node-compose-behind-proxy/)
-- [Back up and restore a deployment](../backup-and-restore/)
-- [Upgrade and roll back a deployment](../upgrade-and-rollback/)
+- [Operate Relay: replace complete revisions](../relay/#replace-complete-revisions)
 - [Harden a production deployment](../../security/hardening-checklist/)
 - [Known limitations and non-guarantees](../../explanation/known-limitations/)

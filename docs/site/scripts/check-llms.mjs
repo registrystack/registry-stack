@@ -241,7 +241,7 @@ const sampleFiles = [
   'explanation/architecture.md',
   'index.md',
   'products/registry-relay.md',
-  'tutorials/author-registry-project.md',
+  'tutorials/publish-governed-sqlite-registry.md',
 ];
 
 for (const f of sampleFiles) {

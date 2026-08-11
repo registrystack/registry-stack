@@ -13,17 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from ci_changes import (
-    AUTHORING_REFERENCE_CONTRACT_SOURCES,
-    AUTHORING_REFERENCE_INPUTS,
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
     RELEASE_SECURITY_WORKFLOWS,
     SHARDS,
     Workspace,
-    authoring_reference_inputs,
     classify,
-    validate_authoring_reference_routing,
 )
 from run_cargo_packages import command_args, package_args
 
@@ -300,7 +296,6 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(shard_names, {"relay", "registryctl"})
         self.assertTrue(outputs["release_tool"])
         self.assertTrue(outputs["release_source_proof"])
-        self.assertTrue(outputs["registryctl_tutorial"])
         self.assertFalse(outputs["platform"])
 
     def test_evidence_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
@@ -380,7 +375,10 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(
             classify(
                 self.workspace,
-                ("docs/site/src/content/docs/tutorials/author-registry-project.mdx",),
+                (
+                    "docs/site/src/content/docs/tutorials/"
+                    "publish-governed-sqlite-registry.mdx",
+                ),
             )["evidence_tutorial"]
         )
 
@@ -391,7 +389,6 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertIn("registry-platform-crypto", outputs["rust_packages"])
         self.assertIn("registry-relay", outputs["rust_packages"])
-        self.assertTrue(outputs["registryctl_tutorial"])
 
     def test_ci_workflow_change_runs_the_complete_matrix(self) -> None:
         outputs = classify(self.workspace, (".github/workflows/ci.yml",))
@@ -715,68 +712,6 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs"])
         self.assertTrue(outputs["docs_archives"])
 
-    def test_authoring_reference_inputs_run_docs(self) -> None:
-        for _, path in AUTHORING_REFERENCE_INPUTS:
-            with self.subTest(path=path):
-                self.assertTrue(classify(self.workspace, (path,))["docs"])
-
-    def test_authoring_reference_input_samples_must_exist_as_files(self) -> None:
-        manifest_path = Path("docs/site/scripts/authoring-reference-sources.json")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        missing_sample = (
-            "crates/registryctl/schemas/project-authoring/missing.schema.json"
-        )
-        self.assertTrue(
-            fnmatch.fnmatchcase(
-                missing_sample,
-                manifest["ci_inputs"][0]["pattern"],
-            )
-        )
-        self.assertFalse(Path(missing_sample).is_file())
-        manifest["ci_inputs"][0]["sample"] = missing_sample
-
-        with tempfile.TemporaryDirectory() as temp_directory:
-            planted_manifest = Path(temp_directory) / manifest_path.name
-            planted_manifest.write_text(json.dumps(manifest), encoding="utf-8")
-            with self.assertRaisesRegex(
-                ValueError,
-                "samples must name existing repository files",
-            ):
-                authoring_reference_inputs(planted_manifest)
-
-    def test_authoring_reference_source_contract_has_independent_ci_coverage(self) -> None:
-        self.assertEqual(
-            AUTHORING_REFERENCE_CONTRACT_SOURCES,
-            (
-                "crates/registryctl/schemas/project-authoring/project.schema.json",
-                "crates/registryctl/schemas/project-authoring/environment.schema.json",
-                "crates/registryctl/schemas/project-authoring/integration.schema.json",
-                "crates/registryctl/schemas/project-authoring/fixture.schema.json",
-                "crates/registryctl/schemas/project-authoring/entity.schema.json",
-                "schemas/registry-relay.config.schema.json",
-                "crates/registryctl/schemas/project-authoring/parity-coverage.json",
-                "crates/registryctl/schemas/project-authoring/documentation-intent.json",
-                "crates/registry-relay/config/documentation-intent.json",
-            ),
-        )
-        validate_authoring_reference_routing(
-            AUTHORING_REFERENCE_CONTRACT_SOURCES,
-            AUTHORING_REFERENCE_INPUTS,
-        )
-        without_project_authoring_schemas = tuple(
-            item
-            for item in AUTHORING_REFERENCE_INPUTS
-            if item[0] != "crates/registryctl/schemas/project-authoring/**"
-        )
-        with self.assertRaisesRegex(
-            ValueError,
-            "do not route source-contract paths",
-        ):
-            validate_authoring_reference_routing(
-                AUTHORING_REFERENCE_CONTRACT_SOURCES,
-                without_project_authoring_schemas,
-            )
-
     def test_docs_pages_is_exact_dispatch_only(self) -> None:
         workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
         trigger_block = workflow.split("\npermissions:", 1)[0].rstrip()
@@ -798,45 +733,15 @@ on:
 """.rstrip(),
         )
 
-    def test_public_project_authoring_modules_run_docs(self) -> None:
-        project_authoring = Path("crates/registryctl/src/project_authoring.rs").read_text(
-            encoding="utf-8"
+    def test_ops_posture_source_runs_docs(self) -> None:
+        # Relay V2 generates no docs-site artifact from crate source, so the one
+        # crate a published page still reads is registry-platform-ops: the
+        # operational posture page states what that module enforces.
+        self.assertTrue(
+            classify(self.workspace, ("crates/registry-platform-ops/src/lib.rs",))[
+                "docs"
+            ]
         )
-        public_modules = re.findall(
-            r"^pub use ([a-z][a-z0-9_]*)::\*;$",
-            project_authoring,
-            flags=re.MULTILINE,
-        )
-        self.assertTrue(public_modules)
-
-        for module in public_modules:
-            source = f"crates/registryctl/src/project_authoring/{module}.rs"
-            with self.subTest(source=source):
-                self.assertTrue(classify(self.workspace, (source,))["docs"])
-        self.assertFalse(
-            classify(
-                self.workspace,
-                ("crates/registryctl/src/project_authoring/project.rs",),
-            )["docs"],
-            "implementation-only project.rs should not rebuild docs",
-        )
-
-    def test_diagnostic_reference_inputs_run_docs(self) -> None:
-        inputs = (
-            "crates/registry-platform-ops/src/lib.rs",
-            "crates/registry-relay/src/consultation/**",
-            "crates/registry-relay/src/process_startup.rs",
-            "crates/registryctl/schemas/project-reports/**",
-            "crates/registryctl/src/project_authoring/diagnostic_reference.rs",
-            "crates/registryctl/src/project_authoring/diagnostics.rs",
-            "crates/registryctl/src/project_authoring/fixture_diagnostics.rs",
-            "crates/registryctl/src/project_authoring/preflight.rs",
-            "crates/registryctl/tests/fixtures/project-reports/**",
-        )
-        for path in inputs:
-            with self.subTest(path=path):
-                classifier_path = path.replace("**", "service.rs")
-                self.assertTrue(classify(self.workspace, (classifier_path,))["docs"])
 
     def test_evidence_contract_change_runs_docs_and_evidence_contracts(self) -> None:
         """The docs Evidence configuration page is generated from these files."""
@@ -957,159 +862,57 @@ on:
                 self.assertEqual(entry["marker"], key_path_contract.marker)
                 self.assertEqual(entry["reference"], key_path_contract.reference)
 
-    def test_first_country_docs_and_journey_routing_matrix(self) -> None:
+    def test_relay_docs_routing_matrix(self) -> None:
+        # Relay V2 publishes two product documents and no generated artifact, so
+        # the docs trigger follows those documents rather than crate source.
+        # Every crate below still selects its own Rust work; what it must not do
+        # is rebuild the site.
         cases = (
             (
-                "crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
+                "products/relay-v2/CONCEPT.md",
+                {"docs": True, "relay_v2_contracts": True},
             ),
             (
-                "crates/registryctl/tests/fixtures/project-authoring/opencrvs/registry-stack.yaml",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
+                "products/relay-v2/STANDARDS-ALIGNMENT.md",
+                {"docs": True, "relay_v2_contracts": True},
             ),
             (
-                "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
+                "products/relay-v2/contracts/package-layout.yaml",
+                {"docs": False, "relay_v2_contracts": True},
             ),
             (
-                "crates/registryctl/schemas/project-reports/registry.project.explanation.v1.schema.json",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
+                # ops-posture-spec.test.mjs reads this file to prove the
+                # published RS-OP-POSTURE claims still match the runtime, so it
+                # is a docs input as well as a contract input.
+                "crates/registry-relay-v2/src/server.rs",
+                {"docs": True, "relay_v2_contracts": True},
             ),
             (
-                "crates/registryctl/tests/fixtures/project-reports/registry.project.explanation.v1.json",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
+                # A Relay V2 source no docs test reads stays out of the docs job.
+                "crates/registry-relay-v2/src/api.rs",
+                {"docs": False, "relay_v2_contracts": True},
             ),
             (
-                "crates/registryctl/src/project_authoring/report_contract.rs",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registryctl/src/project_authoring/output.rs",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registryctl/src/main.rs",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-relay/src/api/openapi.rs",
-                {
-                    "docs": True,
-                    "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
+                "crates/registry-relayctl/src/main.rs",
+                {"docs": False, "relay_v2_contracts": True},
             ),
             (
                 "crates/registry-relay/src/server.rs",
-                {
-                    "docs": True,
-                    "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
+                {"docs": False, "relay_contracts": True},
             ),
             (
-                "crates/registry-relay/src/main.rs",
-                {
-                    "docs": True,
-                    "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
+                "crates/registryctl/src/project_authoring/output.rs",
+                {"docs": False, "project_authoring": True},
             ),
             (
-                "crates/registry-relay/src/config/loader.rs",
-                {
-                    "docs": True,
-                    "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
+                "docs/site/src/data/repo-docs.yaml",
+                {"docs": True, "docs_archives": True, "rust": False},
             ),
             (
-                "crates/registry-platform-ops/src/lib.rs",
-                {
-                    "docs": True,
-                    "registryctl_tutorial": True,
-                },
+                "docs/site/src/content/docs/reference/relayctl.mdx",
+                {"docs": True, "rust": False},
             ),
-            (
-                "crates/registry-relay/src/consultation/service.rs",
-                {
-                    "docs": True,
-                    "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-relay/src/process_startup.rs",
-                {
-                    "docs": True,
-                    "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registryctl/src/project_authoring/diagnostic_reference.rs",
-                {
-                    "docs": True,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "docs/site/src/components/JourneyGateMatrix.astro",
-                {
-                    "docs": True,
-                    "rust": False,
-                    "registryctl_tutorial": False,
-                },
-            ),
-            (
-                "docs/site/src/content/docs/journeys/verify-instance-openapi.mdx",
-                {
-                    "docs": True,
-                    "rust": False,
-                    "registryctl_tutorial": False,
-                },
-            ),
-            (
-                "docs/site/src/content/docs/reference/diagnostics/operator.mdx",
-                {
-                    "docs": True,
-                    "rust": False,
-                    "registryctl_tutorial": False,
-                },
-            ),
+            ("README.md", {"docs": False, "rust": False}),
         )
 
         for path, expected in cases:
@@ -1117,82 +920,6 @@ on:
                 outputs = classify(self.workspace, (path,))
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
-
-    def test_tutorial_package_dependencies_route_the_source_journey(self) -> None:
-        cases = (
-            (
-                "crates/registry-relay/src/state_plane/runtime.rs",
-                {
-                    "docs": False,
-                    "relay_contracts": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "crates/registry-platform-crypto/src/lib.rs",
-                {"docs": True, "registryctl_tutorial": True},
-            ),
-            (
-                "crates/registryctl/src/project_authoring/project.rs",
-                {
-                    "docs": False,
-                    "project_authoring": True,
-                    "registryctl_tutorial": True,
-                },
-            ),
-            (
-                "README.md",
-                {"docs": False, "rust": False, "registryctl_tutorial": False},
-            ),
-        )
-
-        for path, expected in cases:
-            with self.subTest(path=path):
-                outputs = classify(self.workspace, (path,))
-                for output, value in expected.items():
-                    self.assertEqual(outputs[output], value, output)
-
-    def test_current_reader_journey_inputs_route_the_source_journey(self) -> None:
-        inputs = (
-            "docs/site/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh",
-            "docs/site/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh.sha256",
-            "docs/site/public/examples/registryctl/opencrvs-events-api-overlay-v1.sh",
-            "docs/site/public/examples/registryctl/opencrvs-events-api-overlay-v1.sh.sha256",
-            "docs/site/src/content/docs/configure/oauth-client-credentials.mdx",
-            "docs/site/src/content/docs/operate/approve-initial-baseline.mdx",
-            "docs/site/src/content/docs/tutorials/author-registry-project.mdx",
-            "docs/site/src/content/docs/tutorials/configure-project-script-adapter.mdx",
-            "docs/site/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx",
-            "docs/site/src/content/docs/tutorials/use-your-spreadsheet.mdx",
-            "docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx",
-            "docs/site/src/content/docs/tutorials/verify-opencrvs-claims.mdx",
-        )
-
-        for path in inputs:
-            with self.subTest(path=path):
-                self.assertTrue(
-                    classify(self.workspace, (path,))["registryctl_tutorial"]
-                )
-
-    def test_first_country_generation_inputs_run_docs(self) -> None:
-        inputs = (
-            "crates/registryctl/assets/project-starters/**",
-            "crates/registryctl/src/main.rs",
-            "crates/registryctl/src/project_authoring/output.rs",
-            "crates/registryctl/src/project_authoring/promotion_projection.rs",
-            "crates/registryctl/src/project_authoring/report_contract.rs",
-            "crates/registryctl/src/templates/**",
-            "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
-            "crates/registryctl/tests/fixtures/project-authoring/**",
-            "crates/registry-relay/src/api/openapi.rs",
-            "crates/registry-relay/src/main.rs",
-            "crates/registry-relay/src/server.rs",
-        )
-
-        for path in inputs:
-            with self.subTest(path=path):
-                classifier_path = path.replace("**", "example.yaml")
-                self.assertTrue(classify(self.workspace, (classifier_path,))["docs"])
 
     def test_docs_job_fetches_ignored_openapi_inputs_before_script_tests(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")

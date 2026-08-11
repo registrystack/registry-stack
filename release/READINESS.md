@@ -123,8 +123,10 @@ What 1.0 promises the institutions that run this.
       by that release, and anti-rollback monotonic rejection remain outside this
       run).
       Backup and restore guidance for generated and single-node deployments is
-      documented in [`backup-and-restore.mdx`](../docs/site/src/content/docs/operate/backup-and-restore.mdx)
-      (#226). The
+      documented in [`backup-and-restore.mdx` as published at v0.19.0](https://github.com/registrystack/registry-stack/blob/v0.19.0/docs/site/src/content/docs/operate/backup-and-restore.mdx)
+      (#226; the page was retired from the published docs with the Relay V1
+      cutover, so this evidence is pinned to the last release that carried it
+      and needs a Relay V2 replacement before 1.0). The
       [v0.8.4 -> v0.9.0 -> v0.8.4 procedure](exercises/upgrade-v0.8.4-to-v0.9.0.md)
       records the beta-11 migration and rollback gate; it does not claim a
       successful run until finalized-source and published-asset evidence are
@@ -141,9 +143,11 @@ What 1.0 promises the institutions that run this.
       run until finalized-source and published-asset evidence are added.
 - [ ] Single-node Compose deployment behind an institution-owned reverse proxy,
       IAM, and front rate limiter documented. Evidence:
-      [`single-node-compose-behind-proxy.mdx`](../docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx)
-      (#13). Kubernetes and high-availability profiles remain outside the 1.0
-      deployment profile.
+      [`single-node-compose-behind-proxy.mdx` as published at v0.19.0](https://github.com/registrystack/registry-stack/blob/v0.19.0/docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx)
+      (#13; the page was retired from the published docs with the Relay V1
+      cutover, so this evidence is pinned to the last release that carried it
+      and needs a Relay V2 replacement before 1.0). Kubernetes and
+      high-availability profiles remain outside the 1.0 deployment profile.
 - [ ] Security-relevant configuration defaults inventoried and reviewed for
       secure-by-default (#172 and #171 are known open questions). Inventory
       evidence: [`security-config-defaults.md`](notes/security-config-defaults.md);

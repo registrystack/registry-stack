@@ -38,16 +38,6 @@
       "reason": "registryctl is retired and its identifiers are not published by the current resolver."
     },
     {
-      "glob": "docs/site/public/generated/configuration-reference*.json",
-      "classification": "legacy-generated-docs",
-      "reason": "Generated registryctl reference artifacts retain source-local schema identifiers."
-    },
-    {
-      "glob": "docs/site/scripts/generate-authoring-reference*.mjs",
-      "classification": "legacy-generated-docs",
-      "reason": "The authoring reference generator retains registryctl schema identifiers."
-    },
-    {
       "glob": "docs/site/scripts/ops-posture-spec.test.mjs",
       "classification": "legacy-generated-docs",
       "reason": "The operations posture test binds a source-local legacy schema identifier."
@@ -66,11 +56,6 @@
       "glob": "docs/site/src/content/docs/tutorials/first-run-with-solmara-lab.mdx",
       "classification": "external-demo",
       "reason": "Solmara Lab identifiers are adopter-owned demo values, not Registry Stack contracts."
-    },
-    {
-      "glob": "docs/site/src/data/generated/configuration-reference*.json",
-      "classification": "legacy-generated-docs",
-      "reason": "Generated registryctl reference data retains source-local schema identifiers."
     },
     {
       "glob": "products/manifest/fixtures/**",

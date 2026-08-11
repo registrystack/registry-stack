@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry architecture flow</title>
-  <desc>Registry Platform provides shared primitives to both runtime services. Registry Manifest produces portable metadata contracts describing what a registry exposes. Registry Relay binds those descriptions to real sources and serves protected read-only APIs and typed consultations. Evidence Gateway independently answers one bounded question about one subject from its own configured authoritative HTTP sources and returns a signed assertion carrying the answer and not the record. Registry Mint is a supporting service that issues the short-lived access tokens Evidence Gateway verifies, for deployments with no identity provider. The external Solmara Lab adopter demo provides synthetic registry data.</desc>
+  <desc>Registry Platform provides shared primitives to both runtime services. Registry Manifest produces portable metadata contracts describing what a registry exposes. Registry Relay independently compiles a reviewed registry contract and serves protected read-only operations over one local read-only SQLite source; it does not read a Registry Manifest document. Evidence Gateway independently answers one bounded question about one subject from its own configured authoritative HTTP sources and returns a signed assertion carrying the answer and not the record. Registry Mint is a supporting service that issues the short-lived access tokens Evidence Gateway verifies, for deployments with no identity provider. The external Solmara Lab adopter demo provides synthetic registry data.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SHARED PRIMITIVES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -39,19 +39,14 @@
     <text x="16" y="340">OGC Records, and SKOS.</text>
   </g>
 
-  <g stroke="#000091" stroke-width="1" fill="none">
-    <line x1="208" y1="268" x2="236" y2="268"/>
-    <polyline points="230,264 236,268 230,272"/>
-  </g>
-
   <text x="240" y="220" fill="#161616" font-size="14" font-weight="700">Registry Relay</text>
   <text x="240" y="238" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-relay</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="240" y="268">Binds described sources to</text>
-    <text x="240" y="286">real data. Serves protected</text>
-    <text x="240" y="304">read-only APIs and typed</text>
-    <text x="240" y="322">consultations.</text>
+    <text x="240" y="268">Compiles a reviewed registry</text>
+    <text x="240" y="286">contract. Serves read-only</text>
+    <text x="240" y="304">operations over one local</text>
+    <text x="240" y="322">read-only SQLite source.</text>
   </g>
 
   <text x="240" y="392" fill="#161616" font-size="14" font-weight="700">Evidence Gateway</text>

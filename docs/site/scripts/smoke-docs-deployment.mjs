@@ -101,16 +101,18 @@ export async function smokeDocsDeployment({
     throw new Error('/ still contains a version redirect document');
   }
 
+  // Search, sitemap, and machine-readable routes on both mounts. The site
+  // publishes no static asset under /generated/: the only machine-readable
+  // artifact Relay V2 exposes is the OpenAPI document each deployment serves
+  // from its own runtime, which no site deployment can vouch for.
   for (const route of [
     '/pagefind/pagefind.js',
     '/pagefind/pagefind-entry.json',
     '/sitemap-index.xml',
     '/llms.txt',
     '/index.md',
-    '/generated/configuration-reference.v1.json',
     '/dev/llms.txt',
     '/dev/index.md',
-    '/dev/generated/configuration-reference.v1.json',
   ]) {
     await requireRoute(read, route);
   }

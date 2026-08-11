@@ -1,5 +1,5 @@
-// Guards product release-note pages and registryctl changelog sections from
-// drifting behind the shipped release headings.
+// Guards product release-note pages from drifting behind the shipped release
+// headings.
 
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -90,23 +90,10 @@ test('product release notes track newest released changelog headings', () => {
   }
 });
 
-test('registryctl changelog tracks the latest stack release when included', () => {
-  const manifest = latestStackManifest();
-  if (!Object.hasOwn(manifest.artifacts ?? {}, 'registryctl')) {
-    return;
-  }
-
-  const newestRegistryctl = newestVersion(
-    headingVersions(readRepoFile('crates/registryctl/CHANGELOG.md')),
-    'registryctl changelog',
-  );
-
-  assert.equal(
-    newestRegistryctl,
-    manifest.stack.version,
-    'registryctl changelog must carry a section for the latest stack release that includes it',
-  );
-});
+// The registryctl changelog guard is gone with the Relay V2 cutover:
+// registryctl is no longer a release artifact (see release/manifests for the
+// current stack release) and relayctl, the tool that replaced it, keeps no
+// changelog of its own to guard.
 
 test('a hosted-held release claims no external OID4VCI evidence', () => {
   const manifest = latestStackManifest();

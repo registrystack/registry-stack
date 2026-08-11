@@ -7,7 +7,9 @@ source_repos:
   - registry-stack
   - registry-relay
   - registry-platform
-last_reviewed: "2026-08-08"
+  - registry-evidence
+  - registry-mint
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -31,10 +33,13 @@ evidence](openssf-evidence/).
 | What | Where it stands |
 |------|-----------------|
 | Authentication on every route that touches a record or a claim | Built in |
+| One inbound authentication mode, and it is OIDC | Built in; there is no API-key or static-credential mode in either maintained runtime |
 | Deny-by-default authorization, checked before any data is read | Built in |
 | Only the public half of a signing key is ever published | Built in |
-| Person-level access is written to an audit log | Built in (fail-closed is yours to switch on) |
-| Three disclosure modes, with `redacted` revealing neither value nor answer | Built in |
+| Person-level access is written to an audit log | Built in, and fail-closed with no switch to turn it off |
+| Three disclosure modes, with `redacted` revealing neither value nor answer | Built in (Evidence Gateway) |
+| Governed contract verified before the process serves anything | Built in (Relay re-derives its package and compares bytes at startup) |
+| A signature over the governed Relay package | Not provided; `packageRevision` is an integrity digest, not an authenticity proof |
 | Selective-disclosure SD-JWT VC serialization of an assertion | Built in (a second encoding, not a credential lifecycle) |
 | Holder-bound subject binding, proven at presentation by a key-binding JWT | Declared per requirement, verified by the relying party (frozen profile) |
 | Replay prevention for a presented credential | Not provided anywhere; the challenge lifecycle is the relying party's |
@@ -48,24 +53,47 @@ evidence](openssf-evidence/).
 Every request that returns person-level records or claim results moves through the same pipeline:
 authenticate, authorize, serve, audit.
 
-- Authenticate: a runtime service runs exactly one authentication mode, fixed by
-  configuration: static credentials or OIDC (REQ-SEC-G-002). Static credentials are configured as
-  SHA-256 fingerprints, never raw secrets, and compared in constant time (REQ-SEC-G-003). OIDC
-  tokens are trusted only after signature, issuer, audience, and algorithm checks (REQ-SEC-G-004).
+- Authenticate: a maintained runtime service runs exactly one inbound authentication mode, and it
+  is OIDC (REQ-SEC-G-002). Each service trusts exactly one issuer, and tokens are accepted only
+  after signature, issuer, audience, token-type, and algorithm checks (REQ-SEC-G-004). Registry
+  Relay narrows this further: the issuer's discovery URL must be an `https` URL byte-identical to
+  its canonical `/.well-known/openid-configuration` form, the accepted token type is exactly
+  `at+jwt`, and exactly one of EdDSA, ES256, or RS256 is permitted per deployment.
 - Authorize: authorization is scope-based and deny-by-default. The required scope is enforced
   before any source is read, and a caller's reach is never widened at request time
-  (REQ-SEC-G-005, REQ-SEC-G-006).
-- Serve: the service returns the configured surface: a protected read, a claim result, a
-  selected value, a signed assertion, or a denial. Every claim is answered in one of three
-  disclosure modes: `value` hands back the computed value, `predicate` returns only a yes/no, and
-  `redacted` returns neither the value nor the yes/no; the claim's policy fixes which modes are
-  allowed. [Disclosure modes and computed answers](../explanation/disclosure-modes-and-computed-answers/)
+  (REQ-SEC-G-005, REQ-SEC-G-006). Where a Relay operation declares a purpose constraint or an
+  authority row binding, both are read from the verified token, never from a request field.
+- Serve: the service returns the configured surface: a governed read shaped by a compiled
+  disclosure profile, a claim result, a selected value, a signed assertion, or a denial. Relay
+  denials come from a closed set of 26 problem codes. Every Evidence Gateway claim is answered in
+  one of three disclosure modes: `value` hands back the computed value, `predicate` returns only a
+  yes/no, and `redacted` returns neither the value nor the yes/no; the claim's policy fixes which
+  modes are allowed.
+  [Disclosure modes and computed answers](../explanation/disclosure-modes-and-computed-answers/)
   covers this in depth.
 - Audit: the request is recorded in a hash-chained audit envelope capturing the caller
-  principal, the scopes exercised, a request identifier, and the declared purpose
-  (REQ-SEC-G-008). A deployment can run
-  audit fail-closed, so a request whose audit record cannot be written does not succeed
-  (REQ-SEC-G-009).
+  principal kind, the authority exercised, a request identifier, and the governed revision the
+  answer was produced under (REQ-SEC-G-008). Audit is fail-closed and there is no configuration to
+  make it otherwise: a Relay request whose audit record cannot be written returns
+  `503 audit.unavailable` instead of an answer, and Relay re-checks its audit sink for readiness
+  rather than trusting the check it did at startup (REQ-SEC-G-009).
+
+{/* Evidence: IssuerRuntime::profile() requires token_types == ["at+jwt"], exactly one of
+     EdDSA/ES256/RS256, and one canonical https discovery URL,
+     crates/registry-relay-v2/src/contract.rs:1215-1255; PurposeConstraint and AuthorityRowBinding
+     are read from the verified principal, crates/registry-relay-v2/src/auth.rs:204-257; every
+     audit failure maps to ProblemCode::AuditUnavailable (503),
+     crates/registry-relay-v2/src/api.rs, with the test
+     audit_path_replacement_revokes_readiness in crates/registry-relay-v2/src/startup.rs; Evidence
+     Gateway's inbound authentication is OIDC only, crates/registry-evidence/src/auth.rs, and its
+     audit is a fail-closed durable keyed JSONL chain with no enable switch,
+     crates/registry-evidence/src/audit.rs. */}
+
+{/* TODO[evidence]: REQ-SEC-G-002, -003, -004, -008, and -009 are cited from RS-SEC-G, which is
+     being revised for the V2 cutover in parallel with this page. The retired static-credential
+     fingerprint mode (previously REQ-SEC-G-003) has no implementation in either maintained
+     runtime, so its citation is dropped here rather than restated. Re-check these five IDs against
+     RS-SEC-G once that revision lands; if any is renumbered or retired, this list must follow. */}
 
 Every route that returns person-level records or an evidence assertion requires authentication.
 Operational probes, public verification keys, issuer metadata, and docs or OpenAPI when configured
@@ -73,6 +101,12 @@ may be public because they carry no person-level data.
 Evidence Gateway exempts only its probes, its OpenAPI document, its issuer JWKS, and its issuer metadata
 document; both its assertion route and its evidence-definition discovery route require a verified
 access token (REQ-SEC-G-006).
+Registry Relay exempts `GET /health`, `GET /ready`, and `GET /openapi.json`, and beyond those it is
+the contract, not the route, that decides: each compiled operation carries an access profile that is
+either public or protected, so a Relay deployment can legitimately publish an open operation and
+must therefore be reviewed at the contract, not at the route table. Metadata is separately gated by
+a declared visibility of public, operation-bound, or operator-only, and an operator-only artifact
+answers `404 resource.not_found` rather than confirming it exists.
 Issuers sign with asymmetric keys and publish only the public half, so any verifier can check a
 signed artifact without holding a credential of its own (REQ-SEC-G-007).
 
@@ -125,25 +159,69 @@ Two behaviors are recommended rather than required, so confirm them rather than 
   Registry Platform rather than reimplementing its own.
 - HTTP hardening: security response headers and limits on outbound source-fetch traffic are
   recommended posture (REQ-SEC-G-012). Check that your build applies them rather than assuming
-  it.
+  it. The outbound half applies to Evidence Gateway, which fetches from configured authoritative
+  sources. Registry Relay makes no outbound source request at all: its only outbound traffic is
+  OIDC discovery and JWKS retrieval, so for Relay this reduces to response headers and the request
+  and response limits its runtime file sets.
 
-## Declared deployment assurance
+## What Registry Relay checks before it serves
 
-A deployment states the assurance level it claims; the software then enforces gates that match the
-claim.
-Registry Relay accepts a `deployment` block with a profile of `local`, `hosted_lab`,
-`production`, or `evidence_grade`.
-Each profile binds a findings catalog at escalating severities: a `production` deployment with no
-durable audit sink refuses to start, and an `evidence_grade` deployment refuses to start from an
-unsigned local config file.
-Findings, waivers (each with a required operator reference, optional summary, and mandatory
-expiry), and the declared profile are reported by the restricted operations posture endpoint, so
-the deployment's actual state is inspectable rather than asserted. The default tier omits waiver
-metadata.
-The gate catalogs are documented in the
-[Registry Relay configuration reference](../products/registry-relay/configuration/).
-Evidence Gateway states its own operator obligations in its operator contract rather than through this
-posture block.
+Relay has no declared assurance level, no posture endpoint, and no findings-and-waivers catalog. A
+deployment does not state the assurance it claims; it either satisfies the startup checks or the
+process does not serve. Those checks are the security surface worth reviewing:
+
+- The package is verified first. Before Relay opens a source, a sink, or a socket, it re-runs the
+  compiler and the artifact generator over the sealed inputs and compares the results byte for byte
+  against what the package contains. A package that does not re-derive does not start.
+- The runtime file cannot widen the package. `runtime.yaml` (`kind: RelayRuntime`) is a closed
+  schema that rejects unknown fields, and it binds only local concerns: listen address, package
+  path, source paths, the audit sink, an optional OIDC issuer, cursor settings, limits, quotas, and
+  shutdown. Nothing in it can add an operation, a readable column, or a disclosure.
+- Contract and runtime must agree. A contract with any protected access requires a configured
+  issuer, and a contract that declares any lookup requires quotas. Neither is a warning.
+- Secrets are referenced, never inlined. The runtime file accepts exactly two reference grammars,
+  `secret:env/<NAME>` and `secret:file/<name>`, and nothing else. A file secret must be a single
+  flat filename, owned by the running user, with mode exactly `0600` and a link count of one, and
+  no secret may exceed 64 KiB.
+- The source is opened read-only and pinned. Relay opens SQLite with
+  `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NO_MUTEX`, refuses a symlink, refuses a
+  `-wal` or `-journal` sidecar beside a snapshot, and requires a snapshot to sit on a read-only
+  filesystem or to be non-writable by its own mode bits.
+- Operational logging is a closed enum. `RELAY_LOG` accepts `off`, `error`, `warn`, `info`,
+  `debug`, or `trace`; any other value falls back to the crate's own `info` filter rather than
+  enabling a dependency's logging.
+- Unix only, and it fails closed off it. On a non-Unix target Relay's permission check returns
+  false unconditionally and runtime-path validation returns an error, so the process refuses to
+  start rather than running without the ownership and mode checks it relies on.
+
+{/* Evidence: verify_compiled_derivation() and verify_artifact_derivation() re-run the compiler and
+     generator and compare bytes, and safe_permissions() returns false unconditionally under
+     #[cfg(not(unix))], crates/registry-relay-v2/src/package.rs; prepare() verifies the package
+     first, validate_runtime_contract() requires an issuer for protected access and quotas for
+     lookups, and #[cfg(not(unix))] validate_runtime_path returns StartupError::RuntimeInvalid,
+     crates/registry-relay-v2/src/startup.rs:96-104 and :469-492; RelayRuntime is a closed
+     deny_unknown_fields schema, crates/registry-relay-v2/src/contract.rs:1062-1079; the two secret
+     grammars, the 64 KiB bound, and the uid/0600/nlink==1 file checks with their tests
+     references_use_only_the_two_exact_contract_grammars and
+     file_secret_uses_open_file_owner_and_exact_mode_checks,
+     crates/registry-platform-config/src/secrets.rs; the open flags,
+     crates/registry-platform-sqlite/src/schema.rs:131-133 and src/statement.rs:494-496; sidecar
+     and symlink refusal and the read-only-or-non-writable requirement,
+     crates/registry-platform-sqlite/src/capture.rs:11, :34-36, :42-45;
+     operational_log_directive() with the test
+     operational_log_filter_cannot_enable_dependency_targets,
+     crates/registry-relay-v2/src/main.rs. */}
+
+Two of these are worth stating as limits rather than as controls. The package check proves the
+package is internally consistent and unmodified, not that a trusted party produced it: there is no
+signature over a Relay package. And a snapshot's immutability past startup is an operator duty,
+because a process comparing two hashes cannot exclude a privileged writer that changes and restores
+the bytes between them.
+
+The runtime keys are documented in the [Relay configuration reference](../configure/relay/) and the
+day-two procedures in [operate Relay](../operate/relay/).
+Evidence Gateway states its own operator obligations in its operator contract rather than through
+any posture block.
 
 ## What stays with the operator
 

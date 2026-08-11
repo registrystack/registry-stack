@@ -8,11 +8,10 @@
  * this list, so registering a new API reference in astro.config.mjs is the only
  * place that has to learn about it.
  *
- * These are the generated bases, not the hand-authored narrative pages
- * reference/apis/registry-relay and registry-evidence, which keep their .md.
+ * These are the generated bases, not the hand-authored narrative page
+ * reference/apis/registry-evidence, which keeps its .md.
  */
 export const GENERATED_API_BASES = [
-  'reference/apis/relay',
   'reference/apis/evidence',
 ];
 

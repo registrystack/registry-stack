@@ -223,25 +223,29 @@ umask 077
 evidence-oid4vci inspect \
   --config /etc/evidence-oid4vci/oid4vci.yaml \
   > oid4vci-metadata.json
-python3 - <<'PY'
-import json
-
-with open("oid4vci-metadata.json", encoding="utf-8") as source:
-    document = json.load(source)
-print(document["profile"])
-print(document["deployment"])
-PY
 ```
+
+The command prints one indented JSON document. Open it and read the profile marker it claims and
+the deployment shape it derived:
 
 ```text
-registry.evidence.oid4vci-profile/v1
-{'metricsEnabled': True, 'replicas': 1, 'restartInvalidatesOutstandingExchanges': True}
+{
+  "profile": "registry.evidence.oid4vci-profile/v1",
+  "credentialIssuerMetadata": { ... },
+  "authorizationServerMetadata": { ... },
+  "deployment": {
+    "replicas": 1,
+    "restartInvalidatesOutstandingExchanges": true,
+    "metricsEnabled": true
+  }
+}
 ```
 
-The document also contains `credentialIssuerMetadata` and `authorizationServerMetadata` exactly as
-the service derives them. `inspect` is an explicit diagnostic command, so it may print raw issuer
-and audience values to stdout. Keep the output owner-only and do not send it to operational logs,
-metrics, or a shared build artifact. Operational logging omits those raw values.
+The two elided members are the credential issuer and authorization server metadata exactly as the
+service derives them, and they are the parts worth reading in full before routing traffic.
+`inspect` is an explicit diagnostic command, so it may print raw issuer and audience values to
+stdout. Keep the output owner-only and do not send it to operational logs, metrics, or a shared
+build artifact. Operational logging omits those raw values.
 
 Render the deterministic OpenAPI 3.1 contract when the deployment process needs an inspectable
 copy of the public HTTP surface:

@@ -12,6 +12,7 @@ import remarkGfm from 'remark-gfm';
 // .md endpoint prepends (src/pages/[...slug].md.ts).
 import { DISCOVERY_HEADER } from './src/lib/page-markdown.ts';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
+import { buildRelayV2RetirementRedirects } from './src/lib/relay-v2-retirement-redirects.mjs';
 
 // Marketing site that now owns the persuasion layer (the pitch). Old docs
 // routes that migrated there redirect to these pages.
@@ -127,6 +128,7 @@ export default defineConfig({
   // to their new homes so old links and search results keep resolving.
   redirects: {
     ...buildNotaryRetirementRedirects(currentDocsetRedirect),
+    ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/start/quickstart/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
@@ -135,14 +137,14 @@ export default defineConfig({
     // Retired pages keep old links useful by sending readers to a supported
     // task or reference page.
     '/journeys/': internalRedirect('/'),
-    '/journeys/spreadsheet-protected-api/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
+    '/journeys/spreadsheet-protected-api/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
     '/journeys/instance-openapi/': internalRedirect('/reference/apis/'),
-    '/journeys/bounded-http/': internalRedirect('/tutorials/author-registry-project/'),
-    '/journeys/bounded-multi-call-script/': internalRedirect('/tutorials/configure-project-script-adapter/'),
+    '/journeys/bounded-http/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
+    '/journeys/bounded-multi-call-script/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
     '/journeys/exact-snapshot/': internalRedirect('/configure/'),
     '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
     // Retired first-call and source-review routes enter the supported local path.
-    '/start/your-first-call/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
+    '/start/your-first-call/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
     '/start/test-current-source-revision/': internalRedirect('/start/quickstart/'),
     // Retired lab tutorials land on the current chooser or Evidence Gateway
     // overview. The historical Solmara workflow used an obsolete Relay source
@@ -152,11 +154,10 @@ export default defineConfig({
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     // Retired advanced tutorials land on current task, explanation, or
-    // reference entry points.
-    '/tutorials/configure-project-api-key-authentication/': internalRedirect('/configure/'),
+    // reference entry points. The Relay V1 authoring tutorials are retired by
+    // buildRelayV2RetirementRedirects above.
     '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/configure/'),
-    '/tutorials/deploy-standalone-with-own-data/': internalRedirect('/operate/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,
@@ -187,14 +188,11 @@ export default defineConfig({
     // Hand-authored projects/* -> pulled products/* (internal)
     '/projects/registry-relay/': internalRedirect('/products/registry-relay/'),
     '/projects/registry-relay/run-locally/': internalRedirect('/products/registry-relay/'),
-    '/projects/registry-relay/authorize-callers/': internalRedirect('/products/registry-relay/client-integration/'),
-    '/projects/registry-relay/reference/': internalRedirect('/products/registry-relay/configuration/'),
+    '/projects/registry-relay/authorize-callers/': internalRedirect('/configure/relay/'),
+    '/projects/registry-relay/reference/': internalRedirect('/configure/relay/'),
     // Retired project routes redirect only when a current replacement exists.
     // Solmara Lab is an external adopter, not a Registry Stack product.
     '/projects/registry-lab/demo-flow/': internalRedirect('/start/quickstart/'),
-    // The API reference moved from static Redoc HTML to native, theme-aware,
-    // searchable pages. Keep the old shareable links working.
-    '/api/registry-relay.html': internalRedirect('/reference/apis/relay/'),
   },
   integrations: [
     // Mermaid must come BEFORE starlight: its rehype plugin rewrites
@@ -236,13 +234,11 @@ export default defineConfig({
         // Schemas are produced by scripts/fetch-openapi.mjs in `npm run generate`,
         // which runs before any build. The generated routes live alongside the
         // hand-authored narrative pages (reference/apis/registry-*), which link
-        // into them; old /api/*.html links are preserved by redirects below.
+        // into them; old /api/*.html links are preserved by redirects above.
+        // Relay is not registered here: Relay V2 compiles its OpenAPI per
+        // deployment from the adopter's own registry contract and serves it at
+        // GET /openapi.json, so there is no product-level document to pin.
         starlightOpenAPI([
-          {
-            base: 'reference/apis/relay',
-            schema: './openapi/registry-relay.openapi.json',
-            sidebar: { label: 'Relay API operations', collapsed: true },
-          },
           {
             base: 'reference/apis/evidence',
             schema: './openapi/registry-evidence.openapi.json',
@@ -293,11 +289,14 @@ export default defineConfig({
           label: 'Answer with Evidence Gateway',
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
+            // The first hands-on tutorial stays in the open beside the
+            // overview: a first-time reader should not have to open a group to
+            // find where to start.
+            { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
             {
               label: 'Learn locally',
               collapsed: true,
               items: [
-                { label: 'Get your first assertion', slug: 'tutorials/first-evidence-assertion' },
                 { label: 'Explore SD-JWT VC locally', slug: 'tutorials/request-evidence-as-sd-jwt-vc' },
                 { label: 'Return a governed value', slug: 'tutorials/return-a-governed-value' },
                 { label: 'Control caller access', slug: 'tutorials/control-who-can-request-evidence' },
@@ -336,16 +335,25 @@ export default defineConfig({
                 { label: 'Call Mint from application code', slug: 'configure/request-an-access-token' },
               ],
             },
+            // Two audiences that used to share one group: a relying party
+            // calling the HTTP contract, and a deployment delivering the same
+            // assertion to a wallet. Each reads only its own half.
             {
-              label: 'Verify and trust',
+              label: 'Verify as a relying party',
               collapsed: true,
               items: [
                 { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
                 { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
+                { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
+              ],
+            },
+            {
+              label: 'Deliver to wallets',
+              collapsed: true,
+              items: [
                 { label: 'Enable SD-JWT VC in a deployment', slug: 'configure/enable-sd-jwt-vc' },
                 { label: 'Configure OID4VCI wallet delivery', slug: 'configure/evidence-oid4vci' },
                 { label: 'Run OID4VCI interoperability checks', slug: 'tutorials/run-oid4vci-interoperability-checks' },
-                { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
               ],
             },
             {
@@ -356,46 +364,51 @@ export default defineConfig({
                 { label: 'Verify the audit chain', slug: 'operate/evidence-audit' },
               ],
             },
+            // Product-scoped, so it sits with the product rather than in the
+            // cross-product Security section.
+            { label: 'Security model', slug: 'security/evidence' },
           ],
         },
         {
+          // Relay V2 is the shipped runtime, so its pages are the section
+          // itself rather than a collapsed preview inside it. The section
+          // follows the same shape as Evidence Gateway above: overview, first
+          // tutorial, then the later phases collapsed behind the phase they
+          // belong to.
           label: 'Connect an existing registry',
           items: [
             { label: 'Overview', slug: 'configure' },
-            { label: 'Start a spreadsheet registry', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
-            { label: 'Connect an HTTP registry', slug: 'tutorials/author-registry-project' },
-            { label: 'Configure OAuth client credentials', slug: 'configure/oauth-client-credentials' },
-            { label: 'Add OAuth-backed Rhai', slug: 'tutorials/configure-project-script-adapter' },
-            { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
-            { label: 'Configuration fields', slug: 'reference/project-configuration' },
+            { label: 'How governed publication works', slug: 'explanation/governed-registry-publication' },
+            { label: 'Publish a SQLite registry', slug: 'tutorials/publish-governed-sqlite-registry' },
             {
-              label: 'Relay V2 preview',
+              label: 'Author a project',
               collapsed: true,
               items: [
-                { label: 'Overview', slug: 'explanation/governed-registry-publication' },
-                { label: 'Publish a SQLite registry', slug: 'tutorials/publish-governed-sqlite-registry' },
+                { label: 'Author a Relay project', slug: 'configure/relay' },
                 { label: 'Semantics and disclosure', slug: 'explanation/relay-semantics-and-disclosure' },
-                { label: 'Author a Relay V2 project', slug: 'configure/relay' },
-                { label: 'Operate Relay V2', slug: 'operate/relay' },
+                { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
+              ],
+            },
+            {
+              label: 'Operate Relay',
+              collapsed: true,
+              items: [
+                { label: 'Prepare the operator handoff', slug: 'operate' },
+                { label: 'Run a Relay deployment', slug: 'operate/relay' },
               ],
             },
           ],
         },
         {
-          label: 'Operate',
+          // Only what applies to more than one product. Anything that names a
+          // single product lives in that product's section.
+          label: 'Operate across products',
           collapsed: true,
           items: [
-            { label: 'Overview', slug: 'operate' },
-            { label: 'Approve the initial baseline', slug: 'operate/approve-initial-baseline' },
-            { label: 'Run generated Compose', slug: 'operate/single-node-compose-behind-proxy' },
-            {
-              label: 'Advanced',
-              collapsed: true,
-              items: [
-                { label: 'Approve a source change', slug: 'operate/advanced/compare-and-reapprove-source-change' },
-              ],
-            },
+            { label: 'Overview', slug: 'operate/advanced' },
+            { label: 'Retention and persistent state', slug: 'operate/retention-and-persistent-state' },
+            { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
+            { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
           ],
         },
         {
@@ -403,9 +416,9 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'security' },
-            { label: 'Evidence Gateway security model', slug: 'security/evidence' },
             { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
             { label: 'Security support window', slug: 'security/support-window' },
+            { label: 'Security self-assessment', slug: 'security/self-assessment' },
             { label: 'Release trust', slug: 'security/openssf-evidence' },
           ],
         },
@@ -416,16 +429,14 @@ export default defineConfig({
             { label: 'Overview', slug: 'reference' },
             { label: 'Validate a project', slug: 'verify' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
-            { label: 'Project configuration', slug: 'reference/project-configuration' },
             { label: 'Evidence Gateway configuration', slug: 'reference/evidence-configuration' },
             { label: 'evidencectl CLI', slug: 'reference/evidencectl' },
-            { label: 'registryctl CLI', slug: 'reference/registryctl' },
+            { label: 'relayctl CLI', slug: 'reference/relayctl' },
             {
               label: 'API reference',
               collapsed: true,
               items: [
                 { label: 'Overview', slug: 'reference/apis' },
-                { label: 'Relay (narrative)', slug: 'reference/apis/registry-relay' },
                 { label: 'Evidence Gateway (narrative)', slug: 'reference/apis/registry-evidence' },
                 // Generated operation pages for each schema (theme-aware, searchable).
                 ...openAPISidebarGroups,
@@ -434,15 +445,6 @@ export default defineConfig({
             { label: 'Errors and status codes', slug: 'reference/errors' },
             { label: 'Evidence Gateway problems', slug: 'reference/evidence-problems' },
             { label: 'Registry Mint', slug: 'reference/mint' },
-            {
-              label: 'Diagnostic catalogs',
-              collapsed: true,
-              items: [
-                { label: 'Authoring diagnostics', slug: 'reference/diagnostics/authoring' },
-                { label: 'Fixture diagnostics', slug: 'reference/diagnostics/fixture' },
-                { label: 'Operator diagnostics', slug: 'reference/diagnostics/operator' },
-              ],
-            },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
             {
               label: 'Product documentation',
@@ -487,7 +489,6 @@ export default defineConfig({
                 { label: 'Architecture', slug: 'explanation/architecture' },
                 { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
                 { label: 'Records stay home', slug: 'explanation/records-stay-home' },
-                { label: 'Relay protected read flow', slug: 'explanation/consultation-flow' },
                 { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
                 { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
                 { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
@@ -504,7 +505,7 @@ export default defineConfig({
                 { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
                 { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
                 { label: 'RS-PR-EVIDENCE · Evidence Gateway protocol', slug: 'spec/rs-pr-evidence' },
-                { label: 'RS-PR-REGISTRYCTL · registryctl contract', slug: 'spec/rs-pr-registryctl' },
+                { label: 'RS-PR-RELAYCTL · relayctl contract', slug: 'spec/rs-pr-relayctl' },
                 { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
                 { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },
                 { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },

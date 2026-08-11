@@ -1,13 +1,13 @@
 ---
 title: API references
-description: Generated API reference pages for Registry Relay and Evidence Gateway, built from pinned OpenAPI artifacts.
+description: Where to find the HTTP API reference for each Registry Stack service, and why only Evidence Gateway has a pinned OpenAPI document.
 wide: true
 status: current
 owner: registry-docs
 source_repos:
   - registry-relay
   - registry-evidence
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -16,37 +16,21 @@ standards_referenced:
 
 import OpenApiSourcesTable from '../../../../components/OpenApiSourcesTable.astro';
 
-Use this section to browse the HTTP API for Registry Relay or Evidence Gateway. Each
-page is built from a pinned OpenAPI artifact owned by the project it describes.
+Use this section to browse the HTTP API for a Registry Stack service. The two services publish
+their OpenAPI documents in different ways, because one has a product-level route contract and the
+other does not.
 
 {/* Do not duplicate endpoint reference content in narrative pages. */}
 
-## Pinned sources
+## Evidence Gateway: one pinned document
 
-The table below shows the current artifact status, source generator, and link to each API reference page.
-The table is generated from `src/data/openapi-sources.yaml`.
+Evidence Gateway's routes are the same in every deployment, so one generated OpenAPI document
+describes the product. That document is pinned into this site and rendered as a reference page.
 
-<OpenApiSourcesTable />
-
-## Per-project pages
-
-- [Registry Relay API](./registry-relay/) documents the Protected Registry Data API, metadata API,
-  evidence offering discovery, health and readiness endpoints, and optional standards adapters.
 - [Evidence Gateway API](./registry-evidence/) documents the assertion, requester-scoped
   definition discovery, health, readiness, served-contract, and key discovery endpoints.
 
-## Provenance and freshness
-
-[Registry Relay](../../products/registry-relay/) ships a hand-authored abstract OpenAPI contract.
-It documents the full route surface using templated paths
-(`/v1/datasets/{dataset_id}/entities/{entity}/records/...`) and capability tags, rather than
-enumerating one deployment's datasets and entities.
-The contract lives in `registry-relay/openapi/registry-relay.openapi.json`.
-Feature-gated surfaces (OGC API Features, OGC API Records, OGC API EDR, and SP DCI) are included with notes in each tag description explaining the build feature that mounts them.
-For the instance-specific shape of `{dataset_id}` and `{entity}` in a given deployment, fetch `GET /openapi.json` from that gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
-
-[Evidence Gateway](../../products/registry-evidence/) generates its OpenAPI document with the other
-Evidence Gateway contract artifacts:
+The document is generated with the other Evidence Gateway contract artifacts:
 
 ```sh
 cargo run -p registry-evidence --example evidence-contracts -- --output "<directory>"
@@ -56,3 +40,61 @@ The committed copy lives in `products/evidence/generated/`, and root CI's `evide
 job fails on any byte difference between the committed artifacts and a fresh generation. A running
 Evidence Gateway service publishes the same document at `GET /openapi.json` with no authentication
 required.
+
+### Pinned sources
+
+The card below shows the current artifact status, source generator, and link to the reference page.
+It is generated from `src/data/openapi-sources.yaml`.
+
+<OpenApiSourcesTable />
+
+## Relay: one document per deployment
+
+Relay has no product-level OpenAPI document to pin, so this site publishes none.
+
+A Relay deployment serves data that its own `registry.yaml` declares. The compiler turns that
+document into the deployment's OpenAPI 3.1.0 description, and `relay` serves the public projection
+of it at `GET /openapi.json` with no authentication required. The description names that
+deployment's registry, its contract version, its base URI, and its own resources, operations, and
+statistical datasets, so no two deployments produce the same document. Fetch it from the deployment
+you are integrating with:
+
+```sh
+curl -fsS https://<relay-host>/openapi.json
+```
+
+Two projections are generated. The public projection is the artifact served at `GET /openapi.json`
+and it omits every surface the Registry marks operator-only. The full projection,
+`openapi.full.yaml`, is an operator-only artifact and is never served on that route.
+
+What is fixed across every deployment is the route inventory, not the described data. Relay's
+process router is a closed list:
+
+| Route | Method | Purpose |
+| --- | --- | --- |
+| `/health` | GET | Process liveness |
+| `/ready` | GET | Compiled Registry readiness |
+| `/openapi.json` | GET | Public OpenAPI projection for this deployment |
+| `/v2` | GET | Service metadata and the capability inventory |
+| `/v2/resources` | GET | Declared resources |
+| `/v2/resources/{resource}` | GET | One resource's metadata |
+| `/v2/resources/{resource}/records` | GET | Bounded record list |
+| `/v2/resources/{resource}/records/{recordIdentifier}` | GET | One record read |
+| `/v2/resources/{resource}/lookups/{lookup}` | POST | Declared named lookup |
+| `/v2/resources/{resource}/searches/{search}` | GET | Declared named search |
+| `/v2/artifacts/{artifactIdentifier}` | GET | One visibility-appropriate generated artifact |
+| `/sdmx/v2/data/{context}/{agency}/{resource}/{version}/{key}` | GET | SDMX data with a series key |
+| `/sdmx/v2/data/{context}/{agency}/{resource}/{version}` | GET | SDMX data with the key omitted |
+| `/sdmx/v2/structure/{artefactType}/{agency}/{resource}/{version}` | GET | SDMX structure |
+
+A deployment cannot add a route to that list. What varies is which `{resource}`, `{lookup}`,
+`{search}`, and SDMX artefact identifiers resolve, which is exactly what the deployment's own
+OpenAPI document tells you.
+
+For the meaning of the response envelope, the access profiles that gate these routes, and the
+error taxonomy they share, use the reference and explanation pages rather than a rendered
+document:
+
+- [Errors and status codes](../errors/)
+- [Relay semantics and disclosure](../../explanation/relay-semantics-and-disclosure/)
+- [RS-PR-RELAY](../../spec/rs-pr-relay/)

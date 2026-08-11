@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 
@@ -39,7 +39,7 @@ test('current docs stay under /dev/ while v0.15.2 remains the released archive',
   const readmeLines = new Set(readme.split(/\r?\n/));
   assert.equal(
     readmeLines.has(
-      '| Build and run the maintained HTTP project | [Registry Stack 1.0 first run](https://docs.registrystack.org/dev/tutorials/author-registry-project/) |',
+      '| Serve a governed read-only API over a registry you hold | [Publish a governed SQLite registry](https://docs.registrystack.org/dev/tutorials/publish-governed-sqlite-registry/) |',
     ),
     true,
   );
@@ -110,12 +110,19 @@ test('current docs stay under /dev/ while v0.15.2 remains the released archive',
 });
 
 test('current deployment recovery pages do not present draft procedures as supported paths', async () => {
-  for (const path of [
-    'docs/site/src/content/docs/operate/backup-and-restore.mdx',
-    'docs/site/src/content/docs/operate/upgrade-and-rollback.mdx',
-  ]) {
+  // Relay V2 retired the separate backup, restore, upgrade, and rollback pages,
+  // so this guard no longer names them. Which operate pages claim current
+  // status is the page owner's call; what must never happen is a page claiming
+  // it while still carrying a draft disclaimer.
+  const operateRoot = 'docs/site/src/content/docs/operate';
+  const pages = (await readdir(resolve(repoRoot, operateRoot), { recursive: true }))
+    .filter((name) => name.endsWith('.mdx'))
+    .map((name) => `${operateRoot}/${name}`);
+
+  assert.ok(pages.length > 0, `expected operate pages under ${operateRoot}`);
+  for (const path of pages) {
     const source = await readRepo(path);
-    assert.match(source, /^status: current$/m, path);
+    if (!/^status: current$/m.test(source)) continue;
     assert.doesNotMatch(source, /This page is draft\./, path);
   }
 });

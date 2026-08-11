@@ -11,7 +11,7 @@
  * Examples (base = "/"):
  *   /                                         -> /index.md
  *   /explanation/architecture/                -> /explanation/architecture.md
- *   /products/registry-relay/configuration/  -> /products/registry-relay/configuration.md
+ *   /products/registry-relay/standards-alignment/  -> /products/registry-relay/standards-alignment.md
  *
  * Examples (base = "/docs/"):
  *   /docs/                                    -> /docs/index.md

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -36,26 +36,38 @@ deprecation release first.
 
 A deprecation is announced in every channel a consumer of that element reads:
 
-- The CHANGELOG of the affected product gains a `Deprecated` entry naming the element, the
-  replacement, and the earliest release that may remove it.
-- An HTTP route or field is marked `deprecated: true` in the committed OpenAPI document.
-  Precedent: `GET /v1/datasets/{dataset_id}/aggregates/{aggregate_id}/metadata` is marked
-  deprecated as an alias of the `/structure` route.
-- A config key that is renamed keeps working through the deprecation window; after removal,
-  the loader rejects it with a message naming the replacement, through the deprecated-field
-  guard in `registry-platform-config`, instead of silently ignoring it.
+- The release note for the announcing release, under `release/notes/`, gains a `Deprecated`
+  entry naming the element, the replacement, and the earliest release that may remove it.
+  Products that keep their own CHANGELOG (Registry Manifest and the platform crates) carry the
+  same entry there.
+- An HTTP route or field that a committed OpenAPI document describes is marked
+  `deprecated: true` in that document. Evidence Gateway's committed document is the one such
+  artifact the stack publishes. Relay publishes no product-level document, so a Relay route
+  deprecation is announced in the release note and marked on the reference page for the route
+  inventory instead.
+- A config key or authoring-grammar key that is renamed keeps working through the deprecation
+  window. Relay's `registry.yaml` and `runtime.yaml` grammars reject unknown keys, so the
+  removal release turns the retired key into a startup refusal rather than a silently ignored
+  field, and the release note carries the replacement name.
 - A Rust-level `#[deprecated]` attribute marks internal APIs where relevant. Precedent:
-  `verify_jsonl_lines` and `CorsPolicy::layer()` in the platform CHANGELOG.
+  `verify_jsonl_lines` and `CorsPolicy::layer()` in `products/platform/CHANGELOG.md`.
 - The docs page that documents the element gains a note with the `since vX.Y` convention,
   naming the replacement.
 
 ## Migration notes are mandatory
 
-Every deprecation and every removal ships with concrete migration steps in the CHANGELOG
-entry: old key to new key, old route to new route, old metric name to new metric name, with
-copyable examples. "Removed X" without a migration path does not meet this policy. For examples,
-see the `BREAKING:` entries in `crates/registry-relay/CHANGELOG.md` and
-`crates/registryctl/CHANGELOG.md`.
+Every deprecation and every removal ships with concrete migration steps in the entry that
+announces it: old key to new key, old route to new route, old metric name to new metric name,
+with copyable examples. "Removed X" without a migration path does not meet this policy. For
+examples, read the `BREAKING:` entries in `release/notes/v0.19.0.md`, which name the replacement
+binary for each retired one and state that a Relay 1.0 configuration is not an in-place upgrade
+input.
+
+A removal that has no migration path is a different event, and this policy does not let a release
+disguise one as a rename. The v0.19.0 replacement of Relay 1.0 and `registryctl` says so in those
+words: the replacement requires a new governed Registry contract rather than a conversion of the
+old configuration. See
+[Relay V1 and registryctl retirement](../../decisions/relay-v1-and-registryctl-retirement-2026-08-11/).
 
 ## Security exceptions
 
@@ -69,8 +81,11 @@ without disclosing information that would put unpatched deployments at additiona
 - Documentation pages have their own lifecycle. A docs page with frontmatter
   `status: deprecated` is a superseded page, not a scheduled API removal. The two uses of the
   word are unrelated.
-- Pre-1.0 history is not retroactively bound. Renames executed before `v1.0.0` (for example
-  the 2026-05-23 product rename, a clean break with no aliases) predate this policy.
+- Pre-1.0 history is not retroactively bound. Renames and replacements executed before `v1.0.0`
+  predate this policy: the 2026-05-23 product rename was a clean break with no aliases, and the
+  v0.19.0 replacement of the Relay 1.0 runtime and `registryctl` shipped as a breaking product
+  replacement with no deprecation window and no migration path from the old configuration.
+  Neither is a precedent for what a covered element gets after `v1.0.0`.
 - Exempt surfaces listed in the [compatibility promise](../api-stability/) can change without
   deprecation notice.
 

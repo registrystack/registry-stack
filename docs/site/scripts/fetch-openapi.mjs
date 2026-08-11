@@ -40,7 +40,6 @@ const cacheRoot = resolve(root, '.repo-docs-cache');
 // Repo id -> the spec path within the repo. Only repos listed here publish an
 // aggregated API reference; others are skipped.
 const SPEC_SOURCES = {
-  'registry-relay': 'openapi/registry-relay.openapi.json',
   'registry-evidence': 'products/evidence/generated/registry-evidence.openapi.json',
 };
 

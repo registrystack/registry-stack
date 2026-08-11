@@ -59,7 +59,7 @@ async function createFixture(t, { collision = null } = {}) {
     'index.md',
     'Page: https://docs.registrystack.org/index.md\n',
   );
-  await write(devRoot, 'generated/configuration-reference.v1.json', '{}\n');
+  await write(devRoot, 'pagefind/pagefind-entry.json', '{}\n');
 
   await write(
     archiveRoot,
@@ -74,7 +74,6 @@ async function createFixture(t, { collision = null } = {}) {
   await write(rootOutput, 'sitemap-index.xml', '<sitemapindex/>\n');
   await write(rootOutput, 'pagefind/pagefind.js', 'export const search = true;\n');
   await write(rootOutput, 'pagefind/pagefind-entry.json', '{}\n');
-  await write(rootOutput, 'generated/configuration-reference.v1.json', '{}\n');
   if (collision) await write(rootOutput, `${collision}/index.html`, html(`/${collision}/`));
 
   const docset = {

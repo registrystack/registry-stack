@@ -1,65 +1,114 @@
 ---
 title: Prepare the operator handoff
-description: Move reviewed product lanes into a governed deployment package without granting hidden authority.
+description: Receive a sealed Registry Relay package, bind it to local deployment inputs, and replace complete revisions without gaining hidden authority.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-  - registry-relay
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-The local development environment is disposable.
-The governed path creates independently approved product lanes and a portable
-deployment package that an operator can verify before activation.
+The authoring environment is disposable.
+What crosses into a deployment is one sealed package, one matching SQLite
+source, and one reviewed change report.
+The operator binds those to local paths, keys, issuers, and limits, and can
+change none of the meaning inside them.
 
 ## Handoff sequence
 
-| Stage | Command family | Result owner |
+| Stage | Command | Result owner |
 | --- | --- | --- |
-| Review | `registryctl review compare` | Independent reviewer |
-| Build | `registryctl build` | Product-lane signers |
-| Trust | `registryctl trust anchor`, `trust bundle`, and `trust approved-set` | Product trust owners and approved-set owner |
-| Package | `registryctl deploy generate` | Deployment operator |
-| Verify | `registryctl deploy verify` | Deployment operator |
-| Run | Printed `docker compose` command | Deployment operator |
+| Classify the change | `relayctl diff <previous> <current>` | Registry Authority reviewer |
+| Prove governance | `relayctl check <project> --production` | Data publisher |
+| Replay fixtures | `relayctl test <project>` | Data publisher |
+| Seal the revision | `relayctl package <project> --output <dir>` | Data publisher |
+| Bind the deployment | `runtime.yaml` | Deployment operator |
+| Run | `relay serve --runtime <file>` | Deployment operator |
+| Confirm | `GET /health` and `GET /ready` | Deployment operator |
 
-Each Relay lane has its own bundle, anchor, identity, and anti-rollback state.
-The approved set proves that both inputs belong to one compatible project and
-environment.
-It does not activate a product.
+Packaging recompiles the project under the production profile, so a package
+cannot be produced from a revision that would fail `check --production`.
+Generation and packaging never start a service or resolve a secret. Packaging
+does open each bound source read-only to observe its structure, and refuses when
+a binding cannot be observed.
 
-Bare `registryctl deploy` prints help and performs no action.
-Generation and verification do not sign bundles, create production secrets,
-initialize product state, or start Docker Compose.
+## Obtain the runtime
+
+The installer publishes one binary, `relay`, and accepts one platform, Linux
+amd64:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
+```
+
+The installer verifies the downloaded binary against the release `SHA256SUMS`
+before anything reaches the install directory, and refuses any other platform
+rather than guessing. It does not verify release authenticity.
+For a higher-assurance installation, follow
+[release verification](https://github.com/registrystack/registry-stack/blob/v0.19.0/release/VERIFY.md)
+for the pinned tag, then rerun the installer with `RELAY_ASSET_DIR` pointing at
+the verified directory.
+`RELAY_INSTALL_DIR` selects the install directory; the default is
+`~/.local/bin`.
+
+The container image is `ghcr.io/registrystack/relay:v0.19.0`, built on
+distroless nonroot. It exposes port 8080, runs `relay serve --runtime
+/etc/relay/runtime.yaml` by default, and probes itself with `relay healthcheck`.
+
+`relayctl` has no installer. It ships as a plain release binary for three
+platforms, `relayctl-<tag>-linux-amd64`, `relayctl-<tag>-linux-arm64`, and
+`relayctl-<tag>-macos-arm64`. Take the asset directly, or build it from source.
+Operators who prefer to place `relay` themselves take the
+`relay-<tag>-linux-amd64` asset the same way.
 
 ## Record operator-owned inputs
 
-Before generation, record:
+Before the first activation, record:
 
-- The exact approved baseline set and signed release lock (`RegistryReleaseLockV1`)
-- The public Relay and consultation Relay owners
-- The external secret files and their consumers
-- The governed anchor sources and retained immutable copies
-- The public endpoints and edge network
-- The durable state, backup, restore, update, and replacement procedures
-- The expected approved-set digest and generated closure root
+- The package directory, its `packageRevision`, and the contract revision it seals
+- The SQLite source path and the source profile the package already chose
+- The token issuer identity, discovery URL, audience, and accepted algorithms,
+  or the decision that the deployment is fully anonymous
+- The audit sink path, its integrity key reference, and its retention policy
+- The cursor integrity key reference and maximum cursor age
+- The listener address, the TLS termination point, and the limits and quotas
+- The Unix service identity that owns every trusted path
 
-Keep deployment bindings outside generated product configuration.
-Use a declared Compose override, export the package, or translate the
-platform-neutral deployment plan when the managed profile does not fit.
+Relay resolves secrets through `secret:env/<NAME>` or `secret:file/<name>`
+references in `runtime.yaml`, where `<name>` is a single flat lowercase
+filename. Secret values never belong in the package, and the
+package never travels with the database.
+
+## The package proves integrity, not authenticity
+
+`packageRevision` is a SHA-256 digest over the canonicalized package manifest.
+It detects a modified or truncated package. It is not a signature, and Registry
+Relay does not sign packages or responses.
+Authenticity is whatever the institution's transfer, storage, and access
+controls make it, so treat the package like any other trusted deployment
+artifact.
+
+At startup `relay serve` re-derives the compiled registry and the entire
+artifact set from the governed files inside the package and requires
+byte-for-byte equality before it activates.
+On Unix it also refuses symbolic links and group-writable or world-writable
+components in the runtime and package paths; on other platforms that check fails
+closed and the service does not start.
 
 ## Use the operations guidance
 
-- [Run generated Compose behind a reverse proxy](single-node-compose-behind-proxy/)
-- [Approve the initial product baseline](approve-initial-baseline/)
-- [Approve a changed source](advanced/compare-and-reapprove-source-change/)
+- [Operate Registry Relay](relay/) for sources, issuers, audit, limits, and
+  revision replacement
+- [Retention and persistent state](retention-and-persistent-state/) for what
+  each product keeps and what an operator must preserve
+- [Advanced operations](advanced/) for cross-product credential, trust, and
+  runtime-inspection procedures
 
 ## Next
 
-- [Verify generated-file ownership](../generated-artifacts/)
+- [Understand generated files](../generated-artifacts/)
 - [Review the security guidance](../security/)
 - [Report a vulnerability](../security/report-a-vulnerability/)

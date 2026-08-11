@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-platform
   - registry-manifest
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -25,12 +25,14 @@ Use this page to find the machine-readable surfaces you can build against: their
 
 A contract is a machine-readable surface that integrators can depend on:
 
-- **OpenAPI document**: describes HTTP routes, request/response shapes, and auth for a service.
+- **OpenAPI document**: describes HTTP routes, request and response shapes, and authentication for a service.
 - **Shared crate API**: Rust library surface consumed by registry services for common behavior.
+- **Authoring grammar**: a closed YAML shape an adopter writes and a compiler accepts, such as Relay's `registry.yaml` and `runtime.yaml`.
+- **Sealed package format**: the versioned directory a compiler produces and a runtime verifies before it activates.
 - **Portable metadata schema**: the `registry-manifest/v1` YAML schema defining datasets, fields, policies, and evidence offerings.
 - **Static publication bundle**: a manifest-generated directory of catalog, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
 
-Each contract has one owning project. When a contract changes, the owning repo is the source of truth. Shared crate APIs belong to Registry Platform; product routes and config behavior belong to the consuming service.
+Each contract has one owning project. When a contract changes, the owning repo is the source of truth. Shared crate APIs belong to Registry Platform; product routes and configuration behavior belong to the consuming service.
 
 The table is generated from `src/data/contracts.yaml`.
 
@@ -40,13 +42,10 @@ The table is generated from `src/data/contracts.yaml`.
 - **Owner** names the repo whose source artifact defines the contract.
 - **Status** describes the maturity of the contract artifact:
   - `current-source` means the artifact is actively maintained and release-quality.
-  - `hand-authored-abstract-contract` means the artifact is hand-authored from the owning repo's source docs and route table, using templated paths and capability tags rather than enumerated runtime instances.
   - `pinned-generated-snapshot` means the artifact was generated from the owning repo and pinned here for stable publication.
 - **Source of truth** links to the module, file, or CLI that produces the artifact.
 - **Consumer note** records the current limitation or regeneration path.
 
-**What the status values mean for you:**
-`hand-authored-abstract-contract` artifacts document the full HTTP surface but leave runtime-shaped fields (such as `{dataset_id}` and `{entity}`) as path parameters. For instance-specific shapes, fetch the runtime OpenAPI route on a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 `pinned-generated-snapshot` artifacts are stable for integration: they were produced from the owning repo's pinned source and will not change without an explicit re-pin.
 
 <ContractsTable />
@@ -61,6 +60,26 @@ The table is generated from `src/data/contracts.yaml`.
 - Generate pinned artifacts from clean, pinned sources. Do not publish artifacts produced from dirty sibling checkouts, stale local output directories, or unreviewed local build residue.
 
 */}
+
+## Relay has no product-level OpenAPI contract
+
+A Relay deployment's HTTP surface is compiled from the adopter's own `registry.yaml`, so no single
+OpenAPI document describes the product. The contract you can depend on across deployments is the
+authoring grammar plus the fixed route inventory; the document describing one deployment's data is
+served by that deployment at `GET /openapi.json`. See
+[API references](../apis/) for the route inventory and how to fetch a deployment's document.
+
+Two Relay surfaces belong in this table instead of an OpenAPI artifact:
+
+- The Registry contract grammar, `relay.registrystack.org/v2alpha1`, covering `registry.yaml`
+  (`kind: RegistryContract`) and `runtime.yaml` (`kind: RelayRuntime`). Both are closed shapes: an
+  unrecognized key is a parse failure rather than an ignored field, so a document that compiles
+  today cannot silently change meaning under a later runtime.
+- The sealed package format, `relay.registrystack.org/package/v1alpha3`, whose manifest is
+  `relay-package.json`. `relayctl package` produces it and `relay serve` verifies it before
+  activation. Its `packageRevision` is an integrity digest over canonical JSON, not an
+  authenticity proof: packages are unsigned, so the operator's own transport and storage are what
+  bind a package to its author.
 
 ## Machine identifiers
 
@@ -86,12 +105,14 @@ response and its owning source remain authoritative for runtime behavior.
 
 ### Credential contract ownership
 
-Registry Relay no longer issues signed response credentials and no longer serves the former credential-support routes `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`.
+Relay issues no credential. It signs no response, holds no issuing key, and serves no
+credential-support route.
 [Evidence Gateway](../../products/registry-evidence/) owns signed assertions and the public verification keys it serves at `/.well-known/evidence/jwks.json`.
 Its assertion contract is frozen at Version 1 and is documented with the product rather than listed in the table above.
 
-The removed Relay routes are not production contracts for 1.0.
-A client that needs a signed, minimum-disclosure answer calls Evidence Gateway directly instead of following a Relay evidence offering.
+A client that needs a signed, minimum-disclosure answer calls Evidence Gateway directly. Evidence
+Gateway may read a Relay-protected API as one of its fixed HTTP sources, which is a source
+relationship rather than a delegation of signing.
 
 ### JSON-LD namespaces
 
@@ -107,7 +128,13 @@ not register or review the adopter-defined term.
 Their canonical home is `id.registrystack.org/ns/...` or `id.registrystack.org/vocab/...`, as
 recorded in the generated catalog.
 
+Deployment-owned terms are not stack identifiers. A Relay `application/ld+json` response carries an
+`@context` reference that the deployment's own Registry contract names, and the local vocabulary it
+describes is generated per registry. Two deployments therefore publish different contexts for the
+same route shape, which is the point: the semantics belong to the authority that runs the registry.
+
 ## Known gaps
 
-- The Registry Relay OpenAPI artifact is a `hand-authored-abstract-contract`; see [API references provenance and freshness](../apis/) for detail on what that means and how to get an instance-specific shape.
 - Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.
+- Relay's authoring grammar and sealed package format are versioned `v2alpha1` and `v1alpha3`. Both
+  are pre-1.0 and can change with a documented migration in a release note.

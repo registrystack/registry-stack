@@ -1,66 +1,109 @@
 ---
 title: Understand generated files
-description: Identify Registryctl-owned development, build, and deployment outputs before handoff.
+description: Identify what relayctl generates for review and what it seals into a Registry Relay package for deployment.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registryctl writes generated material under `.registry-stack/` and into an
-explicit deployment package.
-These outputs show what Registry Stack derived from authored intent; they are
-not another configuration surface.
+Registry Relay derives two kinds of output from one authored project: review
+material for the people who approve the contract, and a sealed package for the
+operator who runs it.
+Both are derived from authored intent.
+Neither is a second place to configure the service.
 
 ## Keep one source of truth
 
-Edit the project, integration, entity, fixture, and environment files.
-Then rerun the Registryctl command that owns the generated output.
-Never repair a result by editing generated product configuration.
+Edit `registry.yaml` and the governance records, codelists, semantic profiles,
+and fixtures it references, then rerun the command that owns the output.
+A generated file that disagrees with the contract is a stale run, not a
+correction.
+Editing one changes nothing that Relay serves: the runtime rebuilds the same
+material from the contract at startup and refuses a package whose derived bytes
+differ.
 
-## Build output
+## Review output
 
-| Path | Purpose | Ownership |
-| --- | --- | --- |
-| `.registry-stack/build/<environment>/artifact-manifest.json` | Hashes the authored inputs and generated closure | Registryctl generates; reviewer retains |
-| `.registry-stack/build/<environment>/reviewable/` | Value-free material for human review | Registryctl generates; reviewer inspects |
-| `.registry-stack/build/<environment>/signing-inputs/relay-public/` | Unsigned public Relay lane | Registryctl generates; Relay signer approves |
-| `.registry-stack/build/<environment>/signing-inputs/relay-consultation/` | Unsigned consultation Relay lane | Registryctl generates; Relay signer approves |
+`relayctl generate` writes into `generated/` inside the project unless
+`--output` names another directory.
+It refuses a destination that already holds content, so a generated tree is
+always the product of exactly one run.
 
-The two signing inputs stay independent.
-An approved baseline set locates their signed bundles and anchors, but does not
-become another signature or activation authority.
+| Path | What it carries |
+| --- | --- |
+| `openapi.full.yaml` | Every compiled operation, including operator-only ones |
+| `openapi.public.json` | The description Relay serves to unauthenticated callers |
+| `artifacts/` | Capability inventories, JSON Schema, SHACL shapes, JSON-LD vocabularies and contexts, classification and processing descriptions, the audit event schema, and SDMX structures |
+| `reports/identification-report.json` | Which source columns the identification pack flagged, and why |
+| `reports/classification-inventory.json` | The effective classification of every published property |
+| `reports/access-profile-report.json` | What each access profile lets a caller reach |
+| `reports/contextual-review-findings.json` | Combinations a reviewer should look at before approving |
+| `governance/classification-review-starter.yaml` | A starting point for the review record the production profile requires |
 
-## Development output
+Every one of these is derived from the contract and the observed source
+structure.
+None of them carries a source row value.
 
-`.registry-stack/dev/` contains the bound disposable environment, local state,
-and runtime observations.
-`.registry-stack/dev-artifacts/` contains generated local trust and product
-inputs.
+## The sealed package
 
-Registryctl may rebuild or remove both locations.
-Keep them private and separate from governed environments.
+`relayctl package` writes one new directory and refuses a destination that
+already exists.
+It recompiles the project under the production profile first, so a revision that
+would fail `relayctl check --production` cannot be sealed.
 
-## Deployment output
+| Path | What it carries |
+| --- | --- |
+| `relay-package.json` | The manifest: package version, `packageRevision`, contract revision, source schema fingerprints and observed schemas, the artifact list with its operation bindings, and one entry per file |
+| `registry.yaml` | The contract exactly as authored |
+| `governed/` | Every governance file the contract references, plus the classification review rationale and its accepted identification report |
+| `compiled/registry.json` | The canonical compiled Registry |
+| `generated/` | The artifact set, keyed to the manifest entries |
 
-`registryctl deploy generate` writes a portable package into the exact
-`--output-dir` selected by the operator.
-The package contains a normalized approved-set copy, immutable product inputs,
-operator bindings, a platform-neutral deployment plan, generated Compose
-material, and a runbook.
+The package's `generated/` directory holds the artifact set only.
+The review reports and the review starter stay in the authoring project: they
+are inputs to approval, not deployment material.
 
-Registryctl owns the managed closure.
-The operator owns binding values, secret values, certificates, durable state,
-and declared adaptations.
-Generation never activates the package.
+A package carries no database, no `runtime.yaml`, no secret, and no fixture.
+The operator supplies those at the deployment.
+Packaging refuses oversized input instead of truncating it: at most 256
+referenced governance files totalling 16 MiB, 1024 package files totalling
+64 MiB, and a 4 MiB manifest.
+
+## What packageRevision proves
+
+`packageRevision` is a SHA-256 digest over the canonicalized manifest.
+It detects a modified, truncated, or reassembled package.
+It is not a signature, and anyone who alters a package can recompute it, so
+authenticity stays a property of how the institution transfers, stores, and
+restricts the directory.
+
+Acceptance does not stop at the digest.
+Loading a package re-reads every listed file, compares each size and SHA-256,
+recompiles the Registry from the governed files under the production profile,
+regenerates the whole artifact set, and requires byte-for-byte equality before
+the service opens a listener.
+
+{/* Evidence: crates/registry-relay-v2/src/package.rs verify_artifact_derivation():
+    "`packageRevision` is an integrity digest, not an authenticity proof."
+    load_package() rechecks every file entry, then reproduces the compiled
+    Registry and every artifact byte. */}
+
+## Visibility travels with each file
+
+Every manifest entry records whether the file is `public`, `operation-bound`, or
+`operator-only`, and whether it was generated or authored.
+The split is plain in the two OpenAPI documents: `openapi.public.json` is what
+Relay returns from `/openapi.json`, while `openapi.full.yaml` describes every
+compiled operation, including the ones no anonymous caller can reach.
 
 ## Next
 
 - [Validate your project](../verify/)
 - [Prepare the operator handoff](../operate/)
-- [Review Registryctl commands](../reference/registryctl/)
+- [Review the relayctl reference](../reference/relayctl/)

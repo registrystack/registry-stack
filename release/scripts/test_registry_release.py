@@ -620,19 +620,6 @@ class RegistryReleaseTest(TestCase):
                 )
             )
 
-    def test_source_tutorial_does_not_claim_a_container_builder(self) -> None:
-        module = load_debian13_image_check()
-        tutorial = (
-            ROOT / "docs/site/scripts/check-registryctl-tutorials.sh"
-        ).read_text(encoding="utf-8")
-
-        self.assertNotIn("BUILDER_IMAGE=", tutorial)
-        self.assertNotIn(module.RUST_BUILDER, tutorial)
-        self.assertIn(
-            "disposable runtime runs only with an explicitly installed sealed binary",
-            tutorial,
-        )
-
     def test_contributing_documents_major_functionality_test_policy(self) -> None:
         text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 

@@ -1,57 +1,84 @@
 ---
 title: Connect an existing registry
-description: Adapt a bounded HTTP integration to an institution-owned registry without changing product boundaries.
+description: Turn reviewed read-only SQLite views into a checked Registry contract and a sealed Registry Relay package.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-  - registry-relay
-  - registry-evidence
-last_reviewed: "2026-08-03"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Start from the tested HTTP project, prove its synthetic contract, then
-introduce one reviewed institution-owned registry source.
-Registry Stack does not infer access policy, safe fields, or evidence claims
+Registry Relay publishes an institution's records from one reviewed contract,
+not from the shape of its database.
+Connecting a registry is therefore an authoring task: choose which views,
+records, operations, callers, and properties the contract admits, then prove
+that choice before an operator ever sees it.
+Registry Stack does not infer access policy, safe fields, or published meaning
 from source data.
 
-## Start from the HTTP project
+## Start from reviewed SQLite views
 
-Use the `http` template when the source already exposes an HTTP API.
-It contains one bounded synthetic interaction that you can replace with a
-reviewed HTTP or Rhai integration.
+Relay reads read-only SQLite and nothing else.
+The institution decides in SQL what leaves the system of record, and the
+contract then decides what leaves the API.
+Only views can be bound as sources, so a raw table never becomes a route.
 
-Domain systems such as OpenCRVS, DHIS2, and Fast Healthcare Interoperability
-Resources (FHIR) remain authored integrations.
-They are not public templates or privileged runtime connector types.
+`relayctl inspect` reports the structure you are allowed to reason about:
+objects, columns, declared types, nullability, key membership, and a schema
+fingerprint.
+It reads no row values, and it offers no option to sample, limit, or print them.
+
+Choose the source profile the institution can actually operate:
+
+| Property | Snapshot | Live read-only |
+| --- | --- | --- |
+| Publisher updates while Relay runs | No | Yes, through a separate trusted publisher |
+| Source revision | Captured content digest | Explicitly unversioned |
+| Available operations | Every declared operation | Identifier read and named exact lookup |
+
+## Author the contract, not the database
+
+`registry.yaml` is the governed agreement.
+It carries Registry identity and metadata, governance records, semantics,
+classifications, source bindings, resources with their operations and access
+profiles, and any statistical datasets.
+Every key is closed: an unknown field is a refusal, not a silently ignored line.
+
+`runtime.yaml` is the operator's file.
+It binds local paths, the listener, token issuers, audit storage, cursor keys,
+limits, and quotas.
+It cannot add a resource, enable an operation, widen an access profile, change a
+classification, or relax disclosure.
 
 ## Keep authored and generated files separate
 
-You own the project, integration, entity, fixture, and environment files.
-Registryctl owns files under `.registry-stack/` and may replace them.
+You own `registry.yaml`, `runtime.yaml`, the `governance/`, `codelists/`, and
+`semantics/` files the contract references, and the synthetic fixtures.
+`relayctl generate` owns its artifact directory and `relayctl package` owns the
+sealed package directory.
+Both refuse a destination that already holds content instead of overwriting it,
+so a generated tree is always the product of exactly one run.
 
-Fixtures contain synthetic interactions and expected minimized results.
-They never authorize a live network request.
-`registryctl test` remains offline for every source pattern.
+Fixtures are synthetic and never authorize a live network request.
+`relayctl test` replays the project's expected requests through the same
+compiled router the service uses, offline.
 
-## Choose the adaptation
+## Choose the guide
 
-- [Connect an existing HTTP registry](../tutorials/author-registry-project/)
-  for the base bounded request and minimized response path
-- [Configure OAuth client credentials](./oauth-client-credentials/) when a
-  bounded HTTP source requires a reviewed token exchange
-- [Add an OAuth-backed Rhai adapter](../tutorials/configure-project-script-adapter/)
-  for bounded multi-call HTTP acquisition
-- [Review integration patterns](../explanation/integration-patterns/) for
-  HTTP, script, snapshot, and domain-system boundaries
+- [Publish a governed SQLite registry](../tutorials/publish-governed-sqlite-registry/)
+  for a synthetic end-to-end run before any institutional source is involved
+- [Author a Registry Relay project](./relay/) for institution-owned views,
+  access profiles, transforms, and disclosure
+- [Semantics, classification, and disclosure](../explanation/relay-semantics-and-disclosure/)
+  before assigning published names and handling levels to real fields
+- [How Relay publishes a governed Registry](../explanation/governed-registry-publication/)
+  for the product boundary the contract sits inside
 
 ## Next
 
-- [Start from a spreadsheet](../tutorials/publish-spreadsheet-secured-registry-api/)
-  when the institution does not already expose an HTTP registry
-- [Validate a project](../verify/)
+- [Validate your project](../verify/)
 - [Understand generated files](../generated-artifacts/)
-- [Review project configuration](../reference/project-configuration/)
+- [Prepare the operator handoff](../operate/)

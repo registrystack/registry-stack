@@ -93,12 +93,12 @@ Data-backed reference tables are generated from:
 - `src/data/contracts.yaml`
 - `src/data/standards.yaml`
 - `src/data/openapi-sources.yaml`
-- `registryctl tooling reference configuration` for the five project-authoring schemas and the
-  generated Relay and Notary runtime schemas
-- `registryctl tooling reference configuration --coverage` for reviewed field-intent coverage
+- `products/evidence/contracts/{bundle,runtime}.schema.yaml`, read by
+  `scripts/generate-evidence-configuration.mjs` for the Evidence configuration reference
 
-Run `npm run generate` after editing these files.
-Generation refuses to publish the authoring reference when any reachable schema path lacks reviewed
-intent or when the reference and coverage contracts disagree. The generator reads committed schemas,
-typed field knowledge, and reviewed product-owned intent sidecars. It never reads a country workspace,
-runtime configuration, environment value, or secret.
+Run `npm run generate` after editing these files. Relay V2 publishes no generated
+configuration reference: `relayctl` compiles a project rather than exposing a schema
+catalog, and each deployment generates its own OpenAPI description at
+`GET /openapi.json`. The generators read committed schemas and reviewed product-owned
+material only. They never read a country workspace, runtime configuration, environment
+value, or secret.

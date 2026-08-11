@@ -750,14 +750,12 @@ class GateInventoryTest(unittest.TestCase):
         text = self.workflow.replace("-max_total_time=60", "-runs=0")
         self.assertIn("Platform fuzz bounded runtime", self.module.missing_gates(text))
 
-    def test_missing_registryctl_tutorial_execution_is_reported(self) -> None:
+    def test_missing_docs_build_check_is_reported(self) -> None:
         text = self.workflow.replace(
-            "run: npm run check:tutorial:registryctl",
-            "run: npm run execute-registryctl-tutorial",
+            "run: npm run check",
+            "run: npm run verify",
         )
-        self.assertIn(
-            "Registryctl tutorial source execution", self.module.missing_gates(text)
-        )
+        self.assertIn("Docs build check", self.module.missing_gates(text))
 
     def test_missing_manifest_profile_validation_is_reported(self) -> None:
         text = self.workflow.replace(
@@ -968,23 +966,14 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(self.workflow, classifier),
         )
 
-    def test_missing_relay_support_roster_path_filter_is_reported(self) -> None:
+    def test_missing_relay_v2_product_document_path_filter_is_reported(self) -> None:
         classifier = self.classifier.replace(
-            '"docs/site/src/data/relay-support.yaml",',
-            '"docs/site/src/data/removed-relay-support.yaml",',
+            '"products/relay-v2/CONCEPT.md",',
+            '"products/relay-v2/removed-CONCEPT.md",',
         )
         self.assertIn(
-            "Relay support roster path filter",
+            "Relay V2 product document path filter",
             self.module.missing_gates(self.workflow, classifier),
-        )
-
-    def test_missing_registryctl_tutorial_path_filter_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",
-            "registryctl_tutorial_disabled: ${{ steps.filter.outputs.registryctl_tutorial }}",
-        )
-        self.assertIn(
-            "Registryctl tutorial path filter", self.module.missing_gates(text)
         )
 
 

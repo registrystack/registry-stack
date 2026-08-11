@@ -73,13 +73,20 @@ test('keeps Relay outside the Evidence Gateway product boundary', () => {
   }
 });
 
-test('labels the old evidence-gateway PDP id as a legacy Relay identifier', () => {
+// The identifier survives in the manifest schema as a retained name. The Relay
+// policy decision point that once enforced it is gone, so a page that prints the
+// identifier must say so rather than let a reader attach it to Evidence Gateway.
+test('labels the old evidence-gateway PDP id as a superseded Relay identifier', () => {
   const paths = publishedHandAuthoredDocs()
     .filter(({ source }) => source.includes('registry-evidence-gateway-pdp/v1'));
-  assert.ok(paths.length > 0, 'expected the legacy Relay identifier to remain documented');
+  assert.ok(paths.length > 0, 'expected the superseded Relay identifier to remain documented');
 
   for (const { path, source } of paths) {
     assert.match(source, /Relay/i, `${relative(siteRoot, path)} must identify the owner as Relay`);
-    assert.match(source, /legacy/i, `${relative(siteRoot, path)} must mark the identifier legacy`);
+    assert.match(
+      source,
+      /\b(?:legacy|retired)\b/i,
+      `${relative(siteRoot, path)} must mark the identifier legacy or its runtime retired`,
+    );
   }
 });

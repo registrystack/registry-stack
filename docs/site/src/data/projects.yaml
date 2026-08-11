@@ -2,13 +2,14 @@
   name: Registry Platform
   repo_path: ../registry-platform
   target_repo_path: ../registry-platform
-  role: Shared Rust workspace for security and operational primitives consumed by Registry Relay, Evidence Gateway, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.
+  role: Shared Rust workspace for security and operational primitives consumed by Registry Relay, Evidence Gateway, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, the bounded read-only SQLite boundary, crypto, SD-JWT VC support, and test fixtures.
   owns:
     - Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.
+    - The bounded read-only SQLite access boundary both Registry Relay and Evidence Gateway open their sources through.
     - Cross-service crate APIs that must behave consistently in Relay, Evidence Gateway, and other registry services.
     - Shared Rust hygiene templates and supported integration-test fixtures.
   does_not_own:
-    - Registry Relay runtime data access, entity routing, metadata publication, or scope policy semantics.
+    - Registry Relay contract compilation, resource routing, disclosure planning, or access-rule semantics.
     - Evidence Gateway requirement definitions, authorization grants, disclosure decisions, service routes, assertion construction, or signing policy.
     - Product-level authorization policy, tenant isolation, audit retention, secret provisioning, or deployment configuration.
   source_docs:
@@ -41,26 +42,27 @@
   name: Registry Relay
   repo_path: ../registry-relay
   target_repo_path: ../registry-relay
-  role: Read-only HTTP gateway that fronts a sensitive registry database. Exposes entity-shaped query routes, caller-scoped metadata, evidence-offering discovery, and optional OGC API adapters while composing shared auth, OIDC, audit, HTTP security, and crypto primitives from Registry Platform.
+  role: Publishes one existing authoritative registry as a governed, read-only HTTP API. An adopter writes a registry contract over a read-only SQLite source; the compiler turns that contract into the served routes, the semantic and governance artifacts, the disclosure and access decisions, and the audit record, so all of them agree by construction. It composes shared auth, OIDC, audit, HTTP security, bounded SQLite access, and crypto primitives from Registry Platform.
   owns:
-    - Runtime configuration and source binding.
-    - Entity-shaped Registry Data API routes.
-    - Relay-specific API key and OIDC resource-server configuration, scope checks, and route enforcement.
-    - Caller-scoped metadata publication.
-    - Relay-native evidence offering discovery and publication.
+    - The registry contract, its compiler, and the sealed package a deployment serves.
+    - Compiled read-only operations, limited to Consultation retrieve, list, and a constrained exact-lookup search profile, plus explicitly declared pre-aggregated statistical datasets.
+    - Generated artifacts derived from the one contract, covering OpenAPI, JSON Schema, SHACL shapes, JSON-LD contexts, codelists, and capability discovery.
+    - Disclosure profiles, access rules, requester minimization, and value-free audit events.
+    - The `relay` runtime binary and the offline `relayctl` adopter tooling that authors, checks, generates, tests, diffs, and packages a project.
   does_not_own:
-    - Source-registry provisioning, write-back, or domain-data mutation paths in v1.
-    - Portable metadata schema ownership.
+    - Source-registry provisioning, write-back, or any domain-data mutation path.
+    - Record matching. A compiled exact lookup returns records, never candidates, confidence, or a matching explanation.
     - Assertion evaluation, disclosure policy, and signing owned by Evidence Gateway.
     - Shared security and operational primitives owned by Registry Platform.
-    - Storage table ids or arbitrary SQL in public APIs.
+    - Portable metadata renderers owned by Registry Manifest.
+    - Storage table ids or arbitrary SQL in public APIs. A database object no resource declares stays invisible.
   source_docs:
     - label: README
-      url: https://github.com/registrystack/registry-stack/blob/v0.16.3/crates/registry-relay/README.md
-    - label: Local API docs
-      url: https://github.com/registrystack/registry-stack/blob/v0.16.3/crates/registry-relay/docs/api.md
-    - label: Local metadata docs
-      url: https://github.com/registrystack/registry-stack/blob/v0.16.3/crates/registry-relay/docs/metadata.md
+      url: https://github.com/registrystack/registry-stack/blob/HEAD/products/relay-v2/README.md
+    - label: Product concept
+      url: https://github.com/registrystack/registry-stack/blob/HEAD/products/relay-v2/CONCEPT.md
+    - label: Runtime crate
+      url: https://github.com/registrystack/registry-stack/blob/HEAD/crates/registry-relay-v2/README.md
   rename_status: Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence.
 - id: registry-evidence
   name: Evidence Gateway

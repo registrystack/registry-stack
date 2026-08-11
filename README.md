@@ -26,7 +26,7 @@ release manifests, and docs.
 | Understand the product | [registrystack.org](https://registrystack.org/) |
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
 | Get a first minimum-disclosure assertion | [Evidence quickstart](https://docs.registrystack.org/dev/start/evidence-quickstart/) |
-| Build and run the maintained HTTP project | [Registry Stack 1.0 first run](https://docs.registrystack.org/dev/tutorials/author-registry-project/) |
+| Serve a governed read-only API over a registry you hold | [Publish a governed SQLite registry](https://docs.registrystack.org/dev/tutorials/publish-governed-sqlite-registry/) |
 | Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |

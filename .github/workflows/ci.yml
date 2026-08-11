@@ -53,7 +53,6 @@ jobs:
       docs_archives: ${{ steps.filter.outputs.docs_archives }}
       editors: ${{ steps.filter.outputs.editors }}
       client_bindings: ${{ steps.filter.outputs.client_bindings }}
-      registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
       identifiers: ${{ steps.filter.outputs.identifiers }}
     steps:
@@ -934,75 +933,6 @@ jobs:
               ;;
           esac
 
-  registryctl-tutorials:
-    name: registryctl tutorials from source
-    needs: changes
-    if: needs.changes.outputs.registryctl_tutorial == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          fetch-depth: 0
-          submodules: false
-
-      - name: Assert amd64 runner
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$(uname -m)" == "x86_64" ]]
-
-      - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
-        with:
-          node-version: 22.12.0
-          cache: npm
-          cache-dependency-path: docs/site/package-lock.json
-
-      - name: Install docs dependencies
-        working-directory: docs/site
-        run: npm ci
-
-      - name: Test registryctl tutorial helpers
-        working-directory: docs/site
-        run: npm run test:tutorial:registryctl
-
-      - name: Check tutorial command counts
-        working-directory: docs/site
-        run: npm run check:tutorial:dry-run
-
-      - name: Restore source-under-test Cargo build
-        id: tutorial-cache
-        uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8
-        with:
-          path: |
-            target/registryctl-tutorial-source
-          key: registryctl-tutorial-ci-${{ runner.os }}-${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh', 'Cargo.lock', 'Cargo.toml') }}
-          restore-keys: |
-            registryctl-tutorial-ci-${{ runner.os }}-
-            registryctl-tutorial-${{ runner.os }}-
-
-      - name: Execute registryctl tutorials from source
-        working-directory: docs/site
-        run: npm run check:tutorial:registryctl
-
-      - name: Save source-under-test Cargo build
-        if: github.ref == 'refs/heads/main' && steps.tutorial-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@2c8a9bd7457de244a408f35966fab2fb45fda9c8
-        with:
-          path: |
-            target/registryctl-tutorial-source
-          key: ${{ steps.tutorial-cache.outputs.cache-primary-key }}
-
-      - name: Report tutorial disk usage
-        if: always()
-        run: |
-          df -h /
-          du -sh \
-            target/registryctl-tutorial-source \
-            2>/dev/null || true
-
   evidence-tutorials:
     name: Evidence tutorials from source
     needs: changes
@@ -1117,12 +1047,6 @@ jobs:
           node-version: 22.12.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
-
-      - name: Cache Registryctl authoring-reference build
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: docs-authoring-reference
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install docs shell dependency
         run: |
@@ -1312,7 +1236,6 @@ jobs:
       - project-authoring-determinism
       - release-tool
       - release-source-proof
-      - registryctl-tutorials
       - evidence-tutorials
       - docs
       - editor-extensions

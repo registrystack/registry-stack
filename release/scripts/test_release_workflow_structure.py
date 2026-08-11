@@ -795,36 +795,6 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(recheck + 1, deployment)
         self.assertEqual(deploy_steps[deployment]["with"]["timeout"], 600_000)
 
-        build_steps = document["jobs"]["build"]["steps"]
-        cache = next(
-            step
-            for step in build_steps
-            if step.get("name") == "Cache Registryctl authoring-reference build"
-        )
-        self.assertEqual(
-            cache["uses"],
-            "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32",
-        )
-        self.assertEqual(cache["with"]["shared-key"], "docs-authoring-reference")
-        self.assertTrue(cache["with"]["save-if"])
-
-        _, ci = workflow("ci.yml")
-        docs_steps = ci["jobs"]["docs"]["steps"]
-        ci_cache = next(
-            step
-            for step in docs_steps
-            if step.get("name") == "Cache Registryctl authoring-reference build"
-        )
-        self.assertEqual(ci_cache["uses"], cache["uses"])
-        self.assertEqual(
-            ci_cache["with"]["shared-key"],
-            cache["with"]["shared-key"],
-        )
-        self.assertEqual(
-            ci_cache["with"]["save-if"],
-            "${{ github.ref == 'refs/heads/main' }}",
-        )
-
     def test_latest_release_fixture_rejects_stale_or_nonpublished_dispatches(
         self,
     ) -> None:

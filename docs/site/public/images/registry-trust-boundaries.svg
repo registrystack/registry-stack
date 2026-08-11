@@ -95,11 +95,11 @@
 
     <text x="270" y="372">Evidence Gateway and Relay use independently configured sources.</text>
     <text x="270" y="385">Neither product calls or authorizes the other. Each keeps its own</text>
-    <text x="270" y="398">source credentials, authorization decisions, audit trail, and</text>
-    <text x="270" y="411">readiness checks.</text>
+    <text x="270" y="398">authorization decisions, audit trail, and readiness checks; only</text>
+    <text x="270" y="411">Evidence Gateway holds a source credential.</text>
 
-    <text x="270" y="453">Relay owns its own source boundary: a compiled integration fixes the</text>
-    <text x="270" y="466">origin, credential interface, method and path authority, and limits.</text>
+    <text x="270" y="453">Relay owns its own source boundary: one local SQLite file opened</text>
+    <text x="270" y="466">read-only, with no origin, no credential, and no outbound request.</text>
   </g>
 
   <line x1="0" y1="496" x2="720" y2="496" stroke="#e5e5e5" stroke-width="1"/>

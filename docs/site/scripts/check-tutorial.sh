@@ -6,12 +6,6 @@
 # documents the former Evidence Gateway-over-Relay topology. Keep the executable
 # path for archaeology against its pinned lab source.
 #
-# Also applies the cheap drift pre-gate to the registryctl tutorials by
-# extracting every `sh` fence and asserting the command-line count. The
-# dedicated source-under-test runner executes the deployable Relay tutorial in
-# CI. Project-authoring tutorials remain offline and are covered by their
-# command-line drift checks plus the registryctl project-authoring test suite.
-#
 # Usage:
 #   scripts/check-tutorial.sh              extract + execute (needs Docker)
 #   scripts/check-tutorial.sh --dry-run    extract + print only (no Docker)
@@ -19,8 +13,6 @@
 # CI policy:
 #   npm run check runs only this checker's dry-run extraction and drift checks.
 #   check:tutorial executes the archived Solmara workflow manually when asked.
-#   The registryctl-tutorials CI job executes the registryctl tutorials through
-#   check-registryctl-tutorials.sh after this cheaper command-count pre-gate.
 #
 # Configuration:
 #   SOLMARA_LAB_PATH   path to an existing Solmara Lab checkout.
@@ -87,7 +79,7 @@ for arg in "$@"; do
 	case "$arg" in
 	--dry-run) DRY_RUN=1 ;;
 	-h | --help)
-		sed -n '3,53p' "$0"
+		sed -n '3,45p' "$0"
 		exit 0
 		;;
 	*)
@@ -169,78 +161,6 @@ printf 'extracted %d Verify commands from tutorial:\n' "${#VERIFY[@]}"
 for i in "${!VERIFY[@]}"; do
 	printf '  verify %d: %s\n' "$((i + 1))" "${VERIFY[$i]}"
 done
-
-# Drift check for the registryctl tutorials: count non-empty command lines
-# inside `sh` fences. Bump the expected count when you intentionally add or
-# remove a documented command.
-REGISTRYCTL_TUTORIALS=(
-	"author-registry-project:69"
-	"configure-project-script-adapter:49"
-	"publish-spreadsheet-secured-registry-api:15"
-	"use-your-spreadsheet:9"
-	"verify-opencrvs-claims:45"
-)
-
-count_sh_command_lines() {
-	awk '
-        /^[[:space:]]*```sh[[:space:]]*$/ { in_fence = 1; next }
-        /^[[:space:]]*```[[:space:]]*$/ && in_fence { in_fence = 0; next }
-        in_fence {
-            sub(/^[[:space:]]+/, "")
-            if ($0 != "") count++
-        }
-        END { print count + 0 }
-    ' "$1"
-}
-
-for entry in "${REGISTRYCTL_TUTORIALS[@]}"; do
-	name="${entry%:*}"
-	expected="${entry##*:}"
-	page="$REPO_ROOT/src/content/docs/tutorials/$name.mdx"
-	if [[ ! -f "$page" ]]; then
-		printf 'tutorial not found: %s\n' "$page" >&2
-		exit 1
-	fi
-	actual="$(count_sh_command_lines "$page")"
-	if [[ "$actual" != "$expected" ]]; then
-		printf 'tutorial drift: %s.mdx has %s sh command lines, expected %s\n' \
-			"$name" "$actual" "$expected" >&2
-		printf 'if this change was intentional, update REGISTRYCTL_TUTORIALS in %s\n' \
-			"${BASH_SOURCE[0]}" >&2
-		exit 1
-	fi
-	printf 'registryctl tutorial %s: %s sh command lines (expected %s)\n' \
-		"$name" "$actual" "$expected"
-done
-
-# Keep the unreleased project-authoring examples aligned with their public CLI and schema names.
-require_literal() {
-	local page="$1"
-	local literal="$2"
-	if ! grep -Fq -- "$literal" "$page"; then
-		printf 'project-authoring tutorial drift: %s is missing %s\n' "$page" "$literal" >&2
-		exit 1
-	fi
-}
-
-require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
-	'registryctl init my-registry --template http'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
-	'registryctl dev smoke'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx" \
-	'registryctl init my-first-registry --template spreadsheet'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx" \
-	'registryctl dev smoke'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
-	'file: adapter.rhai'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
-	'result.match(#{'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
-	'../verify-opencrvs-claims/'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx" \
-	'POST /api/events/events/search'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx" \
-	'birth-event-verification'
 
 if ((DRY_RUN)); then
 	printf 'dry-run: extraction and drift checks passed; Solmara execution skipped\n'

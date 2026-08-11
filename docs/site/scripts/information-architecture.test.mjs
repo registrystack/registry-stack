@@ -5,6 +5,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 
+import { RETIRED_RELAY_ROUTE_TARGETS } from '../src/lib/relay-v2-retirement-redirects.mjs';
+
 const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
@@ -54,7 +56,7 @@ test('uses the adopter-first top-level flow in its published order', () => {
     'Start',
     'Answer with Evidence Gateway',
     'Connect an existing registry',
-    'Operate',
+    'Operate across products',
     'Security',
     'Reference',
   ]);
@@ -65,7 +67,7 @@ test('publishes one overview route for every task-flow section', () => {
     ['Start', "link: '/'"],
     ['Answer with Evidence Gateway', "slug: 'start/evidence-quickstart'"],
     ['Connect an existing registry', "slug: 'configure'"],
-    ['Operate', "slug: 'operate'"],
+    ['Operate across products', "slug: 'operate/advanced'"],
     ['Security', "slug: 'security'"],
     ['Reference', "slug: 'reference'"],
   ]) {
@@ -75,48 +77,74 @@ test('publishes one overview route for every task-flow section', () => {
   }
 });
 
-test('keeps maintained Relay routes and adds the Relay V2 preview', () => {
+// A page that names one product belongs under that product, so a reader
+// following one adoption path never leaves it. The two cross-product sections
+// keep only what applies to every deployment.
+test('files product-scoped pages under their product, not under the cross-product sections', () => {
+  const crossProduct = topLevelSection(sidebarSource, 'Operate across products');
+  const relay = topLevelSection(sidebarSource, 'Connect an existing registry');
+  for (const relayOnly of ['operate', 'operate/relay']) {
+    const entry = new RegExp(`slug: '${relayOnly.replaceAll('/', '\\/')}' \\}`);
+    assert.doesNotMatch(
+      crossProduct,
+      entry,
+      `${relayOnly} documents Registry Relay and belongs in the Relay section`,
+    );
+    assert.match(relay, entry, `the Relay section must carry ${relayOnly}`);
+  }
+
+  const security = topLevelSection(sidebarSource, 'Security');
+  assert.doesNotMatch(security, /slug: 'security\/evidence'/);
+  const evidence = topLevelSection(sidebarSource, 'Answer with Evidence Gateway');
+  assert.match(evidence, /slug: 'security\/evidence'/);
+});
+
+test('publishes one Relay reader journey without the retired V1 routes', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.doesNotMatch(
     start,
     /slug: 'tutorials\//,
   );
   const connect = topLevelSection(sidebarSource, 'Connect an existing registry');
-  assert.match(
-    connect,
-    /label: 'Start a spreadsheet registry', slug: 'tutorials\/publish-spreadsheet-secured-registry-api'/,
-  );
-  assert.match(
-    connect,
-    /label: 'Use your own spreadsheet', slug: 'tutorials\/use-your-spreadsheet'/,
-  );
-  assert.match(
-    connect,
-    /label: 'Connect an HTTP registry', slug: 'tutorials\/author-registry-project'/,
-  );
   assertOrdered(
     connect,
     [
       "slug: 'explanation/governed-registry-publication'",
       "slug: 'tutorials/publish-governed-sqlite-registry'",
-      "slug: 'explanation/relay-semantics-and-disclosure'",
       "slug: 'configure/relay'",
+      "slug: 'explanation/relay-semantics-and-disclosure'",
       "slug: 'operate/relay'",
     ],
-    'Relay V2 reader journey',
+    'Relay reader journey',
   );
-  assert.match(connect, /label: 'Relay V2 preview'/);
-  assert.doesNotMatch(connect, /verify-opencrvs-claims/);
-  assert.match(
-    homepageSource,
-    /\]\(tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
+  // The section mirrors the Evidence Gateway shape: an overview and the first
+  // hands-on tutorial in the open, then the deeper phases collapsed behind the
+  // phase they belong to.
+  assertOrdered(
+    connect,
+    ["label: 'Author a project'", "label: 'Operate Relay'"],
+    'Relay phase group',
   );
+  // Relay V2 is the only Relay the site documents, so the section carries no
+  // preview group beside the maintained journey and none of the V1 source
+  // tutorials it replaced.
+  assert.doesNotMatch(connect, /label: 'Relay V2 preview'/);
+  for (const retired of [
+    'tutorials/publish-spreadsheet-secured-registry-api',
+    'tutorials/use-your-spreadsheet',
+    'tutorials/author-registry-project',
+    'tutorials/configure-project-script-adapter',
+    'tutorials/verify-opencrvs-claims',
+  ]) {
+    assert.doesNotMatch(sidebarSource, new RegExp(retired));
+    assert.doesNotMatch(homepageSource, new RegExp(retired));
+    assert.doesNotMatch(quickstartSource, new RegExp(retired));
+  }
+  assert.match(homepageSource, /\]\(tutorials\/publish-governed-sqlite-registry\/\)/);
   assert.match(
     quickstartSource,
-    /\]\(\.\.\/\.\.\/tutorials\/publish-spreadsheet-secured-registry-api\/\)/,
+    /\]\(\.\.\/\.\.\/tutorials\/publish-governed-sqlite-registry\/\)/,
   );
-  assert.match(homepageSource, /\]\(tutorials\/author-registry-project\/\)/);
-  assert.match(quickstartSource, /\]\(\.\.\/\.\.\/tutorials\/author-registry-project\/\)/);
   assert.doesNotMatch(homepageSource, /tutorials\/verify-claim-registry-api/);
   assert.doesNotMatch(quickstartSource, /tutorials\/verify-claim-registry-api/);
 });
@@ -135,15 +163,23 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
   assertOrdered(
     evidence,
     [
+      // The first hands-on tutorial sits beside the overview rather than inside
+      // a collapsed group, so a first-time reader reaches it without opening
+      // anything.
+      "slug: 'tutorials/first-evidence-assertion'",
       "label: 'Learn locally'",
       "label: 'Connect a source'",
       "label: 'Prepare and deploy'",
       "label: 'Authenticate callers'",
-      "label: 'Verify and trust'",
+      // Relying-party verification and wallet delivery are different audiences
+      // with different deployments, so they are separate groups.
+      "label: 'Verify as a relying party'",
+      "label: 'Deliver to wallets'",
       "label: 'Operate Evidence Gateway'",
     ],
     'Evidence Gateway task group',
   );
+  assert.doesNotMatch(evidence, /label: 'Verify and trust'/);
   assert.doesNotMatch(evidence, /first-run-with-solmara-lab|Relay-protected|over a Relay/);
   assert.equal(hasDocForSlug('tutorials/first-run-with-solmara-lab'), false);
   assert.match(
@@ -152,27 +188,26 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
   );
 });
 
-test('keeps validation on offline test and nested development commands', () => {
-  assertOrdered(
-    validationSource,
-    [
-      'registryctl test',
-      'registryctl check',
-      'registryctl review compare',
-      'registryctl build',
-      'registryctl doctor',
-      'registryctl dev --detach',
-      'registryctl dev status',
-      'registryctl dev smoke',
-      'registryctl dev logs',
-      'registryctl dev down',
-    ],
-    'Registryctl 1.0 validation command',
-  );
-  assert.match(validationSource, /without contacting a live source/);
+test('keeps validation on the offline relayctl commands', () => {
+  // relayctl has one flat command set and the validation page may present them
+  // in whatever order reads best, so assert presence rather than order.
+  for (const command of ['check', 'test', 'generate', 'diff']) {
+    assert.match(
+      validationSource,
+      new RegExp(`^relayctl ${command}\\b`, 'm'),
+      `validation page must show relayctl ${command}`,
+    );
+  }
+  // The offline claim the page has to keep making, in relayctl's own terms:
+  // the checks read but never write, and the command line is the whole input.
+  assert.match(validationSource, /read-only/);
+  assert.match(validationSource, /reads no environment variables/);
+  // registryctl is retired, and relayctl runs no service: nothing on this page
+  // may present a start, stop, or live-run command as a validation step.
+  assert.doesNotMatch(validationSource, /\bregistryctl\b/);
   assert.doesNotMatch(
     validationSource,
-    /registryctl (?:start|stop|restart|status|open|smoke|logs|preflight|capabilities)\b/,
+    /\brelayctl (?:start|stop|restart|status|open|smoke|logs|dev|doctor|build|review)\b/,
   );
 });
 
@@ -201,16 +236,27 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   );
   assert.match(
     configSource,
-    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/publish-spreadsheet-secured-registry-api\/'\)/,
+    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/publish-governed-sqlite-registry\/'\)/,
   );
   assert.match(
     configSource,
     /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/start\/quickstart\/'\)/,
   );
-  assert.doesNotMatch(
-    configSource,
-    /'\/tutorials\/(?:publish-spreadsheet-secured-registry-api|use-your-spreadsheet)\/':/,
-  );
+  // The retired V1 source tutorials still resolve: their redirects moved into
+  // the Relay V2 retirement module, so assert that map rather than the config
+  // text, where a search for the old keys would now pass for the wrong reason.
+  for (const retired of [
+    '/tutorials/publish-spreadsheet-secured-registry-api/',
+    '/tutorials/use-your-spreadsheet/',
+    '/tutorials/author-registry-project/',
+  ]) {
+    assert.equal(
+      RETIRED_RELAY_ROUTE_TARGETS[retired],
+      '/tutorials/publish-governed-sqlite-registry/',
+      `${retired} must redirect to the maintained governed-registry tutorial`,
+    );
+  }
+  assert.match(configSource, /buildRelayV2RetirementRedirects\(currentDocsetRedirect\)/);
   assert.match(configSource, /buildNotaryRetirementRedirects\(currentDocsetRedirect\)/);
 });
 
