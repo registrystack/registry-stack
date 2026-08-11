@@ -46,17 +46,18 @@ spreadsheet, not a live third-party API, and not a raw database table.
 Continue with [author a Registry Relay project](../../configure/relay/) once the
 first register works.
 
-This run needs no source checkout either. One released installer provides both
-`relay` and `relayctl` for Linux amd64, Linux arm64, and macOS arm64. The
-runtime also ships as a container image, which is an operator input rather than
-a tutorial prerequisite.
+This run needs no source checkout either. The installer provides `relay` for
+Linux amd64. `relayctl` has no installer and ships as a plain release binary for
+Linux amd64, Linux arm64, and macOS arm64. The runtime also ships as a container
+image, which is an operator input rather than a tutorial prerequisite.
 
 ## Keep the two doors separate
 
 An institution can operate Registry Relay and Evidence Gateway, but they are
 independent products with separate sources, authorization, configuration, and
-audit boundaries. Evidence Gateway does not use Relay as its source path, and
-Relay does not sign its responses.
+audit boundaries. An Evidence bundle may name a Relay-served API as one of its
+fixed HTTP sources, but Evidence Gateway does not inherit Relay's authorization
+decision, and Relay does not sign its responses.
 
 Choose the tutorial for the result you need. Start with the Evidence Gateway
 tutorial for a signed, minimum-disclosure answer, or with the Relay tutorial for

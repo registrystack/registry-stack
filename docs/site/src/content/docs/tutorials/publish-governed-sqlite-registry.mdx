@@ -29,7 +29,7 @@ never sees the registrar's internal notes at all.
   outcome="One public register API serving two reviewed fields, refusing a third, with an audit line for the answer it gave."
   time="About 30 minutes"
   level="Local development with synthetic data"
-  prerequisites={['The sqlite3 command line', 'A shell with curl', 'An editor', 'Linux or macOS']}
+  prerequisites={['The sqlite3 command line', 'A shell with curl', 'An editor', 'Linux amd64, the platform the relay installer supports']}
 />
 
 ## Understand the flow
@@ -54,17 +54,28 @@ boundary, and `registeredAddress` never crosses the second.
 
 ## Install Registry Relay
 
-Install the runtime and the authoring tool:
+You need two binaries, and they install separately. `relay` serves a sealed package and has an
+installer. `relayctl` authors and checks a project and does not.
+
+The installer accepts Linux amd64 only, and places `relay` in `~/.local/bin` unless you set
+`RELAY_INSTALL_DIR`:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
-relayctl --version
 relay --version
 ```
 
-The installer provides `relayctl`, which you use to author and check a project, and `relay`,
-which serves a sealed package. Both land in `~/.local/bin` unless you set `RELAY_INSTALL_DIR`.
-If the version commands are not found, add that directory to your `PATH`.
+Take `relayctl` as a plain release asset. Substitute the released tag, and the platform you are
+on, one of `linux-amd64`, `linux-arm64`, or `macos-arm64`:
+
+```sh
+curl -fsSL -o ~/.local/bin/relayctl \
+  "https://github.com/registrystack/registry-stack/releases/download/<released-tag>/relayctl-<released-tag>-linux-amd64"
+chmod 0755 ~/.local/bin/relayctl
+relayctl --version
+```
+
+If either version command is not found, add `~/.local/bin` to your `PATH`.
 
 ## Start a project
 
@@ -647,10 +658,16 @@ head -n 1 var/audit.jsonl
 }
 ```
 
-Read what is not there. The line records that an anonymous caller was answered with the
-properties `legalName` and `legalForm` under the `consultation` processing description. It does
-not record what the values were. `prev_hash` is `null` on the first line and links each
-subsequent line to the one before it, which is what the integrity key protects.
+Read what is not there. The line records that an anonymous caller reached the
+`registered-business.read` operation, and that the contract scoped the answer to the properties
+`legalName` and `legalForm` under the `consultation` processing description. It does not record
+what the values were.
+
+Read the phase too. `attempt` is written before Relay reads the source, so this line proves the
+request was accepted and scoped, not that it was answered. The matching `terminal` line carries
+the outcome, and a refusal is written as `refusal` instead. `prev_hash` is `null` on the first
+line and links each subsequent line to the one before it, which is what the integrity key
+protects.
 
 ## Clean up
 

@@ -177,11 +177,14 @@ verification stay mandatory, there is no trust-all mode, and ambient `HTTP_PROXY
 variables are ignored.
 
 **Registry Relay and Evidence Gateway remain separate.** A deployment may operate both products,
-but no request path joins them. Evidence Gateway contacts its own configured authoritative HTTP
-sources; Relay reads its own local SQLite file and contacts nothing. Each product owns its own
-credentials, authorization decision, audit trail, and readiness checks. A reviewer should reject a
-deployment description that treats Relay authorization as Evidence Gateway authorization, or that
-describes Relay as an Evidence Gateway source hop.
+and neither inherits the other's decisions. Evidence Gateway contacts its own configured
+authoritative HTTP sources; Relay reads its own local SQLite file and contacts nothing. Each
+product owns its own credentials, authorization decision, audit trail, and readiness checks. One
+composition is supported, and it runs one way only: a Relay-served API is an ordinary protected
+HTTP endpoint, so an Evidence bundle may name one as a fixed HTTP source. That is a deployment
+choice, not a feature either product declares. Relay does not know it is being read, and Evidence
+Gateway still makes its own authorization and disclosure decision. A reviewer should reject a
+deployment description that treats Relay authorization as Evidence Gateway authorization.
 
 **Registry Mint to Evidence Gateway.** Registry Mint issues access tokens; Evidence Gateway verifies them as
 an ordinary resource server. The dependency runs one way, and Evidence Gateway's only knowledge of
