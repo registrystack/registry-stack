@@ -8,7 +8,7 @@ import unittest
 TESTS = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 import bootstrap  # noqa: E402
-from relay_server import RelayServer, Request, Response, TRACE_ID  # noqa: E402
+from relay_server import RelayServer, Response, TRACE_ID  # noqa: E402
 
 bootstrap.ensure_built()
 import registry_relay_client as relay  # noqa: E402

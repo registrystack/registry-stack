@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import pathlib
 import platform
 import shutil
@@ -13,7 +14,6 @@ _WORKSPACE_ROOT = _CRATE_ROOT.parents[1]
 _MODULE_NAME = "registry_relay_client"
 _TARGET_DEBUG = _WORKSPACE_ROOT / "target" / "debug"
 _IMPORT_DIR = _TARGET_DEBUG / "relay_python_module"
-_built = False
 
 
 def _library() -> pathlib.Path:
@@ -23,10 +23,8 @@ def _library() -> pathlib.Path:
     return _TARGET_DEBUG / f"lib{_MODULE_NAME}{suffix}"
 
 
+@functools.cache
 def ensure_built() -> None:
-    global _built
-    if _built:
-        return
     subprocess.run(
         [
             "cargo",
@@ -48,4 +46,3 @@ def ensure_built() -> None:
     shutil.copyfile(source, _IMPORT_DIR / f"{_MODULE_NAME}.so")
     if str(_IMPORT_DIR) not in sys.path:
         sys.path.insert(0, str(_IMPORT_DIR))
-    _built = True
