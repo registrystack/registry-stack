@@ -55,6 +55,7 @@ jobs:
       client_bindings: ${{ steps.filter.outputs.client_bindings }}
       registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
+      identifiers: ${{ steps.filter.outputs.identifiers }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -98,6 +99,9 @@ jobs:
             classifier+=(--all)
           fi
           "${classifier[@]}"
+
+      - name: Check repository identifier reference closure
+        run: products/identifiers/scripts/generate.py --check-references
 
       - name: Test CI classifier
         run: python3 .github/scripts/test_ci_changes.py
@@ -567,6 +571,29 @@ jobs:
       - name: Relay V2 coequal HTTP journeys
         run: products/relay-v2/scripts/test-http.sh
 
+  identifiers:
+    name: Public identifier catalog
+    needs: changes
+    if: needs.changes.outputs.identifiers == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check public identifier catalog
+        run: products/identifiers/scripts/check.sh
+
   rust-result:
     name: Rust workspace
     if: always()
@@ -578,6 +605,7 @@ jobs:
       - evidence-contracts
       - relay-contracts
       - relay-v2-contracts
+      - identifiers
     runs-on: ubuntu-24.04
     env:
       RUST_JOB_RESULTS: ${{ toJSON(needs) }}

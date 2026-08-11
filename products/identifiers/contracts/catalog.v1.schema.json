@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/identifiers/catalog.v1.schema.json",
+  "title": "Registry Stack identifier catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "baseUrl", "entries"],
+  "properties": {
+    "version": { "const": 1 },
+    "baseUrl": { "const": "https://id.registrystack.org" },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "mediaType"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "mediaType": { "type": "string", "minLength": 1 }
+      }
+    },
+    "problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "httpStatuses"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "httpStatuses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+        }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "kind", "status", "compatibilityLine", "owner", "title", "description", "source"],
+      "properties": {
+        "uri": { "type": "string", "pattern": "^https://id\\.registrystack\\.org/" },
+        "kind": {
+          "enum": ["problem", "schema", "context", "namespace", "vocabulary", "vocabulary-term"]
+        },
+        "status": { "const": "active" },
+        "compatibilityLine": { "type": "string", "minLength": 1 },
+        "owner": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "source": { "$ref": "#/$defs/source" },
+        "artifact": { "$ref": "#/$defs/artifact" },
+        "problem": { "$ref": "#/$defs/problem" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "problem" } }, "required": ["kind"] },
+          "then": { "required": ["problem"] }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["schema", "context"] } }, "required": ["kind"] },
+          "then": { "required": ["artifact"] }
+        }
+      ]
+    }
+  }
+}

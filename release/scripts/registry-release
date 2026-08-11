@@ -45,6 +45,10 @@ EVIDENCE_OID4VCI_MINIMUM_VERSION = (0, 18, 0)
 REGISTRYCTL_INSTALLER_MINIMUM_VERSION = (0, 14, 0)
 RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
+IDENTIFIER_CATALOG_RELEASE_MINIMUM_VERSION = (0, 19, 1)
+IDENTIFIER_CATALOG_RELATIVE_PATH = "products/identifiers/generated/catalog.v1.json"
+# Historical v0.10-v0.16 releases shipped the V1 Relay and Notary identities.
+# Current v0.19+ releases are validated against RELAY_V2_ARTIFACT_INVENTORY.
 EXACT_ARTIFACT_INVENTORY = {
     "registry-notary",
     "registry-notary-cel-worker",
@@ -216,6 +220,67 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
                 "artifact inventory for version 0.10.0 or later must be exactly the "
                 f"supported release set: {'; '.join(details)}"
             )
+    return errors
+
+
+def identifier_catalog_errors(
+    version: str,
+    binding: Any,
+    repo_root: Path = ROOT,
+) -> list[str]:
+    parsed_version = release_version_tuple(version)
+    required = (
+        parsed_version is not None
+        and parsed_version >= IDENTIFIER_CATALOG_RELEASE_MINIMUM_VERSION
+    )
+    if binding is None and not required:
+        return []
+    if not isinstance(binding, dict):
+        return [
+            "identifier_catalog is required for versions 0.19.1 and later"
+            if required
+            else "identifier_catalog must be an object"
+        ]
+    if set(binding) != {"path", "sha256", "entry_count"}:
+        return [
+            "identifier_catalog must contain exactly path, sha256, and entry_count"
+        ]
+    errors: list[str] = []
+    if binding.get("path") != IDENTIFIER_CATALOG_RELATIVE_PATH:
+        errors.append(
+            f"identifier_catalog.path must be {IDENTIFIER_CATALOG_RELATIVE_PATH}"
+        )
+    digest_value = binding.get("sha256")
+    if not isinstance(digest_value, str) or SHA256_HEX.fullmatch(digest_value) is None:
+        errors.append("identifier_catalog.sha256 must be a lowercase SHA-256 digest")
+    entry_count = binding.get("entry_count")
+    if not isinstance(entry_count, int) or isinstance(entry_count, bool) or entry_count < 1:
+        errors.append("identifier_catalog.entry_count must be a positive integer")
+    catalog_path = repo_root / IDENTIFIER_CATALOG_RELATIVE_PATH
+    if not errors and not catalog_path.is_file():
+        errors.append("the committed identifier catalog is missing")
+    if not errors:
+        if sha256(catalog_path) != digest_value:
+            errors.append(
+                "identifier_catalog.sha256 does not match the committed catalog bytes"
+            )
+        try:
+            catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            errors.append("committed identifier catalog is not readable JSON")
+        else:
+            entries = catalog.get("entries") if isinstance(catalog, dict) else None
+            if not isinstance(entries, list) or len(entries) != entry_count:
+                errors.append(
+                    "identifier_catalog.entry_count does not match the committed catalog"
+                )
+            elif any(
+                not isinstance(entry, dict) or entry.get("status") != "active"
+                for entry in entries
+            ):
+                errors.append(
+                    "the release identifier catalog must contain only active entries"
+                )
     return errors
 
 
@@ -580,6 +645,9 @@ def validate(manifest_path: Path) -> int:
     stack = manifest.get("stack", {}) if isinstance(manifest, dict) else {}
     artifacts = manifest.get("artifacts", {}) if isinstance(manifest, dict) else {}
     external = manifest.get("external", {}) if isinstance(manifest, dict) else {}
+    identifier_catalog = (
+        manifest.get("identifier_catalog") if isinstance(manifest, dict) else None
+    )
     version = str(stack.get("version", ""))
     source_tag = str(stack.get("source_tag", ""))
     has_source_ref = "source_ref" in stack
@@ -608,6 +676,7 @@ def validate(manifest_path: Path) -> int:
                 "stack.source_ref may be HEAD only when stack.status is draft"
             )
     errors.extend(artifact_inventory_errors(version, artifacts))
+    errors.extend(identifier_catalog_errors(version, identifier_catalog))
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
             errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")
@@ -1850,6 +1919,15 @@ def validate_selected_manifest(repo: Path, record: dict[str, Any]) -> None:
                 f"selected manifest artifact {name} version {artifact_version!r} "
                 f"does not match {version}"
             )
+    identifier_errors = identifier_catalog_errors(
+        version,
+        data.get("identifier_catalog"),
+        repo,
+    )
+    if identifier_errors:
+        raise ReleasePlanError(
+            f"selected manifest {identifier_errors[0]}"
+        )
 
 
 def validate_workspace_versions(repo: Path, version: str) -> dict[str, Any]:
@@ -2363,6 +2441,13 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
         (repo / "Cargo.lock", "workspace-lock"),
         (context["documents"]["release_note"], "release-note"),
     ]
+    identifier_catalog = context["selected"]["data"].get("identifier_catalog")
+    if isinstance(identifier_catalog, dict) and isinstance(
+        identifier_catalog.get("path"), str
+    ):
+        surfaces.append(
+            (repo / identifier_catalog["path"], "identifier-catalog")
+        )
     if context["uses_release_docs"]:
         surfaces.extend(
             (

@@ -64,7 +64,25 @@ The table is generated from `src/data/contracts.yaml`.
 
 ## Machine identifiers
 
-Stable machine identifiers for the registry stack resolve at `https://id.registrystack.org/`: RFC 9457 problem types, JSON-LD namespaces, JSON Schemas, and JSON-LD contexts. The resolver identifies each one and links back to the owning documentation. The running service response and the artifacts below remain authoritative for runtime behavior.
+Stable machine identifiers for the registry stack resolve at `https://id.registrystack.org/`:
+RFC 9457 problem types, JSON-LD namespaces and vocabulary terms, and JSON Schemas.
+The generated `products/identifiers/generated/catalog.v1.json` file in `registry-stack` is the
+source of truth for identifiers owned by current source.
+
+The generator derives that catalog from the closed Relay V2 problem inventory, declared current
+JSON Schema groups, and an explicit namespace and vocabulary inventory.
+It also classifies repository references that are fixtures, external demo values, or retired
+source so an unclassified `id.registrystack.org` reference fails generation.
+Each entry records its owner, active status, compatibility line, source path, and source SHA-256 digest.
+Schema entries also bind the published artifact path and artifact SHA-256 digest.
+
+The `registrystack-id` publisher imports a catalog from one exact `registry-stack` commit and
+catalog digest. It publishes exactly that active catalog. An identifier removed from current
+source no longer resolves, and the publisher refuses to reuse the URI with another identifier kind.
+
+The resolver describes identifiers and serves their artifacts. Runtime services do not fetch the
+resolver to make authentication, authorization, or disclosure decisions. The running service
+response and its owning source remain authoritative for runtime behavior.
 
 ### Credential contract ownership
 
@@ -77,15 +95,19 @@ A client that needs a signed, minimum-disclosure answer calls Evidence Gateway d
 
 ### JSON-LD namespaces
 
-The registry stack defines JSON-LD vocabularies for its metadata terms:
+The identifier catalog records these JSON-LD namespaces and vocabularies:
 
-- `registry-relay/v1`: Registry Relay metadata terms, used in emitted DCAT-AP catalogs.
-- `registry-manifest/v1`: Registry Manifest terms.
+- `registry-manifest/v1`: Active Registry Manifest terms.
+- `vocab/core` and `vocab/handling`: Active Registry Relay V2 vocabulary bases and terms.
 
-Their canonical home is `id.registrystack.org/ns/registry-relay/...` and `id.registrystack.org/ns/registry-manifest/...`.
+Child identifiers under `vocab/core/` are adopter-defined semantic predicates.
+Resolving one of those child identifiers identifies the Registry-owned vocabulary base; it does
+not register or review the adopter-defined term.
+
+Their canonical home is `id.registrystack.org/ns/...` or `id.registrystack.org/vocab/...`, as
+recorded in the generated catalog.
 
 ## Known gaps
 
 - The Registry Relay OpenAPI artifact is a `hand-authored-abstract-contract`; see [API references provenance and freshness](../apis/) for detail on what that means and how to get an instance-specific shape.
 - Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.
-- Pinned artifacts are regenerated and reviewed manually; there is no automated provenance check.

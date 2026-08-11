@@ -17,6 +17,7 @@ from ci_changes import (
     AUTHORING_REFERENCE_INPUTS,
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
+    IDENTIFIER_CATALOG_INPUTS,
     RELEASE_SECURITY_WORKFLOWS,
     SHARDS,
     Workspace,
@@ -231,6 +232,27 @@ class CiChangesTest(unittest.TestCase):
             "registry-evidencectl",
         ]:
             self.assertIn(package, outputs["rust_packages"])
+
+    def test_every_identifier_source_selects_the_catalog_gate(self) -> None:
+        for pattern in IDENTIFIER_CATALOG_INPUTS:
+            sample = pattern.replace("**", "sample").replace("*", "sample")
+            with self.subTest(pattern=pattern):
+                self.assertTrue(classify(self.workspace, (sample,))["identifiers"])
+
+    def test_ci_always_checks_repository_identifier_reference_closure(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "products/identifiers/scripts/generate.py --check-references",
+            workflow,
+        )
+
+    def test_identifier_tooling_does_not_force_the_rust_matrix(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("products/identifiers/scripts/generate.py",),
+        )
+        self.assertTrue(outputs["identifiers"])
+        self.assertFalse(outputs["rust"])
 
     def test_relay_v2_product_material_selects_runtime_and_tooling(self) -> None:
         outputs = classify(

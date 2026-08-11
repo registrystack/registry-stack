@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import io
 import json
 import stat
@@ -463,6 +464,7 @@ class RegistryReleaseTest(TestCase):
                 "rust-quality",
                 "rust-tests",
                 "evidence-contracts",
+                "identifiers",
                 "relay-contracts",
                 "relay-v2-contracts",
             },
@@ -2478,6 +2480,33 @@ class RegistryReleaseTest(TestCase):
         self.assertNotIn("registryctl-installer", data["artifacts"])
         self.assertNotIn("registry-docs", data["artifacts"])
 
+    def test_validate_requires_exact_identifier_catalog_after_v0_19_0(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.19.1")
+            accepted = run_tool("validate", str(manifest))
+
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["identifier_catalog"]["sha256"] = "0" * 64
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+            mismatched = run_tool("validate", str(manifest))
+
+            missing = write_manifest(root, version="0.19.1")
+            data = yaml.safe_load(missing.read_text(encoding="utf-8"))
+            del data["identifier_catalog"]
+            missing.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+            absent = run_tool("validate", str(missing))
+
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertNotEqual(0, mismatched.returncode)
+        self.assertIn("does not match the committed catalog bytes", mismatched.stderr)
+        self.assertNotEqual(0, absent.returncode)
+        self.assertIn("identifier_catalog is required", absent.stderr)
+
     def test_relay_installer_joins_the_exact_inventory_after_v0_19_0(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4341,6 +4370,14 @@ def write_manifest(
             },
         },
     }
+    if version_tuple >= (0, 19, 1):
+        catalog_path = ROOT / "products/identifiers/generated/catalog.v1.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        manifest["identifier_catalog"] = {
+            "path": "products/identifiers/generated/catalog.v1.json",
+            "sha256": hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
+            "entry_count": len(catalog["entries"]),
+        }
     path = directory / "release-manifest.yaml"
     path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     return path

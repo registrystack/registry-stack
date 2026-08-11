@@ -1,0 +1,209 @@
+{
+  "$id": "https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "accessProfile": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "accessRuleRevision": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "contractRevision": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "disclosureHandling": {
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "disclosureProfile": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "formatProfile": {
+      "enum": [
+        "rfc7946",
+        "jsonfg"
+      ]
+    },
+    "operationId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "operationIdentifier": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "operationSurface": {
+      "enum": [
+        "record-list",
+        "record-read",
+        "record-lookup",
+        "record-search",
+        "sdmx-data",
+        "sdmx-dataflow-structure",
+        "sdmx-datastructure-structure",
+        "unknown"
+      ]
+    },
+    "outcome": {
+      "enum": [
+        "released",
+        "not-modified",
+        "unresolved",
+        "invalid-request",
+        "missing-credential",
+        "invalid-credential",
+        "denied",
+        "rate-limited",
+        "timed-out",
+        "source-failed",
+        "internal-failed",
+        "not-found"
+      ]
+    },
+    "phase": {
+      "enum": [
+        "attempt",
+        "refusal",
+        "terminal"
+      ]
+    },
+    "principalKind": {
+      "enum": [
+        "anonymous",
+        "authenticated",
+        "unknown"
+      ]
+    },
+    "processingDescriptionIdentifiers": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "processingHandling": {
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "purpose": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "queryShape": {
+      "enum": [
+        "sdmx-keyed-time-period",
+        "sdmx-keyed-all-dimensions",
+        "sdmx-omitted-key-time-period",
+        "sdmx-omitted-key-all-dimensions"
+      ]
+    },
+    "registryIdentifier": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "resourceIdentifier": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "rowBoundaryKind": {
+      "enum": [
+        "none",
+        "principal",
+        "verified-claim",
+        "unknown"
+      ]
+    },
+    "schema": {
+      "const": "registry.relay.audit/v2alpha1"
+    },
+    "selectedProperties": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "sourceRevision": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "enum": [
+            "snapshot",
+            "live"
+          ]
+        },
+        "status": {
+          "enum": [
+            "versioned",
+            "unversioned"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "profile",
+        "status",
+        "value"
+      ],
+      "type": "object"
+    },
+    "traceId": {
+      "pattern": "^[0-9a-f]{32}$",
+      "type": "string"
+    },
+    "transformIdentifiers": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "wireFormat": {
+      "enum": [
+        "json",
+        "json-ld",
+        "geojson",
+        "sdmx-json",
+        "sdmx-csv",
+        "sdmx-structure-json"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "phase",
+    "operationId",
+    "traceId",
+    "registryIdentifier",
+    "operationSurface",
+    "rowBoundaryKind",
+    "processingDescriptionIdentifiers",
+    "selectedProperties",
+    "transformIdentifiers",
+    "contractRevision",
+    "principalKind"
+  ],
+  "title": "Registry Relay value-free audit event",
+  "type": "object"
+}
