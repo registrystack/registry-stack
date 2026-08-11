@@ -587,7 +587,7 @@ profile does not claim OGC API Features conformance.
 
 ## Example 3: civil-event registry
 
-This registry is CRVS-shaped but the runtime remains event-domain neutral. It has no collection-list operation. Authorized registrars may read a known opaque event identifier under one scope and disclosure profile. A verification client may perform only a named exact lookup under a different scope and smaller disclosure profile. It uses an ordinary external issuer for the core journey. Registry Mint may replace that issuer later when it emits the same standard token profile.
+This registry is CRVS-shaped but the runtime remains event-domain neutral. It has no collection-list operation. Authorized registrars may read a known opaque event identifier under one scope and disclosure profile. A verification client may perform only a named exact lookup under a different scope and smaller disclosure profile. It uses an ordinary external issuer for the core journey. Registry Mint may replace that issuer by registering the same audience, scope, and optional authority claims.
 
 This live source is intentionally unversioned. Its Record revision remains
 source-bound, while source revision is explicitly unavailable and responses are

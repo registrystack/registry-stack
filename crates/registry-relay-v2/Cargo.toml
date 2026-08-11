@@ -69,7 +69,10 @@ oxjsonld = "0.2.5"
 registry-platform-httputil.workspace = true
 registry-platform-sqlite = { workspace = true, features = ["fixture"] }
 registry-platform-testing.workspace = true
+registry-mint.workspace = true
+registry-platform-crypto.workspace = true
 registry-relay-client.workspace = true
+p256.workspace = true
 tempfile.workspace = true
 utoipa.workspace = true
 

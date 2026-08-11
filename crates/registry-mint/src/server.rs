@@ -58,7 +58,7 @@ pub enum ServiceError {
     #[error("the audit boundary could not be initialized: {0}")]
     Audit(#[from] MintAuditError),
     #[error("client {0} cannot be served: {1}")]
-    Delegation(String, &'static str),
+    Registration(String, &'static str),
 }
 
 /// The whole serving state: an immutable minter over a reloadable registry.
@@ -90,7 +90,11 @@ impl MintService {
     pub async fn load(config: MintConfig) -> Result<Self, ServiceError> {
         let minter = TokenMinter::new(&config).await?;
         let registry = Arc::new(ClientRegistry::load(&config.clients.directory)?);
-        check_delegations(&registry, minter.claims())?;
+        check_client_profiles(
+            &registry,
+            minter.claims(),
+            config.access_tokens.audiences.len(),
+        )?;
         let replay = Arc::new(ReplayCache::new(
             config.client_assertion.replay_cache_entries,
         ));
@@ -118,7 +122,11 @@ impl MintService {
     pub async fn check(config: &MintConfig) -> Result<usize, ServiceError> {
         let minter = TokenMinter::new(config).await?;
         let registry = ClientRegistry::load(&config.clients.directory)?;
-        check_delegations(&registry, minter.claims())?;
+        check_client_profiles(
+            &registry,
+            minter.claims(),
+            config.access_tokens.audiences.len(),
+        )?;
         MintAuditLog::check(&config.audit, &config.secret_providers)?;
         Ok(registry.len())
     }
@@ -131,7 +139,11 @@ impl MintService {
         let registry = Arc::new(ClientRegistry::load(&self.config.clients.directory)?);
         // Checked on every reload, not only at startup: a registration dropped
         // into the directory later must clear the same bar.
-        check_delegations(&registry, self.minter.claims())?;
+        check_client_profiles(
+            &registry,
+            self.minter.claims(),
+            self.config.access_tokens.audiences.len(),
+        )?;
         let count = registry.len();
         let authenticator = Arc::new(ClientAuthenticator::new(
             registry,
@@ -227,36 +239,75 @@ impl MintService {
     }
 }
 
-/// Refuse a registry whose delegations this configuration cannot express.
+/// Refuse a registry whose authority profiles this configuration cannot express.
 ///
 /// The registry and the claim-name configuration are loaded independently, so
 /// this is the only place their agreement can be established. A disagreement
-/// caught here is an operator error at startup or reload; caught at the first
-/// token request instead, it would be an outage for one caller and a token
-/// missing its actor for another.
-fn check_delegations(
+/// caught here is an operator error at startup or reload. Deferring it until a
+/// token request would turn the same mistake into a caller-specific outage or
+/// an unusable token.
+fn check_client_profiles(
     registry: &ClientRegistry,
-    claims: &crate::config::ClaimNames,
+    claims: Option<&crate::config::ClaimNames>,
+    audience_count: usize,
 ) -> Result<(), ServiceError> {
-    // The claims Mint writes itself. A subject minted over one of these would
-    // replace authority the registry, not the caller, is supposed to decide.
-    let mut reserved = vec!["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "sub"];
-    reserved.push(claims.principal.as_str());
-    reserved.push(claims.requester_tags.as_str());
-    reserved.push(claims.evidence_audience.as_str());
-    reserved.push(claims.grant_id.as_str());
-    reserved.push(claims.grant_authority.as_str());
-    reserved.extend(claims.actor.as_deref());
-
+    let evidence_claim_names = claims.map(|claims| {
+        let mut names = vec![
+            claims.principal.as_str(),
+            claims.requester_tags.as_str(),
+            claims.evidence_audience.as_str(),
+            claims.grant_id.as_str(),
+            claims.grant_authority.as_str(),
+        ];
+        names.extend(claims.actor.as_deref());
+        names
+    });
     for client_id in registry.client_ids() {
         let client = registry
             .get(client_id)
             .expect("client id came from this registry");
+        if client.authorization().is_some() && audience_count != 1 {
+            return Err(ServiceError::Registration(
+                client_id.to_owned(),
+                "standard authorization requires exactly one access-token audience",
+            ));
+        }
+        if let (Some(authorization), Some(evidence_claim_names)) =
+            (client.authorization(), evidence_claim_names.as_ref())
+        {
+            if authorization
+                .claims
+                .keys()
+                .any(|name| evidence_claim_names.contains(&name.as_str()))
+            {
+                return Err(ServiceError::Registration(
+                    client_id.to_owned(),
+                    "a standard authorization claim would overlap configured Evidence authority",
+                ));
+            }
+        }
+        if client.authorization().is_none() && claims.is_none() {
+            return Err(ServiceError::Registration(
+                client_id.to_owned(),
+                "it uses Evidence authority but no Evidence claim names are configured",
+            ));
+        }
         let Some(delegation) = client.delegation() else {
             continue;
         };
+        let claims = claims.expect("an Evidence registration was checked above");
+        // The claims Mint writes itself. A subject minted over one of these
+        // would replace authority the registry, not the caller, is supposed to
+        // decide.
+        let mut reserved = vec!["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "sub"];
+        reserved.push(claims.principal.as_str());
+        reserved.push(claims.requester_tags.as_str());
+        reserved.push(claims.evidence_audience.as_str());
+        reserved.push(claims.grant_id.as_str());
+        reserved.push(claims.grant_authority.as_str());
+        reserved.extend(claims.actor.as_deref());
         if claims.actor.is_none() {
-            return Err(ServiceError::Delegation(
+            return Err(ServiceError::Registration(
                 client_id.to_owned(),
                 "it declares a delegation but no actor claim name is configured",
             ));
@@ -264,7 +315,7 @@ fn check_delegations(
         for path in delegation.subject_claims.values() {
             let root = path.split('.').next().unwrap_or(path);
             if reserved.contains(&root) {
-                return Err(ServiceError::Delegation(
+                return Err(ServiceError::Registration(
                     client_id.to_owned(),
                     "a subject claim path would overwrite an authority claim",
                 ));
@@ -586,7 +637,10 @@ mod tests {
     }
 
     fn claim_names() -> crate::config::ClaimNames {
-        crate::config::tests::sample_config().access_tokens.claims
+        crate::config::tests::sample_config()
+            .access_tokens
+            .claims
+            .expect("the Evidence sample names its claims")
     }
 
     const DELEGATION: &str = "delegation:\n  subjectClaims:\n    given_name: identity.given_name\n";
@@ -598,12 +652,12 @@ mod tests {
     fn a_delegation_without_a_configured_actor_claim_refuses_to_load() {
         let mut claims = claim_names();
         claims.actor = None;
-        let error = check_delegations(&registry_with(DELEGATION), &claims)
+        let error = check_client_profiles(&registry_with(DELEGATION), Some(&claims), 1)
             .expect_err("an unconfigured actor claim must refuse the registry");
-        assert!(matches!(error, ServiceError::Delegation(client, _) if client == "client-a"));
+        assert!(matches!(error, ServiceError::Registration(client, _) if client == "client-a"));
 
         claims.actor = Some("evidence_actor".to_owned());
-        assert!(check_delegations(&registry_with(DELEGATION), &claims).is_ok());
+        assert!(check_client_profiles(&registry_with(DELEGATION), Some(&claims), 1).is_ok());
     }
 
     /// A subject path rooted at a claim Mint writes itself would let the caller
@@ -628,7 +682,7 @@ mod tests {
                 "delegation:\n  subjectClaims:\n    given_name: {root}.given_name\n"
             ));
             assert!(
-                check_delegations(&registry, &claims).is_err(),
+                check_client_profiles(&registry, Some(&claims), 1).is_err(),
                 "a subject path rooted at {root} must be refused"
             );
         }
@@ -640,7 +694,82 @@ mod tests {
     fn an_undelegated_registry_loads_without_an_actor_claim() {
         let mut claims = claim_names();
         claims.actor = None;
-        assert!(check_delegations(&registry_with(""), &claims).is_ok());
+        assert!(check_client_profiles(&registry_with(""), Some(&claims), 1).is_ok());
+    }
+
+    #[test]
+    fn evidence_registrations_require_claim_names_but_scoped_registrations_do_not() {
+        assert!(matches!(
+            check_client_profiles(&registry_with(""), None, 1),
+            Err(ServiceError::Registration(client, _)) if client == "client-a"
+        ));
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let public = crate::assertion::tests::test_key(1).1;
+        std::fs::write(
+            directory.path().join("client-a.yaml"),
+            format!(
+                "clientId: client-a\nprincipal: urn:example:client-a\nauthorization: {{scopes: [registry:read]}}\nkeys: [{public}]\n"
+            ),
+        )
+        .expect("write scoped registration");
+        let registry = ClientRegistry::load(directory.path()).expect("registry loads");
+        assert!(check_client_profiles(&registry, None, 1).is_ok());
+    }
+
+    #[test]
+    fn standard_authorization_cannot_overlap_configured_evidence_authority() {
+        let mut claims = claim_names();
+        claims.principal = "evidence_principal".to_owned();
+        claims.actor = Some("evidence_actor".to_owned());
+        for name in [
+            claims.principal.as_str(),
+            claims.requester_tags.as_str(),
+            claims.evidence_audience.as_str(),
+            claims.grant_id.as_str(),
+            claims.grant_authority.as_str(),
+            claims
+                .actor
+                .as_deref()
+                .expect("the actor claim is configured"),
+        ] {
+            let directory = tempfile::tempdir().expect("temp dir");
+            let public = crate::assertion::tests::test_key(1).1;
+            std::fs::write(
+                directory.path().join("client-a.yaml"),
+                format!(
+                    "clientId: client-a\nprincipal: urn:example:client-a\nauthorization:\n  scopes: [registry:read]\n  claims: {{{name}: authority}}\nkeys: [{public}]\n"
+                ),
+            )
+            .expect("write scoped registration");
+            let registry = ClientRegistry::load(directory.path()).expect("registry loads");
+            assert!(matches!(
+                check_client_profiles(&registry, Some(&claims), 1),
+                Err(ServiceError::Registration(client, _)) if client == "client-a"
+            ));
+        }
+    }
+
+    #[test]
+    fn standard_authorization_requires_one_exact_audience() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let public = crate::assertion::tests::test_key(1).1;
+        std::fs::write(
+            directory.path().join("client-a.yaml"),
+            format!(
+                "clientId: client-a\nprincipal: urn:example:client-a\nauthorization: {{scopes: [registry:read]}}\nkeys: [{public}]\n"
+            ),
+        )
+        .expect("write scoped registration");
+        let registry = ClientRegistry::load(directory.path()).expect("registry loads");
+
+        assert!(check_client_profiles(&registry, None, 1).is_ok());
+        for audience_count in [0, 2] {
+            assert!(matches!(
+                check_client_profiles(&registry, None, audience_count),
+                Err(ServiceError::Registration(client, _)) if client == "client-a"
+            ));
+        }
     }
 
     #[test]

@@ -163,7 +163,7 @@ value-free operational log dimensions.
 - protected identifier read and named exact verification lookup, with collection listing absent;
 - registrar and supervisory access profiles are selected explicitly, are independently scoped, and never fall back; neither read nor lookup scope can synthesize the other;
 - the civil journey proves `date-precision` (`year` and `year-month`) with distinct output terms/types; focused transform and real-router tests reject null, noncanonical, incompatible, and oversized source values with value-free source failure;
-- the external-issuer path is complete; a later optional Mint pairing must traverse the same verifier and access-decision path;
+- the external-issuer path is complete; the optional Mint pairing traverses the same verifier and access-decision path through the Relay client;
 - no match, ambiguity, and a jurisdiction-hidden row collapse to the unresolved lookup outcome; an invalid event record or transform input fails as value-free `503 source.unavailable`, while wrong purpose and wrong jurisdiction binding retain their distinct governed refusal behavior;
 - the fixed Relay lookup remains an ordinary protected HTTP source contract
   suitable for a future Evidence integration, without adding signing behavior

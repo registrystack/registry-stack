@@ -60,6 +60,10 @@ pub struct MintedToken {
     pub access_token: String,
     pub token_type: &'static str,
     pub expires_in: u64,
+    /// The exact standard OAuth scope Mint granted. Evidence-profile tokens do
+    /// not carry scopes and therefore omit this response member.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
     #[serde(skip)]
     token_id: String,
     #[serde(skip)]
@@ -90,7 +94,7 @@ pub struct TokenMinter {
     issuer: String,
     audience: Value,
     lifetime_seconds: i64,
-    claims: ClaimNames,
+    claims: Option<ClaimNames>,
     signer: Arc<dyn SigningProvider>,
     governed_active: PublicJwk,
     recovery_probe: tokio::sync::Mutex<()>,
@@ -158,8 +162,8 @@ impl TokenMinter {
 
     /// The claim names this minter writes authority into.
     #[must_use]
-    pub fn claims(&self) -> &ClaimNames {
-        &self.claims
+    pub fn claims(&self) -> Option<&ClaimNames> {
+        self.claims.as_ref()
     }
 
     /// Current availability of the active signing provider.
@@ -214,36 +218,51 @@ impl TokenMinter {
             "sub".to_owned(),
             Value::String(client.principal().to_owned()),
         );
-        claims.insert(
-            self.claims.principal.clone(),
-            Value::String(client.principal().to_owned()),
-        );
-        claims.insert(
-            self.claims.requester_tags.clone(),
-            Value::Array(
-                client
-                    .requester_tags()
-                    .iter()
-                    .map(|tag| Value::String(tag.clone()))
-                    .collect(),
-            ),
-        );
-        claims.insert(
-            self.claims.evidence_audience.clone(),
-            Value::String(client.evidence_audience().to_owned()),
-        );
-        // Evidence requires the grant id and authority together or not at all,
-        // which the registry already guarantees by construction.
-        if let Some(grant) = client.grant() {
+        let scope = if let Some(authorization) = client.authorization() {
+            let scope = authorization.scopes.join(" ");
+            claims.insert("scope".to_owned(), Value::String(scope.clone()));
+            for (name, value) in &authorization.claims {
+                claims.insert(name.clone(), Value::String(value.clone()));
+            }
+            Some(scope)
+        } else {
+            let names = self.claims.as_ref().ok_or_else(|| {
+                TokenError::server_error("Evidence claim names are not configured")
+            })?;
+            let requester_tags = client.requester_tags().ok_or_else(|| {
+                TokenError::server_error("an Evidence registration has no requester tags")
+            })?;
+            let evidence_audience = client.evidence_audience().ok_or_else(|| {
+                TokenError::server_error("an Evidence registration has no evidence audience")
+            })?;
             claims.insert(
-                self.claims.grant_id.clone(),
-                Value::String(grant.id.clone()),
+                names.principal.clone(),
+                Value::String(client.principal().to_owned()),
             );
             claims.insert(
-                self.claims.grant_authority.clone(),
-                Value::String(grant.authority.clone()),
+                names.requester_tags.clone(),
+                Value::Array(
+                    requester_tags
+                        .iter()
+                        .map(|tag| Value::String(tag.clone()))
+                        .collect(),
+                ),
             );
-        }
+            claims.insert(
+                names.evidence_audience.clone(),
+                Value::String(evidence_audience.to_owned()),
+            );
+            // Evidence requires the grant id and authority together or not at
+            // all, which the registry already guarantees by construction.
+            if let Some(grant) = client.grant() {
+                claims.insert(names.grant_id.clone(), Value::String(grant.id.clone()));
+                claims.insert(
+                    names.grant_authority.clone(),
+                    Value::String(grant.authority.clone()),
+                );
+            }
+            None
+        };
 
         if let Some(delegation) = &authenticated.delegation {
             let registered = client.delegation().ok_or_else(|| {
@@ -251,9 +270,13 @@ impl TokenMinter {
             })?;
             // Startup refuses a registry that declares delegation without a
             // configured actor claim, so reaching here means the two disagree.
-            let actor_claim = self.claims.actor.as_ref().ok_or_else(|| {
-                TokenError::server_error("no actor claim is configured for delegated tokens")
-            })?;
+            let actor_claim = self
+                .claims
+                .as_ref()
+                .and_then(|claims| claims.actor.as_ref())
+                .ok_or_else(|| {
+                    TokenError::server_error("no actor claim is configured for delegated tokens")
+                })?;
             claims.insert(
                 actor_claim.clone(),
                 Value::String(delegation.actor().to_owned()),
@@ -281,6 +304,7 @@ impl TokenMinter {
             access_token: format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature)),
             token_type: "Bearer",
             expires_in: self.lifetime_seconds as u64,
+            scope,
             token_id,
             signing_key_id: self.signer.key_id().to_owned(),
             expires_at_unix: expires_at,
@@ -807,6 +831,60 @@ clients:
         assert_eq!(claims["exp"], json!(NOW + 300));
         assert_eq!(minted.expires_in, 300);
         assert_eq!(minted.token_type, "Bearer");
+        assert_eq!(minted.scope, None);
+        assert!(
+            serde_json::to_value(&minted)
+                .expect("token response serializes")
+                .get("scope")
+                .is_none(),
+            "Evidence token responses retain their existing shape"
+        );
+    }
+
+    #[tokio::test]
+    async fn scoped_authority_is_minted_from_the_registration_as_standard_claims() {
+        let fixture = fixture(None).await;
+        let client_path = fixture._directory.path().join("clients/client-a.yaml");
+        fs::write(
+            &client_path,
+            format!(
+                "clientId: client-a\nprincipal: urn:example:client-a\nauthorization:\n  scopes: [registry:business:read, registry:business:lookup]\n  claims:\n    purpose: statutory-consultation\n    authority: district-17\nkeys: [{}]\n",
+                client_key(1, "client-a-1").1
+            ),
+        )
+        .expect("write scoped client");
+        let registry = ClientRegistry::load(
+            client_path
+                .parent()
+                .expect("the registration has a parent directory"),
+        )
+        .expect("scoped registry loads");
+        let client = registry.get("client-a").expect("client registered");
+
+        let minted = fixture
+            .minter
+            .mint(&undelegated(client), NOW)
+            .await
+            .expect("token mints");
+        let claims = decode_claims(&minted.access_token);
+
+        assert_eq!(
+            claims["scope"],
+            json!("registry:business:read registry:business:lookup")
+        );
+        assert_eq!(claims["purpose"], json!("statutory-consultation"));
+        assert_eq!(claims["authority"], json!("district-17"));
+        assert_eq!(claims["sub"], json!("urn:example:client-a"));
+        assert!(claims.get("evidence_tags").is_none());
+        assert!(claims.get("evidence_audience").is_none());
+        assert_eq!(
+            minted.scope.as_deref(),
+            Some("registry:business:read registry:business:lookup")
+        );
+        assert_eq!(
+            serde_json::to_value(&minted).expect("token response serializes")["scope"],
+            json!("registry:business:read registry:business:lookup")
+        );
     }
 
     #[tokio::test]

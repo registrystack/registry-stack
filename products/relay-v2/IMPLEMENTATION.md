@@ -670,10 +670,11 @@ key, component constraint, time bound, observation, codelist value, hidden
 authority value, or response value.
 
 Registry Mint is optional. Relay production crates do not depend on Mint. A
-Mint deployment may be paired after core V1 when its server-side client grants
-can emit Relay's standard audience, scope, optional purpose, and optional
-binding claims. Mint never copies requested authority from the caller. This
-pairing uses the same verifier and decision path and does not block Relay V1.
+Mint deployment may be paired through its standard authorization registration,
+which emits Relay's audience, scope, optional purpose, and optional binding
+claims. Mint never copies requested authority from the caller. A real-router
+acceptance test exercises this pairing through the same verifier and decision
+path without adding a production dependency from Relay to Mint.
 
 The initial machine-to-machine profile is OAuth client credentials at the
 authorization server followed by this JWT access token at Relay. Mutual-TLS
@@ -807,8 +808,8 @@ any diagnostic surface.
   fixtures, and a real local `relay` process.
 - Use focused parameterized compiler/runtime tests for multi-resource state
   isolation instead of a fifth deployment project.
-- Record the standard token contract Mint must emit. Mint grant changes and a
-  full Mint pairing are a later independently deliverable integration.
+- Exercise Mint's standard authorization registration through the Relay
+  client's private-key-JWT provider and the real Relay router.
 - Record Relay's named lookup as an ordinary protected HTTP source contract for
   a future Evidence integration. A real Evidence pairing remains a separate,
   non-blocking integration journey; Evidence remains the signer and adds no

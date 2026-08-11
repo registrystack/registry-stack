@@ -1,9 +1,9 @@
 # Registry Mint
 
 Mint issues short-lived access tokens to registered machine clients. It exists
-so that a resource server such as Evidence can require signed, expiring,
-audience-bound tokens without the deployment first having to stand up a general
-purpose identity provider.
+so that a resource server such as Evidence Gateway or Registry Relay can
+require signed, expiring, audience-bound tokens without the deployment first
+having to stand up a general purpose identity provider.
 
 Mint is not a product line. It is a small supporting service for deployments
 that have many callers and no IdP.
@@ -18,7 +18,7 @@ and what is that caller permitted to assert?*
 Key selection inside a JWK set is by `kid`, and `kid` is chosen by whoever
 built the token. So in a pooled set every key is equally authoritative for
 every claim. Any client holding any trusted key can mint a token naming any
-principal, any requester tags, and any evidence audience.
+principal or authorization claim.
 
 Mint closes that by splitting the two questions across two places:
 
@@ -55,6 +55,12 @@ assertion twice is refused.
 The response is a signed `at+jwt` access token. Errors collapse to
 `invalid_client` so that the endpoint cannot be used to probe which client ids
 are registered.
+
+Each client registration selects one authority profile. An Evidence profile
+writes configurable Evidence claims. A standard authorization profile writes
+one space-delimited OAuth `scope` claim plus bounded direct string claims.
+The two profiles cannot be combined in one registration, and neither profile
+accepts authority from the token request.
 
 Endpoints:
 
@@ -117,11 +123,11 @@ clients:
   directory: clients
 ```
 
-The `accessTokens.claims` names must match the resource server's
-`authentication` block, because the resource server reads its principal,
-requester tags, evidence audience, and grant pair from configurable claim
-names. Access token lifetime is bounded to 60..=3600 seconds; a long-lived
-bearer token is the thing Mint exists to avoid.
+The `accessTokens.claims` names must match Evidence Gateway's `authentication`
+block because Evidence Gateway reads its principal, requester tags, evidence
+audience, and grant pair from configurable claim names. A scoped-only
+deployment may omit `accessTokens.claims`. Access token lifetime is bounded to
+60..=3600 seconds; a long-lived bearer token is the thing Mint exists to avoid.
 
 Mint's service key is always P-256/ES256. Each governed public JWK carries a
 `kid` equal to its 43-character RFC 7638 thumbprint and is stored as
@@ -188,7 +194,9 @@ configured maximum client-assertion lifetime plus 30 seconds before removing
 and reloading again. Remove a compromised client key immediately and reload;
 do not provide an overlap window during an incident.
 
-## Registering a client
+## Registering clients
+
+### Evidence authority
 
 One `*.yaml` file per client in `clients.directory`:
 
@@ -211,6 +219,45 @@ keys:
 Only public JWKs are accepted; a document carrying a private member is
 rejected. The load is all-or-nothing, so one malformed registration fails the
 whole load and a partially applied registry can never serve.
+
+### Standard scoped authority
+
+Use `authorization` for a Registry Relay client or another OAuth resource
+server that reads the standard `scope` claim:
+
+```yaml
+clientId: registry-consumer
+principal: urn:example:consumer
+authorization:
+  scopes:
+    - registry:business:read
+  claims:
+    purpose: statutory-consultation
+    authority: district-17
+keys:
+  - kty: OKP
+    crv: Ed25519
+    kid: registry-consumer-2026-01
+    x: "..."
+```
+
+Mint joins the registered scopes with one ASCII space, writes the result as
+the token's `scope` claim, and returns the same string in the token response's
+optional `scope` member. The direct claims are server-governed strings. The
+client assertion and token request cannot add, narrow, or replace them.
+
+A scoped registration has 1 to 64 unique RFC 6749 scope-tokens and at most 32
+direct claims. It cannot use `evidenceAudience`, `requesterTags`, `grant`, or
+`delegation`. Direct claim names cannot shadow `iss`, `aud`, `exp`, `iat`,
+`nbf`, `jti`, `client_id`, `sub`, or `scope`.
+When the deployment also configures Evidence claim names, a scoped client's
+direct claims cannot reuse any of those names.
+
+For Registry Relay, configure `accessTokens.audiences` with the one exact
+audience from the Relay runtime. Register only scopes and direct claims that
+the Relay contract uses for the intended operation and access profile. Mint
+remains an ordinary conforming issuer; Relay has no Mint-specific runtime
+branch.
 
 ## Delegation: a token bound to one subject
 
@@ -372,6 +419,12 @@ token to Evidence's own authenticator. `tests/delegated_subject_binding.rs`
 does the same for delegation, running Evidence's own entitlement match and
 selector resolution over a token from the real Mint router. The dependency runs
 one way only. Evidence does not depend on Mint.
+
+`registry-relay-v2`'s `tests/acceptance_http.rs` also starts the real Mint and
+Relay routers. The Relay client obtains a token through its shared
+private-key-JWT provider, then uses Mint's registered scope, purpose, and row
+authority for a protected lookup. Relay's production crates do not depend on
+Mint.
 
 `tests/token_cli.rs` runs `mint token` against a real `mint serve` as two
 processes, which is the only place the stdout contract can be observed.

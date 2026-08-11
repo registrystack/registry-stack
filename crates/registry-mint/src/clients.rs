@@ -3,7 +3,7 @@
 //! This module is the reason Mint exists. A JWKS answers only "was this signed
 //! by a trusted key?" The registry answers the question that actually matters:
 //! "*this specific client* holds *these specific keys*, and is permitted to act
-//! as *this principal* with *these tags* for *this audience*."
+//! as *this principal* with *this server-governed authority*."
 //!
 //! Two rules keep that binding meaningful:
 //!
@@ -41,6 +41,25 @@ const MAX_SUBJECT_FIELDS: usize = 16;
 const MAX_DELEGATED_ACTORS: usize = 64;
 /// The longest claim path Evidence will resolve.
 const MAX_CLAIM_PATH_BYTES: usize = 512;
+/// A registration stays substantially below the compact access-token ceiling.
+const MAX_AUTHORIZATION_SCOPES: usize = 64;
+const MAX_SCOPE_BYTES: usize = 256;
+const MAX_AUTHORIZATION_CLAIMS: usize = 32;
+const MAX_AUTHORIZATION_CLAIM_NAME_BYTES: usize = 128;
+/// Relay accepts direct authority values only through this byte ceiling.
+const MAX_AUTHORIZATION_CLAIM_VALUE_BYTES: usize = 512;
+
+const RESERVED_ACCESS_TOKEN_CLAIMS: [&str; 9] = [
+    "iss",
+    "aud",
+    "exp",
+    "iat",
+    "nbf",
+    "jti",
+    "client_id",
+    "sub",
+    "scope",
+];
 
 /// JWK members that only ever appear in private keys. `oth` carries the
 /// remaining prime factors of a multi-prime RSA private key (RFC 7518 section
@@ -94,6 +113,29 @@ pub struct Delegation {
     pub subject_claims: BTreeMap<String, String>,
 }
 
+/// Product-neutral authority written into a standard OAuth access token.
+///
+/// The client assertion never supplies these values. They are fixed in the
+/// reloadable server-side registration and emitted as one space-delimited
+/// `scope` claim plus bounded direct string claims.
+#[derive(Clone, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Authorization {
+    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub claims: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for Authorization {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Authorization")
+            .field("scopes", &format_args!("[{} redacted]", self.scopes.len()))
+            .field("claims", &format_args!("[{} redacted]", self.claims.len()))
+            .finish()
+    }
+}
+
 impl Delegation {
     /// Whether `actor` is one this client may act as.
     #[must_use]
@@ -110,12 +152,16 @@ impl Delegation {
 struct ClientDocument {
     client_id: String,
     principal: String,
-    evidence_audience: String,
-    requester_tags: Vec<String>,
+    #[serde(default)]
+    evidence_audience: Option<String>,
+    #[serde(default)]
+    requester_tags: Option<Vec<String>>,
     #[serde(default)]
     grant: Option<Grant>,
     #[serde(default)]
     delegation: Option<Delegation>,
+    #[serde(default)]
+    authorization: Option<Authorization>,
     keys: Vec<Value>,
 }
 
@@ -125,10 +171,11 @@ struct ClientDocument {
 pub struct RegisteredClient {
     client_id: String,
     principal: String,
-    evidence_audience: String,
-    requester_tags: Vec<String>,
+    evidence_audience: Option<String>,
+    requester_tags: Option<Vec<String>>,
     grant: Option<Grant>,
     delegation: Option<Delegation>,
+    authorization: Option<Authorization>,
     jwks: JwkSet,
 }
 
@@ -144,13 +191,13 @@ impl RegisteredClient {
     }
 
     #[must_use]
-    pub fn evidence_audience(&self) -> &str {
-        &self.evidence_audience
+    pub fn evidence_audience(&self) -> Option<&str> {
+        self.evidence_audience.as_deref()
     }
 
     #[must_use]
-    pub fn requester_tags(&self) -> &[String] {
-        &self.requester_tags
+    pub fn requester_tags(&self) -> Option<&[String]> {
+        self.requester_tags.as_deref()
     }
 
     #[must_use]
@@ -164,6 +211,14 @@ impl RegisteredClient {
     #[must_use]
     pub fn delegation(&self) -> Option<&Delegation> {
         self.delegation.as_ref()
+    }
+
+    /// The standard scoped authority this client is registered for, if any.
+    /// Evidence registrations instead expose the Evidence-specific accessors
+    /// above. Loading guarantees the two profiles never coexist.
+    #[must_use]
+    pub fn authorization(&self) -> Option<&Authorization> {
+        self.authorization.as_ref()
     }
 
     /// The public keys registered for this client, and nothing else. This is
@@ -182,15 +237,25 @@ impl fmt::Debug for RegisteredClient {
             .debug_struct("RegisteredClient")
             .field("client_id", &"[redacted]")
             .field("principal", &"[redacted]")
-            .field("evidence_audience", &"[redacted]")
+            .field(
+                "evidence_audience",
+                &self.evidence_audience.as_ref().map(|_| "[redacted]"),
+            )
             .field(
                 "requester_tags",
-                &format_args!("[{} redacted]", self.requester_tags.len()),
+                &self
+                    .requester_tags
+                    .as_ref()
+                    .map(|tags| format!("[{} redacted]", tags.len())),
             )
             .field("grant", &self.grant.as_ref().map(|_| "[redacted]"))
             .field(
                 "delegation",
                 &self.delegation.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "authorization",
+                &self.authorization.as_ref().map(|_| "[redacted]"),
             )
             .field("keys", &self.jwks.keys.len())
             .finish()
@@ -297,24 +362,71 @@ fn build_client(
     if document.principal.trim().is_empty() || document.principal.len() > MAX_PRINCIPAL_BYTES {
         return Err(invalid("principal must be 1..=512 bytes"));
     }
-    if document.evidence_audience.len() > MAX_PRINCIPAL_BYTES {
+    validate_authority_profile(&document, &invalid)?;
+
+    let jwks = build_public_jwks(document.keys, &invalid)?;
+
+    Ok(RegisteredClient {
+        client_id: document.client_id,
+        principal: document.principal,
+        evidence_audience: document.evidence_audience,
+        requester_tags: document.requester_tags,
+        grant: document.grant,
+        delegation: document.delegation,
+        authorization: document.authorization,
+        jwks,
+    })
+}
+
+fn validate_authority_profile(
+    document: &ClientDocument,
+    invalid: &impl Fn(&'static str) -> ClientRegistryError,
+) -> Result<(), ClientRegistryError> {
+    let has_evidence = document.evidence_audience.is_some()
+        || document.requester_tags.is_some()
+        || document.grant.is_some()
+        || document.delegation.is_some();
+    match (has_evidence, document.authorization.as_ref()) {
+        (true, Some(_)) => {
+            return Err(invalid(
+                "Evidence authority and standard authorization are mutually exclusive",
+            ))
+        }
+        (false, None) => {
+            return Err(invalid(
+                "an Evidence authority or standard authorization is required",
+            ))
+        }
+        (false, Some(authorization)) => return validate_authorization(authorization, invalid),
+        (true, None) => {}
+    }
+
+    let evidence_audience = document
+        .evidence_audience
+        .as_deref()
+        .ok_or_else(|| invalid("Evidence authority requires evidenceAudience and requesterTags"))?;
+    let requester_tags = document
+        .requester_tags
+        .as_deref()
+        .ok_or_else(|| invalid("Evidence authority requires evidenceAudience and requesterTags"))?;
+
+    if evidence_audience.len() > MAX_PRINCIPAL_BYTES {
         return Err(invalid("evidence audience must be at most 512 bytes"));
     }
     // Evidence parses this claim as a URL and mixes it into the subject-binding
     // MAC, so a value that fails to parse there must fail here.
-    Url::parse(&document.evidence_audience)
-        .map_err(|_| invalid("evidence audience must be a URL"))?;
+    Url::parse(evidence_audience).map_err(|_| invalid("evidence audience must be a URL"))?;
 
-    if document.requester_tags.is_empty() || document.requester_tags.len() > MAX_TAGS {
+    if requester_tags.is_empty() || requester_tags.len() > MAX_TAGS {
         return Err(invalid("between 1 and 32 requester tags are required"));
     }
-    for tag in &document.requester_tags {
+    for tag in requester_tags {
         if tag.trim().is_empty() || tag.len() > 256 {
             return Err(invalid("requester tags must be 1..=256 bytes"));
         }
     }
-    let unique_tags = document.requester_tags.iter().collect::<BTreeSet<_>>();
-    if unique_tags.len() != document.requester_tags.len() {
+    let unique_tags = requester_tags.iter().collect::<BTreeSet<_>>();
+    if unique_tags.len() != requester_tags.len() {
         return Err(invalid("requester tags must be unique"));
     }
 
@@ -328,20 +440,63 @@ fn build_client(
     }
 
     if let Some(delegation) = &document.delegation {
-        validate_delegation(delegation, &invalid)?;
+        validate_delegation(delegation, invalid)?;
+    }
+    Ok(())
+}
+
+fn validate_authorization(
+    authorization: &Authorization,
+    invalid: &impl Fn(&'static str) -> ClientRegistryError,
+) -> Result<(), ClientRegistryError> {
+    if authorization.scopes.is_empty() || authorization.scopes.len() > MAX_AUTHORIZATION_SCOPES {
+        return Err(invalid(
+            "between 1 and 64 authorization scopes are required",
+        ));
+    }
+    for scope in &authorization.scopes {
+        if scope.len() > MAX_SCOPE_BYTES || !valid_scope_token(scope) {
+            return Err(invalid(
+                "authorization scopes must be 1..=256 byte RFC 6749 scope-tokens",
+            ));
+        }
+    }
+    if authorization.scopes.iter().collect::<BTreeSet<_>>().len() != authorization.scopes.len() {
+        return Err(invalid("authorization scopes must be unique"));
     }
 
-    let jwks = build_public_jwks(document.keys, &invalid)?;
+    if authorization.claims.len() > MAX_AUTHORIZATION_CLAIMS {
+        return Err(invalid("at most 32 authorization claims are permitted"));
+    }
+    for (name, value) in &authorization.claims {
+        if !valid_authorization_claim_name(name) {
+            return Err(invalid("authorization claim names are invalid"));
+        }
+        if RESERVED_ACCESS_TOKEN_CLAIMS.contains(&name.as_str()) {
+            return Err(invalid(
+                "authorization claims must not shadow registered access-token claims",
+            ));
+        }
+        if value.is_empty() || value.len() > MAX_AUTHORIZATION_CLAIM_VALUE_BYTES {
+            return Err(invalid(
+                "authorization claim values must be 1..=512 byte direct strings",
+            ));
+        }
+    }
+    Ok(())
+}
 
-    Ok(RegisteredClient {
-        client_id: document.client_id,
-        principal: document.principal,
-        evidence_audience: document.evidence_audience,
-        requester_tags: document.requester_tags,
-        grant: document.grant,
-        delegation: document.delegation,
-        jwks,
-    })
+fn valid_scope_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
+        })
+}
+
+fn valid_authorization_claim_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_AUTHORIZATION_CLAIM_NAME_BYTES
+        && valid_scope_token(value)
 }
 
 fn validate_delegation(
@@ -508,6 +663,18 @@ keys:
   - {kty: OKP, crv: Ed25519, kid: client-a-2026-01, alg: EdDSA, x: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo}
 "#;
 
+    const SCOPED_CLIENT: &str = r#"
+clientId: relay-consumer
+principal: urn:example:relay-consumer
+authorization:
+  scopes: [registry:business:read, registry:business:lookup]
+  claims:
+    purpose: statutory-consultation
+    authority: district-17
+keys:
+  - {kty: OKP, crv: Ed25519, kid: relay-consumer-2026-01, alg: EdDSA, x: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo}
+"#;
+
     fn registry_from(files: &[(&str, &str)]) -> Result<ClientRegistry, ClientRegistryError> {
         let directory = tempfile::tempdir().expect("temp dir");
         for (name, contents) in files {
@@ -538,11 +705,175 @@ keys:
         let client = registry.get("client-a").expect("client-a is registered");
 
         assert_eq!(client.principal(), "urn:example:client-a");
-        assert_eq!(client.evidence_audience(), "https://client-a.example.org");
-        assert_eq!(client.requester_tags(), ["ministry-of-health"]);
+        assert_eq!(
+            client.evidence_audience(),
+            Some("https://client-a.example.org")
+        );
+        assert_eq!(
+            client
+                .requester_tags()
+                .expect("the Evidence authority carries requester tags"),
+            ["ministry-of-health"]
+        );
         assert_eq!(client.grant(), None);
+        assert_eq!(client.authorization(), None);
         assert_eq!(client.jwks().keys.len(), 1);
         assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn a_scoped_registration_binds_standard_authority_without_evidence_fields() {
+        let registry = load_one(SCOPED_CLIENT).expect("registry loads");
+        let client = registry
+            .get("relay-consumer")
+            .expect("the scoped client is registered");
+        let authorization = client
+            .authorization()
+            .expect("the scoped authority is present");
+
+        assert_eq!(client.principal(), "urn:example:relay-consumer");
+        assert_eq!(client.evidence_audience(), None);
+        assert_eq!(client.requester_tags(), None);
+        assert_eq!(client.grant(), None);
+        assert_eq!(client.delegation(), None);
+        assert_eq!(
+            authorization.scopes,
+            ["registry:business:read", "registry:business:lookup"]
+        );
+        assert_eq!(
+            authorization.claims,
+            BTreeMap::from([
+                ("authority".to_owned(), "district-17".to_owned()),
+                ("purpose".to_owned(), "statutory-consultation".to_owned()),
+            ])
+        );
+    }
+
+    #[test]
+    fn authority_profiles_are_required_complete_and_mutually_exclusive() {
+        let no_authority = SCOPED_CLIENT.replace(
+            "authorization:\n  scopes: [registry:business:read, registry:business:lookup]\n  claims:\n    purpose: statutory-consultation\n    authority: district-17\n",
+            "",
+        );
+        assert_eq!(
+            load_error(&no_authority),
+            invalid("an Evidence authority or standard authorization is required")
+        );
+
+        let incomplete = CLIENT_A.replace("evidenceAudience: https://client-a.example.org\n", "");
+        assert_eq!(
+            load_error(&incomplete),
+            invalid("Evidence authority requires evidenceAudience and requesterTags")
+        );
+
+        let combined = CLIENT_A.replace(
+            "requesterTags: [ministry-of-health]\n",
+            "requesterTags: [ministry-of-health]\nauthorization: {scopes: [registry:read]}\n",
+        );
+        assert_eq!(
+            load_error(&combined),
+            invalid("Evidence authority and standard authorization are mutually exclusive")
+        );
+    }
+
+    #[test]
+    fn standard_authority_is_closed_bounded_and_cannot_shadow_token_claims() {
+        let empty = SCOPED_CLIENT.replace(
+            "scopes: [registry:business:read, registry:business:lookup]",
+            "scopes: []",
+        );
+        assert_eq!(
+            load_error(&empty),
+            invalid("between 1 and 64 authorization scopes are required")
+        );
+
+        for scopes in [
+            "[registry:read, registry:read]",
+            "['registry:read records']",
+            "['registry:read\\records']",
+        ] {
+            let text =
+                SCOPED_CLIENT.replace("[registry:business:read, registry:business:lookup]", scopes);
+            assert!(
+                load_one(&text).is_err(),
+                "invalid scopes {scopes} must be refused"
+            );
+        }
+
+        for reserved in RESERVED_ACCESS_TOKEN_CLAIMS {
+            let text = SCOPED_CLIENT.replace("purpose:", &format!("{reserved}:"));
+            assert_eq!(
+                load_error(&text),
+                invalid("authorization claims must not shadow registered access-token claims"),
+                "claim {reserved} must be refused"
+            );
+        }
+
+        let empty_value = SCOPED_CLIENT.replace("purpose: statutory-consultation", "purpose: ''");
+        assert_eq!(
+            load_error(&empty_value),
+            invalid("authorization claim values must be 1..=512 byte direct strings")
+        );
+    }
+
+    #[test]
+    fn standard_authority_size_limits_are_enforced_before_minting() {
+        let replace_authorization = |authorization: &str| {
+            SCOPED_CLIENT.replace(
+                "authorization:\n  scopes: [registry:business:read, registry:business:lookup]\n  claims:\n    purpose: statutory-consultation\n    authority: district-17",
+                authorization,
+            )
+        };
+
+        let too_many_scopes = (0..=MAX_AUTHORIZATION_SCOPES)
+            .map(|index| format!("scope:{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert_eq!(
+            load_error(&replace_authorization(&format!(
+                "authorization:\n  scopes: [{too_many_scopes}]"
+            ))),
+            invalid("between 1 and 64 authorization scopes are required")
+        );
+
+        assert_eq!(
+            load_error(&replace_authorization(&format!(
+                "authorization:\n  scopes: ['{}']",
+                "a".repeat(MAX_SCOPE_BYTES + 1)
+            ))),
+            invalid("authorization scopes must be 1..=256 byte RFC 6749 scope-tokens")
+        );
+
+        let too_many_claims = (0..=MAX_AUTHORIZATION_CLAIMS)
+            .map(|index| format!("    claim{index}: value"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            load_error(&replace_authorization(&format!(
+                "authorization:\n  scopes: [registry:read]\n  claims:\n{too_many_claims}"
+            ))),
+            invalid("at most 32 authorization claims are permitted")
+        );
+
+        for name in [
+            "claim with space".to_owned(),
+            "a".repeat(MAX_AUTHORIZATION_CLAIM_NAME_BYTES + 1),
+        ] {
+            assert_eq!(
+                load_error(&replace_authorization(&format!(
+                    "authorization:\n  scopes: [registry:read]\n  claims:\n    '{name}': value"
+                ))),
+                invalid("authorization claim names are invalid")
+            );
+        }
+
+        assert_eq!(
+            load_error(&replace_authorization(&format!(
+                "authorization:\n  scopes: [registry:read]\n  claims:\n    purpose: '{}'",
+                "a".repeat(MAX_AUTHORIZATION_CLAIM_VALUE_BYTES + 1)
+            ))),
+            invalid("authorization claim values must be 1..=512 byte direct strings")
+        );
     }
 
     #[test]
@@ -772,6 +1103,15 @@ keys:
         assert!(!rendered.contains("urn:example:client-a"));
         assert!(!rendered.contains("ministry-of-health"));
         assert!(!rendered.contains("client-a.example.org"));
+
+        let registry = load_one(SCOPED_CLIENT).expect("registry loads");
+        let client = registry
+            .get("relay-consumer")
+            .expect("the scoped client is registered");
+        let rendered = format!("{client:?}");
+        assert!(!rendered.contains("registry:business:read"));
+        assert!(!rendered.contains("statutory-consultation"));
+        assert!(!rendered.contains("district-17"));
     }
 
     #[test]

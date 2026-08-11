@@ -198,7 +198,7 @@ pub struct AuditConfig {
     pub hash_key_version: u32,
 }
 
-/// Names of the claims Mint writes into minted access tokens.
+/// Names of the Evidence claims Mint writes into Evidence-profile tokens.
 ///
 /// These must match the resource server's `authentication` block. Evidence, for
 /// example, reads its principal, requester tags, evidence audience, and grant
@@ -245,7 +245,16 @@ impl ClaimNames {
         // name would silently replace what Mint decided with what the registry
         // did: an `aud` shadow yields a token whose audience is the principal
         // and which still verifies.
-        for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id"] {
+        for reserved in [
+            "iss",
+            "aud",
+            "exp",
+            "iat",
+            "nbf",
+            "jti",
+            "client_id",
+            "scope",
+        ] {
             if names.contains(&reserved) {
                 return Err(ConfigError::Invalid(
                     "authority claim names must not shadow registered JWT claims",
@@ -271,7 +280,11 @@ pub struct AccessTokenConfig {
     /// configured audiences.
     pub audiences: Vec<String>,
     pub lifetime_seconds: u64,
-    pub claims: ClaimNames,
+    /// Required when at least one client uses the Evidence authority profile.
+    /// A deployment serving only standard scoped registrations does not need
+    /// Evidence claim names.
+    #[serde(default)]
+    pub claims: Option<ClaimNames>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -507,7 +520,9 @@ impl MintConfig {
                 "access token lifetime must be 60..=3600 seconds",
             ));
         }
-        self.access_tokens.claims.validate()?;
+        if let Some(claims) = &self.access_tokens.claims {
+            claims.validate()?;
+        }
 
         if self.validation_mode == ValidationMode::Strict {
             validate_https_endpoint(&self.client_assertion.audience)?;
@@ -1125,8 +1140,18 @@ clients:
     }
 
     #[test]
+    fn evidence_claim_names_are_optional_for_scoped_only_deployments() {
+        let without_claims = VALID.replace(
+            "  claims:\n    principal: sub\n    requesterTags: evidence_tags\n    evidenceAudience: evidence_audience\n    grantId: evidence_grant_id\n    grantAuthority: evidence_authority\n",
+            "",
+        );
+        let config = load_from(&without_claims).expect("a scoped-only token policy loads");
+        assert!(config.access_tokens.claims.is_none());
+    }
+
+    #[test]
     fn authority_claims_cannot_shadow_registered_jwt_claims() {
-        for reserved in ["iss", "aud", "exp", "jti", "client_id"] {
+        for reserved in ["iss", "aud", "exp", "jti", "client_id", "scope"] {
             let text = VALID.replace(
                 "requesterTags: evidence_tags",
                 &format!("requesterTags: {reserved}"),
@@ -1145,7 +1170,16 @@ clients:
         // principal named for a reserved claim would overwrite it. `aud` is the
         // one that matters most: the token would carry the principal as its
         // audience and still verify.
-        for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id"] {
+        for reserved in [
+            "iss",
+            "aud",
+            "exp",
+            "iat",
+            "nbf",
+            "jti",
+            "client_id",
+            "scope",
+        ] {
             let text = VALID.replace("principal: sub", &format!("principal: {reserved}"));
             assert_eq!(
                 load_error(&text),
@@ -1185,7 +1219,13 @@ clients:
     #[test]
     fn the_actor_claim_is_optional_and_obeys_every_other_claim_name_rule() {
         // A deployment that never delegates names no actor claim at all.
-        assert!(sample_config().access_tokens.claims.actor.is_none());
+        assert!(sample_config()
+            .access_tokens
+            .claims
+            .as_ref()
+            .expect("the Evidence sample names its claims")
+            .actor
+            .is_none());
 
         let with_actor = |name: &str| {
             VALID.replace(
@@ -1196,7 +1236,13 @@ clients:
 
         let config = load_from(&with_actor("evidence_actor")).expect("an actor claim is accepted");
         assert_eq!(
-            config.access_tokens.claims.actor.as_deref(),
+            config
+                .access_tokens
+                .claims
+                .as_ref()
+                .expect("the Evidence configuration names its claims")
+                .actor
+                .as_deref(),
             Some("evidence_actor")
         );
 
