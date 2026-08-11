@@ -742,6 +742,37 @@ fn record_options_request(value: Option<Value>) -> Result<RecordOptions> {
     record_options(&object)
 }
 
+fn lookup_selector_value(value: &Value) -> Result<Value> {
+    const MAXIMUM_SAFE_INTEGER_I64: i64 = 9_007_199_254_740_991;
+    const MAXIMUM_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+    let Value::Number(number) = value else {
+        return Ok(value.clone());
+    };
+    if let Some(number) = number.as_i64() {
+        if (-MAXIMUM_SAFE_INTEGER_I64..=MAXIMUM_SAFE_INTEGER_I64).contains(&number) {
+            return Ok(value.clone());
+        }
+        return Err(binding_error(
+            "invalid_request",
+            "a lookup selector value is invalid",
+        ));
+    }
+    let number = number
+        .as_f64()
+        .ok_or_else(|| binding_error("invalid_request", "a lookup selector value is invalid"))?;
+    if !number.is_finite()
+        || number.fract() != 0.0
+        || !(-MAXIMUM_SAFE_INTEGER..=MAXIMUM_SAFE_INTEGER).contains(&number)
+    {
+        return Err(binding_error(
+            "invalid_request",
+            "a lookup selector value is invalid",
+        ));
+    }
+    Ok(Value::from(number as i64))
+}
+
 fn collection_continuation(value: Value, expected: &'static str) -> Result<CollectionContinuation> {
     let object = value
         .as_object()
@@ -956,7 +987,7 @@ impl RelayClient {
         let mut request = LookupRequest::default().options(record_options_request(options)?);
         for (name, value) in selectors {
             request = request
-                .selector(name, value.clone())
+                .selector(name, lookup_selector_value(value)?)
                 .map_err(client_error)?;
         }
         let etag = parse_etag(etag)?;
@@ -1230,6 +1261,35 @@ mod tests {
             "bbox": [100.0, 13.0, 101.0, 14.0]
         }))
         .expect("the closed search query shape is accepted");
+    }
+
+    #[test]
+    fn javascript_safe_integer_selectors_become_signed_json_integers() {
+        for (wire, expected) in [
+            ("4294967296.0", 4_294_967_296_i64),
+            ("9007199254740991.0", 9_007_199_254_740_991_i64),
+            ("-9007199254740991.0", -9_007_199_254_740_991_i64),
+        ] {
+            let value = serde_json::from_str(wire).expect("a floating JSON number");
+            let normalized = lookup_selector_value(&value).expect("a safe integer");
+            assert_eq!(normalized.as_i64(), Some(expected));
+            assert!(normalized
+                .as_number()
+                .is_some_and(serde_json::Number::is_i64));
+        }
+
+        for wire in [
+            "1.5",
+            "9007199254740992",
+            "9007199254740992.0",
+            "-9007199254740992.0",
+        ] {
+            let value = serde_json::from_str(wire).expect("a floating JSON number");
+            let error = lookup_selector_value(&value).unwrap_err();
+            let envelope = error_envelope(error);
+            assert_eq!(envelope["kind"], "invalid_request");
+            assert_eq!(envelope["message"], "a lookup selector value is invalid");
+        }
     }
 
     #[test]

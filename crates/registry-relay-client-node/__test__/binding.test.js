@@ -26,11 +26,24 @@ function assertBoundaryChildExitsNormally(source) {
 
 let server;
 let baseUrl;
+const lookupBodies = [];
 
 before(async () => {
   server = http.createServer((request, response) => {
     response.setHeader('traceparent', TRACEPARENT);
     response.setHeader('content-type', 'application/json');
+    if (request.method === 'POST'
+      && request.url.includes('/lookups/')
+      && request.headers['if-none-match'] !== ETAG) {
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(chunk));
+      request.on('end', () => {
+        lookupBodies.push(Buffer.concat(chunks).toString('utf8'));
+        response.statusCode = 404;
+        response.end('{}');
+      });
+      return;
+    }
     if (request.headers['if-none-match'] === ETAG) {
       response.statusCode = 304;
       response.setHeader('etag', ETAG);
@@ -152,6 +165,37 @@ test('request validation failures have a distinct stable kind', async () => {
     client.resources({ pageSize: 0 }),
     (error) => error instanceof RelayClientError && error.kind === 'invalid_request',
   );
+});
+
+test('lookup preserves the full JavaScript safe integer domain in its JSON body', async () => {
+  lookupBodies.length = 0;
+  const client = new RelayClient({ baseUrl });
+  await assert.rejects(client.lookup('people', 'by-number', {
+    max: Number.MAX_SAFE_INTEGER,
+    min: Number.MIN_SAFE_INTEGER,
+    wide: 2 ** 32,
+  }));
+  assert.deepEqual(lookupBodies, [
+    '{"selectors":{"max":9007199254740991,"min":-9007199254740991,"wide":4294967296}}',
+  ]);
+});
+
+test('lookup rejects fractional and unsafe numeric selectors as invalid requests', async () => {
+  lookupBodies.length = 0;
+  const client = new RelayClient({ baseUrl });
+  for (const selector of [
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    Number.MIN_SAFE_INTEGER - 1,
+  ]) {
+    await assert.rejects(
+      client.lookup('people', 'by-number', { number: selector }),
+      (error) => error instanceof RelayClientError
+        && error.kind === 'invalid_request'
+        && error.message === 'a lookup selector value is invalid',
+    );
+  }
+  assert.deepEqual(lookupBodies, []);
 });
 
 test('list and search runtime options preserve their distinct query shapes', async () => {

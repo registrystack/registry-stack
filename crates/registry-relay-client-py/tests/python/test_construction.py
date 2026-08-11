@@ -172,6 +172,19 @@ class ConstructionTest(unittest.TestCase):
                     relay.RelayClient(**kwargs)
                 self.assertEqual(raised.exception.kind, "configuration")
 
+    def test_max_response_bytes_range_errors_are_stable_configuration_errors(self):
+        for value in (-1, 1 << 100):
+            with self.subTest(value=value):
+                with self.assertRaises(relay.RelayClientError) as raised:
+                    relay.RelayClient(
+                        "http://127.0.0.1:9", max_response_bytes=value
+                    )
+                self.assertEqual(raised.exception.kind, "configuration")
+                self.assertEqual(
+                    str(raised.exception),
+                    "max_response_bytes must be an unsigned 64-bit integer",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

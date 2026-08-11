@@ -378,6 +378,33 @@ async fn probes_and_openapi_never_acquire_a_token() {
 }
 
 #[tokio::test]
+async fn invalid_access_profiles_are_rejected_before_auth_or_io() {
+    let provider = Arc::new(CountingToken(AtomicUsize::new(0)));
+    let (_client, paths) = test_client(Mode::Routes, Some(provider.clone())).await;
+
+    for invalid in ["Public", "public_profile", "public--profile"] {
+        assert!(matches!(
+            RecordOptions::default().access_profile(invalid),
+            Err(RelayClientError::InvalidRequest { .. })
+        ));
+    }
+    assert!(
+        CollectionContinuation::try_from_projection(CollectionContinuationProjection {
+            route: CollectionRouteProjection::Records {
+                resource: "people".into(),
+            },
+            cursor: "opaque_cursor-123".into(),
+            format: RecordFormat::Json,
+            access_profile: Some("Public_Profile".into()),
+        })
+        .is_err()
+    );
+
+    assert_eq!(provider.0.load(Ordering::SeqCst), 0);
+    assert!(paths.lock().expect("paths").is_empty());
+}
+
+#[tokio::test]
 async fn base_prefix_is_preserved_for_every_route_family() {
     let (client, paths) = test_client(Mode::Routes, None).await;
     let _ = client.health().await;

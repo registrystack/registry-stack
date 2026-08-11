@@ -38,6 +38,9 @@ auth-eligible request. `health`, `ready`, and `openapi` never call it and never
 send authorization. `PrivateKeyJwt` and `StaticToken` are re-exported from the
 shared platform client primitives.
 
+Explicit access-profile selectors use Relay's bounded lower-case kebab grammar:
+ASCII lower-case letters, digits, and single interior hyphens, up to 128 bytes.
+
 ## Discovery and consultation
 
 ```rust,no_run

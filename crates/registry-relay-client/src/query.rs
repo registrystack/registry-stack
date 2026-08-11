@@ -93,7 +93,7 @@ impl RecordOptions {
 
     pub fn access_profile(mut self, value: impl Into<String>) -> Result<Self, RelayClientError> {
         let value = value.into();
-        validate_identifier(&value, "the access profile identifier is invalid")?;
+        validate_access_profile_identifier(&value)?;
         self.access_profile = Some(value);
         Ok(self)
     }
@@ -578,6 +578,23 @@ fn validate_identifier(value: &str, reason: &'static str) -> Result<(), RelayCli
     Ok(())
 }
 
+pub(crate) fn validate_access_profile_identifier(value: &str) -> Result<(), RelayClientError> {
+    if value.is_empty()
+        || value.len() > MAX_IDENTIFIER_BYTES
+        || value.starts_with('-')
+        || value.ends_with('-')
+        || value.contains("--")
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(RelayClientError::invalid_request(
+            "the access profile identifier is invalid",
+        ));
+    }
+    Ok(())
+}
+
 fn valid_sdmx_ncname_segment(value: &str) -> bool {
     let mut bytes = value.bytes();
     matches!(bytes.next(), Some(first) if first.is_ascii_alphabetic())
@@ -724,6 +741,32 @@ mod tests {
             .filter("cursor", "opaque")
             .unwrap_err();
         assert!(matches!(error, RelayClientError::InvalidRequest { .. }));
+    }
+
+    #[test]
+    fn access_profile_identifiers_match_the_server_lowercase_kebab_grammar() {
+        for valid in ["public", "registrar-premises", "1", &"a".repeat(128)] {
+            assert!(
+                RecordOptions::default().access_profile(valid).is_ok(),
+                "rejected {valid:?}"
+            );
+        }
+        for invalid in [
+            "",
+            "Public",
+            "public_profile",
+            "-public",
+            "public-",
+            "public--profile",
+            "public.profile",
+            "público",
+            &"a".repeat(129),
+        ] {
+            assert!(
+                RecordOptions::default().access_profile(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
     }
 
     #[test]

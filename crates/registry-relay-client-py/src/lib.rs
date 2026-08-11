@@ -77,6 +77,46 @@ fn parse_etag(py: Python<'_>, value: Option<&str>) -> PyResult<Option<StrongEtag
         .transpose()
 }
 
+fn optional_u32(
+    py: Python<'_>,
+    value: Option<&Bound<'_, PyAny>>,
+    name: &'static str,
+) -> PyResult<Option<u32>> {
+    value
+        .map(|value| {
+            value.extract::<u32>().map_err(|_| {
+                to_py_err(
+                    py,
+                    &MappedError::binding(
+                        "invalid_request",
+                        format!("{name} must be an unsigned 32-bit integer"),
+                    ),
+                )
+            })
+        })
+        .transpose()
+}
+
+fn optional_u64_configuration(
+    py: Python<'_>,
+    value: Option<&Bound<'_, PyAny>>,
+    name: &'static str,
+) -> PyResult<Option<u64>> {
+    value
+        .map(|value| {
+            value.extract::<u64>().map_err(|_| {
+                to_py_err(
+                    py,
+                    &MappedError::binding(
+                        "configuration",
+                        format!("{name} must be an unsigned 64-bit integer"),
+                    ),
+                )
+            })
+        })
+        .transpose()
+}
+
 fn record_format(py: Python<'_>, value: &str) -> PyResult<RecordFormat> {
     match value {
         "json" => Ok(RecordFormat::Json),
@@ -368,9 +408,11 @@ impl RelayClient {
         request_timeout_seconds: Option<f64>,
         connect_timeout_seconds: Option<f64>,
         user_agent: Option<String>,
-        max_response_bytes: Option<u64>,
+        max_response_bytes: Option<&Bound<'_, PyAny>>,
         trusted_root_certificates: Option<Vec<u8>>,
     ) -> PyResult<Self> {
+        let max_response_bytes =
+            optional_u64_configuration(py, max_response_bytes, "max_response_bytes")?;
         let (authorization, private_key_jwt_trusted_root_certificates) =
             authorization_from_python(authorization)
                 .map_err(|error| conversion_error(py, "configuration", &error))?;
@@ -440,9 +482,10 @@ impl RelayClient {
     fn resources<'py>(
         &self,
         py: Python<'py>,
-        page_size: Option<u32>,
+        page_size: Option<&Bound<'_, PyAny>>,
         etag: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let page_size = optional_u32(py, page_size, "page_size")?;
         let mut request = ResourceListRequest::default();
         if let Some(page_size) = page_size {
             request = request
@@ -516,13 +559,14 @@ impl RelayClient {
         &self,
         py: Python<'py>,
         resource: &str,
-        page_size: Option<u32>,
+        page_size: Option<&Bound<'_, PyAny>>,
         fields: Option<Vec<String>>,
         access_profile: Option<String>,
         format: &str,
         filters: Option<&Bound<'_, PyAny>>,
         etag: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let page_size = optional_u32(py, page_size, "page_size")?;
         let request = list_request(py, page_size, fields, access_profile, format, filters)?;
         let etag = parse_etag(py, etag)?;
         let value = py
@@ -555,12 +599,13 @@ impl RelayClient {
         resource: &str,
         search: &str,
         bbox: &Bound<'_, PyAny>,
-        page_size: Option<u32>,
+        page_size: Option<&Bound<'_, PyAny>>,
         fields: Option<Vec<String>>,
         access_profile: Option<String>,
         format: &str,
         etag: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let page_size = optional_u32(py, page_size, "page_size")?;
         let request = search_request(py, bbox, page_size, fields, access_profile, format)?;
         let etag = parse_etag(py, etag)?;
         let value = py
@@ -675,12 +720,14 @@ impl RelayClient {
         version: &str,
         key: Option<String>,
         constraints: Option<&Bound<'_, PyAny>>,
-        offset: Option<u32>,
-        limit: Option<u32>,
+        offset: Option<&Bound<'_, PyAny>>,
+        limit: Option<&Bound<'_, PyAny>>,
         dimension_at_observation: Option<String>,
         format: &str,
         etag: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let offset = optional_u32(py, offset, "offset")?;
+        let limit = optional_u32(py, limit, "limit")?;
         let mut request = SdmxDataRequest::new(agency, resource, version)
             .map_err(|error| sdk_error(py, &error))?;
         if let Some(key) = key {

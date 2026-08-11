@@ -60,6 +60,47 @@ class RequestShapeTest(unittest.TestCase):
             self.client.search("people", "nearby", bbox=cyclic)
         self.assertEqual(cycle.exception.kind, "invalid_request")
 
+    def test_unsigned_request_ranges_are_stable_invalid_request_errors(self):
+        calls = (
+            ("resources", lambda value: self.client.resources(page_size=value), "page_size"),
+            (
+                "list",
+                lambda value: self.client.list_records("people", page_size=value),
+                "page_size",
+            ),
+            (
+                "search",
+                lambda value: self.client.search(
+                    "people", "nearby", bbox=[10, 20, 11, 21], page_size=value
+                ),
+                "page_size",
+            ),
+            (
+                "sdmx offset",
+                lambda value: self.client.sdmx_data(
+                    "AGENCY", "FLOW", "1.0.0", offset=value
+                ),
+                "offset",
+            ),
+            (
+                "sdmx limit",
+                lambda value: self.client.sdmx_data(
+                    "AGENCY", "FLOW", "1.0.0", limit=value
+                ),
+                "limit",
+            ),
+        )
+        for value in (-1, 1 << 100):
+            for family, call, name in calls:
+                with self.subTest(family=family, value=value):
+                    with self.assertRaises(relay.RelayClientError) as raised:
+                        call(value)
+                    self.assertEqual(raised.exception.kind, "invalid_request")
+                    self.assertEqual(
+                        str(raised.exception),
+                        f"{name} must be an unsigned 32-bit integer",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

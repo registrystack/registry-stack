@@ -62,6 +62,7 @@ export interface SearchOptions extends RecordOptions {
   bbox: readonly [number, number, number, number]
 }
 
+/** Numeric selectors must satisfy `Number.isSafeInteger`. */
 export type LookupSelector = string | number | boolean
 export type LookupSelectors = Readonly<Record<string, LookupSelector>>
 

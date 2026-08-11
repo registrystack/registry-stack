@@ -3,6 +3,7 @@ use std::fmt;
 use registry_platform_httpsec::TraceId;
 use serde::{Deserialize, Serialize};
 
+use crate::query::validate_access_profile_identifier;
 use crate::RecordFormat;
 
 /// A validated strong entity tag over SHA-256 bytes (`"` plus 64 lower hex digits plus `"`).
@@ -181,7 +182,7 @@ impl CollectionContinuation {
             }
         };
         if let Some(profile) = &value.access_profile {
-            validate_route_identifier(profile)?;
+            validate_access_profile_identifier(profile)?;
         }
         Ok(Self {
             cursor: value.cursor,
