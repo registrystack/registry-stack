@@ -277,22 +277,26 @@ function commandLink(from, command) {
 
 function argumentTable(entries, heading, firstColumn) {
   if (entries.length === 0) return '';
+  const showsRepeatability = entries.some((argument) => argument.repeatable);
   const rows = entries.map((argument) =>
     [
       inlineCode(argument.display),
       argument.always_required ? 'Yes' : 'No',
-      argument.repeatable ? 'Yes' : 'No',
+      ...(showsRepeatability ? [argument.repeatable ? 'Yes' : 'No'] : []),
       values(argument.default_values),
       values(argument.possible_values),
       argument.environment === null ? 'n/a' : inlineCode(argument.environment),
       tableText(argument.description || 'n/a'),
     ].join(' | '),
   );
+  const columns = [firstColumn, 'Always required'];
+  if (showsRepeatability) columns.push('Repeatable');
+  columns.push('Default', 'Values', 'Environment', 'Description');
   return `
 ## ${heading}
 
-| ${firstColumn} | Always required | Repeatable | Default | Values | Environment | Description |
-| --- | --- | --- | --- | --- | --- | --- |
+| ${columns.join(' | ')} |
+| ${columns.map(() => '---').join(' | ')} |
 ${rows.map((row) => `| ${row} |`).join('\n')}
 `;
 }

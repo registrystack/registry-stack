@@ -87,6 +87,7 @@ test('renders required groups and conditional requirements', () => {
   assert.match(page, /One or more of `--scope`, `--role` are required\./u);
   assert.match(page, /`--right` is present \| `--detail` is required\./u);
   assert.match(page, /Always required/u);
+  assert.doesNotMatch(page, /Repeatable/u);
 });
 
 test('renders repeatable option cardinality', () => {
