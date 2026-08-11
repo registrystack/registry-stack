@@ -34,20 +34,32 @@ for path in "${production_sources[@]}"; do
   fi
 done
 
+# The hosted contract runner does not install ripgrep. Keep each grep status
+# explicit so a missing path or unreadable source fails the gate closed.
 set +e
-rg -i -l "$forbidden" "${production_sources[@]}" >/dev/null
-rg_status=$?
+grep -EilR -- "$forbidden" "${production_sources[@]}" >/dev/null
+grep_status=$?
 set -e
-if [[ "$rg_status" -eq 0 ]]; then
+if [[ "$grep_status" -eq 0 ]]; then
   echo "relay-v2 source-neutrality: acceptance-domain term in Relay V2 production source" >&2
   exit 1
 fi
-if [[ "$rg_status" -ne 1 ]]; then
+if [[ "$grep_status" -ne 1 ]]; then
   echo "relay-v2 source-neutrality: production source scan failed" >&2
-  exit "$rg_status"
+  exit "$grep_status"
+fi
+
+set +e
+domain_paths=$(grep -EilR -- "$forbidden" "$PRODUCT_DIR")
+grep_status=$?
+set -e
+if [[ "$grep_status" -gt 1 ]]; then
+  echo "relay-v2 source-neutrality: product source scan failed" >&2
+  exit "$grep_status"
 fi
 
 while IFS= read -r path; do
+  [[ -n "$path" ]] || continue
   relative="${path#"$PRODUCT_DIR/"}"
   case "$relative" in
     acceptance/*|CONCEPT.md|DEFINITION-OF-DONE.md|CONFIGURATION-EXAMPLES.md|IMPLEMENTATION.md|README.md|STANDARDS-ALIGNMENT.md|scripts/check-source-neutrality.sh|scripts/check-generated.sh|scripts/test_adopter_workflow.py|scripts/validate_product.py|scripts/test_validate_product.py|contracts/generated-baselines.yaml|contracts/package-layout.yaml|contracts/acceptance-scenario-matrix.yaml|contracts/security-invariant-matrix.yaml)
@@ -56,11 +68,19 @@ while IFS= read -r path; do
   esac
   echo "relay-v2 source-neutrality: domain term outside acceptance/docs: $relative" >&2
   exit 1
-done < <(rg -i -l "$forbidden" "$PRODUCT_DIR" || true)
+done <<<"$domain_paths"
 
-if rg -i -n 'legacy/generated-crud|api/legacy|test/openAPI' "$PRODUCT_DIR/acceptance" "$PRODUCT_DIR/contracts" >/dev/null; then
+set +e
+grep -EinR -- 'legacy/generated-crud|api/legacy|test/openAPI' "$PRODUCT_DIR/acceptance" "$PRODUCT_DIR/contracts" >/dev/null
+grep_status=$?
+set -e
+if [[ "$grep_status" -eq 0 ]]; then
   echo "relay-v2 source-neutrality: legacy Digital Registries OpenAPI input referenced" >&2
   exit 1
+fi
+if [[ "$grep_status" -ne 1 ]]; then
+  echo "relay-v2 source-neutrality: legacy input scan failed" >&2
+  exit "$grep_status"
 fi
 
 echo "relay-v2 source-neutrality passed"
