@@ -29,9 +29,15 @@ Re-verify one stored signed response offline against a pinned key set. Exactly o
 evidence verify [OPTIONS] --jwks <JWKS> --policy <POLICY> <--jws <JWS>|--sd-jwt-vc <SD_JWT_VC>>
 ```
 
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | One of `--jws <JWS>`, `--sd-jwt-vc <SD_JWT_VC>` is required. |
+
 ## Options
 
-| Option | Required | Default | Values | Environment | Description |
+| Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--jws <JWS>` | No | n/a | n/a | n/a | Stored flattened JWS JSON response file |
 | `--sd-jwt-vc <SD_JWT_VC>` | No | n/a | n/a | n/a | Stored compact SD-JWT VC response file |

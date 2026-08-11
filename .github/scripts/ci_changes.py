@@ -131,6 +131,8 @@ EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_PATTERNS = tuple(
 # and Evidence binary. Keep this list at module ownership so changing an Args
 # type beside a top-level parser cannot leave its published page stale.
 CLI_REFERENCE_INPUTS = (
+    ("Cargo.lock", "Cargo.lock"),
+    ("Cargo.toml", "Cargo.toml"),
     ("crates/registry-cli-docs/src/**", "crates/registry-cli-docs/src/lib.rs"),
     ("crates/registry-evidence/src/cli.rs", "crates/registry-evidence/src/cli.rs"),
     (

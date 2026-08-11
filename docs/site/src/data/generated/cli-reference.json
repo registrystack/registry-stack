@@ -12,7 +12,7 @@
         {
           "display": "--runtime <RUNTIME>",
           "description": "One closed operator runtime file that binds the governed bundle",
-          "required": false,
+          "always_required": false,
           "default_values": [
             "/etc/registry-evidence/runtime.yaml"
           ],
@@ -22,7 +22,7 @@
         {
           "display": "-h, --help",
           "description": "Print help",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
@@ -30,12 +30,13 @@
         {
           "display": "-V, --version",
           "description": "Print version",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
         }
       ],
+      "constraints": [],
       "subcommands": [
         {
           "name": "check",
@@ -48,7 +49,7 @@
             {
               "display": "--runtime <RUNTIME>",
               "description": "One closed operator runtime file that binds the governed bundle",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "/etc/registry-evidence/runtime.yaml"
               ],
@@ -58,12 +59,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -77,7 +79,7 @@
             {
               "display": "--fixture <FIXTURE>",
               "description": "Bundle-relative fixture path referenced by exactly one requirement",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -85,7 +87,7 @@
             {
               "display": "--explain",
               "description": "Print the per-stage trace of what each case actually did. A failure names the contract that broke and nothing else, which says that a case failed but never why. The trace says how far each case got, what shape the response and facts had, and which declared concept the output gate was checking. It reports shapes, counts, and identifiers, never document values, and it never changes an outcome, an exit code, or a message.",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -93,7 +95,7 @@
             {
               "display": "--explain-format <EXPLAIN_FORMAT>",
               "description": "Render the `--explain` trace for a machine reader instead of a person. The JSON form is the whole of standard output, so the summary line's verdict and evaluated-case count move inside the document rather than trailing it",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [
                 "text",
@@ -104,7 +106,7 @@
             {
               "display": "--runtime <RUNTIME>",
               "description": "One closed operator runtime file that binds the governed bundle",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "/etc/registry-evidence/runtime.yaml"
               ],
@@ -114,10 +116,19 @@
             {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--explain-format <EXPLAIN_FORMAT>",
+              "arguments": [
+                "--explain"
+              ]
             }
           ],
           "subcommands": []
@@ -133,7 +144,7 @@
             {
               "display": "--runtime <RUNTIME>",
               "description": "One closed operator runtime file that binds the governed bundle",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "/etc/registry-evidence/runtime.yaml"
               ],
@@ -143,12 +154,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -162,7 +174,7 @@
             {
               "display": "--jws <JWS>",
               "description": "Stored flattened JWS JSON response file",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -170,7 +182,7 @@
             {
               "display": "--sd-jwt-vc <SD_JWT_VC>",
               "description": "Stored compact SD-JWT VC response file",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -178,7 +190,7 @@
             {
               "display": "--jwks <JWKS>",
               "description": "Pinned trusted JWKS document. This file is the complete trust set",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -186,7 +198,7 @@
             {
               "display": "--policy <POLICY>",
               "description": "Relying-procedure verification policy document",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -194,7 +206,7 @@
             {
               "display": "--at <AT>",
               "description": "Verification instant as strict RFC 3339 UTC; system time by default",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -202,7 +214,7 @@
             {
               "display": "--runtime <RUNTIME>",
               "description": "One closed operator runtime file that binds the governed bundle",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "/etc/registry-evidence/runtime.yaml"
               ],
@@ -212,10 +224,20 @@
             {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "required_one_of",
+              "when": null,
+              "arguments": [
+                "--jws <JWS>",
+                "--sd-jwt-vc <SD_JWT_VC>"
+              ]
             }
           ],
           "subcommands": []
@@ -231,7 +253,7 @@
             {
               "display": "--sd-jwt-vc-presentation <SD_JWT_VC_PRESENTATION>",
               "description": "Stored compact SD-JWT VC presentation file",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -239,7 +261,7 @@
             {
               "display": "--jwks <JWKS>",
               "description": "Pinned trusted JWKS document. This file is the complete trust set",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -247,7 +269,7 @@
             {
               "display": "--policy <POLICY>",
               "description": "Holder-bound relying-procedure verification policy document",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -255,7 +277,7 @@
             {
               "display": "--at <AT>",
               "description": "Verification instant as strict RFC 3339 UTC; system time by default",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -263,7 +285,7 @@
             {
               "display": "--runtime <RUNTIME>",
               "description": "One closed operator runtime file that binds the governed bundle",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "/etc/registry-evidence/runtime.yaml"
               ],
@@ -273,12 +295,13 @@
             {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -292,7 +315,7 @@
             {
               "display": "--runtime <RUNTIME>",
               "description": "One closed operator runtime file that binds the governed bundle",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "/etc/registry-evidence/runtime.yaml"
               ],
@@ -302,12 +325,13 @@
             {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         }
       ]
@@ -323,7 +347,7 @@
         {
           "display": "-h, --help",
           "description": "Print help",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
@@ -331,12 +355,13 @@
         {
           "display": "-V, --version",
           "description": "Print version",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
         }
       ],
+      "constraints": [],
       "subcommands": [
         {
           "name": "check",
@@ -349,7 +374,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VCI_CONFIG"
@@ -357,12 +382,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -376,7 +402,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VCI_CONFIG"
@@ -384,12 +410,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -403,7 +430,7 @@
             {
               "display": "--output <OUTPUT>",
               "description": "Write to a file instead of stdout",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -411,12 +438,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -430,7 +458,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VCI_CONFIG"
@@ -438,12 +466,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         }
       ]
@@ -459,7 +488,7 @@
         {
           "display": "-h, --help",
           "description": "Print help",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
@@ -467,12 +496,13 @@
         {
           "display": "-V, --version",
           "description": "Print version",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
         }
       ],
+      "constraints": [],
       "subcommands": [
         {
           "name": "access",
@@ -485,12 +515,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "policy",
@@ -503,12 +534,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": [
                 {
                   "name": "add",
@@ -520,7 +552,7 @@
                     {
                       "display": "<POLICY>",
                       "description": "Lowercase policy identifier",
-                      "required": true,
+                      "always_required": true,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
@@ -530,7 +562,7 @@
                     {
                       "display": "--question <QUESTION>",
                       "description": "Authored question granted by this policy. Repeat for more than one",
-                      "required": true,
+                      "always_required": true,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
@@ -538,12 +570,13 @@
                     {
                       "display": "-h, --help",
                       "description": "Print help",
-                      "required": false,
+                      "always_required": false,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
                     }
                   ],
+                  "constraints": [],
                   "subcommands": []
                 },
                 {
@@ -557,12 +590,13 @@
                     {
                       "display": "-h, --help",
                       "description": "Print help",
-                      "required": false,
+                      "always_required": false,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
                     }
                   ],
+                  "constraints": [],
                   "subcommands": []
                 }
               ]
@@ -578,12 +612,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": [
                 {
                   "name": "add",
@@ -595,7 +630,7 @@
                     {
                       "display": "<CLIENT>",
                       "description": "Lowercase client identifier",
-                      "required": true,
+                      "always_required": true,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
@@ -605,7 +640,7 @@
                     {
                       "display": "--policy <POLICY>",
                       "description": "Access policy assigned to this client. Repeat for more than one",
-                      "required": true,
+                      "always_required": true,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
@@ -613,7 +648,7 @@
                     {
                       "display": "--generate-local-key",
                       "description": "Generate an owner-only P-256 key for local client authentication",
-                      "required": true,
+                      "always_required": true,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
@@ -621,12 +656,13 @@
                     {
                       "display": "-h, --help",
                       "description": "Print help",
-                      "required": false,
+                      "always_required": false,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
                     }
                   ],
+                  "constraints": [],
                   "subcommands": []
                 },
                 {
@@ -640,12 +676,13 @@
                     {
                       "display": "-h, --help",
                       "description": "Print help",
-                      "required": false,
+                      "always_required": false,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
                     }
                   ],
+                  "constraints": [],
                   "subcommands": []
                 },
                 {
@@ -658,7 +695,7 @@
                     {
                       "display": "<CLIENT>",
                       "description": "Lowercase client identifier",
-                      "required": true,
+                      "always_required": true,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
@@ -668,12 +705,13 @@
                     {
                       "display": "-h, --help",
                       "description": "Print help",
-                      "required": false,
+                      "always_required": false,
                       "default_values": [],
                       "possible_values": [],
                       "environment": null
                     }
                   ],
+                  "constraints": [],
                   "subcommands": []
                 }
               ]
@@ -691,12 +729,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "signing",
@@ -709,7 +748,7 @@
                 {
                   "display": "--out-dir <OUT_DIR>",
                   "description": "Secret directory receiving the private JWK file (created 0700)",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -717,7 +756,7 @@
                 {
                   "display": "--public-out <PUBLIC_OUT>",
                   "description": "Public JWK output path; defaults to a file inside the secret directory",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -725,12 +764,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -744,7 +784,7 @@
                 {
                   "display": "--out <OUT>",
                   "description": "Output file for the raw secret (written 0600)",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -752,12 +792,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help (see a summary with '-h')",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -771,7 +812,7 @@
                 {
                   "display": "--out <OUT>",
                   "description": "Output file for the bearer token (written 0600)",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -779,12 +820,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -798,7 +840,7 @@
                 {
                   "display": "--out-dir <OUT_DIR>",
                   "description": "Directory receiving the holder private JWK file (created 0700)",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -806,7 +848,7 @@
                 {
                   "display": "--public-out <PUBLIC_OUT>",
                   "description": "Public JWK output path; defaults to a file inside the secret directory",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -814,12 +856,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -833,7 +876,7 @@
                 {
                   "display": "--out-dir <OUT_DIR>",
                   "description": "Secret directory receiving the private JWK file (created 0700)",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -841,7 +884,7 @@
                 {
                   "display": "--public-out <PUBLIC_OUT>",
                   "description": "Public JWK output path; defaults to a file inside the secret directory",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -849,7 +892,7 @@
                 {
                   "display": "--private-name <PRIVATE_NAME>",
                   "description": "Name of the private JWK file, which is the `secret:file/NAME` a source's `clientAssertionKeyRef` points at; defaults to one naming the algorithm. The public half follows it as `NAME-public.jwk.json`",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -857,7 +900,7 @@
                 {
                   "display": "--algorithm <ALGORITHM>",
                   "description": "Signature algorithm the assertion is signed with",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [
                     "es384"
                   ],
@@ -870,12 +913,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help (see a summary with '-h')",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             }
           ]
@@ -890,7 +934,7 @@
             {
               "display": "<PUBLIC_JWK_FILES>",
               "description": "Public JWK files to include, in order",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -900,7 +944,7 @@
             {
               "display": "--out <OUT>",
               "description": "Output JWKS document path",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -908,7 +952,7 @@
             {
               "display": "--force",
               "description": "Overwrite an existing output file",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -916,12 +960,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -934,7 +979,7 @@
             {
               "display": "<DIRECTORY>",
               "description": "New directory to create for the editable authoring project",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -944,7 +989,7 @@
             {
               "display": "--openapi <OPENAPI>",
               "description": "OpenAPI 3.0 or 3.1 document: a local path or an HTTPS URL",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -952,7 +997,7 @@
             {
               "display": "--transport <TRANSPORT>",
               "description": "Source transport to author without an API description",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [
                 "sqlite-extract"
@@ -962,7 +1007,7 @@
             {
               "display": "--profile <PROFILE>",
               "description": "Explicit development profile for local authoring",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [
                 "local"
@@ -972,12 +1017,13 @@
             {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -991,7 +1037,7 @@
             {
               "display": "--project <PROJECT>",
               "description": "Editable Evidence Gateway project; defaults to the current directory",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "."
               ],
@@ -1001,7 +1047,7 @@
             {
               "display": "--target <TARGET>",
               "description": "Explicit deployment target containing governance.yaml and runtime.yaml",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1009,7 +1055,7 @@
             {
               "display": "--output <OUTPUT>",
               "description": "New candidate directory to create. It must not already exist",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1017,12 +1063,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -1036,12 +1083,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "run",
@@ -1054,7 +1102,7 @@
                 {
                   "display": "--project <PROJECT>",
                   "description": "Deployment project directory containing runtime.yaml and bundle/",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1062,7 +1110,7 @@
                 {
                   "display": "--evidence-bin <EVIDENCE_BIN>",
                   "description": "Path to the evidence binary; defaults to `evidence` on PATH",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1070,7 +1118,7 @@
                 {
                   "display": "--json",
                   "description": "Emit one machine-readable JSON report on standard output",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1078,7 +1126,7 @@
                 {
                   "display": "--explain",
                   "description": "Ask `evidence` to explain each evaluation, and relay the trace it prints. The trace can name what a source returned, so it is relayed only when it is asked for. For the structured form, run `evidence evaluate --explain --explain-format json` against the fixture directly.",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1086,12 +1134,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help (see a summary with '-h')",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             }
           ]
@@ -1107,12 +1156,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "suggest",
@@ -1125,7 +1175,7 @@
                 {
                   "display": "--openapi <OPENAPI>",
                   "description": "OpenAPI 3.0 or 3.1 document for a print-only draft. With --project, the retained source.openapi.yaml is used instead",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1133,7 +1183,7 @@
                 {
                   "display": "--operation <OPERATION>",
                   "description": "Operation as \"METHOD /path/template\"; interactive selection if absent",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1141,7 +1191,7 @@
                 {
                   "display": "--status <STATUS>",
                   "description": "Response status code to read the schema from",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [
                     "200"
                   ],
@@ -1151,7 +1201,7 @@
                 {
                   "display": "--media-type <MEDIA_TYPE>",
                   "description": "Response media type to read the schema from",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [
                     "application/json"
                   ],
@@ -1161,7 +1211,7 @@
                 {
                   "display": "--select <SELECTION>",
                   "description": "Projection pointer to select; repeat once per leaf. Interactive selection if absent",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1169,7 +1219,7 @@
                 {
                   "display": "--sample <SAMPLE>",
                   "description": "Sample response JSON file used to suggest bounds. Read only; nothing from it is copied into any artifact except derived bounds",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1177,7 +1227,7 @@
                 {
                   "display": "--source-id <SOURCE_ID>",
                   "description": "Source identifier for the generated artifacts",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1185,7 +1235,7 @@
                 {
                   "display": "--project <PROJECT>",
                   "description": "Deployment project to write the draft into; print-only if absent",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1193,12 +1243,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             }
           ]
@@ -1214,7 +1265,7 @@
             {
               "display": "--project <PROJECT>",
               "description": "Deployment project directory containing runtime.yaml and bundle/",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1222,7 +1273,7 @@
             {
               "display": "--mint-config <PATH>",
               "description": "Mechanically compare this Registry Mint configuration with Evidence Gateway authentication",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1230,7 +1281,7 @@
             {
               "display": "--json",
               "description": "Emit one machine-readable JSON report on standard output",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1238,12 +1289,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -1257,7 +1309,7 @@
             {
               "display": "--detach",
               "description": "Return after Registry Mint and Evidence Gateway are ready on loopback",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1265,7 +1317,7 @@
             {
               "display": "--evidence-port <EVIDENCE_PORT>",
               "description": "Loopback port for the local Evidence Gateway service",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "8080"
               ],
@@ -1275,7 +1327,7 @@
             {
               "display": "--mint-port <MINT_PORT>",
               "description": "Loopback port for the local Mint service",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "8081"
               ],
@@ -1285,12 +1337,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "stop",
@@ -1303,12 +1356,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -1322,12 +1376,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             }
           ]
@@ -1343,12 +1398,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "prepare",
@@ -1360,7 +1416,7 @@
                 {
                   "display": "<QUESTION>",
                   "description": "Question defined by the active local project",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1370,7 +1426,7 @@
                 {
                   "display": "--purpose <PURPOSE>",
                   "description": "Exact purpose declared by the question",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1378,7 +1434,7 @@
                 {
                   "display": "--subject <SUBJECT>",
                   "description": "Subject selector. Repeat role:field=value for a multi-subject question",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1386,7 +1442,7 @@
                 {
                   "display": "--name <NAME>",
                   "description": "Safe name for this retained request",
-                  "required": true,
+                  "always_required": true,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1394,7 +1450,7 @@
                 {
                   "display": "--client <CLIENT>",
                   "description": "Registered local application used to request authorization",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1402,7 +1458,7 @@
                 {
                   "display": "--format <FORMAT>",
                   "description": "Response format to request and verify",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [
                     "signed-jws"
                   ],
@@ -1415,12 +1471,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             }
           ]
@@ -1435,7 +1492,7 @@
             {
               "display": "<RESPONSE>",
               "description": "Signed JWS or SD-JWT VC response returned by Evidence Gateway",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1445,7 +1502,7 @@
             {
               "display": "--context <CONTEXT>",
               "description": "Owner-only verification context retained before the response existed",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1453,7 +1510,7 @@
             {
               "display": "--output <OUTPUT>",
               "description": "New owner-only file for the exact verified Evidence Gateway payload",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1461,12 +1518,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -1480,12 +1538,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "show",
@@ -1498,7 +1557,7 @@
                 {
                   "display": "--last-operation",
                   "description": "Show the last verified local operation after the service has stopped",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1506,10 +1565,19 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "required_one_of",
+                  "when": null,
+                  "arguments": [
+                    "--last-operation"
+                  ]
                 }
               ],
               "subcommands": []
@@ -1527,12 +1595,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "editor",
@@ -1545,7 +1614,7 @@
                 {
                   "display": "--project <PROJECT>",
                   "description": "Editable Evidence Gateway project; defaults to the current directory",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [
                     "."
                   ],
@@ -1555,12 +1624,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -1574,12 +1644,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             }
           ]
@@ -1597,7 +1668,7 @@
         {
           "display": "-h, --help",
           "description": "Print help",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
@@ -1605,12 +1676,13 @@
         {
           "display": "-V, --version",
           "description": "Print version",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
         }
       ],
+      "constraints": [],
       "subcommands": [
         {
           "name": "check",
@@ -1623,7 +1695,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": "MINT_CONFIG"
@@ -1631,12 +1703,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -1650,7 +1723,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": "MINT_CONFIG"
@@ -1658,12 +1731,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -1677,7 +1751,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": "MINT_CONFIG"
@@ -1685,12 +1759,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -1704,7 +1779,7 @@
             {
               "display": "--url <URL>",
               "description": "The token endpoint, for example `https://mint.example.org/token`",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1712,7 +1787,7 @@
             {
               "display": "--client-id <CLIENT_ID>",
               "description": "The `clientId` this caller is registered under",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1720,7 +1795,7 @@
             {
               "display": "--key <KEY>",
               "description": "The caller's private JWK. Must be owner-only and not a symlink",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1728,7 +1803,7 @@
             {
               "display": "--audience <AUDIENCE>",
               "description": "The endpoint's configured `clientAssertion.audience`. Defaults to `--url`, which is the usual configuration",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1736,7 +1811,7 @@
             {
               "display": "--actor <ACTOR>",
               "description": "Request a delegated token for this actor. Requires `--subject-file`",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1744,7 +1819,7 @@
             {
               "display": "--subject-file <SUBJECT_FILE>",
               "description": "A JSON object of subject selector fields, for the actor to act for. A file rather than repeated flags on purpose: these are a real person's identifying details, and command lines are visible to every process on the host and land in shell history.",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1752,7 +1827,7 @@
             {
               "display": "--lifetime-seconds <LIFETIME_SECONDS>",
               "description": "Assertion lifetime in seconds",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "120"
               ],
@@ -1762,7 +1837,7 @@
             {
               "display": "--ca-certificate <CA_CERTIFICATE>",
               "description": "Trust this PEM certificate bundle in addition to the system roots, for a development deployment behind a private CA",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1770,7 +1845,7 @@
             {
               "display": "--verbose",
               "description": "Print the full endpoint response instead of the access token alone",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1778,12 +1853,13 @@
             {
               "display": "-h, --help",
               "description": "Print help (see a summary with '-h')",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         }
       ]
@@ -1799,7 +1875,7 @@
         {
           "display": "-h, --help",
           "description": "Print help",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
@@ -1807,12 +1883,13 @@
         {
           "display": "-V, --version",
           "description": "Print version",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
         }
       ],
+      "constraints": [],
       "subcommands": [
         {
           "name": "serve",
@@ -1825,7 +1902,7 @@
             {
               "display": "--runtime <RUNTIME>",
               "description": "Strict deployment binding for the sealed package and local resources",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": "RELAY_RUNTIME"
@@ -1833,12 +1910,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -1852,7 +1930,7 @@
             {
               "display": "--url <URL>",
               "description": "Complete HTTP(S) URL of the Relay `/health` endpoint",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "http://127.0.0.1:8080/health"
               ],
@@ -1862,12 +1940,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         }
       ]
@@ -1883,7 +1962,7 @@
         {
           "display": "--json",
           "description": "Emit the shared report as best-effort JSON for local automation",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
@@ -1891,7 +1970,7 @@
         {
           "display": "-h, --help",
           "description": "Print help",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
@@ -1899,12 +1978,13 @@
         {
           "display": "-V, --version",
           "description": "Print version",
-          "required": false,
+          "always_required": false,
           "default_values": [],
           "possible_values": [],
           "environment": null
         }
       ],
+      "constraints": [],
       "subcommands": [
         {
           "name": "init",
@@ -1916,7 +1996,7 @@
             {
               "display": "<PROJECT>",
               "description": "Authoring project directory",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1926,7 +2006,7 @@
             {
               "display": "--json",
               "description": "Emit the shared report as best-effort JSON for local automation",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1934,12 +2014,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -1952,7 +2033,7 @@
             {
               "display": "<DATABASE>",
               "description": "SQLite database to inspect structurally",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1962,7 +2043,7 @@
             {
               "display": "--profile <PROFILE>",
               "description": "Source posture to use while opening the database read-only",
-              "required": false,
+              "always_required": false,
               "default_values": [
                 "live-read-only"
               ],
@@ -1975,7 +2056,7 @@
             {
               "display": "--starters <DIRECTORY>",
               "description": "Write compiler-derived, visibly unreviewed starters to this directory",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1983,7 +2064,7 @@
             {
               "display": "--statistical-view <VIEW>",
               "description": "Generate a format-neutral statistical component starter for this view",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1991,7 +2072,7 @@
             {
               "display": "--time-column <COLUMN>",
               "description": "Exact source column for the required time-period dimension",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -1999,7 +2080,7 @@
             {
               "display": "--measure-column <COLUMN>",
               "description": "Exact source column for the required observation measure",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2007,7 +2088,7 @@
             {
               "display": "--attribute-column <COLUMN>",
               "description": "Exact source column to treat as an observation attribute instead of a dimension",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2015,7 +2096,7 @@
             {
               "display": "--json",
               "description": "Emit the shared report as best-effort JSON for local automation",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2023,10 +2104,49 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--statistical-view <VIEW>",
+              "arguments": [
+                "--starters <DIRECTORY>",
+                "--time-column <COLUMN>",
+                "--measure-column <COLUMN>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--time-column <COLUMN>",
+              "arguments": [
+                "--starters <DIRECTORY>",
+                "--measure-column <COLUMN>",
+                "--statistical-view <VIEW>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--measure-column <COLUMN>",
+              "arguments": [
+                "--starters <DIRECTORY>",
+                "--time-column <COLUMN>",
+                "--statistical-view <VIEW>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--attribute-column <COLUMN>",
+              "arguments": [
+                "--starters <DIRECTORY>",
+                "--time-column <COLUMN>",
+                "--measure-column <COLUMN>",
+                "--statistical-view <VIEW>"
+              ]
             }
           ],
           "subcommands": []
@@ -2041,7 +2161,7 @@
             {
               "display": "<PROJECT>",
               "description": "Authoring project directory",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2051,7 +2171,7 @@
             {
               "display": "--production",
               "description": "Require all generated suggestions to have been reviewed",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2059,7 +2179,7 @@
             {
               "display": "--json",
               "description": "Emit the shared report as best-effort JSON for local automation",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2067,12 +2187,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -2085,7 +2206,7 @@
             {
               "display": "<PROJECT>",
               "description": "Authoring project directory",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2095,7 +2216,7 @@
             {
               "display": "--output <DIRECTORY>",
               "description": "Destination for generated artifacts",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2103,7 +2224,7 @@
             {
               "display": "--json",
               "description": "Emit the shared report as best-effort JSON for local automation",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2111,12 +2232,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -2129,7 +2251,7 @@
             {
               "display": "<PROJECT>",
               "description": "Authoring project directory",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2139,7 +2261,7 @@
             {
               "display": "--fixture <IDENTIFIER>",
               "description": "Run one exact fixture identifier",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2147,7 +2269,7 @@
             {
               "display": "--json",
               "description": "Emit the shared report as best-effort JSON for local automation",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2155,12 +2277,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -2173,7 +2296,7 @@
             {
               "display": "<PREVIOUS>",
               "description": "Previously reviewed project directory",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2181,7 +2304,7 @@
             {
               "display": "<CURRENT>",
               "description": "Candidate project directory",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2191,7 +2314,7 @@
             {
               "display": "--json",
               "description": "Emit the shared report as best-effort JSON for local automation",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2199,12 +2322,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -2217,7 +2341,7 @@
             {
               "display": "<PROJECT>",
               "description": "Authoring project directory",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2227,7 +2351,7 @@
             {
               "display": "--output <DIRECTORY>",
               "description": "New sealed package directory",
-              "required": true,
+              "always_required": true,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2235,7 +2359,7 @@
             {
               "display": "--json",
               "description": "Emit the shared report as best-effort JSON for local automation",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2243,12 +2367,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": []
         },
         {
@@ -2262,7 +2387,7 @@
             {
               "display": "--json",
               "description": "Emit the shared report as best-effort JSON for local automation",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
@@ -2270,12 +2395,13 @@
             {
               "display": "-h, --help",
               "description": "Print help",
-              "required": false,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": null
             }
           ],
+          "constraints": [],
           "subcommands": [
             {
               "name": "editor",
@@ -2287,7 +2413,7 @@
                 {
                   "display": "[PROJECT]",
                   "description": "Relay V2 authoring project; defaults to the current directory",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [
                     "."
                   ],
@@ -2299,7 +2425,7 @@
                 {
                   "display": "--json",
                   "description": "Emit the shared report as best-effort JSON for local automation",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -2307,12 +2433,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             },
             {
@@ -2326,7 +2453,7 @@
                 {
                   "display": "--json",
                   "description": "Emit the shared report as best-effort JSON for local automation",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -2334,12 +2461,13 @@
                 {
                   "display": "-h, --help",
                   "description": "Print help",
-                  "required": false,
+                  "always_required": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
                 }
               ],
+              "constraints": [],
               "subcommands": []
             }
           ]

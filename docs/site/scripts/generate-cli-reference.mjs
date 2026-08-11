@@ -76,7 +76,7 @@ function validateArgument(argument, label) {
     new Set([
       'display',
       'description',
-      'required',
+      'always_required',
       'default_values',
       'possible_values',
       'environment',
@@ -87,13 +87,33 @@ function validateArgument(argument, label) {
   if (typeof argument.description !== 'string') {
     throw new Error(`${label}.description must be a string`);
   }
-  if (typeof argument.required !== 'boolean') {
-    throw new Error(`${label}.required must be a boolean`);
+  if (typeof argument.always_required !== 'boolean') {
+    throw new Error(`${label}.always_required must be a boolean`);
   }
   stringArray(argument.default_values, `${label}.default_values`);
   stringArray(argument.possible_values, `${label}.possible_values`);
   if (argument.environment !== null && typeof argument.environment !== 'string') {
     throw new Error(`${label}.environment must be a string or null`);
+  }
+}
+
+function validateConstraint(constraint, label) {
+  exactKeys(constraint, new Set(['kind', 'when', 'arguments']), label);
+  if (!['required_one_of', 'requires_all'].includes(constraint.kind)) {
+    throw new Error(`${label}.kind must be required_one_of or requires_all`);
+  }
+  if (constraint.when !== null && typeof constraint.when !== 'string') {
+    throw new Error(`${label}.when must be a string or null`);
+  }
+  if (constraint.kind === 'required_one_of' && constraint.when !== null) {
+    throw new Error(`${label}.when must be null for required_one_of`);
+  }
+  if (constraint.kind === 'requires_all') {
+    nonempty(constraint.when, `${label}.when`);
+  }
+  stringArray(constraint.arguments, `${label}.arguments`);
+  if (constraint.arguments.length === 0) {
+    throw new Error(`${label}.arguments must not be empty`);
   }
 }
 
@@ -109,6 +129,7 @@ function validateCommand(command, parent, invocations) {
       'usage',
       'arguments',
       'options',
+      'constraints',
       'subcommands',
     ]),
     label,
@@ -133,7 +154,7 @@ function validateCommand(command, parent, invocations) {
     throw new Error(`${label}.long_about must be a string or null`);
   }
   nonempty(command.usage, `${label}.usage`);
-  for (const field of ['arguments', 'options', 'subcommands']) {
+  for (const field of ['arguments', 'options', 'constraints', 'subcommands']) {
     if (!Array.isArray(command[field])) {
       throw new Error(`${label}.${field} must be an array`);
     }
@@ -143,6 +164,9 @@ function validateCommand(command, parent, invocations) {
   );
   command.options.forEach((argument, index) =>
     validateArgument(argument, `${label}.options[${index}]`),
+  );
+  command.constraints.forEach((constraint, index) =>
+    validateConstraint(constraint, `${label}.constraints[${index}]`),
   );
   command.subcommands.forEach((subcommand) =>
     validateCommand(subcommand, command.invocation, invocations),
@@ -246,7 +270,7 @@ function argumentTable(entries, heading, firstColumn) {
   const rows = entries.map((argument) =>
     [
       inlineCode(argument.display),
-      argument.required ? 'Yes' : 'No',
+      argument.always_required ? 'Yes' : 'No',
       values(argument.default_values),
       values(argument.possible_values),
       argument.environment === null ? 'n/a' : inlineCode(argument.environment),
@@ -256,9 +280,34 @@ function argumentTable(entries, heading, firstColumn) {
   return `
 ## ${heading}
 
-| ${firstColumn} | Required | Default | Values | Environment | Description |
+| ${firstColumn} | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 ${rows.map((row) => `| ${row} |`).join('\n')}
+`;
+}
+
+function constraintTable(constraints) {
+  if (constraints.length === 0) return '';
+  const rows = constraints.map((constraint) => {
+    if (constraint.kind === 'required_one_of') {
+      const requirement =
+        constraint.arguments.length === 1
+          ? `${inlineCode(constraint.arguments[0])} is required.`
+          : `One of ${values(constraint.arguments)} is required.`;
+      return `| Command invocation | ${requirement} |`;
+    }
+    const requirement =
+      constraint.arguments.length === 1
+        ? `${inlineCode(constraint.arguments[0])} is required.`
+        : `All of ${values(constraint.arguments)} are required.`;
+    return `| ${inlineCode(constraint.when)} is present | ${requirement} |`;
+  });
+  return `
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+${rows.join('\n')}
 `;
 }
 
@@ -282,6 +331,7 @@ function renderCommand(command) {
     lines.push('', '## Description', '', sentence(command.long_about));
   }
   lines.push('', '## Usage', '', '```text', command.usage, '```');
+  lines.push(constraintTable(command.constraints));
 
   if (command.subcommands.length > 0) {
     lines.push(

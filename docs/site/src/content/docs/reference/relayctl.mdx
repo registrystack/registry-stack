@@ -1,6 +1,6 @@
 ---
-title: Relayctl command reference
-description: Reference for the Relay adopter command line, covering project initialization, schema inspection, validation, artifact generation, fixtures, change classification, sealed packaging, and editor integration.
+title: Relayctl workflow reference
+description: Operational boundaries for Relay project initialization, schema inspection, validation, artifact generation, fixtures, change classification, packaging, and editor integration.
 status: current
 owner: registry-docs
 source_repos:
@@ -23,9 +23,9 @@ Relayctl is pre-1.0 adopter tooling and sits outside any frozen runtime contract
 can change before a compatibility promise covers it. The `relay` binary stays the authority for
 package verification, activation, and serving.
 
-This page is written by hand from the command definitions in `crates/registry-relayctl/src/lib.rs`
-and the boundary tests in `crates/registry-relayctl/tests/cli_contract.rs`, at release v0.19.0. The
-command line is not generated, so the source files win on any disagreement.
+This page records workflow boundaries from `crates/registry-relayctl/src/lib.rs` and the boundary
+tests in `crates/registry-relayctl/tests/cli_contract.rs`, at release v0.19.0. Use the
+[generated relayctl syntax](../cli/relayctl/) for exact command, argument, option, and constraint data.
 
 ## Commands
 
@@ -248,6 +248,7 @@ The binary lands at `target/release/relayctl`.
 
 ## Next
 
+- [Generated relayctl syntax](../cli/relayctl/)
 - [Configure Relay](../../configure/relay/)
 - [Operate Relay](../../operate/relay/)
 - [Publish a governed SQLite registry](../../tutorials/publish-governed-sqlite-registry/)

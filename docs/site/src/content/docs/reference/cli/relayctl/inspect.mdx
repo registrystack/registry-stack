@@ -25,15 +25,24 @@ This page is generated from the public Clap command tree. Hidden implementation 
 relayctl inspect [OPTIONS] <DATABASE>
 ```
 
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| `--statistical-view <VIEW>` is present | All of `--starters <DIRECTORY>`, `--time-column <COLUMN>`, `--measure-column <COLUMN>` are required. |
+| `--time-column <COLUMN>` is present | All of `--starters <DIRECTORY>`, `--measure-column <COLUMN>`, `--statistical-view <VIEW>` are required. |
+| `--measure-column <COLUMN>` is present | All of `--starters <DIRECTORY>`, `--time-column <COLUMN>`, `--statistical-view <VIEW>` are required. |
+| `--attribute-column <COLUMN>` is present | All of `--starters <DIRECTORY>`, `--time-column <COLUMN>`, `--measure-column <COLUMN>`, `--statistical-view <VIEW>` are required. |
+
 ## Arguments
 
-| Argument | Required | Default | Values | Environment | Description |
+| Argument | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `<DATABASE>` | Yes | n/a | n/a | n/a | SQLite database to inspect structurally |
 
 ## Options
 
-| Option | Required | Default | Values | Environment | Description |
+| Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--profile <PROFILE>` | No | `live-read-only` | `snapshot`, `live-read-only` | n/a | Source posture to use while opening the database read-only |
 | `--starters <DIRECTORY>` | No | n/a | n/a | n/a | Write compiler-derived, visibly unreviewed starters to this directory |

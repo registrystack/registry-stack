@@ -16,7 +16,7 @@ function argument(display) {
   return {
     display,
     description: 'Static option description.',
-    required: false,
+    always_required: false,
     default_values: [],
     possible_values: [],
     environment: null,
@@ -33,6 +33,7 @@ function command(name, parent = null, subcommands = []) {
     usage: `${invocation} [OPTIONS]`,
     arguments: [],
     options: [argument('-h, --help')],
+    constraints: [],
     subcommands,
   };
 }
@@ -58,6 +59,27 @@ test('renders one linked page for every nested public command', () => {
   assert.match(pages.get('relayctl/tooling/editor.mdx'), /\| `-h, --help` \|/u);
   assert.match(pages.get('relayctl.mdx'), /\{\/\* Generated from Clap/u);
   assert.doesNotMatch(pages.get('relayctl.mdx'), /<!--/u);
+});
+
+test('renders required groups and conditional requirements', () => {
+  const catalog = fixtureCatalog();
+  const relayctl = catalog.binaries.find((binary) => binary.name === 'relayctl');
+  relayctl.constraints.push(
+    {
+      kind: 'required_one_of',
+      when: null,
+      arguments: ['--left', '--right'],
+    },
+    {
+      kind: 'requires_all',
+      when: '--right',
+      arguments: ['--detail'],
+    },
+  );
+  const page = renderCatalog(catalog).get('relayctl.mdx');
+  assert.match(page, /One of `--left`, `--right` is required\./u);
+  assert.match(page, /`--right` is present \| `--detail` is required\./u);
+  assert.match(page, /Always required/u);
 });
 
 test('rejects a hidden command even if a collector emits it', () => {
