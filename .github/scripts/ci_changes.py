@@ -170,6 +170,55 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 AUTHORING_REFERENCE_MANIFEST = (
     REPO_ROOT / "docs/site/scripts/authoring-reference-sources.json"
 )
+IDENTIFIER_CATALOG_CONTRACT = (
+    REPO_ROOT / "products/identifiers/contracts/catalog-source.json"
+)
+
+
+def identifier_catalog_inputs(
+    contract_path: Path = IDENTIFIER_CATALOG_CONTRACT,
+) -> tuple[str, ...]:
+    """Derive every source path that can change the public identifier catalog."""
+
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    schema_groups = contract.get("schemaSources")
+    records = contract.get("records")
+    if not isinstance(schema_groups, list) or not isinstance(records, list):
+        raise ValueError(
+            f"identifier catalog has an invalid source contract: {contract_path}"
+        )
+
+    inputs = [
+        "products/identifiers/**",
+        "crates/registry-relay-v2/examples/audit-event-schema.rs",
+        "crates/registry-relay-v2/examples/problem-catalog.rs",
+        "crates/registry-relay-v2/src/audit.rs",
+        "crates/registry-relay-v2/src/problem.rs",
+    ]
+    for index, group in enumerate(schema_groups):
+        pattern = group.get("glob") if isinstance(group, dict) else None
+        if not isinstance(pattern, str) or not pattern:
+            raise ValueError(f"identifier schemaSources[{index}] has no glob")
+        inputs.append(pattern)
+        source = group.get("sourcePath")
+        if source is not None:
+            if not isinstance(source, str) or not source:
+                raise ValueError(
+                    f"identifier schemaSources[{index}] has an invalid sourcePath"
+                )
+            inputs.append(source)
+    for index, record in enumerate(records):
+        source = record.get("sourcePath") if isinstance(record, dict) else None
+        if not isinstance(source, str) or not source:
+            raise ValueError(f"identifier records[{index}] has no sourcePath")
+        inputs.append(source)
+
+    if any(source.startswith(("/", "../")) for source in inputs):
+        raise ValueError("identifier catalog inputs must be repository-relative")
+    return tuple(dict.fromkeys(inputs))
+
+
+IDENTIFIER_CATALOG_INPUTS = identifier_catalog_inputs()
 
 
 def authoring_reference_contract_sources(
@@ -405,6 +454,10 @@ def classify(
                 seeds.update(PLATFORM_PACKAGES)
             elif path.startswith("products/relay-v2/"):
                 seeds.update(RELAY_V2_PACKAGES)
+            elif path.startswith("products/identifiers/"):
+                # The catalog gate compiles its focused Relay V2 exporter.
+                # Catalog-only tooling does not require the full Rust matrix.
+                pass
             elif path in {
                 "docs/site/src/data/generated/relay-support.json",
                 "docs/site/src/data/relay-support.yaml",
@@ -420,6 +473,10 @@ def classify(
         else workspace.affected_packages(seeds)
     )
     complete = run_all or force_all
+
+    identifiers = complete or any(
+        matches(path, *IDENTIFIER_CATALOG_INPUTS) for path in paths
+    )
 
     platform = complete or any(
         matches(
@@ -644,6 +701,7 @@ def classify(
         "client_bindings": client_bindings,
         "registryctl_tutorial": registryctl_tutorial,
         "evidence_tutorial": evidence_tutorial,
+        "identifiers": identifiers,
     }
 
 

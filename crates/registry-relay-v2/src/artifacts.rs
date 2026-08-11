@@ -1683,7 +1683,9 @@ fn absolute(base: &str, path: &str) -> String {
     format!("{}{path}", base.trim_end_matches('/'))
 }
 
-fn audit_event_schema() -> Value {
+/// Return the fixed value-free audit event JSON Schema published in packages.
+#[must_use]
+pub fn audit_event_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://id.registrystack.org/schemas/registry-relay/audit-event/v2alpha1",

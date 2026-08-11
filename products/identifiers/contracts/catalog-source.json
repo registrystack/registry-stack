@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "baseUrl": "https://id.registrystack.org",
+  "referenceExclusions": [
+    {
+      "glob": "crates/registry-config-report/**",
+      "classification": "legacy-source",
+      "reason": "Configuration-report schemas are not current public Registry Stack identifier contracts."
+    },
+    {
+      "glob": "crates/registry-manifest-core/tests/**",
+      "classification": "fixture",
+      "reason": "Manifest test shapes are local conformance fixtures, not Registry Stack identifier contracts."
+    },
+    {
+      "glob": "crates/registry-platform-httpsec/**",
+      "classification": "legacy-source",
+      "reason": "The legacy body-limit problem helper is not wired into a current product route."
+    },
+    {
+      "glob": "crates/registry-platform-ops/**",
+      "classification": "legacy-source",
+      "reason": "Legacy operations schemas remain source-local and are not current resolver contracts."
+    },
+    {
+      "glob": "crates/registry-platform-testing/**",
+      "classification": "fixture",
+      "reason": "Cross-crate HTTP problem values are test fixtures for legacy helpers."
+    },
+    {
+      "glob": "crates/registry-relay/**",
+      "classification": "retired-product",
+      "reason": "Registry Relay V1 is retired and its identifiers are not published by the current resolver."
+    },
+    {
+      "glob": "crates/registryctl/**",
+      "classification": "retired-product",
+      "reason": "registryctl is retired and its identifiers are not published by the current resolver."
+    },
+    {
+      "glob": "docs/site/public/generated/configuration-reference*.json",
+      "classification": "legacy-generated-docs",
+      "reason": "Generated registryctl reference artifacts retain source-local schema identifiers."
+    },
+    {
+      "glob": "docs/site/scripts/generate-authoring-reference*.mjs",
+      "classification": "legacy-generated-docs",
+      "reason": "The authoring reference generator retains registryctl schema identifiers."
+    },
+    {
+      "glob": "docs/site/scripts/ops-posture-spec.test.mjs",
+      "classification": "legacy-generated-docs",
+      "reason": "The operations posture test binds a source-local legacy schema identifier."
+    },
+    {
+      "glob": "docs/site/src/content/docs/reference/api-stability.mdx",
+      "classification": "historical-documentation",
+      "reason": "The stability reference describes the broader historical identifier surface."
+    },
+    {
+      "glob": "docs/site/src/content/docs/spec/rs-op-posture.mdx",
+      "classification": "historical-documentation",
+      "reason": "The posture specification records a source-local legacy schema identifier."
+    },
+    {
+      "glob": "docs/site/src/content/docs/tutorials/first-run-with-solmara-lab.mdx",
+      "classification": "external-demo",
+      "reason": "Solmara Lab identifiers are adopter-owned demo values, not Registry Stack contracts."
+    },
+    {
+      "glob": "docs/site/src/data/generated/configuration-reference*.json",
+      "classification": "legacy-generated-docs",
+      "reason": "Generated registryctl reference data retains source-local schema identifiers."
+    },
+    {
+      "glob": "products/manifest/fixtures/**",
+      "classification": "fixture",
+      "reason": "Manifest profile identifiers in fixtures are not Registry Stack resolver contracts."
+    },
+    {
+      "glob": "release/*.schema.json",
+      "classification": "retired-product",
+      "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
+    },
+    {
+      "glob": "release/scripts/registry_release_lock.py",
+      "classification": "retired-product",
+      "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
+    },
+    {
+      "glob": "schemas/*.schema.json",
+      "classification": "retired-product",
+      "reason": "Root Relay V1 and Notary configuration schemas are retired."
+    }
+  ],
+  "schemaSources": [
+    {
+      "glob": "products/identifiers/generated/artifacts/**/*.json",
+      "sourcePath": "crates/registry-relay-v2/src/artifacts.rs",
+      "owner": "relay-v2",
+      "status": "active",
+      "compatibilityLine": "v2alpha1",
+      "description": "Relay V2 generated public JSON Schema."
+    },
+    {
+      "glob": "products/identifiers/contracts/*.schema.json",
+      "owner": "identifiers",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "description": "JSON Schema for the Registry Stack identifier catalog."
+    },
+    {
+      "glob": "crates/registry-relayctl/schemas/authoring/*.json",
+      "owner": "relay-v2",
+      "status": "active",
+      "compatibilityLine": "v2alpha1",
+      "description": "Relay V2 authoring JSON Schema."
+    }
+  ],
+  "records": [
+    {
+      "uri": "https://id.registrystack.org/ns/registry-manifest/v1#",
+      "kind": "namespace",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "registry-manifest",
+      "title": "Registry Manifest v1 namespace",
+      "description": "JSON-LD namespace for Registry Manifest terms.",
+      "sourcePath": "crates/registry-manifest-core/src/lib.rs"
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/core/",
+      "kind": "vocabulary",
+      "status": "active",
+      "compatibilityLine": "relay-v2",
+      "owner": "relay-v2",
+      "title": "Registry Relay core vocabulary",
+      "description": "Vocabulary base for Relay V2 Registry Core semantic predicates.",
+      "sourcePath": "crates/registry-relay-v2/src/semantics.rs"
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/sourceRequired",
+      "kind": "vocabulary-term",
+      "status": "active",
+      "compatibilityLine": "relay-v2",
+      "owner": "relay-v2",
+      "title": "Source required",
+      "description": "Relay V2 Registry Core predicate indicating whether a source value is required.",
+      "sourcePath": "crates/registry-relay-v2/src/semantics.rs"
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/codelist",
+      "kind": "vocabulary-term",
+      "status": "active",
+      "compatibilityLine": "relay-v2",
+      "owner": "relay-v2",
+      "title": "Codelist",
+      "description": "Relay V2 Registry Core predicate binding a controlled property to its codelist.",
+      "sourcePath": "crates/registry-relay-v2/src/semantics.rs"
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/geometryType",
+      "kind": "vocabulary-term",
+      "status": "active",
+      "compatibilityLine": "relay-v2",
+      "owner": "relay-v2",
+      "title": "Geometry type",
+      "description": "Relay V2 Registry Core predicate identifying a spatial property's geometry type.",
+      "sourcePath": "crates/registry-relay-v2/src/semantics.rs"
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/coordinateReferenceSystem",
+      "kind": "vocabulary-term",
+      "status": "active",
+      "compatibilityLine": "relay-v2",
+      "owner": "relay-v2",
+      "title": "Coordinate reference system",
+      "description": "Relay V2 Registry Core predicate identifying a spatial property's coordinate reference system.",
+      "sourcePath": "crates/registry-relay-v2/src/semantics.rs"
+    },
+    {
+      "uri": "https://id.registrystack.org/vocab/handling",
+      "kind": "vocabulary",
+      "status": "active",
+      "compatibilityLine": "relay-v2",
+      "owner": "relay-v2",
+      "title": "Registry Relay handling vocabulary",
+      "description": "Ordered Relay V2 technical handling levels: public, internal, confidential, and restricted.",
+      "sourcePath": "products/relay-v2/CONCEPT.md"
+    }
+  ]
+}

@@ -79,6 +79,11 @@ or release-tool implementation changes into this PR. Merge after the protected
 checks pass. The merge commit is both the candidate source and future tag
 target. There is no finalization or closeout PR.
 
+Starting with version `0.19.1`, the release manifest records the committed
+identifier catalog path, SHA-256 digest, and active entry count. The planner
+checks that binding against the source tree. Live resolver availability remains
+an asynchronous publication smoke rather than a candidate-build gate.
+
 ## Request and verify one candidate
 
 Resolve current protected `main` and request the candidate:

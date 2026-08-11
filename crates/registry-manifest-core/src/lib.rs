@@ -74,10 +74,6 @@ const BUILTIN_VOCABULARIES: &[(&str, &str)] = &[
         "registry_manifest",
         "https://id.registrystack.org/ns/registry-manifest/v1#",
     ),
-    (
-        "registry_relay",
-        "https://id.registrystack.org/ns/registry-relay/v1#",
-    ),
     ("sh", "http://www.w3.org/ns/shacl#"),
     ("skos", "http://www.w3.org/2004/02/skos/core#"),
     ("xsd", "http://www.w3.org/2001/XMLSchema#"),

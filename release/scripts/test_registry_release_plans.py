@@ -14,6 +14,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "release/scripts/registry-release"
 CROSSWALK_REF = "1" * 40
+FIXTURE_IDENTIFIER_CATALOG = {
+    "version": 1,
+    "entries": [{"status": "active"}],
+}
+FIXTURE_IDENTIFIER_CATALOG_SHA256 = hashlib.sha256(
+    (json.dumps(FIXTURE_IDENTIFIER_CATALOG, indent=2) + "\n").encode()
+).hexdigest()
 LEGACY_ARTIFACT_INVENTORY = (
     "evidence",
     "evidence-client-node",
@@ -88,7 +95,7 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
         if version_tuple >= (0, 19, 0)
         else LEGACY_ARTIFACT_INVENTORY
     )
-    return {
+    data = {
         "stack": {
             "release": release_id,
             "version": version,
@@ -106,6 +113,13 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
             }
         },
     }
+    if version_tuple >= (0, 19, 1):
+        data["identifier_catalog"] = {
+            "path": "products/identifiers/generated/catalog.v1.json",
+            "sha256": FIXTURE_IDENTIFIER_CATALOG_SHA256,
+            "entry_count": len(FIXTURE_IDENTIFIER_CATALOG["entries"]),
+        }
+    return data
 
 
 class FixtureRepo:
@@ -116,7 +130,11 @@ class FixtureRepo:
         git(root, "config", "user.email", "release-test@example.invalid")
         git(root, "config", "user.name", "Release Test")
         write(root / "seed", "candidate\n")
-        git(root, "add", "seed")
+        write_json(
+            root / "products/identifiers/generated/catalog.v1.json",
+            FIXTURE_IDENTIFIER_CATALOG,
+        )
+        git(root, "add", "seed", "products/identifiers/generated/catalog.v1.json")
         git(root, "commit", "-m", "candidate")
         self.candidate = git(root, "rev-parse", "HEAD")
         git(root, "tag", "v1.0.0")
@@ -138,6 +156,10 @@ class FixtureRepo:
 
     def _write_surfaces(self) -> None:
         root = self.root
+        write_json(
+            root / "products/identifiers/generated/catalog.v1.json",
+            FIXTURE_IDENTIFIER_CATALOG,
+        )
         write(
             root / "Cargo.toml",
             f'''[workspace]
@@ -634,6 +656,46 @@ class RegistryReleasePlanTest(unittest.TestCase):
             incomplete_inventory.stderr,
         )
         self.assertIn("unexpected registry-docs", incomplete_inventory.stderr)
+
+    def test_prepare_uses_identifier_catalog_from_recorded_source_ref(self) -> None:
+        write_json(
+            self.repo.root / "products/identifiers/generated/catalog.v1.json",
+            {
+                "version": 1,
+                "entries": [{"status": "active"}, {"status": "active"}],
+            },
+        )
+
+        result = self.prepare()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_prepare_rejects_identifier_catalog_drift_at_recorded_source_ref(
+        self,
+    ) -> None:
+        write_json(
+            self.repo.root / "products/identifiers/generated/catalog.v1.json",
+            {
+                "version": 1,
+                "entries": [{"status": "active"}, {"status": "active"}],
+            },
+        )
+        git(self.repo.root, "add", "products/identifiers/generated/catalog.v1.json")
+        git(self.repo.root, "commit", "-m", "change release catalog")
+        changed_source = git(self.repo.root, "rev-parse", "HEAD")
+        target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
+        data = yaml.safe_load(target.read_text(encoding="utf-8"))
+        data["stack"]["source_ref"] = changed_source
+        write_yaml(target, data)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn(
+            "identifier_catalog.sha256 does not match the committed catalog bytes",
+            result.stderr,
+        )
 
     def test_prepare_rejects_stale_registryctl_lock_version(self) -> None:
         lock = self.repo.root / "Cargo.lock"

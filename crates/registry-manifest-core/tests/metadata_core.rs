@@ -984,10 +984,10 @@ fn vocabularies_protect_builtins_and_validate_custom_namespaces() {
     );
     manifest.vocabularies.insert(
         "registry_relay".to_string(),
-        "https://id.registrystack.org/ns/registry-relay/v1#".to_string(),
+        "https://example.org/relay/ns#".to_string(),
     );
     validate_manifest(&manifest)
-        .expect("safe custom vocabulary and identical protected values pass");
+        .expect("safe custom vocabularies and identical protected values pass");
 }
 
 #[test]
@@ -2044,7 +2044,7 @@ datasets:
         lookup_keys: [national_id]
         access:
           kind: evidence-server
-          conforms_to: registry_relay:evidence-server-v1
+          conforms_to: https://example.test/evidence-server/v1
           endpoint_url: https://evidence.example.test
           discovery_url: https://evidence.example.test/.well-known/evidence-service
           ruleset: smallholder-v1
