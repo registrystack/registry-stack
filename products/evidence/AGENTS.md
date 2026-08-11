@@ -66,6 +66,17 @@ Production behavior must stay source-product and assertion-case neutral:
 - no future-profile stub, placeholder schema, module, feature, extension hook,
   or empty API.
 
+One narrow authoring-only exception applies under
+`registry-evidencectl/src/source_mock/`: the local source mock may use a closed,
+versioned vocabulary of generic synthetic-data generators, schema formats, and
+conservative field-name inference to keep tutorial and integration testing away
+from production data. The authoring compiler may recognize the one
+`x-evidencectl-mock` key only to omit it during narrowing, so the same retained
+OpenAPI document remains usable. The exception does not permit source-product
+names, network imports, live responses, runtime or adapter behavior,
+derivations, production configuration, or generated Evidence contracts. The
+source-neutrality gate must prove both sides of this boundary.
+
 The four acceptance definitions are coequal. Every phase preserves all four,
 and completion means every Definition of Done row passes on one revision.
 

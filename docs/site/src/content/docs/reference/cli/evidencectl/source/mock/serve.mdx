@@ -1,0 +1,44 @@
+---
+title: "evidencectl source mock serve command reference"
+description: "Generated syntax and options for evidencectl source mock serve."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Serve schema-valid synthetic responses from OpenAPI or exact edited cases.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl source mock serve [OPTIONS]
+```
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--openapi <OPENAPI>` | No | n/a | n/a | n/a | OpenAPI 3.0 or 3.1 document for an ephemeral, write-free preview |
+| `--config <CONFIG>` | No | n/a | n/a | n/a | Materialized mock configuration whose checked body bytes are authoritative |
+| `--project <PROJECT>` | No | n/a | n/a | n/a | Explicit Evidence authoring project; the current directory is used when omitted |
+| `--operation <OPERATION>` | No | n/a | n/a | n/a | Narrow ephemeral discovery to one `METHOD /path/template` operation |
+| `--http-addr <HTTP_ADDR>` | No | n/a | n/a | n/a | Numeric loopback listener address. Standalone mode defaults to 127.0.0.1:4010 |
+| `--seed <SEED>` | No | n/a | n/a | n/a | Deterministic unsigned generation seed. Ephemeral mode defaults to zero |
+| `--as-of <AS_OF>` | No | n/a | n/a | n/a | Calendar date used only by explicit or inferred age generation |
+| `--explain` | No | n/a | n/a | n/a | Explain generator choices without printing generated or authored values |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

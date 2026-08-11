@@ -26,6 +26,7 @@ repository_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 temporary_root=$(mktemp -d)
 trap 'rm -rf "$temporary_root"' EXIT HUP INT TERM
 production_text="$temporary_root/production-rust.txt"
+vocabulary_source_text="$temporary_root/vocabulary-source-rust.txt"
 
 # `registry-language-server` is here because `evidencectl` links it, so every
 # line of it ships inside Evidence adopter tooling. The whole crate is swept,
@@ -118,8 +119,12 @@ if [[ "${#production_sources[@]}" -eq 0 ]]; then
 fi
 
 : >"$production_text"
+: >"$vocabulary_source_text"
+source_index=0
 for source_file in "${production_sources[@]}"; do
-  python3 - "$source_file" >>"$production_text" <<'PY'
+  source_index=$((source_index + 1))
+  filtered_source="$temporary_root/source-$source_index.rs"
+  python3 - "$source_file" >"$filtered_source" <<'PY'
 import re
 import sys
 
@@ -231,6 +236,15 @@ for start, end in spans:
     cursor = end
 sys.stdout.write(source[cursor:])
 PY
+  cat "$filtered_source" >>"$production_text"
+  # The local source mock is an authoring-only synthetic-data surface. It may
+  # name generic faker and inference concepts, but it remains inside the
+  # source-product sweep above and cannot exempt runtime, adapters, or sibling
+  # evidencectl modules from the domain-neutral vocabulary rule.
+  case "$source_file" in
+  "$repository_root/crates/registry-evidencectl/src/source_mock/"*.rs) ;;
+  *) cat "$filtered_source" >>"$vocabulary_source_text" ;;
+  esac
 done
 
 if [[ ! -s "$production_text" ]]; then
@@ -247,7 +261,7 @@ fi
 # the unaltered text, and no term either sweep refuses can hide behind a fixed
 # string that contains none of them.
 vocabulary_text="$temporary_root/vocabulary-rust.txt"
-sed 's/SPDX-License-Identifier/SPDX/g' "$production_text" >"$vocabulary_text"
+sed 's/SPDX-License-Identifier/SPDX/g' "$vocabulary_source_text" >"$vocabulary_text"
 
 published_files=()
 while IFS= read -r published_file; do

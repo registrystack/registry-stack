@@ -1,0 +1,54 @@
+---
+title: "evidencectl source mock generate command reference"
+description: "Generated syntax and options for evidencectl source mock generate."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Create editable configuration and response bodies without overwriting files.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl source mock generate [OPTIONS]
+```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| `--output <OUTPUT>` is present | `--openapi <OPENAPI>` is required. |
+| `--case <CASE>` is present | `--operation <OPERATION>` is required. |
+| `--path-parameter <PATH_PARAMETERS>` is present | `--operation <OPERATION>` is required. |
+
+## Options
+
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--openapi <OPENAPI>` | No | No | n/a | n/a | n/a | OpenAPI document for initial standalone materialization |
+| `--config <CONFIG>` | No | No | n/a | n/a | n/a | Create only missing bodies from an existing editable configuration |
+| `--output <OUTPUT>` | No | No | n/a | n/a | n/a | Initial configuration path. Defaults to mocks/source.yaml |
+| `--project <PROJECT>` | No | No | n/a | n/a | n/a | Explicit Evidence authoring project; the current directory is used when omitted |
+| `--operation <OPERATION>` | No | No | n/a | n/a | n/a | Narrow generation to one `METHOD /path/template` operation |
+| `--case <CASE>` | No | No | n/a | n/a | n/a | Override the starter case name for the selected operation |
+| `--path-parameter <PATH_PARAMETERS>` | No | Yes | n/a | n/a | n/a | Concrete selected-operation path parameter as NAME=VALUE; repeat as needed |
+| `--seed <SEED>` | No | No | n/a | n/a | n/a | Deterministic unsigned generation seed. Initial generation defaults to zero |
+| `--as-of <AS_OF>` | No | No | n/a | n/a | n/a | Calendar date used only by explicit or inferred age generation |
+| `--explain` | No | No | n/a | n/a | n/a | Explain generator choices without printing generated or authored values |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

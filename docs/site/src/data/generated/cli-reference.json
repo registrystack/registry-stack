@@ -1338,6 +1338,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--base-url <BASE_URL>",
+                  "description": "Reviewed source origin to write into a newly created source draft",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--project <PROJECT>",
                   "description": "Deployment project to write the draft into; print-only if absent",
                   "always_required": false,
@@ -1367,6 +1376,293 @@
                 }
               ],
               "subcommands": []
+            },
+            {
+              "name": "mock",
+              "invocation": "evidencectl source mock",
+              "about": "Generate, inspect, and serve a local synthetic source API",
+              "long_about": null,
+              "usage": "evidencectl source mock <COMMAND>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": [
+                {
+                  "name": "serve",
+                  "invocation": "evidencectl source mock serve",
+                  "about": "Serve schema-valid synthetic responses from OpenAPI or exact edited cases",
+                  "long_about": null,
+                  "usage": "evidencectl source mock serve [OPTIONS]",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "--openapi <OPENAPI>",
+                      "description": "OpenAPI 3.0 or 3.1 document for an ephemeral, write-free preview",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--config <CONFIG>",
+                      "description": "Materialized mock configuration whose checked body bytes are authoritative",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--project <PROJECT>",
+                      "description": "Explicit Evidence authoring project; the current directory is used when omitted",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--operation <OPERATION>",
+                      "description": "Narrow ephemeral discovery to one `METHOD /path/template` operation",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--http-addr <HTTP_ADDR>",
+                      "description": "Numeric loopback listener address. Standalone mode defaults to 127.0.0.1:4010",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--seed <SEED>",
+                      "description": "Deterministic unsigned generation seed. Ephemeral mode defaults to zero",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--as-of <AS_OF>",
+                      "description": "Calendar date used only by explicit or inferred age generation",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--explain",
+                      "description": "Explain generator choices without printing generated or authored values",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                },
+                {
+                  "name": "generate",
+                  "invocation": "evidencectl source mock generate",
+                  "about": "Create editable configuration and response bodies without overwriting files",
+                  "long_about": null,
+                  "usage": "evidencectl source mock generate [OPTIONS]",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "--openapi <OPENAPI>",
+                      "description": "OpenAPI document for initial standalone materialization",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--config <CONFIG>",
+                      "description": "Create only missing bodies from an existing editable configuration",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--output <OUTPUT>",
+                      "description": "Initial configuration path. Defaults to mocks/source.yaml",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--project <PROJECT>",
+                      "description": "Explicit Evidence authoring project; the current directory is used when omitted",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--operation <OPERATION>",
+                      "description": "Narrow generation to one `METHOD /path/template` operation",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--case <CASE>",
+                      "description": "Override the starter case name for the selected operation",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--path-parameter <PATH_PARAMETERS>",
+                      "description": "Concrete selected-operation path parameter as NAME=VALUE; repeat as needed",
+                      "always_required": false,
+                      "repeatable": true,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--seed <SEED>",
+                      "description": "Deterministic unsigned generation seed. Initial generation defaults to zero",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--as-of <AS_OF>",
+                      "description": "Calendar date used only by explicit or inferred age generation",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--explain",
+                      "description": "Explain generator choices without printing generated or authored values",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [
+                    {
+                      "kind": "requires_all",
+                      "when": "--output <OUTPUT>",
+                      "arguments": [
+                        "--openapi <OPENAPI>"
+                      ]
+                    },
+                    {
+                      "kind": "requires_all",
+                      "when": "--case <CASE>",
+                      "arguments": [
+                        "--operation <OPERATION>"
+                      ]
+                    },
+                    {
+                      "kind": "requires_all",
+                      "when": "--path-parameter <PATH_PARAMETERS>",
+                      "arguments": [
+                        "--operation <OPERATION>"
+                      ]
+                    }
+                  ],
+                  "subcommands": []
+                },
+                {
+                  "name": "check",
+                  "invocation": "evidencectl source mock check",
+                  "about": "Validate edited configuration and response bodies without writing or binding",
+                  "long_about": null,
+                  "usage": "evidencectl source mock check [OPTIONS]",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "--config <CONFIG>",
+                      "description": "Editable mock configuration. Project mode defaults to mocks/source.yaml",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--project <PROJECT>",
+                      "description": "Explicit Evidence authoring project; the current directory is used when omitted",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                }
+              ]
             }
           ]
         },

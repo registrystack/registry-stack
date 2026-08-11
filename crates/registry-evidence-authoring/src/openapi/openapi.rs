@@ -16,18 +16,22 @@
 //! no end, so the repeat is cut in place, marked, and reported, and the rest
 //! of the operation stays draftable.
 //!
-//! Resolution also canonicalizes the two dialect spellings that describe
-//! something the closed subset already admits: a two-member union against
-//! `null` becomes the type pair `[T, "null"]`, and a node declaring
-//! `properties` or `items` and no `type` is read as the type that keyword
-//! belongs to. Neither adds a constraint the document does not state; each is
-//! reported as a note so the reading stays the operator's to reject.
+//! Resolution also canonicalizes dialect spellings that describe something
+//! the closed subset already admits: OpenAPI 3.0 `nullable: true` and a
+//! two-member union against `null` become the type pair `[T, "null"]`, and a
+//! node declaring `properties` or `items` and no `type` is read as the type
+//! that keyword belongs to. Neither adds a constraint the document does not
+//! state; each is reported as a note so the reading stays the operator's to
+//! reject.
+
+use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
 use super::types::{
-    OperationKey, OperationSummary, ResolvedResponse, ResolvedSchema, RECURSIVE_REF_KEY,
+    OpenApiDialect, OperationKey, OperationParameter, OperationSummary, ParameterLocation,
+    ResolvedResponse, ResolvedSchema, RECURSIVE_REF_KEY,
 };
 
 /// Path Item Object keys this pipeline can draft a source from.
@@ -36,7 +40,12 @@ use super::types::{
 /// two: the runtime's method enumeration is `GET` and `POST`. Offering any
 /// other method would only produce a source the runtime rejects, so the
 /// listing is filtered here rather than at the far end of the pipeline.
-const OPERATION_METHODS: [&str; 2] = ["get", "post"];
+const SUGGEST_OPERATION_METHODS: [&str; 2] = ["get", "post"];
+
+/// Every HTTP operation field admitted by an OpenAPI Path Item Object.
+const OPENAPI_OPERATION_METHODS: [&str; 8] = [
+    "get", "put", "post", "delete", "options", "head", "patch", "trace",
+];
 
 /// Query parameter names that bound how many items one response carries,
 /// compared against the parameter's name lowercased with `_`, `-` and `.`
@@ -79,6 +88,8 @@ fn is_page_size_name(name: &str) -> bool {
 #[derive(Debug, Clone)]
 pub struct Spec {
     document: Value,
+    dialect: OpenApiDialect,
+    openapi_version: String,
 }
 
 impl Spec {
@@ -105,12 +116,40 @@ impl Spec {
             .get("openapi")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("{origin} has no top-level `openapi` version string"))?;
-        if !(version.starts_with("3.0.") || version.starts_with("3.1.")) {
+        let dialect = if version.starts_with("3.0.") {
+            OpenApiDialect::OpenApi30
+        } else if version.starts_with("3.1.") {
+            OpenApiDialect::OpenApi31
+        } else {
             bail!(
                 "{origin} declares `openapi: {version}`; only OpenAPI 3.0.x and 3.1.x are supported"
             );
-        }
-        Ok(Spec { document })
+        };
+        let openapi_version = version.to_owned();
+        Ok(Spec {
+            document,
+            dialect,
+            openapi_version,
+        })
+    }
+
+    /// The Schema Object dialect selected by the document's OpenAPI version.
+    pub const fn dialect(&self) -> OpenApiDialect {
+        self.dialect
+    }
+
+    /// The exact top-level OpenAPI version string retained from the document.
+    pub fn openapi_version(&self) -> &str {
+        &self.openapi_version
+    }
+
+    /// The document's top-level `x-evidencectl-mock` value, when declared.
+    ///
+    /// This intentionally exposes only the one extension owned by the local
+    /// authoring tool. It does not turn arbitrary vendor extensions into a
+    /// second untyped configuration surface.
+    pub fn mock_hint(&self) -> Option<&Value> {
+        self.document.get("x-evidencectl-mock")
     }
 
     /// Every path-and-method operation that carries at least one JSON
@@ -130,7 +169,7 @@ impl Spec {
             let Some(path_item) = path_item.as_object() else {
                 continue;
             };
-            for method in OPERATION_METHODS {
+            for method in SUGGEST_OPERATION_METHODS {
                 let Some(operation) = path_item.get(method) else {
                     continue;
                 };
@@ -152,6 +191,66 @@ impl Spec {
             }
         }
         out
+    }
+
+    /// Every declared OpenAPI operation, including methods and response shapes
+    /// that the source-suggestion pipeline cannot draft from.
+    ///
+    /// Unlike [`Self::operations`], this neutral inventory reports malformed
+    /// paths, references, and Operation Objects instead of silently omitting
+    /// them. Paths remain in the retained map's stable order and methods in
+    /// OpenAPI field order.
+    pub fn declared_operations(&self) -> Result<Vec<OperationKey>> {
+        let paths = self
+            .document
+            .get("paths")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("document has no object-valued `paths`"))?;
+        let mut operations = Vec::new();
+        for (path, path_item_raw) in paths {
+            if path.starts_with("x-") {
+                continue;
+            }
+            if !path.starts_with('/') {
+                bail!("paths field `{path}` is neither a `/` path nor an `x-` extension");
+            }
+            let path_item = self
+                .resolve_top_ref(path_item_raw, &mut Vec::new())
+                .with_context(|| format!("resolving path item `{path}`"))?;
+            let path_item = path_item
+                .as_object()
+                .ok_or_else(|| anyhow!("path item `{path}` is not an object"))?;
+            for field in path_item.keys() {
+                if OPENAPI_OPERATION_METHODS.contains(&field.as_str())
+                    || matches!(
+                        field.as_str(),
+                        "$ref" | "summary" | "description" | "servers" | "parameters"
+                    )
+                    || field.starts_with("x-")
+                {
+                    continue;
+                }
+                bail!(
+                    "path item `{path}` has unknown field `{field}`; it cannot be inventoried as an OpenAPI operation"
+                );
+            }
+            for method in OPENAPI_OPERATION_METHODS {
+                let Some(operation) = path_item.get(method) else {
+                    continue;
+                };
+                if !operation.is_object() {
+                    bail!(
+                        "{method_upper} {path} operation is not an object",
+                        method_upper = method.to_ascii_uppercase()
+                    );
+                }
+                operations.push(OperationKey {
+                    method: method.to_ascii_uppercase(),
+                    path: path.clone(),
+                });
+            }
+        }
+        Ok(operations)
     }
 
     /// The `(status, media type)` pairs on `operation` whose media type
@@ -243,6 +342,147 @@ impl Spec {
         })
     }
 
+    /// The exact Operation Object selected by method and literal path.
+    ///
+    /// A path-item-level local reference is resolved first. The returned value
+    /// otherwise remains the authored Operation Object, including fields this
+    /// crate does not interpret.
+    pub fn operation(&self, key: &OperationKey) -> Result<&Value> {
+        self.find_operation(key)
+    }
+
+    /// Parameters effective for one operation after OpenAPI override rules.
+    ///
+    /// Path-item parameters come first. An operation-level parameter with the
+    /// same `(name, in)` replaces that entry in place; a new operation-level
+    /// parameter is appended. Local Parameter Object and Schema Object
+    /// references are resolved before the typed values are returned.
+    pub fn operation_parameters(&self, key: &OperationKey) -> Result<Vec<OperationParameter>> {
+        let paths = self
+            .document
+            .get("paths")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("document has no `paths`"))?;
+        let path_item_raw = paths
+            .get(&key.path)
+            .ok_or_else(|| anyhow!("no path `{}` in the document", key.path))?;
+        let path_item = self
+            .resolve_top_ref(path_item_raw, &mut Vec::new())
+            .with_context(|| format!("resolving path item `{}`", key.path))?;
+        let operation = self.find_operation(key)?;
+
+        let path_parameters = self.parameters_at(
+            path_item.get("parameters"),
+            &format!("path item `{}`", key.path),
+        )?;
+        let operation_parameters = self.parameters_at(
+            operation.get("parameters"),
+            &format!("{} {} operation", key.method, key.path),
+        )?;
+
+        let mut merged = Vec::with_capacity(path_parameters.len() + operation_parameters.len());
+        let mut positions = BTreeMap::new();
+        for parameter in path_parameters {
+            let identity = (parameter.name.clone(), parameter.location);
+            if positions.insert(identity.clone(), merged.len()).is_some() {
+                bail!(
+                    "path item `{}` declares parameter `{}` in `{}` more than once",
+                    key.path,
+                    identity.0,
+                    identity.1.as_str()
+                );
+            }
+            merged.push(parameter);
+        }
+
+        let mut operation_identities = BTreeMap::new();
+        for parameter in operation_parameters {
+            let identity = (parameter.name.clone(), parameter.location);
+            if operation_identities.insert(identity.clone(), ()).is_some() {
+                bail!(
+                    "{} {} declares parameter `{}` in `{}` more than once",
+                    key.method,
+                    key.path,
+                    identity.0,
+                    identity.1.as_str()
+                );
+            }
+            if let Some(position) = positions.get(&identity).copied() {
+                merged[position] = parameter;
+            } else {
+                positions.insert(identity, merged.len());
+                merged.push(parameter);
+            }
+        }
+        Ok(merged)
+    }
+
+    fn parameters_at(&self, value: Option<&Value>, owner: &str) -> Result<Vec<OperationParameter>> {
+        let Some(value) = value else {
+            return Ok(Vec::new());
+        };
+        let parameters = value
+            .as_array()
+            .ok_or_else(|| anyhow!("{owner} has a non-array `parameters` field"))?;
+        parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                self.parse_parameter(parameter)
+                    .with_context(|| format!("reading {owner} parameter {index}"))
+            })
+            .collect()
+    }
+
+    fn parse_parameter(&self, parameter_raw: &Value) -> Result<OperationParameter> {
+        let parameter = self.resolve_top_ref(parameter_raw, &mut Vec::new())?;
+        let parameter = parameter
+            .as_object()
+            .ok_or_else(|| anyhow!("parameter is not an object"))?;
+        let name = parameter
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| anyhow!("parameter has no non-empty string `name`"))?;
+        let location = match parameter.get("in").and_then(Value::as_str) {
+            Some("query") => ParameterLocation::Query,
+            Some("header") => ParameterLocation::Header,
+            Some("path") => ParameterLocation::Path,
+            Some("cookie") => ParameterLocation::Cookie,
+            Some(other) => bail!("parameter `{name}` has unsupported location `{other}`"),
+            None => bail!("parameter `{name}` has no string `in` location"),
+        };
+        let required = match parameter.get("required") {
+            Some(Value::Bool(required)) => *required,
+            Some(_) => bail!("parameter `{name}` has a non-Boolean `required` field"),
+            None => false,
+        };
+        if location == ParameterLocation::Path && !required {
+            bail!("path parameter `{name}` must declare `required: true`");
+        }
+        let schema_raw = parameter.get("schema").ok_or_else(|| {
+            anyhow!(
+                "parameter `{name}` declares no `schema`; content-based parameters are not supported"
+            )
+        })?;
+        let schema = self
+            .inline_schema(schema_raw, "", &mut Vec::new(), &mut Vec::new())
+            .with_context(|| format!("resolving the schema of parameter `{name}`"))?;
+        let example = parameter
+            .get("example")
+            .or_else(|| schema.get("example"))
+            .cloned();
+        let default = schema.get("default").cloned();
+        Ok(OperationParameter {
+            name: name.to_owned(),
+            location,
+            required,
+            schema: ResolvedSchema(schema),
+            example,
+            default,
+        })
+    }
+
     /// Base URLs from the document's top-level `servers` array, in document
     /// order. Empty when the document declares none.
     pub fn servers(&self) -> Vec<String> {
@@ -323,6 +563,10 @@ impl Spec {
     /// Finds `key`'s Operation Object, resolving a path-item-level `$ref` if
     /// present.
     fn find_operation(&self, key: &OperationKey) -> Result<&Value> {
+        let method = key.method.to_ascii_lowercase();
+        if !OPENAPI_OPERATION_METHODS.contains(&method.as_str()) {
+            bail!("`{}` is not an OpenAPI operation method", key.method);
+        }
         let paths = self
             .document
             .get("paths")
@@ -332,10 +576,13 @@ impl Spec {
             .get(&key.path)
             .ok_or_else(|| anyhow!("no path `{}` in the document", key.path))?;
         let path_item = self.resolve_top_ref(path_item_raw, &mut Vec::new())?;
-        let method = key.method.to_ascii_lowercase();
-        path_item
+        let operation = path_item
             .get(&method)
-            .ok_or_else(|| anyhow!("path `{}` has no `{}` operation", key.path, key.method))
+            .ok_or_else(|| anyhow!("path `{}` has no `{}` operation", key.path, key.method))?;
+        if !operation.is_object() {
+            bail!("{} {} operation is not an object", key.method, key.path);
+        }
+        Ok(operation)
     }
 
     /// Follows a chain of `$ref` at the top level of `node` (a Response,
@@ -353,6 +600,17 @@ impl Spec {
         let Some(reference) = object.get("$ref").and_then(Value::as_str) else {
             return Ok(node);
         };
+        if self.dialect == OpenApiDialect::OpenApi31 && object.len() != 1 {
+            let siblings = object
+                .keys()
+                .filter(|key| key.as_str() != "$ref")
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "OpenAPI 3.1 reference `{reference}` has sibling field(s) {siblings}; this reference cannot be resolved losslessly"
+            );
+        }
         let pointer = local_ref_pointer(reference)?;
         if stack.iter().any(|seen| seen == reference) {
             bail!("$ref cycle detected at `{reference}`");
@@ -367,8 +625,10 @@ impl Spec {
 
     /// Recursively inlines every local `$ref` inside a Schema Object and
     /// normalizes the dialect. Per OpenAPI 3.0 semantics, a schema node
-    /// carrying `$ref` has any sibling keywords ignored; this function does the
-    /// same, uniformly, for simplicity.
+    /// carrying `$ref` has sibling keywords ignored. OpenAPI 3.1 annotation
+    /// siblings are retained around a single-member `allOf`; assertion and
+    /// applicator siblings are refused because flattening them into one object
+    /// could silently change their JSON Schema meaning.
     ///
     /// `pointer` locates `node` inside the response schema so a note can name
     /// where it applies; it is the same extended projection form the flattener
@@ -384,6 +644,21 @@ impl Spec {
             return Ok(node.clone());
         };
         if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+            let ref_siblings = object
+                .iter()
+                .filter(|(key, _)| key.as_str() != "$ref")
+                .collect::<Vec<_>>();
+            if self.dialect == OpenApiDialect::OpenApi31 {
+                if let Some((key, _)) = ref_siblings
+                    .iter()
+                    .find(|(key, _)| !safe_openapi31_ref_annotation(key))
+                {
+                    bail!(
+                        "OpenAPI 3.1 schema $ref `{reference}` at `{}` has unsupported sibling `{key}`; constraint siblings cannot be inlined losslessly",
+                        display_pointer(pointer)
+                    );
+                }
+            }
             let target_pointer = local_ref_pointer(reference)?;
             if stack.iter().any(|seen| seen == reference) {
                 notes.push(format!(
@@ -403,7 +678,16 @@ impl Spec {
             stack.push(reference.to_string());
             let inlined = self.inline_schema(&target, pointer, stack, notes);
             stack.pop();
-            return inlined;
+            let inlined = inlined?;
+            if self.dialect == OpenApiDialect::OpenApi31 && !ref_siblings.is_empty() {
+                let mut annotated = serde_json::Map::with_capacity(ref_siblings.len() + 1);
+                annotated.insert("allOf".to_owned(), Value::Array(vec![inlined]));
+                for (key, value) in ref_siblings {
+                    annotated.insert(key.clone(), value.clone());
+                }
+                return Ok(Value::Object(annotated));
+            }
+            return Ok(inlined);
         }
 
         let mut result = serde_json::Map::with_capacity(object.len());
@@ -446,12 +730,39 @@ impl Spec {
             };
             result.insert(key.clone(), inlined_value);
         }
-        normalize_nullable(&mut result);
+        if self.dialect == OpenApiDialect::OpenApi30 {
+            normalize_nullable(&mut result);
+        }
         collapse_null_union(&mut result);
         order_nullable_pair(&mut result);
         infer_structural_type(&mut result, pointer, notes);
         Ok(Value::Object(result))
     }
+}
+
+/// Annotation-only siblings that can remain beside a resolved OpenAPI 3.1
+/// schema reference without changing which instances the schema accepts.
+///
+/// Constraint, applicator, identifier, and vocabulary keywords are refused.
+/// Preserving those would require a general JSON Schema resolver, including
+/// evaluation-scope behavior such as `unevaluatedProperties`, which this
+/// bounded OpenAPI reader deliberately is not.
+fn safe_openapi31_ref_annotation(key: &str) -> bool {
+    matches!(
+        key,
+        "$comment"
+            | "title"
+            | "description"
+            | "default"
+            | "deprecated"
+            | "readOnly"
+            | "writeOnly"
+            | "examples"
+            | "example"
+            | "discriminator"
+            | "xml"
+            | "externalDocs"
+    ) || key.starts_with("x-")
 }
 
 /// Rewrites OpenAPI 3.0's `nullable: true` in place to the 3.1-style type

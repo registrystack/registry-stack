@@ -19,6 +19,7 @@ mod jwks;
 mod keygen;
 mod request;
 mod scaffold;
+mod source_mock;
 mod suggest;
 mod tooling;
 mod tooling_editor;

@@ -945,6 +945,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "deunicode"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
+
+[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1134,6 +1140,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "fake"
+version = "4.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2b0902eb36fbab51c14eda1c186bda119fcff91e5e4e7fc2dd2077298197ce8"
+dependencies = [
+ "deunicode",
+ "rand 0.9.4",
 ]
 
 [[package]]
@@ -3190,13 +3206,18 @@ name = "registry-evidencectl"
 version = "0.19.0"
 dependencies = [
  "anyhow",
+ "axum",
  "base64",
  "chrono",
  "clap",
+ "fake",
  "getrandom 0.4.3",
  "hex",
  "inquire",
+ "jsonschema 0.18.3",
  "p256",
+ "rand 0.9.4",
+ "rand_chacha",
  "registry-evidence-authoring",
  "registry-evidence-client",
  "registry-language-server",
@@ -3211,6 +3232,7 @@ dependencies = [
  "signal-hook",
  "tempfile",
  "tokio",
+ "tower",
  "ureq",
  "url",
  "zeroize",

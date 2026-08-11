@@ -1,0 +1,23 @@
+openapi: 3.1.0
+info: {title: Ambiguous synthetic API, version: 1.0.0}
+paths:
+  /things/{first}:
+    get:
+      parameters:
+        - {name: first, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: First shape
+          content:
+            application/json:
+              schema: {type: object, properties: {ok: {type: boolean}}}
+  /things/{second}:
+    get:
+      parameters:
+        - {name: second, in: path, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: Indistinguishable shape
+          content:
+            application/json:
+              schema: {type: object, properties: {ok: {type: boolean}}}

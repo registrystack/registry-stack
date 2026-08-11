@@ -1,6 +1,6 @@
 ---
-title: "evidencectl source command reference"
-description: "Generated syntax and options for evidencectl source."
+title: "evidencectl source mock check command reference"
+description: "Generated syntax and options for evidencectl source mock check."
 status: current
 owner: registry-docs
 source_repos:
@@ -13,7 +13,7 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Work with a project's sources, starting from their own API documents.
+Validate edited configuration and response bodies without writing or binding.
 
 ## Contract status
 
@@ -22,20 +22,15 @@ This page is generated from the public Clap command tree. Hidden implementation 
 ## Usage
 
 ```text
-evidencectl source <COMMAND>
+evidencectl source mock check [OPTIONS]
 ```
-
-## Commands
-
-| Command | Description |
-| --- | --- |
-| [`suggest`](./suggest/) | Suggest source configuration from an OpenAPI document |
-| [`mock`](./mock/) | Generate, inspect, and serve a local synthetic source API |
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
+| `--config <CONFIG>` | No | n/a | n/a | n/a | Editable mock configuration. Project mode defaults to mocks/source.yaml |
+| `--project <PROJECT>` | No | n/a | n/a | n/a | Explicit Evidence authoring project; the current directory is used when omitted |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract
