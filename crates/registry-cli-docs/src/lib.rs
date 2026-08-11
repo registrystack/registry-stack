@@ -43,7 +43,8 @@ pub struct ArgumentReference {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
-    RequiredOneOf,
+    RequiredExactlyOne,
+    RequiredOneOrMore,
     RequiresAll,
 }
 
@@ -150,7 +151,7 @@ fn argument_reference(argument: &Arg) -> ArgumentReference {
             .map(ToString::to_string)
             .map(|value| normalized(&value))
             .unwrap_or_default(),
-        always_required: argument.is_required_set(),
+        always_required: argument.is_required_set() && argument.get_env().is_none(),
         default_values: if takes_values {
             argument
                 .get_default_values()
@@ -170,13 +171,19 @@ fn command_constraints(command: &Command) -> Vec<ConstraintReference> {
         .get_groups()
         .filter(|group| group.is_required_set())
         .filter_map(|group| {
-            let arguments = group_arguments(command, group)
+            let mut group = group.clone();
+            let kind = if group.is_multiple() {
+                ConstraintKind::RequiredOneOrMore
+            } else {
+                ConstraintKind::RequiredExactlyOne
+            };
+            let arguments = group_arguments(command, &group)
                 .into_iter()
                 .filter(|argument| !argument.is_hide_set())
                 .map(argument_display)
                 .collect::<Vec<_>>();
             (!arguments.is_empty()).then_some(ConstraintReference {
-                kind: ConstraintKind::RequiredOneOf,
+                kind,
                 when: None,
                 arguments,
             })
@@ -514,7 +521,7 @@ mod tests {
         );
 
         assert!(reference.constraints.iter().any(|constraint| {
-            constraint.kind == ConstraintKind::RequiredOneOf
+            constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.when.is_none()
                 && constraint.arguments == ["--left", "--right"]
         }));
@@ -523,6 +530,44 @@ mod tests {
                 && constraint.when.as_deref() == Some("--right")
                 && constraint.arguments == ["--detail"]
         }));
+
+        let multiple = command_reference(
+            Command::new("tool")
+                .arg(Arg::new("first").long("first").action(ArgAction::SetTrue))
+                .arg(Arg::new("second").long("second").action(ArgAction::SetTrue))
+                .group(
+                    ArgGroup::new("choices")
+                        .required(true)
+                        .multiple(true)
+                        .args(["first", "second"]),
+                ),
+            None,
+        );
+        assert!(multiple.constraints.iter().any(|constraint| {
+            constraint.kind == ConstraintKind::RequiredOneOrMore
+                && constraint.arguments == ["--first", "--second"]
+        }));
+    }
+
+    #[test]
+    fn an_environment_binding_is_an_alternative_to_a_required_option() {
+        let reference = command_reference(
+            Command::new("tool").arg(
+                Arg::new("config")
+                    .long("config")
+                    .env("TOOL_CONFIG")
+                    .required(true),
+            ),
+            None,
+        );
+
+        let config = reference
+            .options
+            .iter()
+            .find(|argument| argument.display == "--config <CONFIG>")
+            .expect("config option");
+        assert!(!config.always_required);
+        assert_eq!(config.environment.as_deref(), Some("TOOL_CONFIG"));
     }
 
     #[test]
@@ -530,7 +575,7 @@ mod tests {
         let catalog = catalog();
         let audit_show = find_command(&catalog.binaries, "evidencectl audit show");
         assert!(audit_show.constraints.iter().any(|constraint| {
-            constraint.kind == ConstraintKind::RequiredOneOf
+            constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.arguments == ["--last-operation"]
         }));
 
@@ -555,6 +600,29 @@ mod tests {
                     .any(|argument| argument == required),
                 "statistical view did not require {required}"
             );
+        }
+
+        let evidencectl_new = find_command(&catalog.binaries, "evidencectl new");
+        assert!(evidencectl_new.constraints.iter().any(|constraint| {
+            constraint.kind == ConstraintKind::RequiredExactlyOne
+                && constraint.arguments == ["--openapi <OPENAPI>", "--transport <TRANSPORT>"]
+        }));
+        assert!(evidencectl_new
+            .options
+            .iter()
+            .any(|argument| argument.display == "--profile <PROFILE>" && argument.always_required));
+
+        for (invocation, option) in [
+            ("mint check", "--config <CONFIG>"),
+            ("evidence-oid4vci check", "--config <CONFIG>"),
+            ("relay serve", "--runtime <RUNTIME>"),
+        ] {
+            assert!(find_command(&catalog.binaries, invocation)
+                .options
+                .iter()
+                .any(|argument| argument.display == option
+                    && argument.environment.is_some()
+                    && !argument.always_required));
         }
     }
 }

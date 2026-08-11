@@ -13,7 +13,7 @@ use std::{
 };
 
 use anyhow::{bail, Context as _};
-use clap::{Args, ValueEnum};
+use clap::{ArgGroup, Args, ValueEnum};
 
 use crate::{keygen, suggest, tooling_editor};
 
@@ -32,6 +32,12 @@ pub enum AuthoringTransport {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("authoring_source")
+        .required(true)
+        .multiple(false)
+        .args(["openapi", "transport"])
+))]
 pub struct NewArgs {
     /// New directory to create for the editable authoring project.
     pub directory: PathBuf,
@@ -45,7 +51,7 @@ pub struct NewArgs {
     pub transport: Option<AuthoringTransport>,
 
     /// Explicit development profile for local authoring.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, required = true)]
     pub profile: Option<AuthoringProfile>,
 
     /// Compatibility flag; local projects now always generate disposable keys.

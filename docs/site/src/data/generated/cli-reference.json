@@ -232,7 +232,7 @@
           ],
           "constraints": [
             {
-              "kind": "required_one_of",
+              "kind": "required_exactly_one",
               "when": null,
               "arguments": [
                 "--jws <JWS>",
@@ -374,7 +374,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "always_required": true,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VCI_CONFIG"
@@ -402,7 +402,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "always_required": true,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VCI_CONFIG"
@@ -458,7 +458,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "always_required": true,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VCI_CONFIG"
@@ -974,7 +974,7 @@
           "invocation": "evidencectl new",
           "about": "Start an editable Evidence Gateway project from OpenAPI or a SQLite extract",
           "long_about": null,
-          "usage": "evidencectl new [OPTIONS] <DIRECTORY>",
+          "usage": "evidencectl new --profile <PROFILE> <--openapi <OPENAPI>|--transport <TRANSPORT>> <DIRECTORY>",
           "arguments": [
             {
               "display": "<DIRECTORY>",
@@ -1007,7 +1007,7 @@
             {
               "display": "--profile <PROFILE>",
               "description": "Explicit development profile for local authoring",
-              "always_required": false,
+              "always_required": true,
               "default_values": [],
               "possible_values": [
                 "local"
@@ -1023,7 +1023,16 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "required_exactly_one",
+              "when": null,
+              "arguments": [
+                "--openapi <OPENAPI>",
+                "--transport <TRANSPORT>"
+              ]
+            }
+          ],
           "subcommands": []
         },
         {
@@ -1573,7 +1582,7 @@
               ],
               "constraints": [
                 {
-                  "kind": "required_one_of",
+                  "kind": "required_exactly_one",
                   "when": null,
                   "arguments": [
                     "--last-operation"
@@ -1695,7 +1704,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "always_required": true,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": "MINT_CONFIG"
@@ -1723,7 +1732,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "always_required": true,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": "MINT_CONFIG"
@@ -1751,7 +1760,7 @@
             {
               "display": "--config <CONFIG>",
               "description": "",
-              "always_required": true,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": "MINT_CONFIG"
@@ -1902,7 +1911,7 @@
             {
               "display": "--runtime <RUNTIME>",
               "description": "Strict deployment binding for the sealed package and local resources",
-              "always_required": true,
+              "always_required": false,
               "default_values": [],
               "possible_values": [],
               "environment": "RELAY_RUNTIME"

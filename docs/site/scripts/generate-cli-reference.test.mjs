@@ -66,7 +66,7 @@ test('renders required groups and conditional requirements', () => {
   const relayctl = catalog.binaries.find((binary) => binary.name === 'relayctl');
   relayctl.constraints.push(
     {
-      kind: 'required_one_of',
+      kind: 'required_exactly_one',
       when: null,
       arguments: ['--left', '--right'],
     },
@@ -75,9 +75,15 @@ test('renders required groups and conditional requirements', () => {
       when: '--right',
       arguments: ['--detail'],
     },
+    {
+      kind: 'required_one_or_more',
+      when: null,
+      arguments: ['--scope', '--role'],
+    },
   );
   const page = renderCatalog(catalog).get('relayctl.mdx');
-  assert.match(page, /One of `--left`, `--right` is required\./u);
+  assert.match(page, /Exactly one of `--left`, `--right` is required\./u);
+  assert.match(page, /One or more of `--scope`, `--role` are required\./u);
   assert.match(page, /`--right` is present \| `--detail` is required\./u);
   assert.match(page, /Always required/u);
 });
@@ -109,4 +115,14 @@ test('writes deterministic pages and detects tracked drift', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('the docs check detects CLI drift before generation', async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+  );
+  const steps = packageJson.scripts.check.split(' && ');
+
+  assert.equal(steps[0], 'npm run check:cli-reference');
+  assert.ok(steps.indexOf('npm run check:cli-reference') < steps.indexOf('npm run generate'));
 });

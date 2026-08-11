@@ -22,8 +22,14 @@ This page is generated from the public Clap command tree. Hidden implementation 
 ## Usage
 
 ```text
-evidencectl new [OPTIONS] <DIRECTORY>
+evidencectl new --profile <PROFILE> <--openapi <OPENAPI>|--transport <TRANSPORT>> <DIRECTORY>
 ```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | Exactly one of `--openapi <OPENAPI>`, `--transport <TRANSPORT>` is required. |
 
 ## Arguments
 
@@ -37,7 +43,7 @@ evidencectl new [OPTIONS] <DIRECTORY>
 | --- | --- | --- | --- | --- | --- |
 | `--openapi <OPENAPI>` | No | n/a | n/a | n/a | OpenAPI 3.0 or 3.1 document: a local path or an HTTPS URL |
 | `--transport <TRANSPORT>` | No | n/a | `sqlite-extract` | n/a | Source transport to author without an API description |
-| `--profile <PROFILE>` | No | n/a | `local` | n/a | Explicit development profile for local authoring |
+| `--profile <PROFILE>` | Yes | n/a | `local` | n/a | Explicit development profile for local authoring |
 | `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
 
 ## Generation contract

@@ -99,14 +99,20 @@ function validateArgument(argument, label) {
 
 function validateConstraint(constraint, label) {
   exactKeys(constraint, new Set(['kind', 'when', 'arguments']), label);
-  if (!['required_one_of', 'requires_all'].includes(constraint.kind)) {
-    throw new Error(`${label}.kind must be required_one_of or requires_all`);
+  if (
+    !['required_exactly_one', 'required_one_or_more', 'requires_all'].includes(
+      constraint.kind,
+    )
+  ) {
+    throw new Error(
+      `${label}.kind must be required_exactly_one, required_one_or_more, or requires_all`,
+    );
   }
   if (constraint.when !== null && typeof constraint.when !== 'string') {
     throw new Error(`${label}.when must be a string or null`);
   }
-  if (constraint.kind === 'required_one_of' && constraint.when !== null) {
-    throw new Error(`${label}.when must be null for required_one_of`);
+  if (constraint.kind.startsWith('required_') && constraint.when !== null) {
+    throw new Error(`${label}.when must be null for required groups`);
   }
   if (constraint.kind === 'requires_all') {
     nonempty(constraint.when, `${label}.when`);
@@ -289,11 +295,18 @@ ${rows.map((row) => `| ${row} |`).join('\n')}
 function constraintTable(constraints) {
   if (constraints.length === 0) return '';
   const rows = constraints.map((constraint) => {
-    if (constraint.kind === 'required_one_of') {
+    if (constraint.kind === 'required_exactly_one') {
       const requirement =
         constraint.arguments.length === 1
           ? `${inlineCode(constraint.arguments[0])} is required.`
-          : `One of ${values(constraint.arguments)} is required.`;
+          : `Exactly one of ${values(constraint.arguments)} is required.`;
+      return `| Command invocation | ${requirement} |`;
+    }
+    if (constraint.kind === 'required_one_or_more') {
+      const requirement =
+        constraint.arguments.length === 1
+          ? `${inlineCode(constraint.arguments[0])} is required.`
+          : `One or more of ${values(constraint.arguments)} are required.`;
       return `| Command invocation | ${requirement} |`;
     }
     const requirement =
