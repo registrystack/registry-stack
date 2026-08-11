@@ -58,6 +58,8 @@ use wiremock::{
 /// `tests/golden_fixture.rs` rather than shared with it: every file under
 /// `tests/` compiles as its own crate.
 const FIXTURE_ISSUED_AT: &str = "2026-08-01T00:00:00Z";
+const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 
 /// The specification every send/verify test in this file prepares against,
 /// as the plain Python-facing (snake_case) shape `spec_from_json` expects.
@@ -318,7 +320,9 @@ fn round_trip_through_send_and_verify() {
             Mock::given(method("POST"))
                 .and(path_matcher("/v1/evidence"))
                 .respond_with(
-                    ResponseTemplate::new(200).set_body_raw(body, EVIDENCE_JWS_MEDIA_TYPE),
+                    ResponseTemplate::new(200)
+                        .insert_header("traceparent", TRACEPARENT)
+                        .set_body_raw(body, EVIDENCE_JWS_MEDIA_TYPE),
                 )
                 .expect(1)
                 .mount(&server),
@@ -344,7 +348,7 @@ fn round_trip_through_send_and_verify() {
             .expect("trace_id is exposed")
             .extract()
             .expect("trace_id is a string or None");
-        assert_eq!(trace_id, None);
+        assert_eq!(trace_id.as_deref(), Some(TRACE_ID));
 
         let pinned = verified
             .getattr("pinned_subject_expectations")
@@ -394,7 +398,9 @@ fn request_and_verify_performs_the_same_round_trip() {
             Mock::given(method("POST"))
                 .and(path_matcher("/v1/evidence"))
                 .respond_with(
-                    ResponseTemplate::new(200).set_body_raw(body, EVIDENCE_JWS_MEDIA_TYPE),
+                    ResponseTemplate::new(200)
+                        .insert_header("traceparent", TRACEPARENT)
+                        .set_body_raw(body, EVIDENCE_JWS_MEDIA_TYPE),
                 )
                 .expect(1)
                 .mount(&server),
@@ -411,6 +417,12 @@ fn request_and_verify_performs_the_same_round_trip() {
             .extract()
             .expect("requestNonce is a string");
         assert_eq!(verified_nonce, nonce);
+        let trace_id: Option<String> = verified
+            .getattr("trace_id")
+            .expect("trace_id is exposed")
+            .extract()
+            .expect("trace_id is a string or None");
+        assert_eq!(trace_id.as_deref(), Some(TRACE_ID));
     });
 }
 
@@ -468,6 +480,7 @@ fn a_live_two_item_batch_returns_mixed_ordered_results() {
                 .and(path_matcher("/v1/evidence/batch"))
                 .respond_with(
                     ResponseTemplate::new(200)
+                        .insert_header("traceparent", TRACEPARENT)
                         .set_body_raw(body, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE),
                 )
                 .expect(1)
@@ -477,6 +490,12 @@ fn a_live_two_item_batch_returns_mixed_ordered_results() {
         let verified = client
             .call_method1("request_and_verify_batch", (&prepared,))
             .expect("the complete mixed batch verifies");
+        let trace_id: Option<String> = verified
+            .getattr("trace_id")
+            .expect("trace_id is exposed")
+            .extract()
+            .expect("trace_id is a string or None");
+        assert_eq!(trace_id.as_deref(), Some(TRACE_ID));
         let items = verified.getattr("items").expect("items are exposed");
         assert_eq!(items.len().expect("items has a length"), 2);
 
@@ -550,7 +569,9 @@ fn a_second_send_is_refused_without_reaching_the_deployment() {
             Mock::given(method("POST"))
                 .and(path_matcher("/v1/evidence"))
                 .respond_with(
-                    ResponseTemplate::new(200).set_body_raw(body, EVIDENCE_JWS_MEDIA_TYPE),
+                    ResponseTemplate::new(200)
+                        .insert_header("traceparent", TRACEPARENT)
+                        .set_body_raw(body, EVIDENCE_JWS_MEDIA_TYPE),
                 )
                 .expect(1)
                 .mount(&server),
@@ -600,6 +621,7 @@ fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request()
             .and(path_matcher("/v1/evidence"))
             .respond_with(
                 ResponseTemplate::new(200)
+                    .insert_header("traceparent", TRACEPARENT)
                     .set_body_raw(stale_response_body, EVIDENCE_JWS_MEDIA_TYPE),
             )
             .expect(1)

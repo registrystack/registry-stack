@@ -314,7 +314,7 @@ load_spec() {
 			"Prepared request: .evidence/requests/age-checker-refused/request.json"
 			"Prepared request: .evidence/requests/service-router-allowed/request.json"
 			"HTTP 403"
-			'"code": "not_authorized"'
+			'"code": "evidence.denied"'
 			"HTTP 200"
 			"VERIFIED"
 			"evidencectl: unknown or revoked active client age-checker"
