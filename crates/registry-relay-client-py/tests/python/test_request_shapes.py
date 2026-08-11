@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from collections import UserList
 import inspect
 import pathlib
 import sys
+from types import MappingProxyType
 import unittest
+from urllib.parse import parse_qs, urlsplit
 
 TESTS = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 import bootstrap  # noqa: E402
+from relay_server import RelayServer, Request, json_response, record_collection  # noqa: E402
 
 bootstrap.ensure_built()
 import registry_relay_client as relay  # noqa: E402
@@ -59,6 +63,50 @@ class RequestShapeTest(unittest.TestCase):
         with self.assertRaises(relay.RelayClientError) as cycle:
             self.client.search("people", "nearby", bbox=cyclic)
         self.assertEqual(cycle.exception.kind, "invalid_request")
+
+    def test_search_accepts_concrete_list_and_tuple_bounding_boxes(self):
+        queries: list[dict[str, list[str]]] = []
+
+        def respond(request: Request):
+            target = urlsplit(request.target)
+            self.assertEqual(
+                target.path, "/prefix/v2/resources/people/searches/nearby"
+            )
+            queries.append(parse_qs(target.query))
+            return json_response(record_collection(None))
+
+        with RelayServer(respond) as server:
+            client = relay.RelayClient(server.base_url)
+            for bbox in ([10.0, 20.0, 11.0, 21.0], (10.0, 20.0, 11.0, 21.0)):
+                with self.subTest(container=type(bbox).__name__):
+                    self.assertEqual(
+                        client.search("people", "nearby", bbox=bbox)["kind"],
+                        "complete",
+                    )
+
+        self.assertEqual(
+            queries,
+            [
+                {"bbox": ["10,20,11,21"]},
+                {"bbox": ["10,20,11,21"]},
+            ],
+        )
+
+    def test_search_rejects_exotic_sequences_as_stable_client_errors(self):
+        values = (
+            UserList([10.0, 20.0, 11.0, 21.0]),
+            range(4),
+            MappingProxyType({"west": 10.0, "south": 20.0}),
+        )
+        for bbox in values:
+            with self.subTest(container=type(bbox).__name__):
+                with self.assertRaises(relay.RelayClientError) as raised:
+                    self.client.search("people", "nearby", bbox=bbox)
+                self.assertEqual(raised.exception.kind, "invalid_request")
+                self.assertEqual(
+                    str(raised.exception),
+                    "a value of this Python type cannot be converted",
+                )
 
     def test_unsigned_request_ranges_are_stable_invalid_request_errors(self):
         calls = (

@@ -27,9 +27,11 @@ function assertBoundaryChildExitsNormally(source) {
 let server;
 let baseUrl;
 const lookupBodies = [];
+const requestUrls = [];
 
 before(async () => {
   server = http.createServer((request, response) => {
+    requestUrls.push(request.url);
     response.setHeader('traceparent', TRACEPARENT);
     response.setHeader('content-type', 'application/json');
     if (request.method === 'POST'
@@ -167,6 +169,91 @@ test('request validation failures have a distinct stable kind', async () => {
   );
 });
 
+test('constructor numeric options preserve JavaScript safe integers', () => {
+  for (const numericOptions of [
+    { maxResponseBytes: 2 ** 32 },
+    { maxResponseBytes: Number.MAX_SAFE_INTEGER },
+    { requestTimeoutMilliseconds: 2 ** 32 },
+    { connectTimeoutMilliseconds: 2 ** 32 },
+  ]) {
+    assert.ok(new RelayClient({ baseUrl, ...numericOptions }));
+  }
+
+  for (const maxResponseBytes of [1.5, -1, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(
+      () => new RelayClient({ baseUrl, maxResponseBytes }),
+      (error) => error instanceof RelayClientError
+        && error.kind === 'configuration'
+        && error.message === 'maxResponseBytes must be a non-negative integer',
+    );
+  }
+  assert.throws(
+    () => new RelayClient({ baseUrl, maxResponseBytes: 0 }),
+    (error) => error instanceof RelayClientError
+      && error.kind === 'configuration'
+      && error.message === 'the response body bound must be greater than zero',
+  );
+});
+
+test('request integer options accept their target maxima without precision loss', async () => {
+  requestUrls.length = 0;
+  const client = new RelayClient({ baseUrl });
+  await assert.rejects(client.resources({ pageSize: 100 }));
+  await assert.rejects(client.listRecords('people', { pageSize: 0xffff_ffff }));
+  await assert.rejects(client.search('people', 'within-bbox', {
+    pageSize: 0xffff_ffff,
+    bbox: [-10, -5, 10, 5],
+  }));
+  await assert.rejects(client.sdmxData({
+    agency: 'AGENCY',
+    resource: 'FLOW',
+    version: '1.0.0',
+    offset: 0xffff_ffff,
+    limit: 0xffff_ffff,
+  }));
+
+  assert.equal(requestUrls.length, 4);
+  const queries = requestUrls.map((value) => new URL(value, baseUrl).searchParams);
+  assert.equal(queries[0].get('pageSize'), '100');
+  assert.equal(queries[1].get('pageSize'), '4294967295');
+  assert.equal(queries[2].get('pageSize'), '4294967295');
+  assert.equal(queries[3].get('offset'), '4294967295');
+  assert.equal(queries[3].get('limit'), '4294967295');
+});
+
+test('request integer options reject fractional, unsafe, and target-overflow values before I/O', async () => {
+  requestUrls.length = 0;
+  const client = new RelayClient({ baseUrl });
+  for (const invoke of [
+    () => client.resources({ pageSize: 1.5 }),
+    () => client.listRecords('people', { pageSize: Number.MAX_SAFE_INTEGER + 1 }),
+    () => client.search('people', 'within-bbox', {
+      pageSize: 2 ** 32,
+      bbox: [-10, -5, 10, 5],
+    }),
+    () => client.sdmxData({
+      agency: 'AGENCY', resource: 'FLOW', version: '1.0.0', offset: 2 ** 32,
+    }),
+    () => client.sdmxData({
+      agency: 'AGENCY', resource: 'FLOW', version: '1.0.0', limit: -1,
+    }),
+  ]) {
+    await assert.rejects(
+      invoke(),
+      (error) => error instanceof RelayClientError
+        && error.kind === 'invalid_request'
+        && /must be a non-negative integer/.test(error.message),
+    );
+  }
+  await assert.rejects(
+    client.resources({ pageSize: 101 }),
+    (error) => error instanceof RelayClientError
+      && error.kind === 'invalid_request'
+      && error.message === 'resource page size must be between 1 and 100',
+  );
+  assert.deepEqual(requestUrls, []);
+});
+
 test('lookup preserves the full JavaScript safe integer domain in its JSON body', async () => {
   lookupBodies.length = 0;
   const client = new RelayClient({ baseUrl });
@@ -261,9 +348,11 @@ test('synchronous napi argument conversion failures use fixed redacted envelopes
   for (const invoke of [
     () => client.resource(42),
     () => client.resources({ pageSize: 1n }),
+    () => client.resources({ pageSize: Number.POSITIVE_INFINITY }),
     () => client.lookup('people', 'by-identity', undefined),
     () => client.lookup('people', 'by-identity', { number: Number.NaN }),
     () => client.lookup('people', 'by-identity', { number: Number.POSITIVE_INFINITY }),
+    () => client.search('people', 'within-bbox', { bbox: [Number.NaN, -5, 10, 5] }),
   ]) {
     assert.throws(
       invoke,
@@ -275,7 +364,12 @@ test('synchronous napi argument conversion failures use fixed redacted envelopes
 });
 
 test('constructor napi conversion failures use fixed configuration envelopes', () => {
-  for (const config of [{ baseUrl: 1n }, undefined]) {
+  for (const config of [
+    { baseUrl: 1n },
+    { baseUrl, maxResponseBytes: Number.NaN },
+    { baseUrl, requestTimeoutMilliseconds: Number.POSITIVE_INFINITY },
+    undefined,
+  ]) {
     assert.throws(
       () => new RelayClient(config),
       (error) => error instanceof RelayClientError
@@ -412,21 +506,43 @@ test('private-key JWT configuration is accepted without token-endpoint I/O', () 
   const clientKey = privateKey.export({ format: 'jwk' });
   clientKey.alg = 'ES256';
   clientKey.kid = 'node-binding-test-key';
-  const client = new RelayClient({
+  const privateKeyJwt = {
+    tokenEndpoint: 'https://issuer.invalid/oauth/token',
+    clientId: 'node-binding-test-client',
+    clientKey,
+    audience: 'https://issuer.invalid/oauth/token',
+    assertionLifetimeSeconds: 300,
+    refreshMarginSeconds: 2 ** 32,
+    requestTimeoutMilliseconds: 2 ** 32,
+    connectTimeoutMilliseconds: 2 ** 32,
+    userAgent: 'registry-relay-client-node-test',
+  };
+  const construct = (overrides = {}) => new RelayClient({
     baseUrl,
-    authorization: {
-      privateKeyJwt: {
-        tokenEndpoint: 'https://issuer.invalid/oauth/token',
-        clientId: 'node-binding-test-client',
-        clientKey,
-        audience: 'https://issuer.invalid/oauth/token',
-        assertionLifetimeSeconds: 60,
-        refreshMarginSeconds: 10,
-        requestTimeoutMilliseconds: 1_000,
-        connectTimeoutMilliseconds: 500,
-        userAgent: 'registry-relay-client-node-test',
-      },
-    },
+    authorization: { privateKeyJwt: { ...privateKeyJwt, ...overrides } },
   });
+  const client = construct();
   assert.ok(client);
+
+  for (const [overrides, message] of [
+    [
+      { assertionLifetimeSeconds: 300.5 },
+      'authorization.privateKeyJwt.assertionLifetimeSeconds must be an integer',
+    ],
+    [
+      { refreshMarginSeconds: Number.MAX_SAFE_INTEGER + 1 },
+      'authorization.privateKeyJwt.refreshMarginSeconds must be an integer',
+    ],
+    [
+      { requestTimeoutMilliseconds: -1 },
+      'authorization.privateKeyJwt.requestTimeoutMilliseconds must be a non-negative integer',
+    ],
+  ]) {
+    assert.throws(
+      () => construct(overrides),
+      (error) => error instanceof RelayClientError
+        && error.kind === 'configuration'
+        && error.message === message,
+    );
+  }
 });

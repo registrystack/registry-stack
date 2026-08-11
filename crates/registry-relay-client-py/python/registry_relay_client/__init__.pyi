@@ -6,6 +6,7 @@ RecordFormat = Literal["json", "json-ld", "geojson", "json-fg"]
 SdmxDataFormat = Literal["json", "csv"]
 SdmxStructureKind = Literal["dataflow", "datastructure"]
 Selector = Union[str, int, bool]
+BoundingBox = list[float] | tuple[float, float, float, float]
 
 class _PrivateKeyJwtRequired(TypedDict):
     token_endpoint: str
@@ -186,7 +187,7 @@ class RelayClient:
         resource: str,
         search: str,
         *,
-        bbox: Sequence[float],
+        bbox: BoundingBox,
         page_size: Optional[int] = ...,
         fields: Optional[Sequence[str]] = ...,
         access_profile: Optional[str] = ...,

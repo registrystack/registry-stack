@@ -531,12 +531,28 @@ impl SdmxStructureKind {
     }
 }
 
+/// A validated SDMX structure route.
+///
+/// Route fields are read-only so an invalid value cannot be substituted after
+/// construction and sent to Relay.
+///
+/// ```compile_fail
+/// use registry_relay_client::{SdmxStructureKind, SdmxStructureRequest};
+///
+/// let mut request = SdmxStructureRequest::new(
+///     SdmxStructureKind::Dataflow,
+///     "AGENCY",
+///     "FLOW",
+///     "1.0.0",
+/// ).unwrap();
+/// request.version = "latest".into();
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SdmxStructureRequest {
-    pub kind: SdmxStructureKind,
-    pub agency: String,
-    pub resource: String,
-    pub version: String,
+    kind: SdmxStructureKind,
+    agency: String,
+    resource: String,
+    version: String,
 }
 
 impl SdmxStructureRequest {
@@ -563,6 +579,26 @@ impl SdmxStructureRequest {
             ));
         }
         Ok(result)
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> SdmxStructureKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn agency(&self) -> &str {
+        &self.agency
+    }
+
+    #[must_use]
+    pub fn resource(&self) -> &str {
+        &self.resource
+    }
+
+    #[must_use]
+    pub fn version(&self) -> &str {
+        &self.version
     }
 }
 
@@ -721,6 +757,25 @@ mod tests {
             .dimension_at_observation("AllDimensions")
             .is_ok());
         assert!(base.dimension_at_observation("time_period").is_err());
+    }
+
+    #[test]
+    fn sdmx_structure_route_fields_remain_validated_and_read_only() {
+        let request = SdmxStructureRequest::new(
+            SdmxStructureKind::DataStructure,
+            "AGENCY.SUB",
+            "FLOW",
+            "1.0.0",
+        )
+        .expect("valid structure request");
+        assert_eq!(request.kind(), SdmxStructureKind::DataStructure);
+        assert_eq!(request.agency(), "AGENCY.SUB");
+        assert_eq!(request.resource(), "FLOW");
+        assert_eq!(request.version(), "1.0.0");
+        assert!(
+            SdmxStructureRequest::new(SdmxStructureKind::Dataflow, "AGENCY", "FLOW", "latest",)
+                .is_err()
+        );
     }
 
     #[test]

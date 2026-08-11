@@ -39,9 +39,11 @@ def class_members(node: ast.ClassDef) -> set[str]:
 
 class DriftTest(unittest.TestCase):
     def setUp(self):
-        tree = ast.parse(STUB.read_text(encoding="utf-8"))
+        self.tree = ast.parse(STUB.read_text(encoding="utf-8"))
         self.stub_classes = {
-            node.name: node for node in tree.body if isinstance(node, ast.ClassDef)
+            node.name: node
+            for node in self.tree.body
+            if isinstance(node, ast.ClassDef)
         }
         self.classes = {
             name: node
@@ -101,6 +103,40 @@ class DriftTest(unittest.TestCase):
                     for name, parameter in live_parameters.items()
                 }
                 self.assertEqual(stub_parameters, live_projection)
+
+    def test_bbox_type_matches_the_exact_runtime_containers(self):
+        alias = next(
+            node
+            for node in self.tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "BoundingBox"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(
+            ast.unparse(alias.value),
+            "list[float] | tuple[float, float, float, float]",
+        )
+        self.assertFalse(
+            any(
+                isinstance(node, ast.Name) and node.id == "Sequence"
+                for node in ast.walk(alias.value)
+            )
+        )
+
+        search = next(
+            node
+            for node in self.classes["RelayClient"].body
+            if isinstance(node, ast.FunctionDef) and node.name == "search"
+        )
+        bbox = next(
+            argument
+            for argument in search.args.kwonlyargs
+            if argument.arg == "bbox"
+        )
+        self.assertIsInstance(bbox.annotation, ast.Name)
+        self.assertEqual(bbox.annotation.id, "BoundingBox")
 
     def test_error_attributes_and_inheritance_are_pinned(self):
         self.assertEqual(

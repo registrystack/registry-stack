@@ -46,6 +46,10 @@ One aggregate budget per call permits at most 128 levels, 100,000 values, and
 4 MiB of UTF-8 string data. These checks prevent recursive native conversion
 of cyclic or active JavaScript objects.
 
+Integer-valued configuration and request options must satisfy
+`Number.isSafeInteger` and the bound of their target option. Safe integers are
+preserved exactly across native conversion.
+
 Raw OpenAPI, artifact, and SDMX responses carry `body` as a Node `Buffer` and
 `mediaType` as the accepted server media type.
 

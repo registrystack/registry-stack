@@ -51,8 +51,9 @@ accepts. Raw OpenAPI, artifact, and SDMX bodies are returned as `bytes`.
 
 List and search requests follow their distinct Relay contracts. A list accepts
 optional equality `filters` and never accepts `bbox`. A named search requires a
-four-number `bbox` ordered as west, south, east, north and never accepts
-`filters`:
+four-number `bbox` ordered as west, south, east, north. The bbox must be a
+concrete Python `list` or a four-item `tuple`; other sequence implementations
+are rejected. Search never accepts `filters`:
 
 ```python
 listed = client.list_records("people", filters={"status": "active"})

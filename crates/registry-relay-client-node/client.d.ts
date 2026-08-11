@@ -1,5 +1,7 @@
 export type JsonScalar = string | number | boolean | null
 export type JsonValue = JsonScalar | ReadonlyArray<JsonValue> | { readonly [key: string]: JsonValue }
+/** An integer that satisfies `Number.isSafeInteger` and the option's documented bounds. */
+export type SafeInteger = number
 
 export interface PrivateJwk {
   readonly kty: string
@@ -13,10 +15,10 @@ export interface PrivateKeyJwtConfig {
   clientId: string
   clientKey: PrivateJwk
   audience?: string | null
-  assertionLifetimeSeconds?: number | null
-  refreshMarginSeconds?: number | null
-  requestTimeoutMilliseconds?: number | null
-  connectTimeoutMilliseconds?: number | null
+  assertionLifetimeSeconds?: SafeInteger | null
+  refreshMarginSeconds?: SafeInteger | null
+  requestTimeoutMilliseconds?: SafeInteger | null
+  connectTimeoutMilliseconds?: SafeInteger | null
   userAgent?: string | null
   trustedRootCertificates?: string | null
 }
@@ -28,17 +30,17 @@ export type RelayAuthorization =
 export interface RelayClientConfig {
   baseUrl: string
   authorization?: RelayAuthorization | null
-  requestTimeoutMilliseconds?: number | null
-  connectTimeoutMilliseconds?: number | null
+  requestTimeoutMilliseconds?: SafeInteger | null
+  connectTimeoutMilliseconds?: SafeInteger | null
   userAgent?: string | null
-  maxResponseBytes?: number | null
+  maxResponseBytes?: SafeInteger | null
   trustedRootCertificates?: string | null
 }
 
 export type RecordFormat = 'json' | 'json-ld' | 'geojson' | 'geo-json-rfc7946' | 'json-fg'
 
 export interface ResourceListOptions {
-  pageSize?: number | null
+  pageSize?: SafeInteger | null
 }
 
 export interface ResourceContinuation {
@@ -52,18 +54,17 @@ export interface RecordOptions {
 }
 
 export interface ListOptions extends RecordOptions {
-  pageSize?: number | null
+  pageSize?: SafeInteger | null
   filters?: Readonly<Record<string, string>> | null
 }
 
 export interface SearchOptions extends RecordOptions {
-  pageSize?: number | null
+  pageSize?: SafeInteger | null
   /** `[west, south, east, north]` in WGS84 longitude/latitude degrees. */
   bbox: readonly [number, number, number, number]
 }
 
-/** Numeric selectors must satisfy `Number.isSafeInteger`. */
-export type LookupSelector = string | number | boolean
+export type LookupSelector = string | SafeInteger | boolean
 export type LookupSelectors = Readonly<Record<string, LookupSelector>>
 
 export interface RecordsRoute {
@@ -91,8 +92,8 @@ export interface SdmxDataRequest {
   version: string
   key?: string | null
   constraints?: Readonly<Record<string, string>> | null
-  offset?: number | null
-  limit?: number | null
+  offset?: SafeInteger | null
+  limit?: SafeInteger | null
   dimensionAtObservation?: string | null
   format?: 'json' | 'csv' | null
 }

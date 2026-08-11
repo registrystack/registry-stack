@@ -29,6 +29,8 @@ type ResourceOutcome = Either<ResourcePageOutcome, NotModifiedOutcome>;
 type CollectionOutcome = Either<CollectionPageOutcome, NotModifiedOutcome>;
 type RawOutcome = Either<RawCompleteOutcome, NotModifiedOutcome>;
 
+const MAXIMUM_JAVASCRIPT_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
 #[napi(object)]
 pub struct CompleteOutcome {
     pub kind: String,
@@ -214,6 +216,39 @@ fn optional_string(
     }
 }
 
+fn bounded_safe_integer(
+    value: &Value,
+    minimum: i64,
+    maximum: i64,
+    kind: &'static str,
+    message: &'static str,
+) -> Result<i64> {
+    debug_assert!(minimum >= -MAXIMUM_JAVASCRIPT_SAFE_INTEGER);
+    debug_assert!(maximum <= MAXIMUM_JAVASCRIPT_SAFE_INTEGER);
+
+    let invalid = || binding_error(kind, message);
+    let Value::Number(number) = value else {
+        return Err(invalid());
+    };
+    let integer = if let Some(integer) = number.as_i64() {
+        integer
+    } else {
+        let number = number.as_f64().ok_or_else(&invalid)?;
+        if !number.is_finite()
+            || number.fract() != 0.0
+            || !(-(MAXIMUM_JAVASCRIPT_SAFE_INTEGER as f64)..=MAXIMUM_JAVASCRIPT_SAFE_INTEGER as f64)
+                .contains(&number)
+        {
+            return Err(invalid());
+        }
+        number as i64
+    };
+    if !(minimum..=maximum).contains(&integer) {
+        return Err(invalid());
+    }
+    Ok(integer)
+}
+
 fn optional_u64(
     object: &Map<String, Value>,
     field: &str,
@@ -222,10 +257,10 @@ fn optional_u64(
 ) -> Result<Option<u64>> {
     match object.get(field) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| binding_error(kind, message)),
+        Some(value) => {
+            bounded_safe_integer(value, 0, MAXIMUM_JAVASCRIPT_SAFE_INTEGER, kind, message)
+                .map(|value| Some(value as u64))
+        }
     }
 }
 
@@ -236,10 +271,14 @@ fn optional_i64(
 ) -> Result<Option<i64>> {
     match object.get(field) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_i64()
-            .map(Some)
-            .ok_or_else(|| binding_error("configuration", message)),
+        Some(value) => bounded_safe_integer(
+            value,
+            -MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+            MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+            "configuration",
+            message,
+        )
+        .map(Some),
     }
 }
 
@@ -611,11 +650,10 @@ fn request_optional_u32(
 ) -> Result<Option<u32>> {
     match object.get(field) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .map(Some)
-            .ok_or_else(|| binding_error("invalid_request", message)),
+        Some(value) => {
+            bounded_safe_integer(value, 0, i64::from(u32::MAX), "invalid_request", message)
+                .map(|value| Some(value as u32))
+        }
     }
 }
 
@@ -743,34 +781,17 @@ fn record_options_request(value: Option<Value>) -> Result<RecordOptions> {
 }
 
 fn lookup_selector_value(value: &Value) -> Result<Value> {
-    const MAXIMUM_SAFE_INTEGER_I64: i64 = 9_007_199_254_740_991;
-    const MAXIMUM_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
-
-    let Value::Number(number) = value else {
+    if !value.is_number() {
         return Ok(value.clone());
-    };
-    if let Some(number) = number.as_i64() {
-        if (-MAXIMUM_SAFE_INTEGER_I64..=MAXIMUM_SAFE_INTEGER_I64).contains(&number) {
-            return Ok(value.clone());
-        }
-        return Err(binding_error(
-            "invalid_request",
-            "a lookup selector value is invalid",
-        ));
     }
-    let number = number
-        .as_f64()
-        .ok_or_else(|| binding_error("invalid_request", "a lookup selector value is invalid"))?;
-    if !number.is_finite()
-        || number.fract() != 0.0
-        || !(-MAXIMUM_SAFE_INTEGER..=MAXIMUM_SAFE_INTEGER).contains(&number)
-    {
-        return Err(binding_error(
-            "invalid_request",
-            "a lookup selector value is invalid",
-        ));
-    }
-    Ok(Value::from(number as i64))
+    bounded_safe_integer(
+        value,
+        -MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+        MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+        "invalid_request",
+        "a lookup selector value is invalid",
+    )
+    .map(Value::from)
 }
 
 fn collection_continuation(value: Value, expected: &'static str) -> Result<CollectionContinuation> {
@@ -1261,6 +1282,53 @@ mod tests {
             "bbox": [100.0, 13.0, 101.0, 14.0]
         }))
         .expect("the closed search query shape is accepted");
+    }
+
+    #[test]
+    fn public_integer_fields_share_the_javascript_safe_integer_decoder() {
+        let object = serde_json::from_str::<Value>(
+            r#"{
+                "u64": 4294967296.0,
+                "i64": -9007199254740991.0,
+                "u32": 4294967295.0
+            }"#,
+        )
+        .expect("floating JSON numbers");
+        let object = object.as_object().expect("an object");
+        assert_eq!(
+            optional_u64(object, "u64", "configuration", "invalid").unwrap(),
+            Some(4_294_967_296)
+        );
+        assert_eq!(
+            optional_i64(object, "i64", "invalid").unwrap(),
+            Some(-9_007_199_254_740_991)
+        );
+        assert_eq!(
+            request_optional_u32(object, "u32", "invalid").unwrap(),
+            Some(u32::MAX)
+        );
+
+        for (wire, maximum, kind) in [
+            ("1.5", MAXIMUM_JAVASCRIPT_SAFE_INTEGER, "configuration"),
+            (
+                "9007199254740992",
+                MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+                "configuration",
+            ),
+            (
+                "9007199254740992.0",
+                MAXIMUM_JAVASCRIPT_SAFE_INTEGER,
+                "configuration",
+            ),
+            ("4294967296.0", i64::from(u32::MAX), "invalid_request"),
+            ("-1", i64::from(u32::MAX), "invalid_request"),
+        ] {
+            let value = serde_json::from_str(wire).expect("a JSON number");
+            let error = bounded_safe_integer(&value, 0, maximum, kind, "invalid").unwrap_err();
+            let envelope = error_envelope(error);
+            assert_eq!(envelope["kind"], kind);
+            assert_eq!(envelope["message"], "invalid");
+        }
     }
 
     #[test]
