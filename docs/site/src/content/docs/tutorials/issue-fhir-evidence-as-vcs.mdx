@@ -42,9 +42,11 @@ is a public demonstration server containing synthetic data. Its operator can add
 records, so the discovery result and expected `true` answers can change. Do not send real patient
 identifiers or other sensitive data to it.
 
-This tutorial works with this server as written. Another FHIR server may use different resource
-profiles, data, authorization, search behavior, or JSON shapes. Do not replace only the server URL
-and assume the same evidence claim remains valid.
+This tutorial works with this server as written. Its test-only origin override accepts only a
+numeric-loopback HTTP endpoint so Registry Docs can replay the same steps against sanitized local
+records. Another FHIR server may use different resource profiles, data, authorization, search
+behavior, or JSON shapes. Do not replace only the server URL and assume the same evidence claim
+remains valid.
 
 The two questions return narrow administrative facts:
 
@@ -75,11 +77,26 @@ owner-only local files and does not print identifiers or FHIR resources:
 import json
 import os
 import re
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.error import HTTPError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-BASE_URL = "https://r4.smarthealthit.org"
+DEFAULT_BASE_URL = "https://r4.smarthealthit.org"
+BASE_URL = os.environ.get("FHIR_TUTORIAL_TEST_BASE_URL", DEFAULT_BASE_URL)
+if BASE_URL != DEFAULT_BASE_URL:
+    parsed_origin = urlsplit(BASE_URL)
+    if (
+        parsed_origin.scheme != "http"
+        or parsed_origin.hostname != "127.0.0.1"
+        or parsed_origin.port is None
+        or parsed_origin.username is not None
+        or parsed_origin.password is not None
+        or parsed_origin.path not in {"", "/"}
+        or parsed_origin.query
+        or parsed_origin.fragment
+    ):
+        raise RuntimeError("the tutorial test origin must be numeric loopback HTTP")
+BASE_URL = BASE_URL.rstrip("/")
 MAXIMUM_BYTES = 1_048_576
 FHIR_ID = re.compile(r"^[A-Za-z0-9.-]{1,64}$")
 ORGANIZATION_TYPE_SYSTEM = (
@@ -92,7 +109,7 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-OPENER = build_opener(NoRedirect)
+OPENER = build_opener(ProxyHandler({}), NoRedirect)
 
 
 def read_fhir(path, parameters=None, missing_ok=False):
@@ -248,12 +265,29 @@ Create `fhir-read-through.py`:
 
 ```python
 import json
+import os
 import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
-BASE_URL = "https://r4.smarthealthit.org"
+DEFAULT_BASE_URL = "https://r4.smarthealthit.org"
+BASE_URL = os.environ.get("FHIR_TUTORIAL_TEST_BASE_URL", DEFAULT_BASE_URL)
+if BASE_URL != DEFAULT_BASE_URL:
+    parsed_origin = urlsplit(BASE_URL)
+    if (
+        parsed_origin.scheme != "http"
+        or parsed_origin.hostname != "127.0.0.1"
+        or parsed_origin.port is None
+        or parsed_origin.username is not None
+        or parsed_origin.password is not None
+        or parsed_origin.path not in {"", "/"}
+        or parsed_origin.query
+        or parsed_origin.fragment
+    ):
+        raise RuntimeError("the tutorial test origin must be numeric loopback HTTP")
+BASE_URL = BASE_URL.rstrip("/")
 MAXIMUM_BYTES = 1_048_576
 RESOURCE_PATH = re.compile(r"^/(Coverage|Organization)/([A-Za-z0-9.-]{1,64})$")
 
@@ -263,7 +297,7 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-OPENER = build_opener(NoRedirect)
+OPENER = build_opener(ProxyHandler({}), NoRedirect)
 
 
 class FhirReadThrough(BaseHTTPRequestHandler):
@@ -352,10 +386,12 @@ curl --silent --show-error --fail http://127.0.0.1:8000/healthz
 ready
 ```
 
-This is a transport adapter, not a mock FHIR server. Every Coverage or Organization response used
-by Evidence Gateway is fetched live from `https://r4.smarthealthit.org` at request time. The
-adapter asks the upstream server for FHIR JSON, validates the resource, and exposes the same JSON
-body as `application/json`, which is inside Evidence Gateway's frozen v1 source contract.
+This is a transport adapter, not a mock FHIR server. In the reader path, every Coverage or
+Organization response used by Evidence Gateway is fetched live from `https://r4.smarthealthit.org`
+at request time. The adapter asks the upstream server for FHIR JSON, validates the resource, and
+exposes the same JSON body as `application/json`, which is inside Evidence Gateway's frozen v1
+source contract. Both scripts ignore ambient proxy variables so selectors cannot be sent through
+an undeclared intermediary.
 
 ## Describe the exact FHIR reads
 

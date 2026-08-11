@@ -56,6 +56,7 @@ REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
 # fence by heading, language and occurrence and applies it to a file, using
 # only the shell and coreutils the container carries.
 FENCE="$SITE_ROOT/scripts/evidence-tutorial-fence.sh"
+FHIR_TUTORIAL_MOCK="$SITE_ROOT/scripts/fixtures/fhir-tutorial-mock.py"
 DOCS_ROOT="${EVIDENCE_TUTORIAL_DOCS_ROOT:-$SITE_ROOT/src/content/docs/tutorials}"
 BUILD_PROFILE="${EVIDENCE_TUTORIAL_CARGO_PROFILE:-ci}"
 TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
@@ -74,6 +75,7 @@ EVIDENCE_TUTORIALS=(
 	refuse-unsafe-evidence-requests
 	verify-an-assertion-as-a-consumer
 	control-who-can-request-evidence
+	issue-fhir-evidence-as-vcs
 )
 
 # Every other page under DOCS_ROOT, and the reason it is not replayed here.
@@ -86,7 +88,6 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	first-run-with-solmara-lab                       # historical; the Solmara Lab stack is replayed by check-tutorial.sh, not here
 	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
-	issue-fhir-evidence-as-vcs                        # needs the public SMART Health IT FHIR server; live and opt-in, not replayed in CI
 	issue-evidence-access-tokens-with-registry-mint  # drift-checked by evidence-production-build-docs.test.mjs; needs a Registry Mint deployment
 	issue-immunization-evidence-from-dhis2           # needs the public DHIS2 demo; live and opt-in, not replayed in CI
 	manage-evidence-verifier-trust                   # how-to against the reader's own deployment; no fixed scenario this gate can replay
@@ -450,6 +451,50 @@ load_spec() {
 			"Removed stopped local Evidence state"
 		)
 		;;
+	issue-fhir-evidence-as-vcs)
+		SPEC_FENCES=10
+		SPEC_STEPS=(
+			"run:1"
+			"save:Select live synthetic records|python|1|discover-fhir-records.py"
+			"fhir-mock"
+			"run:2"
+			"save:Run a live FHIR read-through adapter|python|1|fhir-read-through.py"
+			"run:3"
+			"save:Describe the exact FHIR reads|yaml|1|fhir-smart-r4.openapi.yaml"
+			"run:4"
+			"save:Author the patient coverage question|yaml|1|questions/fhir-coverage-status.yaml"
+			"save:Author the patient coverage question|rhai|1|derivations/fhir-coverage-status.rhai"
+			"save:Author the healthcare-establishment question|yaml|1|questions/fhir-healthcare-establishment.yaml"
+			"save:Author the healthcare-establishment question|rhai|1|derivations/fhir-healthcare-establishment.rhai"
+			"run:5-10"
+		)
+		SPEC_LITERALS=(
+			'FHIR_TUTORIAL_TEST_BASE_URL'
+			'build_opener(ProxyHandler({}), NoRedirect)'
+			'headers={"Accept": "application/fhir+json"}'
+			'source: true'
+			'--subjects-file ../fhir-coverage-subjects.json'
+			'--subjects-file ../fhir-organization-subjects.json'
+			"--header 'Accept: application/dc+sd-jwt'"
+			'evidencectl audit show --last-operation'
+			'evidencectl dev clean'
+		)
+		SPEC_OUTPUTS=(
+			"Coverage selector file: ready"
+			"Organization selector file: ready"
+			"Created an editable OpenAPI authoring project in fhir-record-evidence"
+			"Evidence ready at http://127.0.0.1:8080"
+			"Mint ready at http://127.0.0.1:8081"
+			"Prepared request: .evidence/requests/fhir-coverage-vc/request.json"
+			"Prepared request: .evidence/requests/fhir-healthcare-establishment-vc/request.json"
+			"HTTP 200"
+			"VERIFIED"
+			"Local Evidence stopped"
+			"ACCESS AUTHORIZED fhir-healthcare-establishment healthcare-establishment-verification requester="
+			"DISCLOSURE RELEASED healthcare_provider_record_active"
+			"Removed stopped local Evidence state"
+		)
+		;;
 	*)
 		printf '%s is not a registered Evidence tutorial\n' "$1" >&2
 		exit 2
@@ -758,6 +803,17 @@ emit_wait_http_step() {
 	printf 'done\n'
 }
 
+emit_fhir_mock_step() {
+	printf '\nprintf "==> start sanitized local FHIR mock\\n"\n'
+	printf '%q >%q 2>&1 &\n' "$FHIR_TUTORIAL_MOCK" "$WORK_ROOT/fhir-tutorial-mock.log"
+	printf 'BACKGROUND_PIDS+=("$!")\n'
+	printf 'for attempt in {1..50}; do\n'
+	printf '  if curl --noproxy "*" -fs http://127.0.0.1:8003/healthz >/dev/null 2>&1; then break; fi\n'
+	printf '  if [[ "$attempt" -eq 50 ]]; then printf "sanitized FHIR mock did not become ready\\n" >&2; exit 1; fi\n'
+	printf '  sleep 0.1\n'
+	printf 'done\n'
+}
+
 emit_journey() {
 	local slug="$1" fence_dir="$2" tutorial_file="$3"
 	local edit_dir="$WORK_ROOT/edits/$slug"
@@ -780,6 +836,7 @@ emit_journey() {
 		run:*) emit_run_step "$slug" "${step#run:}" "$fence_dir" ;;
 		run-fails:*) emit_run_fails_step "$slug" "${step#run-fails:}" "$fence_dir" ;;
 		python-client) emit_python_client_step "$slug" ;;
+		fhir-mock) emit_fhir_mock_step ;;
 		edit:*) emit_edit_step "$slug" "${step#edit:}" "$tutorial_file" "$edit_dir" ;;
 		save:*) emit_save_step "$slug" "${step#save:}" ;;
 		background:*) emit_background_step "$slug" "${step#background:}" "$fence_dir" ;;
@@ -816,6 +873,14 @@ run_journey_script() {
 	local slug="$1" reader_dir="$2" run_script="$3"
 	if [[ "$slug" == "run-oid4vci-interoperability-checks" ]]; then
 		(cd "$reader_dir" && PATH="$SHIM_DIR:$PATH" CARGO_TARGET_DIR="$TARGET_DIR" bash "$run_script")
+	elif [[ "$slug" == "issue-fhir-evidence-as-vcs" ]]; then
+		(
+			unset CARGO_TARGET_DIR
+			cd "$reader_dir"
+			PATH="$SHIM_DIR:$PATH" \
+				FHIR_TUTORIAL_TEST_BASE_URL="http://127.0.0.1:8003" \
+				bash "$run_script"
+		)
 	else
 		(
 			unset CARGO_TARGET_DIR
