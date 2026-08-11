@@ -322,6 +322,12 @@ class CiChangesTest(unittest.TestCase):
                 "evidence_tutorial"
             ]
         )
+        self.assertTrue(
+            classify(
+                self.workspace,
+                ("crates/registry-evidence-oid4vci/src/service.rs",),
+            )["evidence_tutorial"]
+        )
         self.assertFalse(
             classify(
                 self.workspace,
@@ -499,14 +505,14 @@ class CiChangesTest(unittest.TestCase):
             {"evidence"},
         )
 
-    def test_oid4vci_change_runs_rust_and_contracts_without_unrelated_tutorial(self) -> None:
+    def test_oid4vci_change_runs_rust_contracts_and_its_registered_tutorial(self) -> None:
         outputs = classify(
             self.workspace,
             ("crates/registry-evidence-oid4vci/src/lib.rs",),
         )
         self.assertIn("registry-evidence-oid4vci", outputs["rust_packages"])
         self.assertTrue(outputs["evidence_contracts"])
-        self.assertFalse(outputs["evidence_tutorial"])
+        self.assertTrue(outputs["evidence_tutorial"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
             {"evidence"},

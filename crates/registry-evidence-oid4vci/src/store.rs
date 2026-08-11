@@ -81,16 +81,18 @@ pub enum StoreError {
 pub struct PreparedRequest {
     kind: String,
     body: String,
+    maximum_holder_keys: usize,
 }
 
 redacted_debug!(PreparedRequest);
 
 impl PreparedRequest {
     #[must_use]
-    pub fn new(kind: &str, body: &str) -> Self {
+    pub fn new(kind: &str, body: &str, maximum_holder_keys: usize) -> Self {
         Self {
             kind: kind.to_owned(),
             body: body.to_owned(),
+            maximum_holder_keys,
         }
     }
 
@@ -104,6 +106,14 @@ impl PreparedRequest {
     #[must_use]
     pub fn body(&self) -> &str {
         &self.body
+    }
+
+    /// The effective Evidence batch ceiling captured when the offer was
+    /// created. Keeping it with the prepared request prevents a later discovery
+    /// change from making metadata, offer creation, and redemption disagree.
+    #[must_use]
+    pub fn maximum_holder_keys(&self) -> usize {
+        self.maximum_holder_keys
     }
 }
 
@@ -145,10 +155,12 @@ struct StoreState {
 }
 
 impl StoreState {
-    fn prune(&mut self, now: i64) {
+    fn prune(&mut self, now: i64) -> usize {
+        let before = self.offers.len() + self.ledgers.len() + self.tokens.len();
         self.offers.retain(|_, entry| entry.expires_at > now);
         self.ledgers.retain(|_, ledger| ledger.expires_at > now);
         self.tokens.retain(|_, entry| entry.expires_at > now);
+        before.saturating_sub(self.offers.len() + self.ledgers.len() + self.tokens.len())
     }
 }
 
@@ -436,13 +448,14 @@ impl OfferStore {
     /// Writes prune as they go, so this exists for the quiet deployment: one
     /// that stops receiving requests must not keep the last minutes of state in
     /// memory indefinitely.
-    pub fn sweep(&self, now: i64) {
+    pub fn sweep(&self, now: i64) -> usize {
         // A poisoned lock means a panic already happened while state was being
         // changed. There is nothing safe to prune and nothing to report to, so
         // the sweep skips this round; every read and write still fails loudly.
         if let Ok(mut state) = self.state.lock() {
-            state.prune(now);
+            return state.prune(now);
         }
+        0
     }
 
     /// How many entries the store holds, across every key-space.
@@ -452,6 +465,23 @@ impl OfferStore {
             .lock()
             .map(|state| state.offers.len() + state.ledgers.len() + state.tokens.len())
             .unwrap_or(0)
+    }
+
+    /// The fullest bounded key-space, for operational saturation pressure.
+    ///
+    /// Each of the offer, ledger, and token maps refuses independently at the
+    /// configured capacity. Reporting their aggregate would hide a full map
+    /// behind spare room in the other two. A poisoned store returns no sample
+    /// so telemetry retains its last trustworthy value instead of reporting
+    /// an apparent recovery to zero.
+    pub(crate) fn maximum_keyspace_len(&self) -> Option<usize> {
+        self.state.lock().ok().map(|state| {
+            state
+                .offers
+                .len()
+                .max(state.ledgers.len())
+                .max(state.tokens.len())
+        })
     }
 
     #[must_use]
@@ -509,8 +539,10 @@ fn transaction_code_matches(expected: Option<&String>, presented: Option<&String
 
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum NonceError {
-    #[error("the nonce is not a nonce this process minted")]
-    Refused,
+    #[error("the nonce is not structurally valid")]
+    Invalid,
+    #[error("the nonce integrity tag was refused")]
+    Tampered,
     #[error("the nonce has expired")]
     Expired,
 }
@@ -568,14 +600,20 @@ impl NonceMinter {
     /// Verify a nonce by recomputing it. Never reads a stored value, because
     /// there is none.
     pub fn verify(&self, nonce: &str, now: i64) -> Result<(), NonceError> {
-        let (expiry, presented) = nonce.split_once('.').ok_or(NonceError::Refused)?;
-        let expires_at: i64 = expiry.parse().map_err(|_| NonceError::Refused)?;
+        let (expiry, presented) = nonce.split_once('.').ok_or(NonceError::Invalid)?;
+        if presented.is_empty() || presented.contains('.') {
+            return Err(NonceError::Invalid);
+        }
+        let expires_at: i64 = expiry.parse().map_err(|_| NonceError::Invalid)?;
+        if expiry != expires_at.to_string() {
+            return Err(NonceError::Invalid);
+        }
         let expected = self.tag(expires_at);
         // The MAC is checked before the expiry, so a caller cannot learn
         // anything about a nonce it did not receive by reading the refusal.
         let matches: bool = expected.as_bytes().ct_eq(presented.as_bytes()).into();
         if !matches {
-            return Err(NonceError::Refused);
+            return Err(NonceError::Tampered);
         }
         if expires_at <= now {
             return Err(NonceError::Expired);
@@ -602,7 +640,11 @@ mod tests {
     }
 
     fn prepared() -> PreparedRequest {
-        PreparedRequest::new("urn:example:kind", r#"{"selector":"held-by-the-adopter"}"#)
+        PreparedRequest::new(
+            "urn:example:kind",
+            r#"{"selector":"held-by-the-adopter"}"#,
+            4,
+        )
     }
 
     fn store() -> OfferStore {
@@ -866,6 +908,37 @@ mod tests {
     }
 
     #[test]
+    fn saturation_pressure_is_the_fullest_independently_bounded_keyspace() {
+        let store = store();
+        assert_eq!(store.maximum_keyspace_len(), Some(0));
+
+        store
+            .remember_offer("code-1", None, prepared(), NOW)
+            .expect("the offer is remembered");
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.maximum_keyspace_len(), Some(1));
+
+        for token in ["token-1", "token-2"] {
+            store
+                .bind_access_token(token, prepared(), NOW)
+                .expect("the token is bound");
+        }
+        assert_eq!(store.len(), 4);
+        assert_eq!(store.maximum_keyspace_len(), Some(2));
+    }
+
+    #[test]
+    fn a_poisoned_store_reports_no_trustworthy_pressure_sample() {
+        let store = store();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = store.state.lock().expect("the store lock");
+            panic!("poison the store for the pressure test");
+        }));
+
+        assert_eq!(store.maximum_keyspace_len(), None);
+    }
+
+    #[test]
     fn nothing_the_store_holds_is_the_secret_it_stands_for() {
         let store = store();
         store
@@ -951,12 +1024,42 @@ mod tests {
     }
 
     #[test]
+    fn a_noncanonical_nonce_expiry_is_refused_even_with_the_valid_tag() {
+        let minter = NonceMinter::new(120);
+        let nonce = minter.mint(NOW);
+        let (expiry, tag) = nonce.split_once('.').expect("the nonce carries its expiry");
+
+        for (case, rewritten) in [
+            ("leading plus", format!("+{expiry}.{tag}")),
+            ("leading zero", format!("0{expiry}.{tag}")),
+            ("leading whitespace", format!(" {expiry}.{tag}")),
+            ("trailing whitespace", format!("{expiry} .{tag}")),
+        ] {
+            assert_eq!(
+                minter.verify(&rewritten, NOW),
+                Err(NonceError::Invalid),
+                "the {case} rewrite must be refused"
+            );
+        }
+
+        let zero_expiry_nonce = minter.mint(-120);
+        let (_, zero_expiry_tag) = zero_expiry_nonce
+            .split_once('.')
+            .expect("the nonce carries its expiry");
+        assert_eq!(
+            minter.verify(&format!("-0.{zero_expiry_tag}"), -1),
+            Err(NonceError::Invalid),
+            "the negative-zero rewrite must be refused"
+        );
+    }
+
+    #[test]
     fn a_nonce_from_another_process_is_refused() {
         let first = NonceMinter::new(120);
         let second = NonceMinter::new(120);
         let nonce = first.mint(NOW);
 
-        assert_eq!(second.verify(&nonce, NOW), Err(NonceError::Refused));
+        assert_eq!(second.verify(&nonce, NOW), Err(NonceError::Tampered));
     }
 
     #[test]

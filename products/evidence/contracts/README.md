@@ -73,6 +73,22 @@ contract, and deployment-shaped references live under
 [`../reference/request-adapter/`](../reference/request-adapter/). They are
 normative Version 1 inputs, not future-profile examples.
 
+## Pre-1.0 definitions discovery migration
+
+Registry Stack deliberately retains the `registry.evidence-definitions/v1`
+identity while making `holderBoundBatchMaxSize` a required member of the
+closed definitions response after v0.18. This is a pre-1.0 breaking product
+improvement. A strict client or validator built against the v0.18 schema
+rejects the added member because that schema has `additionalProperties: false`.
+
+Upgrade Evidence Gateway and every Evidence client or protocol adapter that
+reads its definitions response together. The current Evidence client treats a
+missing `holderBoundBatchMaxSize` as `1`, which supports a staged rollback or a
+short interoperation window in which the client is upgraded before Evidence
+Gateway. That default does not make an older strict client able to read the new
+response. Do not upgrade Evidence Gateway first while an older client or
+adapter remains in service.
+
 All schemas use source-neutral identifiers. Names of compatibility targets may
 appear only below `../fixtures/source-shapes/`. Acceptance-case vocabulary is
 confined to test-only bundles below `../fixtures/acceptance/`; it is not core

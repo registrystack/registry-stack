@@ -1,9 +1,8 @@
 //! The `evidence-oid4vci` binary.
 //!
-//! Two subcommands. `check` loads and validates a deployment without opening a
-//! socket, so an operator can validate an edited configuration on the host that
-//! is already serving the old one. `serve` runs the delivery service until it is
-//! terminated.
+//! Four subcommands. `check` validates a deployment without opening a socket,
+//! `inspect` prints its derived metadata, `openapi` renders the public contract,
+//! and `serve` runs the delivery service until it is terminated.
 
 use std::{path::PathBuf, process::ExitCode, sync::Arc};
 
@@ -30,6 +29,17 @@ enum Command {
     Check {
         #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
         config: PathBuf,
+    },
+    /// Validate the deployment and print its derived protocol metadata.
+    Inspect {
+        #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
+        config: PathBuf,
+    },
+    /// Render the deterministic OpenAPI 3.1 contract, then exit.
+    Openapi {
+        /// Write to a file instead of stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Serve the delivery endpoints until terminated.
     Serve {
@@ -66,19 +76,43 @@ fn run(cli: Cli) -> Result<(), String> {
             let config = load_config(&config)?;
             DeliveryService::check(&config)
                 .map_err(|error| format!("the configuration cannot be served: {error}"))?;
-            tracing::info!(
-                target: "registry_evidence_oid4vci",
-                credential_issuer = config.credential_issuer,
-                "configuration is valid"
-            );
+            tracing::info!(target: "registry_evidence_oid4vci", "configuration is valid");
+            Ok(())
+        }
+        Command::Inspect { config } => {
+            let config = load_config(&config)?;
+            let runtime = runtime()?;
+            let document = runtime.block_on(async move {
+                let service = DeliveryService::load(config)
+                    .map_err(|error| format!("the service cannot be inspected: {error}"))?;
+                service
+                    .inspect()
+                    .await
+                    .map_err(|error| format!("the service metadata is unavailable: {error}"))
+            })?;
+            let rendered = serde_json::to_string_pretty(&document)
+                .map_err(|_| "the service metadata could not be rendered".to_owned())?;
+            println!("{rendered}");
+            Ok(())
+        }
+        Command::Openapi { output } => {
+            let mut rendered = serde_json::to_string_pretty(
+                &registry_evidence_oid4vci::contracts::openapi_document(),
+            )
+            .map_err(|_| "the OpenAPI contract could not be rendered".to_owned())?;
+            rendered.push('\n');
+            if let Some(output) = output {
+                std::fs::write(output, rendered).map_err(|error| {
+                    format!("the OpenAPI contract could not be written: {error}")
+                })?;
+            } else {
+                print!("{rendered}");
+            }
             Ok(())
         }
         Command::Serve { config } => {
             let config = load_config(&config)?;
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| format!("the async runtime could not start: {error}"))?;
+            let runtime = runtime()?;
             runtime.block_on(async move {
                 let service = Arc::new(
                     DeliveryService::load(config)
@@ -90,6 +124,13 @@ fn run(cli: Cli) -> Result<(), String> {
             })
         }
     }
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("the async runtime could not start: {error}"))
 }
 
 fn load_config(path: &std::path::Path) -> Result<DeliveryConfig, String> {
@@ -112,5 +153,28 @@ async fn shutdown_signal() {
     tokio::select! {
         () = interrupt => {}
         () = terminate => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_openapi_write_failure_keeps_the_operating_system_cause() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing_parent = directory.path().join("missing").join("contract.json");
+        let error = run(Cli {
+            command: Command::Openapi {
+                output: Some(missing_parent),
+            },
+        })
+        .expect_err("writing below a missing directory fails");
+
+        assert!(
+            error.starts_with("the OpenAPI contract could not be written: "),
+            "error: {error}"
+        );
+        assert_ne!(error, "the OpenAPI contract could not be written");
     }
 }

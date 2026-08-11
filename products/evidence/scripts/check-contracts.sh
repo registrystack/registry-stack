@@ -18,6 +18,9 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo run --locked --quiet -p registry-evidence --example evidence-contracts -- \
   --output "$generated_root"
+CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo run --locked --quiet -p registry-evidence-oid4vci -- openapi \
+  --output "$generated_root/registry-evidence-oid4vci.openapi.json"
 
 if ! diff -ru "$committed_root" "$generated_root"; then
   echo 'Evidence generated contracts differ from the committed artifacts.' >&2

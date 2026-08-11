@@ -22,8 +22,8 @@ export interface HolderPublicKey {
   x: string
   /** The y coordinate, unpadded base64url. */
   y: string
-  alg?: 'ES256'
-  kid?: string
+  alg?: 'ES256' | null
+  kid?: string | null
 }
 
 /** The request-spec input accepted by `EvidenceClient.prepare`. */

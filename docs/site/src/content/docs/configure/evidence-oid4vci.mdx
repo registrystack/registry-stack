@@ -9,13 +9,15 @@ last_reviewed: "2026-08-09"
 doc_type: how-to
 locale: en
 standards_referenced:
+  - oid4vci
+  - openapi
   - sd-jwt-vc
 ---
 
 Configure `evidence-oid4vci` when a deployment needs to expose a holder-bound Evidence Gateway
 credential to an OID4VCI client rather than through the Evidence Gateway response contract.
-This page documents the adapter's protocol and deployment contract, not compatibility with a
-specific wallet.
+This page documents the adapter's frozen protocol and deployment profile, not general issuer
+certification or compatibility with a wallet product.
 
 ## When to use evidence-oid4vci
 
@@ -23,15 +25,11 @@ specific wallet.
 Registry Mint is. It exposes Evidence Gateway credentials over OID4VCI 1.0 Final, the
 wallet-facing protocol Evidence Gateway deliberately refuses to speak.
 
-Three properties bound the service, and none is negotiable:
-
-- **It never signs a credential.** Evidence Gateway signs. `evidence-oid4vci` holds no Evidence
-  Gateway signing key and has no code path that could use one.
-- **It never holds a holder private key.** It receives holder public keys inside wallet-signed
-  proof JWTs and passes them to Evidence Gateway unchanged.
-- **It adds no Evidence Gateway semantics.** It is a protocol adapter. Every authorization
-  decision, every source acquisition, and every signature stays behind the Evidence Gateway
-  runtime contract.
+Evidence Gateway signs every credential. The adapter holds no Evidence Gateway signing key and
+never holds a holder private key. It receives holder public keys inside wallet-signed proof JSON
+Web Tokens (JWTs) and passes those public keys into one Evidence Gateway batch request. Every
+Evidence authorization decision, source acquisition, derivation, and signature stays behind the
+Evidence Gateway runtime contract.
 
 The dependency between the two services runs one way: `evidence-oid4vci` is a client of Evidence
 Gateway and, for its adopter-facing endpoint, a resource server for Registry Mint tokens. No
@@ -41,8 +39,64 @@ Use `evidence-oid4vci` only for credentials issued under Evidence Gateway's `hol
 binding mode. A requirement whose subject binding is audience-scoped is not deliverable through
 this service.
 
-The repository does not yet carry a real-wallet or external OID4VCI conformance run. Verify the
-chosen wallet against the deployment before making a compatibility claim.
+## Treat the frozen profile as the contract
+
+`products/evidence/contracts/oid4vci-profile.yaml` is the versioned source of truth for the
+adapter. Public metadata, the generated OpenAPI document, configuration, and runtime tests must
+stay within that profile.
+
+`products/evidence/generated/registry-evidence-oid4vci.openapi.json` is the generated contract for
+the complete delivery listener. Reproduce it with `products/evidence/scripts/check-contracts.sh`;
+do not edit the generated document by hand.
+
+| Profile property | Supported value |
+| --- | --- |
+| Protocol | OpenID for Verifiable Credential Issuance (OID4VCI) 1.0 Final |
+| Initiation and grant | Issuer-initiated pre-authorized code, with anonymous token-client access |
+| Credential format | Holder-bound Evidence `dc+sd-jwt` only |
+| Proof | `jwt` with ES256 over a P-256 holder key |
+| Proof key source | Inline public JWK or bounded self-contained `did:jwk#0` |
+| Batch shape | Plural `proofs.jwt` in, plural `credentials` out |
+| State | Bounded process-local memory, exactly one service replica |
+| Compatibility claim | Frozen Registry profile implementation, not full issuer certification or conformance |
+
+The service performs no remote Decentralized Identifier (DID) resolution. A `did:jwk#0` value
+contains the public JWK that the service decodes locally.
+
+The profile does not support:
+
+- Authorization code flow or Pushed Authorization Requests (PAR)
+- Demonstrating Proof of Possession (DPoP)
+- Remote DID resolution or any proof-selected key lookup
+- Credential formats other than `dc+sd-jwt`
+- Deferred issuance, notifications, status, revocation, refresh, or reissuance
+- Draft 13 wire shapes or credential offers by reference
+- Durable protocol state, multi-replica state, or stateful nonce replay tracking
+- Wallet attestation, wallet onboarding, or plugin extensibility
+
+Do not enable an unsupported capability to accommodate a client. A client that requires one is
+outside this profile.
+
+## Use the pinned Inji evidence narrowly
+
+The interoperability target is the metadata-driven flow in these upstream `develop` revisions:
+
+| Component | Revision | Revision date |
+| --- | --- | --- |
+| Inji Wallet | `2fa12c3285b6523db340c3dd2333454b750b40a4` | 2026-08-03 |
+| Inji Android VCI client | `f1d7ee2b14e996e18bfc7c40fbf89ec31b768951` | 2026-07-31 |
+| Inji iOS VCI client | `dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c` | 2026-08-04 |
+
+On 2026-08-09, the checked-in sanitized runner passed the Registry-side metadata, wire-shape,
+negative, concurrency, and independent presentation-verification tests for this target. The
+separate upstream runner then reproduced the focused tests from all three exact public revisions:
+41 Wallet tests, the selected Kotlin unit-test task, and 12 Swift tests passed. The sanitized
+receipt is committed at
+`products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json`.
+
+This is bounded interoperability evidence for exact revisions and test conditions. It does not
+cover the Android or iOS user interface, device behavior, wallet storage or presentation, full
+issuer certification, another Inji release, or general compatibility.
 
 ## Before you start
 
@@ -71,6 +125,9 @@ listener:
   port: 8090
   maximumRequestBytes: 16384
   requestTimeoutMilliseconds: 5000
+metricsListener:
+  address: 127.0.0.1
+  port: 9090
 evidence:
   baseUrl: https://evidence.example.org
 mint:
@@ -105,7 +162,17 @@ is the base URL of the Evidence Gateway deployment this service requests credent
 credentials may be requested is the Evidence Gateway bundle's decision, never restated here.
 There is deliberately no configuration member for the credential configurations this service
 publishes: every entry is derived from the Evidence Gateway bundle, so published metadata cannot
-describe a credential Evidence Gateway would refuse to issue.
+describe a credential that the same coordinated Evidence Gateway generation would refuse to issue.
+The advertised
+`batch_credential_issuance.batch_size` also comes from authenticated Evidence discovery. The
+adapter omits that optional metadata member when the effective ceiling is one, and publishes it
+only for a ceiling from two through sixteen. It records the effective value with each offer, so a
+later metadata change cannot widen an outstanding exchange.
+
+`metricsListener` is optional and absent by default. When present, it binds a separate
+operator-private loopback or private address. It cannot share the delivery listener's binding.
+The delivery listener does not serve metrics, and the metrics listener does not serve protocol or
+adopter routes.
 
 `mint.privateKeyFile` is this service's own private JWK, read owner-only when the outbound client
 to Registry Mint is built, and never logged or rendered. `mint.clientAssertionAudience` defaults to
@@ -145,10 +212,49 @@ evidence-oid4vci check --config /etc/evidence-oid4vci/oid4vci.yaml
 ```
 
 `check` does everything `serve` does except bind a socket: it loads and validates the
-configuration document and the Mint client key, then exits. `check` and `serve` accept
+configuration document and the Mint client key, then exits. `check`, `inspect`, and `serve` accept
 `EVIDENCE_OID4VCI_CONFIG` in place of `--config`.
 
+Inspect the metadata derived from the validated configuration and authenticated Evidence
+discovery before routing traffic:
+
+```sh
+umask 077
+evidence-oid4vci inspect \
+  --config /etc/evidence-oid4vci/oid4vci.yaml \
+  > oid4vci-metadata.json
+python3 - <<'PY'
+import json
+
+with open("oid4vci-metadata.json", encoding="utf-8") as source:
+    document = json.load(source)
+print(document["profile"])
+print(document["deployment"])
+PY
+```
+
+```text
+registry.evidence.oid4vci-profile/v1
+{'metricsEnabled': True, 'replicas': 1, 'restartInvalidatesOutstandingExchanges': True}
+```
+
+The document also contains `credentialIssuerMetadata` and `authorizationServerMetadata` exactly as
+the service derives them. `inspect` is an explicit diagnostic command, so it may print raw issuer
+and audience values to stdout. Keep the output owner-only and do not send it to operational logs,
+metrics, or a shared build artifact. Operational logging omits those raw values.
+
+Render the deterministic OpenAPI 3.1 contract when the deployment process needs an inspectable
+copy of the public HTTP surface:
+
+```sh
+evidence-oid4vci openapi --output oid4vci.openapi.json
+```
+
+This command needs no deployment configuration and performs no network request.
+
 ## Start evidence-oid4vci
+
+Run exactly one serving process for the deployment:
 
 ```sh
 evidence-oid4vci serve --config /etc/evidence-oid4vci/oid4vci.yaml
@@ -157,17 +263,68 @@ evidence-oid4vci serve --config /etc/evidence-oid4vci/oid4vci.yaml
 Every field in the configuration document is startup-only; changing the credential issuer, the
 listener, the Evidence Gateway or Mint endpoints, or the store bounds means restarting the process.
 
+Use the two process-local probes after the listener starts:
+
+```sh
+curl --fail --silent https://wallet.example.org/health
+curl --fail --silent https://wallet.example.org/ready
+```
+
+```text
+{"status":"ok"}
+{"status":"ready"}
+```
+
+`/health` reports that the process answers. `/ready` reports that the process holds its loaded
+configuration, key material, and state store. Readiness does not contact or report the condition
+of Evidence Gateway or Registry Mint. Use the deployment's private upstream monitoring to observe
+those services.
+
+## Monitor the private metrics listener
+
+When `metricsListener` is present, collect Prometheus text from its only route:
+
+```sh
+curl --fail --silent http://127.0.0.1:9090/metrics
+```
+
+The listener returns `404 Not Found` for every other path. With `metricsListener` absent, the
+process opens no metrics socket and the delivery listener still has no `/metrics` route.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `evidence_oid4vci_http_requests_total` | Counter | Delivery requests by closed route, method, status, and problem class |
+| `evidence_oid4vci_http_request_duration_seconds` | Histogram | Delivery request latency with the same closed labels |
+| `evidence_oid4vci_outcomes_total` | Counter | Offer, code, token, nonce, proof, issuance, upstream Evidence, saturation, store-fault, and cleanup outcomes |
+| `evidence_oid4vci_store_entries` and `evidence_oid4vci_store_capacity` | Gauges | The fullest independently bounded offer, ledger, or token keyspace and its refusal threshold |
+| `evidence_oid4vci_cleanup_expired_total` | Counter | Expired process-local entries released by cleanup |
+
+The request labels are closed to the registered routes plus `unmatched`, the methods `GET`,
+`POST`, `HEAD`, `OPTIONS`, and `other`, three status classes, and the protocol's fixed problem
+classes. The complete outcome vocabulary is `offer_created`, `offer_authorization_refused`,
+`store_saturated`, `code_redeemed`, `code_claim_refused`, `token_claimed`,
+`token_claim_refused`, `nonce_minted`, `nonce_invalid`, `nonce_tampered`, `nonce_expired`,
+`proof_refused`, `credential_issued`, `evidence_refused`, `evidence_not_available`,
+`evidence_unavailable`, `store_fault`, and `cleanup_expired`. These labels contain no request-derived or
+deployment-specific identifier.
+
+Structured request logs use the same closed route, method, status, and problem classes. Logs and
+metrics omit codes, transaction codes, tokens, nonces, proofs, holder keys, credentials,
+selectors, subject identifiers, client identifiers, credential configuration identifiers, raw
+issuers, and raw audiences. Successful `/health` and `/ready` requests log at `DEBUG`; probe
+failures and non-probe requests remain visible at `INFO`.
+
 ## Protocol surface
 
 `evidence-oid4vci` pins OID4VCI 1.0 Final, one version, with no draft-13 compatibility mode.
 
 | Endpoint | Auth | Notes |
 | --- | --- | --- |
-| `GET /.well-known/openid-credential-issuer` | none | Publishes the issuer and credential endpoints, authorization server, batch ceiling, and supported credential configurations. The token endpoint is not published here. |
+| `GET /.well-known/openid-credential-issuer` | none | Publishes the issuer and credential endpoints, authorization server, supported credential configurations, and a batch ceiling only when the deployment accepts at least two proofs. The token endpoint is not published here. |
 | `GET /.well-known/oauth-authorization-server` | none | Publishes the token endpoint, the pre-authorized-code grant, `none` for token endpoint authentication, and anonymous pre-authorized access. |
 | `POST /offers` | Registry Mint bearer token | Adopter-facing, not wallet-facing. Takes `credentialConfigurationId`, `subjects`, and a boolean `transactionCode`. Returns the offer object, its `openid-credential-offer://` URI, and, when one was asked for, the generated transaction code, once. |
 | `POST /token` | pre-authorized code, plus the transaction code when the offer set one | `grant_type=urn:ietf:params:oauth:grant-type:pre-authorized_code`. Returns `access_token`, `token_type`, `expires_in`. No `c_nonce`. |
-| `POST /nonce` | none | Empty body in, `{"c_nonce": ...}` out, `Cache-Control: no-store`. The nonce is a keyed freshness challenge and is not bound to an access token. |
+| `POST /nonce` | none | Empty body or empty JSON object in, `{"c_nonce": ...}` out, `Cache-Control: no-store`. The nonce is a keyed freshness challenge and is not bound to an access token. |
 | `POST /credential` | bearer access token | Takes `credential_configuration_id` and `proofs.jwt[]`. Returns `credentials: [{credential: ...}]`. |
 | `GET /health`, `GET /ready` | none | Operational probes. Readiness deliberately reports nothing about the Evidence Gateway or Registry Mint deployments behind it, so a probe cannot be used to survey them. |
 
@@ -195,18 +352,35 @@ widens the five-minute `iat` freshness window.
 ## Operational limits
 
 Everything this service remembers lives in one bounded in-memory store, and none of it survives a
-restart or a second replica. State these limits plainly to anyone operating the deployment:
+restart or a second replica.
 
-- **State is in-memory only.** A restart invalidates every offer outstanding in a minutes-wide
-  window. There is no database anywhere beneath this service.
-- **Single-use is enforced per process.** A redeemed pre-authorized code and a redeemed access
-  token are each refused on reuse, but only within the one process that redeemed them, which is why
-  a deployment runs exactly one replica. Adding a second replica breaks single-use unless it also
-  adds a shared store, which this service does not have.
-- **Single-use is mostly a detection property, not a prevention property.** It turns a stolen
-  offer's silent duplicate issuance into one party getting an error and complaining. The short
-  offer and access-token lifetimes and the `tx_code` are the primary defenses; single-use marks the
-  attempt after the fact rather than stopping it before.
+Run exactly one replica. A pre-authorized code and an access token can each be claimed once within
+that process. A second replica would hold another store and would not observe the first replica's
+claim, so a load-balanced or rolling multi-replica deployment is outside the profile.
+
+A recognized live access token is claimed before the credential request body and holder proofs
+are accepted. Invalid JSON, configuration, nonce, proof, or duplicate holder key leaves that token
+spent and makes no Evidence request. Obtain a new authorized exchange before correcting and
+retrying the request. A failure after Evidence access begins also leaves the token spent and returns
+the terminal `credential_request_denied` error, because retrying that token cannot succeed.
+
+Stop the old replica before starting a replacement. Restarting invalidates outstanding offers,
+pre-authorized codes, and access tokens. The client receives the same value-free refusal used for
+an unknown, expired, consumed, or locked exchange and must obtain a new offer. A nonce is a
+stateless, service-minted freshness challenge. The service validates the nonce's integrity and
+expiry but does not store or consume it, so nonce reuse alone is not replay detection.
+
+Treat an Evidence Gateway bundle change as a coordinated restart. Stop the adapter first, which
+invalidates its outstanding exchanges, restart Evidence Gateway with the new bundle, then start the
+adapter so its catalog cache begins from the new deployment generation. Do not restart or replace
+Evidence Gateway behind a running adapter whose cached metadata and outstanding offers came from
+the previous bundle generation.
+
+Size `store.maximumOffers` for every offer created during the configured offer lifetime, including
+offers already redeemed whose failure ledgers remain live. The approximate sustained creation
+ceiling is `maximumOffers / offerLifetimeSeconds` per second. Saturation refuses a new offer
+without evicting a live authorized exchange. Short offer and access-token lifetimes and a
+transaction code reduce the usefulness of copied offer material.
 
 ## Next
 
@@ -214,3 +388,22 @@ restart or a second replica. State these limits plainly to anyone operating the 
   authenticate to Evidence Gateway and to protect its own `POST /offers` endpoint.
 - [Configure Evidence Gateway](../evidence/) for the deployment this service requests credentials
   from.
+
+## Troubleshooting
+
+| Symptom | Bounded cause | Corrective action |
+| --- | --- | --- |
+| `check` refuses the configuration | A required field, origin, bound, listener, or owner-only client key is invalid. | Correct the named configuration category and rerun `check`. Do not weaken `strict` mode for a shared deployment. |
+| Issuer metadata is unavailable | The adapter could not derive a current holder-bound catalog from Evidence Gateway. | Check Evidence Gateway through operator-private monitoring, then inspect the metadata again. Do not add a hand-authored credential configuration. |
+| `/health` or `/ready` does not return its fixed success body | The process or listener is unavailable, or the loaded process state is not ready. | Remove the replica from traffic, correct the startup or listener failure, and start one replacement. |
+| A code or token stops working after a restart | Restart discarded the process-local exchange. | Create a new authorized offer and complete a new exchange. Do not retry an outstanding exchange against the replacement process. |
+| The credential endpoint reports `invalid_nonce` | The nonce is malformed, tampered, expired, or not minted by this service. | Obtain a fresh nonce from the discovered nonce endpoint, obtain a new offer and access token, and sign a new proof with a synchronized clock. |
+| The credential endpoint reports `invalid_proof` | The proof shape, algorithm, key source, audience, freshness, or distinct-key rule is outside the frozen profile. | Compare the request with published metadata, then obtain a new offer, access token, and nonce before retrying. |
+| The credential endpoint reports `credential_request_denied` | Evidence Gateway refused, lacked, or could not complete this already claimed exchange. | Diagnose Evidence Gateway through private monitoring, then create a new authorized offer after the upstream is usable. Do not retry the spent token. |
+| A new offer is refused under load | The bounded in-memory store is at capacity. | Stop creating offers, allow expired entries to be cleaned up, and size `maximumOffers` for the reviewed live window before the next restart. |
+| Credential delivery reports an upstream failure | Registry Mint or Evidence Gateway did not complete the adapter's bounded outbound call. | Diagnose the upstream through its private monitoring. Start a new authorized exchange after the upstream recovers. |
+| The private metrics address refuses a connection | `metricsListener` is absent, invalid, occupied, or the process has not restarted on the edited configuration. | Run `check`, keep the binding private and distinct from the delivery listener, then restart the single replica. |
+
+Protocol errors deliberately do not reveal whether a secret value was unknown, expired, consumed,
+or locked out. Operational logs must not add that distinction or print codes, tokens, nonces,
+proofs, holder keys, credentials, selectors, subject identifiers, raw issuers, or raw audiences.

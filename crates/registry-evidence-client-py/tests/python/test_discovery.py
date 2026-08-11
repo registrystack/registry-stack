@@ -35,6 +35,7 @@ DEFINITIONS_DOCUMENT = {
     "assuranceProfile": "local",
     "issuedBy": "https://issuer.example.test",
     "providedBy": "https://provider.example.test",
+    "holderBoundBatchMaxSize": 4,
     "definitions": [
         {
             "requirement": "urn:example:py-test:requirement:status:v1",

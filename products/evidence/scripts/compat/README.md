@@ -50,3 +50,47 @@ The current pins are:
 
 Pin updates are reviewed compatibility-profile changes. Do not float a branch,
 tag, Maven version, container tag, or dependency range inside an adapter.
+
+## Inji OID4VCI delivery profile
+
+The OID4VCI harness is separate from the stored-credential verifier harnesses
+above. It checks the wallet-facing delivery protocol against a sanitized
+behavior profile and ordinary Registry-side black-box tests. It stores no
+captured offer, code, token, nonce, proof, credential, selector, subject
+identifier, private key, or live response.
+
+Run the ordinary check with no network or upstream checkout:
+
+```sh
+products/evidence/scripts/compat/inji-oid4vci.sh
+```
+
+The opt-in source check starts from clean clones, requires each clone to resolve
+to the exact reviewed commit, and then invokes the pinned projects' focused
+wallet, Kotlin, and iOS client tests:
+
+```sh
+EVIDENCE_INJI_OID4VCI=1 \
+products/evidence/scripts/compat/inji-oid4vci-upstream.sh
+```
+
+The combined runner requires macOS, Git, npm, Java 17, Android SDK platform 34
+with Build Tools 33.0.1, full Xcode, an available iPhone 15 simulator, and
+network access. It checks those prerequisites before cloning any repository.
+Any absent toolchain, clone failure, revision mismatch, dependency failure, or
+upstream test failure stops the check. The test recorded on 2026-08-09 pins:
+
+- Inji Wallet `2fa12c3285b6523db340c3dd2333454b750b40a4`
+- Inji VCI Client for Kotlin
+  `f1d7ee2b14e996e18bfc7c40fbf89ec31b768951`
+- Inji VCI Client for Swift
+  `dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c`
+
+The exact pinned source tests passed on 2026-08-09 beside the sanitized
+Registry-side flow; the environment and counts are recorded in
+`products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json`. This
+is bounded interoperability evidence, not certification or a general
+compatibility claim. It excludes mobile UI/device automation, authorization
+code, PAR, DPoP, deferred, encrypted, status, and notification issuance,
+multi-replica or persistent adapter state, and every live issuer or live user
+data path.

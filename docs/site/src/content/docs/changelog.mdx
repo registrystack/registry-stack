@@ -16,6 +16,17 @@ documents.
 Per-product release notes live in each product repository; the entries below link to the
 relevant product pages on this site rather than duplicating release notes.
 
+## Unreleased
+
+BREAKING:
+
+- Made `holderBoundBatchMaxSize` a required member of the
+  `registry.evidence-definitions/v1` metadata response.
+- Upgrade the Evidence runtime, Evidence clients, and Evidence OID4VCI adapter
+  together. New clients read an older response without this member as a batch
+  size of `1`; older strict clients reject responses that contain the new
+  member.
+
 ## 2026-08-09
 
 Documentation updates for the v0.18.0 beta-28 release candidate:

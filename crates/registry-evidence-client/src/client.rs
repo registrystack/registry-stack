@@ -1786,6 +1786,13 @@ mod tests {
         )
     }
 
+    fn definitions_json_with_batch_maximum(value: u16) -> String {
+        definitions_json(EVIDENCE_DEFINITIONS_SCHEMA_V1).replace(
+            r#","definitions"#,
+            &format!(r#", "holderBoundBatchMaxSize":{value},"definitions"#),
+        )
+    }
+
     async fn discovery_client(
         server: &MockServer,
         fixture: &SignedEvidenceFixture,
@@ -1899,6 +1906,34 @@ mod tests {
             .expect("the document is the v1 shape");
         assert_eq!(document.schema, EVIDENCE_DEFINITIONS_SCHEMA_V1);
         assert!(document.definitions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_discovered_holder_bound_batch_maximum_outside_the_contract_is_a_protocol_failure() {
+        let fixture = signed_evidence();
+        for value in [0, 17, u16::MAX] {
+            let server = MockServer::start().await;
+            let client = discovery_client(
+                &server,
+                &fixture,
+                definitions_json_with_batch_maximum(value),
+            )
+            .await;
+
+            assert_eq!(
+                client
+                    .discover()
+                    .await
+                    .expect_err("an invalid batch maximum is not authoring input"),
+                EvidenceClientError::Protocol {
+                    status: 200,
+                    code: None,
+                    operation: Some(OPERATION.to_owned()),
+                    retry_after_seconds: None,
+                },
+                "a ceiling of {value} must be refused"
+            );
+        }
     }
 
     /// `Retry-After` is a response-controlled value, and the client documents the

@@ -3,10 +3,10 @@
 # Execute the current Evidence tutorials from a fresh reader directory.
 #
 # This gate builds the Evidence toolset from the checked-out source unless
-# EVIDENCE_BIN, EVIDENCECTL_BIN and MINT_BIN select exact candidate or released
-# bytes, then replays each registered tutorial's own shell fences in its own
-# reader directory. Every tutorial creates the files it needs from its
-# documented commands, so what CI runs is what a reader copies.
+# EVIDENCE_BIN, EVIDENCECTL_BIN, EVIDENCE_OID4VCI_BIN and MINT_BIN select exact
+# candidate or released bytes, then replays each registered tutorial's own
+# shell fences in its own reader directory. Every tutorial creates the files it
+# needs from its documented commands, so what CI runs is what a reader copies.
 #
 # Usage:
 #   scripts/check-evidence-tutorials.sh                 replay every tutorial
@@ -41,7 +41,8 @@
 #
 # Configuration:
 #   EVIDENCE_BIN / EVIDENCECTL_BIN /      run these exact binaries instead of
-#   MINT_BIN                              building from source
+#   EVIDENCE_OID4VCI_BIN / MINT_BIN       building from source
+#   EVIDENCE_OID4VCI_INTEROP_TEST_BIN     run this prebuilt sanitized flow test
 #   EVIDENCE_CLIENT_PY_LIB                import this prebuilt Python client
 #                                         module instead of building one
 #   EVIDENCE_TUTORIAL_CARGO_PROFILE       ci (default) or release
@@ -66,6 +67,7 @@ TARGET_DIR="$REPO_ROOT/target/evidence-tutorial-source"
 EVIDENCE_TUTORIALS=(
 	first-evidence-assertion
 	request-evidence-as-sd-jwt-vc
+	run-oid4vci-interoperability-checks
 	request-evidence-from-an-application
 	return-a-governed-value
 	assert-a-role-bound-relationship
@@ -225,6 +227,46 @@ load_spec() {
 			"ACCESS AUTHORIZED adult-assessment age-assessment-review requester="
 			"DISCLOSURE RELEASED adult_assessment"
 			"Removed stopped local Evidence state"
+		)
+		;;
+	run-oid4vci-interoperability-checks)
+		SPEC_FENCES=4
+		SPEC_STEPS=(
+			"run:1"
+			"save:Copy the complete configuration|yaml|1|.tutorial/oid4vci-adopter/oid4vci.yaml"
+			"run:2"
+			"run:4"
+		)
+		SPEC_LITERALS=(
+			'actual `evidence-oid4vci` binary'
+			'against the copied file, runs `inspect`'
+			'probes `/health` and `/ready`'
+			"EVIDENCE_OID4VCI_ADOPTER_ROOT=\"\$PWD/.tutorial/oid4vci-adopter\""
+			"products/evidence/fixtures/interoperability/inji-oid4vci/profile.json"
+			"products/evidence/scripts/compat/inji-oid4vci.sh"
+			"PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests"
+			"EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh"
+			"PASS: pinned Inji OID4VCI source and client tests"
+			"combined upstream runner is macOS-only"
+			"Pinned Inji OID4VCI checking needs Java 17; the installed runtime is not Java 17."
+			"Pinned Inji OID4VCI checking needs ANDROID_HOME or ANDROID_SDK_ROOT to name an installed Android SDK."
+			"Pinned Inji OID4VCI checking needs Android SDK platform 34 and Build Tools 33.0.1."
+			"Pinned Inji OID4VCI checking needs full Xcode, not Command Line Tools alone."
+			"Pinned Inji OID4VCI checking could not inspect installed iOS simulators."
+			"Pinned Inji OID4VCI checking needs an available iPhone 15 simulator."
+			"2fa12c3285b6523db340c3dd2333454b750b40a4"
+			"f1d7ee2b14e996e18bfc7c40fbf89ec31b768951"
+			"dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c"
+		)
+		SPEC_OUTPUTS=(
+			"CONFIG COPIED: complete configuration has no untracked inputs"
+			"CONFIG CHECKED: complete delivery configuration is valid"
+			"METADATA INSPECTED: derived holder-bound batch ceiling is 4"
+			"SERVICE READY: health and readiness are available on the delivery listener"
+			"METRICS PRIVATE: metrics exist only on the separate loopback listener"
+			"PRESENTATION VERIFIED: public wallet flow returned holder-bound Evidence"
+			"CLEANUP COMPLETE: generated private material was removed"
+			"PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests"
 		)
 		;;
 	return-a-governed-value)
@@ -496,18 +538,22 @@ resolve_profile_dir() {
 SHIM_DIR="$WORK_ROOT/bin"
 
 prepare_toolset() {
-	if [[ -z "${EVIDENCE_BIN:-}" || -z "${EVIDENCECTL_BIN:-}" || -z "${MINT_BIN:-}" ]]; then
+	if [[ -z "${EVIDENCE_BIN:-}" || -z "${EVIDENCECTL_BIN:-}" || \
+		-z "${EVIDENCE_OID4VCI_BIN:-}" || -z "${MINT_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
-			-p registry-evidence -p registry-evidencectl -p registry-mint)
+			-p registry-evidence -p registry-evidencectl \
+			-p registry-evidence-oid4vci -p registry-mint)
 		EVIDENCE_BIN="$TARGET_DIR/$profile_dir/evidence"
 		EVIDENCECTL_BIN="$TARGET_DIR/$profile_dir/evidencectl"
+		EVIDENCE_OID4VCI_BIN="$TARGET_DIR/$profile_dir/evidence-oid4vci"
 		MINT_BIN="$TARGET_DIR/$profile_dir/mint"
 	fi
+	export EVIDENCE_OID4VCI_BIN
 	local bin
-	for bin in "$EVIDENCE_BIN" "$EVIDENCECTL_BIN" "$MINT_BIN"; do
+	for bin in "$EVIDENCE_BIN" "$EVIDENCECTL_BIN" "$EVIDENCE_OID4VCI_BIN" "$MINT_BIN"; do
 		# Absoluteness first: the reader journey runs from its own directory and
 		# reaches the binaries through symlinks, so a relative path resolves
 		# against the wrong directory and would otherwise surface much later,
@@ -526,6 +572,7 @@ prepare_toolset() {
 	mkdir -p "$SHIM_DIR"
 	ln -s "$EVIDENCE_BIN" "$SHIM_DIR/evidence"
 	ln -s "$EVIDENCECTL_BIN" "$SHIM_DIR/evidencectl"
+	ln -s "$EVIDENCE_OID4VCI_BIN" "$SHIM_DIR/evidence-oid4vci"
 	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
 }
 
@@ -768,6 +815,22 @@ executed_fence_count() {
 	printf '%d' "$total"
 }
 
+# The sanitized OID4VCI runner may fall back to Cargo when CI has not supplied
+# its prebuilt interoperability test. Keep that build in this gate's target
+# directory without changing the documented Cargo behavior of other tutorials.
+run_journey_script() {
+	local slug="$1" reader_dir="$2" run_script="$3"
+	if [[ "$slug" == "run-oid4vci-interoperability-checks" ]]; then
+		(cd "$reader_dir" && PATH="$SHIM_DIR:$PATH" CARGO_TARGET_DIR="$TARGET_DIR" bash "$run_script")
+	else
+		(
+			unset CARGO_TARGET_DIR
+			cd "$reader_dir"
+			PATH="$SHIM_DIR:$PATH" bash "$run_script"
+		)
+	fi
+}
+
 # ---------------------------------------------------------------------------
 # Replay
 # ---------------------------------------------------------------------------
@@ -823,6 +886,12 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 	first-evidence-assertion)
 		reader_dir="$WORK_ROOT/reader/evidence-start"
 		;;
+	run-oid4vci-interoperability-checks)
+		# The runner remains sourced from the checkout, but the copied adopter
+		# configuration belongs to a fresh writable reader directory. This also
+		# proves the journey in CI, where the checkout is mounted read-only.
+		reader_dir="$WORK_ROOT/reader/run-oid4vci-interoperability-checks"
+		;;
 	request-evidence-as-sd-jwt-vc)
 		# This follow-up deliberately rewrites the starter project to explore a
 		# structured VC. Give it a copy so the other follow-ups still begin from
@@ -854,6 +923,12 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 	*) reader_dir="$WORK_ROOT/reader/$slug" ;;
 	esac
 	mkdir -p "$reader_dir"
+	if [[ "$slug" == "run-oid4vci-interoperability-checks" ]]; then
+		ln -s "$REPO_ROOT/products" "$reader_dir/products"
+		ln -s "$REPO_ROOT/crates" "$reader_dir/crates"
+		ln -s "$REPO_ROOT/Cargo.toml" "$reader_dir/Cargo.toml"
+		ln -s "$REPO_ROOT/Cargo.lock" "$reader_dir/Cargo.lock"
+	fi
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		if [[ "$step" == "python-client" ]]; then
 			prepare_python_client
@@ -863,7 +938,7 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 	emit_journey "$slug" "$fence_dir" "$tutorial_file" >"$run_script"
 
 	run_log="$WORK_ROOT/run-$slug.log"
-	if ! (cd "$reader_dir" && PATH="$SHIM_DIR:$PATH" bash "$run_script") 2>&1 |
+	if ! run_journey_script "$slug" "$reader_dir" "$run_script" 2>&1 |
 		tee "$run_log"; then
 		printf 'tutorial %s failed; the transcript ends just before this line\n' \
 			"$slug" >&2

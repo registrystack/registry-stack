@@ -1,0 +1,44 @@
+{
+  "schema": "registry.evidence-oid4vci-inji-interoperability-receipt/v1",
+  "testedOn": "2026-08-09",
+  "runner": "EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh",
+  "result": "pass",
+  "receipt": "PASS: pinned Inji OID4VCI source and client tests",
+  "environment": {
+    "operatingSystem": "macOS 26.4.1",
+    "architecture": "arm64",
+    "node": "24.15.0",
+    "npm": "11.12.1",
+    "java": "Eclipse Temurin 17.0.20+8",
+    "androidPlatform": "34",
+    "androidBuildToolsSelectedByGradle": "33.0.1",
+    "xcode": "26.6 (17F113)",
+    "iosSimulator": "iPhone 15, iOS 26.5"
+  },
+  "results": {
+    "injiWallet": {
+      "revision": "2fa12c3285b6523db340c3dd2333454b750b40a4",
+      "command": "npx jest --runInBand machines/Issuers/IssuersService.test.ts --coverage=false",
+      "testsPassed": 41,
+      "testsFailed": 0
+    },
+    "injiVciClientKotlin": {
+      "revision": "f1d7ee2b14e996e18bfc7c40fbf89ec31b768951",
+      "task": ":vci-client:testDebugUnitTest",
+      "result": "build-successful"
+    },
+    "injiVciClientSwift": {
+      "revision": "dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c",
+      "scheme": "VCIClientTests",
+      "testsPassed": 12,
+      "testsFailed": 0
+    }
+  },
+  "observations": {
+    "upstreamWalletAudit": "154 findings: 10 low, 95 moderate, 35 high, 14 critical",
+    "auditScope": "Pinned upstream test-only dependency tree; no Registry runtime dependency was added",
+    "kotlinWarnings": "Pinned upstream compiler and Gradle deprecation warnings did not fail the selected tests",
+    "swiftWarnings": "Pinned upstream build warnings did not fail the selected tests"
+  },
+  "claimBoundary": "Exact pinned source and focused client tests passed beside the sanitized Registry interoperability flow. This is not device or UI evidence, another-revision compatibility, OpenID conformance, issuer certification, or general Inji compatibility."
+}

@@ -1019,7 +1019,17 @@ jobs:
           set -euo pipefail
           CARGO_TARGET_DIR="target/evidence-tutorial-source" \
             cargo build --locked --profile ci \
-            -p registry-evidence -p registry-evidencectl -p registry-mint
+            -p registry-evidence -p registry-evidencectl \
+            -p registry-evidence-oid4vci -p registry-mint
+          CARGO_TARGET_DIR="target/evidence-tutorial-source" \
+            cargo test --locked --profile ci \
+            -p registry-evidence-oid4vci --test inji_interoperability --no-run
+          test_binary=$(find target/evidence-tutorial-source/ci/deps \
+            -maxdepth 1 -type f -perm -111 -name 'inji_interoperability-*' \
+            -printf '%T@ %p\n' | sort -nr | sed -n '1s/^[^ ]* //p')
+          [[ -n "$test_binary" ]]
+          cp "$test_binary" \
+            target/evidence-tutorial-source/ci/inji-oid4vci-interop-test
           # The application tutorial imports the Python client. It is built for
           # the stable ABI, so the container step below imports this same file
           # rather than building inside a read-only mount.
@@ -1051,6 +1061,8 @@ jobs:
             --mount "type=bind,src=${PWD},dst=/work,readonly" \
             --env EVIDENCE_BIN=/work/target/evidence-tutorial-source/ci/evidence \
             --env EVIDENCECTL_BIN=/work/target/evidence-tutorial-source/ci/evidencectl \
+            --env EVIDENCE_OID4VCI_BIN=/work/target/evidence-tutorial-source/ci/evidence-oid4vci \
+            --env EVIDENCE_OID4VCI_INTEROP_TEST_BIN=/work/target/evidence-tutorial-source/ci/inji-oid4vci-interop-test \
             --env MINT_BIN=/work/target/evidence-tutorial-source/ci/mint \
             --env EVIDENCE_CLIENT_PY_LIB=/work/target/evidence-tutorial-source/ci/libregistry_evidence_client.so \
             rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \

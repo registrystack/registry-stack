@@ -49,6 +49,15 @@ fn default_request_timeout_milliseconds() -> u64 {
     5_000
 }
 
+fn normalized_bind_address(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(IpAddr::V6(address), IpAddr::V4),
+        address => address,
+    }
+}
+
 #[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListenerConfig {
@@ -60,10 +69,65 @@ pub struct ListenerConfig {
     pub request_timeout_milliseconds: u64,
 }
 
+/// Optional operator-only metrics listener.
+///
+/// Absent means no metrics endpoint exists. When present it is a distinct
+/// private binding that serves no wallet or adopter route.
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MetricsListenerConfig {
+    pub address: String,
+    pub port: u16,
+}
+
+impl MetricsListenerConfig {
+    pub fn bind_address(&self) -> Result<IpAddr, ConfigError> {
+        let address: IpAddr = self.address.parse().map_err(|_| {
+            ConfigError::Invalid("metrics listener address is not a private IP address")
+        })?;
+        let address = normalized_bind_address(address);
+        let is_private = match address {
+            IpAddr::V4(address) => {
+                address.is_loopback() || address.is_private() || address.is_link_local()
+            }
+            IpAddr::V6(address) => {
+                // `IpAddr` carries no interface scope, so accepting fe80::/10
+                // here would admit an unscoped link-local binding.
+                address.is_loopback() || address.is_unique_local()
+            }
+        };
+        if !is_private || address.is_unspecified() || address.is_multicast() {
+            return Err(ConfigError::Invalid(
+                "the metrics listener must bind a loopback or private address",
+            ));
+        }
+        Ok(address)
+    }
+
+    fn validate(&self, listener: &ListenerConfig) -> Result<(), ConfigError> {
+        if self.port == 0 {
+            return Err(ConfigError::Invalid(
+                "the metrics listener port must be non-zero",
+            ));
+        }
+        let address = self.bind_address()?;
+        let public_address = listener.bind_address()?;
+        if self.port == listener.port
+            && (public_address.is_unspecified() || public_address == address)
+        {
+            return Err(ConfigError::Invalid(
+                "the metrics listener must not share the delivery listener binding",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl ListenerConfig {
     pub fn bind_address(&self) -> Result<IpAddr, ConfigError> {
         self.address
             .parse()
+            .map(normalized_bind_address)
             .map_err(|_| ConfigError::Invalid("listener address is not an IP address"))
     }
 
@@ -252,7 +316,10 @@ fn default_maximum_transaction_code_attempts() -> u32 {
 /// the store fails closed on saturation rather than evicting a live entry, so
 /// the capacity is what an operator sizes against the offers a deployment
 /// really creates, and the lifetimes are what keeps that capacity from filling
-/// with state nobody is going to claim.
+/// with state nobody is going to claim. A redeemed offer's failure ledger stays
+/// for the full offer lifetime, so sustained offer creation is bounded to about
+/// `maximum_offers / offer_lifetime_seconds` per second, not merely the number
+/// of offers waiting to be redeemed at one instant.
 #[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StoreConfig {
@@ -346,6 +413,8 @@ pub struct DeliveryConfig {
     /// so what is published and what is compared are the same bytes.
     pub credential_issuer: String,
     pub listener: ListenerConfig,
+    #[serde(default)]
+    pub metrics_listener: Option<MetricsListenerConfig>,
     pub evidence: EvidenceConfig,
     pub mint: MintClientConfig,
     pub offers: OfferAuthorizationConfig,
@@ -390,7 +459,7 @@ impl DeliveryConfig {
         }
     }
 
-    fn validate(&self) -> Result<(), ConfigError> {
+    pub(crate) fn validate(&self) -> Result<(), ConfigError> {
         if self.version != 1 {
             return Err(ConfigError::Invalid(
                 "only configuration version 1 is supported",
@@ -414,6 +483,9 @@ impl DeliveryConfig {
         }
         self.listener.bind_address()?;
         self.listener.validate()?;
+        if let Some(metrics) = &self.metrics_listener {
+            metrics.validate(&self.listener)?;
+        }
 
         if self.mint.client_id.trim().is_empty() || self.mint.client_id.len() > 128 {
             return Err(ConfigError::Invalid(
@@ -934,6 +1006,95 @@ store:
             assert!(
                 matches!(load_from(&text), Err(ConfigError::Invalid(_))),
                 "the listener accepted {limit}"
+            );
+        }
+    }
+
+    #[test]
+    fn metrics_are_absent_by_default_and_the_optional_listener_is_private_and_distinct() {
+        assert!(valid_config().metrics_listener.is_none());
+
+        let configured = VALID.replace(
+            "listener: {address: 127.0.0.1, port: 8090}",
+            "listener: {address: 127.0.0.1, port: 8090}\nmetricsListener: {address: 127.0.0.1, port: 9090}",
+        );
+        let config = load_from(&configured).expect("a distinct loopback listener loads");
+        assert_eq!(
+            config
+                .metrics_listener
+                .expect("metrics were configured")
+                .port,
+            9090
+        );
+
+        for listener in [
+            "metricsListener: {address: 0.0.0.0, port: 9090}",
+            "metricsListener: {address: 8.8.8.8, port: 9090}",
+            "metricsListener: {address: 127.0.0.1, port: 8090}",
+            "metricsListener: {address: 127.0.0.1, port: 0}",
+        ] {
+            let refused = VALID.replace(
+                "listener: {address: 127.0.0.1, port: 8090}",
+                &format!("listener: {{address: 127.0.0.1, port: 8090}}\n{listener}"),
+            );
+            assert!(
+                matches!(load_from(&refused), Err(ConfigError::Invalid(_))),
+                "metrics accepted {listener}"
+            );
+        }
+    }
+
+    #[test]
+    fn ipv4_mapped_listener_addresses_cannot_hide_a_metrics_binding_overlap() {
+        let configured = VALID.replace(
+            "listener: {address: 127.0.0.1, port: 8090}",
+            "listener: {address: \"::ffff:127.0.0.1\", port: 8090}\nmetricsListener: {address: 127.0.0.1, port: 8090}",
+        );
+        assert_eq!(
+            load_from(&configured),
+            Err(ConfigError::Invalid(
+                "the metrics listener must not share the delivery listener binding"
+            ))
+        );
+    }
+
+    #[test]
+    fn metrics_accept_loopback_unique_local_and_current_ipv4_private_addresses() {
+        for address in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.0.1",
+            "169.254.1.1",
+            "::1",
+            "fc00::1",
+            "fdff:ffff::1",
+        ] {
+            let configured = VALID.replace(
+                "listener: {address: 127.0.0.1, port: 8090}",
+                &format!(
+                    "listener: {{address: 127.0.0.1, port: 8090}}\nmetricsListener: {{address: \"{address}\", port: 9090}}"
+                ),
+            );
+            assert!(load_from(&configured).is_ok(), "metrics refused {address}");
+        }
+    }
+
+    #[test]
+    fn unscoped_ipv6_unicast_link_local_metrics_addresses_are_refused() {
+        for address in ["fe80::1", "febf:ffff::1"] {
+            let configured = VALID.replace(
+                "listener: {address: 127.0.0.1, port: 8090}",
+                &format!(
+                    "listener: {{address: 127.0.0.1, port: 8090}}\nmetricsListener: {{address: \"{address}\", port: 9090}}"
+                ),
+            );
+            assert_eq!(
+                load_from(&configured),
+                Err(ConfigError::Invalid(
+                    "the metrics listener must bind a loopback or private address"
+                )),
+                "metrics accepted {address}"
             );
         }
     }

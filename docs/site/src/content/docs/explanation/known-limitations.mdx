@@ -12,6 +12,7 @@ last_reviewed: "2026-08-08"
 doc_type: explanation
 locale: en
 standards_referenced:
+  - oid4vci
   - sd-jwt-vc
   - cccev
   - odrl
@@ -179,9 +180,10 @@ assertions, and no caller input selects a mode.
   state, exactly as they are for an audience-scoped assertion. An expected holder key thumbprint is
   an optional extra expectation for a pre-established holder, not what proves possession.
 - Wallet compatibility is unclaimed: full SD-JWT VC and OID4VCI conformance are not claimed, and no
-  test in this repository covers a wallet holding or presenting an Evidence Gateway credential. The
-  opt-in compatibility harnesses in the source tree verify issuer signatures only and cover no key
-  binding.
+  test in this repository covers a wallet storing or presenting an Evidence Gateway credential.
+  The pinned OID4VCI runner covers sanitized metadata and wire shapes, service-side key binding,
+  and independent presentation verification. Its opt-in upstream half runs focused source tests at
+  exact Inji revisions, not Android or iOS user-interface or device automation.
 
 ## Registry Mint limits
 

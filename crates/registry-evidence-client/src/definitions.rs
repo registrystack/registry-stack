@@ -17,9 +17,28 @@ use registry_evidence_verifier::{
     },
     AssuranceProfile,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
+
+use crate::prepare::MAXIMUM_HOLDER_KEYS;
 
 pub const EVIDENCE_DEFINITIONS_SCHEMA_V1: &str = "registry.evidence-definitions/v1";
+
+const fn default_holder_bound_batch_max_size() -> u16 {
+    1
+}
+
+fn deserialize_holder_bound_batch_max_size<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = u16::deserialize(deserializer)?;
+    if value == 0 || usize::from(value) > MAXIMUM_HOLDER_KEYS {
+        return Err(D::Error::custom(
+            "the holder-bound batch maximum must be 1..=16",
+        ));
+    }
+    Ok(value)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,6 +47,17 @@ pub struct EvidenceDefinitionsDocument {
     pub assurance_profile: AssuranceProfile,
     pub issued_by: String,
     pub provided_by: String,
+    /// Effective holder-bound batch ceiling published by the deployment.
+    ///
+    /// A missing member is read as one for compatibility with a deployment
+    /// predating batch-ceiling discovery. One is the only safe inference: it
+    /// never causes a caller or protocol adapter to advertise a wider batch
+    /// than that deployment can honor.
+    #[serde(
+        default = "default_holder_bound_batch_max_size",
+        deserialize_with = "deserialize_holder_bound_batch_max_size"
+    )]
+    pub holder_bound_batch_max_size: u16,
     pub definitions: Vec<EvidenceDefinition>,
 }
 
@@ -253,6 +283,7 @@ mod tests {
       "assuranceProfile": "local",
       "issuedBy": "urn:example:client:issuer",
       "providedBy": "urn:example:client:provider",
+      "holderBoundBatchMaxSize": 4,
       "definitions": [
         {
           "requirement": "urn:example:client:requirement:status:v1",
@@ -292,6 +323,7 @@ mod tests {
         let document = document();
         assert_eq!(document.schema, EVIDENCE_DEFINITIONS_SCHEMA_V1);
         assert_eq!(document.assurance_profile, AssuranceProfile::Local);
+        assert_eq!(document.holder_bound_batch_max_size, 4);
         let definition = document
             .definition("urn:example:client:requirement:status:v1")
             .expect("the requirement is present");
@@ -322,6 +354,28 @@ mod tests {
         assert!(document
             .definition("urn:example:client:requirement:absent")
             .is_none());
+    }
+
+    #[test]
+    fn a_missing_holder_bound_batch_maximum_defaults_to_one() {
+        let earlier = DOCUMENT.replace(r#""holderBoundBatchMaxSize": 4,"#, "");
+        let document: EvidenceDefinitionsDocument =
+            serde_json::from_str(&earlier).expect("the earlier v1 document parses");
+        assert_eq!(document.holder_bound_batch_max_size, 1);
+    }
+
+    #[test]
+    fn a_discovered_holder_bound_batch_maximum_must_be_one_through_sixteen() {
+        for value in [0, 17, u16::MAX] {
+            let outside_contract = DOCUMENT.replace(
+                r#""holderBoundBatchMaxSize": 4"#,
+                &format!(r#""holderBoundBatchMaxSize": {value}"#),
+            );
+            assert!(
+                serde_json::from_str::<EvidenceDefinitionsDocument>(&outside_contract).is_err(),
+                "a ceiling of {value} must be refused"
+            );
+        }
     }
 
     #[test]

@@ -47,4 +47,5 @@ axum-test.workspace = true
 ed25519-dalek.workspace = true
 p256.workspace = true
 registry-mint.workspace = true
+reqwest.workspace = true
 tempfile.workspace = true

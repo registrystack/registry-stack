@@ -499,13 +499,18 @@ fn definitions_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "assuranceProfile", "issuedBy", "providedBy", "definitions"
+            "schema", "assuranceProfile", "issuedBy", "providedBy",
+            "holderBoundBatchMaxSize", "definitions"
         ],
         "properties": {
             "schema": {"const": "registry.evidence-definitions/v1"},
             "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
             "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
+            "holderBoundBatchMaxSize": {
+                "description": "The effective deployment ceiling for one holder-bound batch. A protocol adapter may advertise no larger batch than this value.",
+                "type": "integer", "minimum": 1, "maximum": MAXIMUM_HOLDER_BOUND_BATCH_SIZE
+            },
             "definitions": {
                 "type": "array", "maxItems": 16384, "uniqueItems": true,
                 "items": {"$ref": "#/$defs/definition"}
@@ -1409,6 +1414,50 @@ mod tests {
     }
 
     #[test]
+    fn definitions_v1_intentionally_requires_the_bounded_holder_batch_ceiling() {
+        let schema = definitions_schema();
+        assert_eq!(schema["$id"], DEFINITIONS_SCHEMA_ID);
+        assert!(schema["required"]
+            .as_array()
+            .expect("definitions required members are an array")
+            .iter()
+            .any(|member| member == "holderBoundBatchMaxSize"));
+        assert_eq!(
+            schema["properties"]["holderBoundBatchMaxSize"]["minimum"],
+            json!(1)
+        );
+        assert_eq!(
+            schema["properties"]["holderBoundBatchMaxSize"]["maximum"],
+            json!(MAXIMUM_HOLDER_BOUND_BATCH_SIZE)
+        );
+
+        let compiled = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&schema)
+            .expect("definitions schema compiles");
+        let mut document = json!({
+            "schema": "registry.evidence-definitions/v1",
+            "assuranceProfile": "local",
+            "issuedBy": "urn:example:issuer",
+            "providedBy": "urn:example:provider",
+            "holderBoundBatchMaxSize": 1,
+            "definitions": []
+        });
+        assert!(compiled.is_valid(&document));
+        document
+            .as_object_mut()
+            .expect("definitions document is an object")
+            .remove("holderBoundBatchMaxSize");
+        assert!(
+            !compiled.is_valid(&document),
+            "the retained v1 identity intentionally has a new required member"
+        );
+        document["holderBoundBatchMaxSize"] = json!(17);
+        assert!(!compiled.is_valid(&document));
+    }
+
+    #[test]
     fn openapi_document_is_valid_utoipa_model() {
         let document = openapi_document(
             &request_schema(),
@@ -1686,6 +1735,7 @@ mod tests {
                     "assuranceProfile": "evidence-grade",
                     "issuedBy": "urn:example:issuer",
                     "providedBy": "urn:example:provider",
+                    "holderBoundBatchMaxSize": 4,
                     "definitions": [{
                         "requirement": "urn:example:requirement:v1",
                         "configurationRevision": format!("sha256:{}", "0".repeat(64)),

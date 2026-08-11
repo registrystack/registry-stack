@@ -157,6 +157,10 @@ pub struct EvidenceDefinitions {
     pub assurance_profile: AssuranceProfile,
     pub issued_by: String,
     pub provided_by: String,
+    /// Effective deployment ceiling for one holder-bound batch. Discovery
+    /// publishes the bundle's configured value so a delivery adapter cannot
+    /// advertise the wider compile-time request ceiling by mistake.
+    pub holder_bound_batch_max_size: u16,
     pub definitions: Vec<EvidenceDefinition>,
 }
 
@@ -517,6 +521,7 @@ mod tests {
             assurance_profile: AssuranceProfile::EvidenceGrade,
             issued_by: "protected-discovery-issuer-canary".to_owned(),
             provided_by: "protected-discovery-provider-canary".to_owned(),
+            holder_bound_batch_max_size: 4,
             definitions: vec![EvidenceDefinition {
                 requirement: "protected-discovery-requirement-canary".to_owned(),
                 configuration_revision: "protected-discovery-revision-canary".to_owned(),
