@@ -257,11 +257,13 @@ pub fn build_app(service: Arc<DeliveryService>) -> Router {
     let routes = PUBLIC_ROUTES
         .into_iter()
         .fold(Router::new(), |router, route| match route {
-            PublicRoute::Health => router.route(route.path(), get(health)),
-            PublicRoute::Ready => router.route(route.path(), get(ready)),
-            PublicRoute::IssuerMetadata => router.route(route.path(), get(issuer_metadata)),
+            PublicRoute::Health => router.route(route.path(), get(health).head(unknown_route)),
+            PublicRoute::Ready => router.route(route.path(), get(ready).head(unknown_route)),
+            PublicRoute::IssuerMetadata => {
+                router.route(route.path(), get(issuer_metadata).head(unknown_route))
+            }
             PublicRoute::AuthorizationServerMetadata => {
-                router.route(route.path(), get(authorization_server))
+                router.route(route.path(), get(authorization_server).head(unknown_route))
             }
             PublicRoute::Offers => router.route(route.path(), post(create_offer)),
             PublicRoute::Token => router.route(route.path(), post(token)),
@@ -1535,6 +1537,25 @@ mod tests {
                 Some(&b"no-store"[..]),
                 "path {path}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_public_get_routes_refuse_implicit_head_requests() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (service, _) = wired_service(directory.path());
+        let server = TestServer::new(build_app(service));
+
+        for path in [
+            HEALTH_PATH,
+            READY_PATH,
+            ISSUER_METADATA_PATH,
+            AUTHORIZATION_SERVER_METADATA_PATH,
+        ] {
+            server
+                .method(axum::http::Method::HEAD, path)
+                .await
+                .assert_status_not_found();
         }
     }
 

@@ -49,6 +49,15 @@ fn default_request_timeout_milliseconds() -> u64 {
     5_000
 }
 
+fn normalized_bind_address(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(IpAddr::V6(address), IpAddr::V4),
+        address => address,
+    }
+}
+
 #[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListenerConfig {
@@ -76,6 +85,7 @@ impl MetricsListenerConfig {
         let address: IpAddr = self.address.parse().map_err(|_| {
             ConfigError::Invalid("metrics listener address is not a private IP address")
         })?;
+        let address = normalized_bind_address(address);
         let is_private = match address {
             IpAddr::V4(address) => {
                 address.is_loopback() || address.is_private() || address.is_link_local()
@@ -117,6 +127,7 @@ impl ListenerConfig {
     pub fn bind_address(&self) -> Result<IpAddr, ConfigError> {
         self.address
             .parse()
+            .map(normalized_bind_address)
             .map_err(|_| ConfigError::Invalid("listener address is not an IP address"))
     }
 
@@ -1031,6 +1042,20 @@ store:
                 "metrics accepted {listener}"
             );
         }
+    }
+
+    #[test]
+    fn ipv4_mapped_listener_addresses_cannot_hide_a_metrics_binding_overlap() {
+        let configured = VALID.replace(
+            "listener: {address: 127.0.0.1, port: 8090}",
+            "listener: {address: \"::ffff:127.0.0.1\", port: 8090}\nmetricsListener: {address: 127.0.0.1, port: 8090}",
+        );
+        assert_eq!(
+            load_from(&configured),
+            Err(ConfigError::Invalid(
+                "the metrics listener must not share the delivery listener binding"
+            ))
+        );
     }
 
     #[test]
