@@ -52,14 +52,14 @@ pub enum Command {
         #[arg(long)]
         audience: Option<String>,
         /// Request a delegated token for this actor. Requires `--subject-file`.
-        #[arg(long)]
+        #[arg(long, requires = "subject_file")]
         actor: Option<String>,
         /// A JSON object of subject selector fields, for the actor to act for.
         ///
         /// A file rather than repeated flags on purpose: these are a real
         /// person's identifying details, and command lines are visible to every
         /// process on the host and land in shell history.
-        #[arg(long)]
+        #[arg(long, requires = "actor")]
         subject_file: Option<PathBuf>,
         /// Assertion lifetime in seconds.
         #[arg(long, default_value_t = 120)]
@@ -79,4 +79,45 @@ pub fn command() -> clap::Command {
     let mut command = Cli::command();
     command.build();
     command
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    const TOKEN_ARGS: [&str; 8] = [
+        "mint",
+        "token",
+        "--url",
+        "https://mint.example.org/token",
+        "--client-id",
+        "caller",
+        "--key",
+        "private.jwk",
+    ];
+
+    #[test]
+    fn token_delegation_requires_the_actor_and_subject_file_together() {
+        assert!(Cli::try_parse_from(TOKEN_ARGS).is_ok());
+
+        for lone_option in [["--actor", "scheduler"], ["--subject-file", "subject.json"]] {
+            let error = Cli::try_parse_from(
+                TOKEN_ARGS
+                    .into_iter()
+                    .chain(lone_option)
+                    .collect::<Vec<_>>(),
+            )
+            .expect_err("one delegation option must require the other");
+            assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+        }
+
+        assert!(Cli::try_parse_from(
+            TOKEN_ARGS
+                .into_iter()
+                .chain(["--actor", "scheduler", "--subject-file", "subject.json",])
+                .collect::<Vec<_>>(),
+        )
+        .is_ok());
+    }
 }

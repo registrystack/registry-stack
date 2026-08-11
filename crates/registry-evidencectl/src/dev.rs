@@ -56,12 +56,13 @@ const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 45;
 const SHUTDOWN_TIMEOUT_SECONDS: u64 = 35;
 
 #[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 pub struct DevArgs {
     #[command(subcommand)]
     action: Option<DevAction>,
 
     /// Return after Registry Mint and Evidence Gateway are ready on loopback.
-    #[arg(long)]
+    #[arg(long, required = true)]
     detach: bool,
 
     /// Loopback port for the local Evidence Gateway service.

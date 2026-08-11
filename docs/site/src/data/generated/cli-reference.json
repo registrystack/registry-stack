@@ -1423,7 +1423,7 @@
           "invocation": "evidencectl dev",
           "about": "Run the private local Registry Mint and Evidence Gateway pair",
           "long_about": null,
-          "usage": "evidencectl dev [OPTIONS] [COMMAND]",
+          "usage": "evidencectl dev [OPTIONS] --detach\n       evidencectl dev <COMMAND>",
           "arguments": [],
           "options": [
             {
@@ -1538,7 +1538,7 @@
               "invocation": "evidencectl request prepare",
               "about": "Prepare the request, authorization header, and verification context",
               "long_about": null,
-              "usage": "evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --subject <SUBJECT> --name <NAME> <QUESTION>",
+              "usage": "evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION>",
               "arguments": [
                 {
                   "display": "<QUESTION>",
@@ -1563,8 +1563,17 @@
                 {
                   "display": "--subject <SUBJECT>",
                   "description": "Subject selector. Repeat role:field=value for a multi-subject question",
-                  "always_required": true,
+                  "always_required": false,
                   "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--subjects-file <PATH>",
+                  "description": "Owner-only JSON file containing the complete subject selector set",
+                  "always_required": false,
+                  "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
                   "environment": null
@@ -1611,7 +1620,16 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "required_exactly_one",
+                  "when": null,
+                  "arguments": [
+                    "--subject <SUBJECT>",
+                    "--subjects-file <PATH>"
+                  ]
+                }
+              ],
               "subcommands": []
             }
           ]
@@ -2022,7 +2040,22 @@
               "environment": null
             }
           ],
-          "constraints": [],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--actor <ACTOR>",
+              "arguments": [
+                "--subject-file <SUBJECT_FILE>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--subject-file <SUBJECT_FILE>",
+              "arguments": [
+                "--actor <ACTOR>"
+              ]
+            }
+          ],
           "subcommands": []
         }
       ]

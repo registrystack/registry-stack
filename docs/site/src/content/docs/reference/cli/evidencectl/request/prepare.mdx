@@ -22,8 +22,14 @@ This page is generated from the public Clap command tree. Hidden implementation 
 ## Usage
 
 ```text
-evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --subject <SUBJECT> --name <NAME> <QUESTION>
+evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION>
 ```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | Exactly one of `--subject <SUBJECT>`, `--subjects-file <PATH>` is required. |
 
 ## Arguments
 
@@ -36,7 +42,8 @@ evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --subject <SUBJECT> --
 | Option | Always required | Repeatable | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `--purpose <PURPOSE>` | Yes | No | n/a | n/a | n/a | Exact purpose declared by the question |
-| `--subject <SUBJECT>` | Yes | Yes | n/a | n/a | n/a | Subject selector. Repeat role:field=value for a multi-subject question |
+| `--subject <SUBJECT>` | No | Yes | n/a | n/a | n/a | Subject selector. Repeat role:field=value for a multi-subject question |
+| `--subjects-file <PATH>` | No | No | n/a | n/a | n/a | Owner-only JSON file containing the complete subject selector set |
 | `--name <NAME>` | Yes | No | n/a | n/a | n/a | Safe name for this retained request |
 | `--client <CLIENT>` | No | No | n/a | n/a | n/a | Registered local application used to request authorization |
 | `--format <FORMAT>` | No | No | `signed-jws` | `signed-jws`, `sd-jwt-vc` | n/a | Response format to request and verify |

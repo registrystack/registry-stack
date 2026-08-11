@@ -112,6 +112,7 @@ pub fn main_entry() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
 
     #[test]
     fn public_reference_excludes_the_dev_supervisor() {
@@ -119,5 +120,54 @@ mod tests {
         assert!(command
             .find_subcommand("__dev-supervisor")
             .is_some_and(clap::Command::is_hide_set));
+    }
+
+    #[test]
+    fn dev_syntax_separates_start_options_from_lifecycle_subcommands() {
+        let missing_detach = Cli::try_parse_from(["evidencectl", "dev"])
+            .expect_err("starting the local pair requires --detach");
+        assert_eq!(missing_detach.kind(), ErrorKind::MissingRequiredArgument);
+
+        assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_ok());
+        assert!(Cli::try_parse_from(["evidencectl", "dev", "stop"]).is_ok());
+
+        let mixed_mode = Cli::try_parse_from(["evidencectl", "dev", "--detach", "stop"])
+            .expect_err("start options must not combine with a lifecycle subcommand");
+        assert_eq!(mixed_mode.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn request_prepare_requires_one_subject_input_form() {
+        let base = [
+            "evidencectl",
+            "request",
+            "prepare",
+            "question",
+            "--purpose",
+            "eligibility",
+            "--name",
+            "retained-request",
+        ];
+
+        let missing_subject =
+            Cli::try_parse_from(base).expect_err("one subject input form is required");
+        assert_eq!(missing_subject.kind(), ErrorKind::MissingRequiredArgument);
+
+        assert!(
+            Cli::try_parse_from(base.into_iter().chain(["--subject", "person:id=123"]),).is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(base.into_iter().chain(["--subjects-file", "subjects.json"]),)
+                .is_ok()
+        );
+
+        let duplicate_subject = Cli::try_parse_from(base.into_iter().chain([
+            "--subject",
+            "person:id=123",
+            "--subjects-file",
+            "subjects.json",
+        ]))
+        .expect_err("subject input forms are mutually exclusive");
+        assert_eq!(duplicate_subject.kind(), ErrorKind::ArgumentConflict);
     }
 }

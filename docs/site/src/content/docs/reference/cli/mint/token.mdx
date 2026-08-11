@@ -29,6 +29,13 @@ Obtain an access token from a running token endpoint, as a client would. This au
 mint token [OPTIONS] --url <URL> --client-id <CLIENT_ID> --key <KEY>
 ```
 
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| `--actor <ACTOR>` is present | `--subject-file <SUBJECT_FILE>` is required. |
+| `--subject-file <SUBJECT_FILE>` is present | `--actor <ACTOR>` is required. |
+
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |

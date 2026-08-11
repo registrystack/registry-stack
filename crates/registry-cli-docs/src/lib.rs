@@ -101,7 +101,7 @@ fn command_reference(mut command: Command, parent: Option<&str>) -> CommandRefer
         .get_arguments()
         .filter(|argument| !argument.is_hide_set())
     {
-        let reference = argument_reference(argument);
+        let reference = argument_reference(&command, argument);
         if argument.get_index().is_some() {
             arguments.push(reference);
         } else {
@@ -128,7 +128,7 @@ fn command_reference(mut command: Command, parent: Option<&str>) -> CommandRefer
     }
 }
 
-fn argument_reference(argument: &Arg) -> ArgumentReference {
+fn argument_reference(command: &Command, argument: &Arg) -> ArgumentReference {
     let takes_values = argument.get_action().takes_values();
     let possible_values = if takes_values {
         argument
@@ -152,7 +152,10 @@ fn argument_reference(argument: &Arg) -> ArgumentReference {
             .map(ToString::to_string)
             .map(|value| normalized(&value))
             .unwrap_or_default(),
-        always_required: argument.is_required_set() && argument.get_env().is_none(),
+        always_required: argument.is_required_set()
+            && argument.get_env().is_none()
+            && !(command.is_subcommand_negates_reqs_set()
+                && command.get_subcommands().next().is_some()),
         repeatable: matches!(
             argument.get_action(),
             clap::ArgAction::Append | clap::ArgAction::Count
@@ -622,6 +625,34 @@ mod tests {
             constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.arguments == ["--openapi <OPENAPI>", "--project <PROJECT>"]
         }));
+
+        let request_prepare = find_command(&catalog.binaries, "evidencectl request prepare");
+        assert!(request_prepare.constraints.iter().any(|constraint| {
+            constraint.kind == ConstraintKind::RequiredExactlyOne
+                && constraint.arguments == ["--subject <SUBJECT>", "--subjects-file <PATH>"]
+        }));
+
+        let mint_token = find_command(&catalog.binaries, "mint token");
+        for (when, required) in [
+            ("--actor <ACTOR>", "--subject-file <SUBJECT_FILE>"),
+            ("--subject-file <SUBJECT_FILE>", "--actor <ACTOR>"),
+        ] {
+            assert!(mint_token.constraints.iter().any(|constraint| {
+                constraint.kind == ConstraintKind::RequiresAll
+                    && constraint.when.as_deref() == Some(when)
+                    && constraint.arguments == [required]
+            }));
+        }
+
+        let dev = find_command(&catalog.binaries, "evidencectl dev");
+        assert_eq!(
+            dev.usage,
+            "evidencectl dev [OPTIONS] --detach\n       evidencectl dev <COMMAND>"
+        );
+        assert!(dev
+            .options
+            .iter()
+            .any(|argument| { argument.display == "--detach" && !argument.always_required }));
 
         let inspect = find_command(&catalog.binaries, "relayctl inspect");
         assert!(inspect.options.iter().any(|argument| {

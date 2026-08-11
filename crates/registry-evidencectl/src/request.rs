@@ -17,7 +17,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 use registry_evidence_client::{
     AssuranceProfile, EvidenceClient, EvidenceClientConfig, EvidenceRequestSpec,
     EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument, JwksDocument,
@@ -48,6 +48,11 @@ pub enum RequestCommand {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("subject_input")
+        .required(true)
+        .args(["subject", "subjects_file"])
+))]
 pub struct PrepareArgs {
     /// Question defined by the active local project.
     question: String,
@@ -57,11 +62,11 @@ pub struct PrepareArgs {
     purpose: String,
 
     /// Subject selector. Repeat role:field=value for a multi-subject question.
-    #[arg(long, conflicts_with = "subjects_file")]
+    #[arg(long)]
     subject: Vec<String>,
 
     /// Owner-only JSON file containing the complete subject selector set.
-    #[arg(long, value_name = "PATH", conflicts_with = "subject")]
+    #[arg(long, value_name = "PATH")]
     subjects_file: Option<PathBuf>,
 
     /// Safe name for this retained request.

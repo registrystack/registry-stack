@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 // llms.txt `details` block so it can never drift from the header the per-page
 // .md endpoint prepends (src/pages/[...slug].md.ts).
 import { DISCOVERY_HEADER } from './src/lib/page-markdown.ts';
+import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayV2RetirementRedirects } from './src/lib/relay-v2-retirement-redirects.mjs';
 
@@ -430,19 +431,7 @@ export default defineConfig({
             { label: 'Validate a project', slug: 'verify' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Evidence Gateway configuration', slug: 'reference/evidence-configuration' },
-            {
-              label: 'Command-line interfaces',
-              collapsed: true,
-              items: [
-                { label: 'Overview', slug: 'reference/cli' },
-                { label: 'relay', slug: 'reference/cli/relay' },
-                { label: 'relayctl', slug: 'reference/cli/relayctl' },
-                { label: 'evidence', slug: 'reference/cli/evidence' },
-                { label: 'evidencectl', slug: 'reference/cli/evidencectl' },
-                { label: 'mint', slug: 'reference/cli/mint' },
-                { label: 'evidence-oid4vci', slug: 'reference/cli/evidence-oid4vci' },
-              ],
-            },
+            ...cliReferenceSidebar(),
             { label: 'relayctl workflows', slug: 'reference/relayctl' },
             { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
             { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
