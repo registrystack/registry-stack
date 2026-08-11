@@ -330,7 +330,10 @@ class CiChangesTest(unittest.TestCase):
             / "docs/site/scripts/check-evidence-tutorials.sh"
         )
         helpers = set(
-            re.findall(r"scripts/([A-Za-z0-9._-]+\.(?:sh|mjs))", gate.read_text())
+            re.findall(
+                r"\$SITE_ROOT/scripts/([A-Za-z0-9._/-]+\.(?:mjs|py|sh))",
+                gate.read_text(),
+            )
         )
         self.assertTrue(helpers, "the gate must invoke at least one helper")
         for helper in sorted(helpers):
