@@ -181,6 +181,39 @@ fn a_finding_is_reported_at_the_field_it_names() {
     );
 }
 
+#[test]
+fn a_referenced_subject_source_marker_is_reported_by_the_shared_check() {
+    let text = QUESTION.replace(
+        "  profile: <|subject-profile|>person-reference-v1\n",
+        "  profile: <|subject-profile|>person-reference-v1\n  source: <|source-marker|>true\n",
+    );
+
+    let (project, reported) = question_project(&text);
+
+    assert_eq!(
+        authoring_findings(&without_cursors(&text)),
+        vec![(
+            "subject-source-context",
+            "subject.source is available only to an inline OpenAPI operation".to_owned()
+        )],
+        "the authoring library refuses this question"
+    );
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    assert_eq!(
+        reported[0].code.as_deref(),
+        Some("evidence/subject-source-context")
+    );
+    assert_eq!(
+        reported[0].message,
+        "subject.source is available only to an inline OpenAPI operation"
+    );
+    assert_eq!(
+        reported[0].range.start,
+        project.cursor(QUESTION_PATH, "source-marker"),
+        "the diagnostic underlines the source marker the finding named"
+    );
+}
+
 /// A finding often names a field the author left out, which is the whole point of the finding. The
 /// bridge walks as far as the document goes and stops on the deepest field it does hold, so the
 /// diagnostic lands on the answer that is missing its schema rather than at the top of the file.

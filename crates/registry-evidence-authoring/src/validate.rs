@@ -195,6 +195,17 @@ pub fn validate_question(question: &Question) -> Vec<Finding> {
                     "a source reference must contain only one valid ref",
                 );
             }
+            if let Some((position, _)) = subjects
+                .iter()
+                .enumerate()
+                .find(|(_, subject)| subject.source.is_some())
+            {
+                return one(
+                    subject_path(question, position).key("source"),
+                    "subject-source-context",
+                    "subject.source is available only to an inline OpenAPI operation",
+                );
+            }
         }
         (None, Some(operation)) => {
             if question.source.facts.is_empty() || question.source.facts.len() > 16 {

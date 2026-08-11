@@ -163,6 +163,16 @@ fn question_cases() -> Vec<Case<Question>> {
             message: "a source reference must contain only one valid ref",
         },
         Case {
+            rule: "source-bound subject on a referenced source",
+            build: || {
+                question(|document| {
+                    document["source"] = json!({ "ref": "records" });
+                    document["subject"]["source"] = json!(true);
+                })
+            },
+            message: "subject.source is available only to an inline OpenAPI operation",
+        },
+        Case {
             rule: "fact count",
             build: || question(|document| document["source"]["facts"] = json!([])),
             message: "source.facts must contain 1..=16 authored fact selections",
@@ -434,7 +444,7 @@ fn the_set_of_rule_codes_is_the_expected_one() {
     for case in derivation_cases() {
         codes.push(first(&validate_authored_answer((case.build)())).code);
     }
-    assert_eq!(codes.len(), 39, "codes were: {codes:?}");
+    assert_eq!(codes.len(), 40, "codes were: {codes:?}");
     codes.sort_unstable();
     codes.dedup();
     assert_eq!(
@@ -477,6 +487,7 @@ fn the_set_of_rule_codes_is_the_expected_one() {
             "subject-declaration",
             "subject-identifier",
             "subject-role-unique",
+            "subject-source-context",
         ]
     );
 }

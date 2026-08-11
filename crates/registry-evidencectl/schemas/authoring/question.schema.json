@@ -260,6 +260,14 @@
         },
         "selector": {
           "type": "string"
+        },
+        "source": {
+          "default": null,
+          "description": "Whether this role supplies an inline operation path selector.\n\nOmission keeps the unambiguous single-role shorthand. An explicit\nvalue is useful when multiple roles use the same selector field name.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [

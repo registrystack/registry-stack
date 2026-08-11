@@ -35,6 +35,7 @@ use crate::{
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_SELECTOR_VALUE_BYTES: usize = 200;
+const MAX_SUBJECTS_FILE_BYTES: u64 = 16 * 1024;
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_CONTEXT_BYTES: u64 = 256 * 1024;
 const LOCAL_PROCEDURE_INPUT_SCHEMA_V1: &str = "registry.evidence.local-relying-procedure-input/v1";
@@ -56,8 +57,12 @@ pub struct PrepareArgs {
     purpose: String,
 
     /// Subject selector. Repeat role:field=value for a multi-subject question.
-    #[arg(long, required = true)]
+    #[arg(long, conflicts_with = "subjects_file")]
     subject: Vec<String>,
+
+    /// Owner-only JSON file containing the complete subject selector set.
+    #[arg(long, value_name = "PATH", conflicts_with = "subject")]
+    subjects_file: Option<PathBuf>,
 
     /// Safe name for this retained request.
     #[arg(long)]
@@ -119,6 +124,25 @@ struct LocalProcedureSubject<'a> {
 struct LocalProcedureSelector<'a> {
     profile: &'a str,
     values: BTreeMap<&'a str, &'a str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubjectInputFile {
+    subjects: Vec<SubjectInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubjectInput {
+    role: String,
+    field: String,
+    value: String,
+}
+
+struct ValidatedSubject<'a> {
+    definition: &'a dev::ReadySubjectState,
+    value: Zeroizing<String>,
 }
 
 #[derive(Deserialize)]
@@ -281,13 +305,10 @@ fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Res
     }
 }
 
-fn validate_closed_inputs<'a, 'b>(
+fn validate_closed_inputs<'a>(
     ready: &'a ReadyDevState,
-    args: &'b PrepareArgs,
-) -> Result<(
-    &'a dev::ReadyQuestionState,
-    Vec<(&'a dev::ReadySubjectState, &'b str)>,
-)> {
+    args: &PrepareArgs,
+) -> Result<(&'a dev::ReadyQuestionState, Vec<ValidatedSubject<'a>>)> {
     let question = ready
         .questions
         .iter()
@@ -296,28 +317,27 @@ fn validate_closed_inputs<'a, 'b>(
     if args.purpose != question.purpose {
         bail!("purpose does not match the active local tutorial question");
     }
-    if args.subject.len() != question.subjects.len() {
+    let inputs = load_subject_inputs(args, question)?;
+    if inputs.len() != question.subjects.len() {
         bail!("subject inputs must match the question's complete role set");
     }
     let mut values = BTreeMap::new();
-    for input in &args.subject {
-        let (binding, value) = input
-            .split_once('=')
-            .filter(|(_, value)| !value.contains('='))
-            .ok_or_else(|| anyhow!("subject must be one field=value or role:field=value pair"))?;
-        let (role, field) = match binding.split_once(':') {
-            Some((role, field)) if !role.contains(':') && !field.contains(':') => (role, field),
-            None if question.subjects.len() == 1 => (question.subjects[0].role.as_str(), binding),
-            _ => bail!("multi-subject inputs must use role:field=value"),
-        };
+    for input in inputs {
         let subject = question
             .subjects
             .iter()
-            .find(|subject| subject.role == role)
+            .find(|subject| subject.role == input.role)
             .ok_or_else(|| anyhow!("subject role does not match the active local question"))?;
-        if field != subject.selector_field || values.insert(role, value).is_some() {
+        if input.field != subject.selector_field
+            || values
+                .insert(input.role, Zeroizing::new(input.value))
+                .is_some()
+        {
             bail!("subject inputs must contain each declared role and selector exactly once");
         }
+        let value = values
+            .get(subject.role.as_str())
+            .expect("the inserted subject value is present");
         if value.is_empty()
             || value.len() > MAX_SELECTOR_VALUE_BYTES
             || value.chars().any(char::is_control)
@@ -330,13 +350,80 @@ fn validate_closed_inputs<'a, 'b>(
         .iter()
         .map(|subject| {
             values
-                .get(subject.role.as_str())
-                .copied()
-                .map(|value| (subject, value))
+                .remove(subject.role.as_str())
+                .map(|value| ValidatedSubject {
+                    definition: subject,
+                    value,
+                })
                 .ok_or_else(|| anyhow!("subject inputs do not cover the complete role set"))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok((question, subjects))
+}
+
+fn load_subject_inputs(
+    args: &PrepareArgs,
+    question: &dev::ReadyQuestionState,
+) -> Result<Vec<SubjectInput>> {
+    match (&args.subjects_file, args.subject.is_empty()) {
+        (Some(path), true) => read_subject_inputs(path),
+        (None, false) => args
+            .subject
+            .iter()
+            .map(|input| parse_subject_argument(input, question))
+            .collect(),
+        _ => bail!("provide exactly one of --subject or --subjects-file"),
+    }
+}
+
+fn parse_subject_argument(input: &str, question: &dev::ReadyQuestionState) -> Result<SubjectInput> {
+    let (binding, value) = input
+        .split_once('=')
+        .filter(|(_, value)| !value.contains('='))
+        .ok_or_else(|| anyhow!("subject must be one field=value or role:field=value pair"))?;
+    let (role, field) = match binding.split_once(':') {
+        Some((role, field)) if !role.contains(':') && !field.contains(':') => (role, field),
+        None if question.subjects.len() == 1 => (question.subjects[0].role.as_str(), binding),
+        _ => bail!("multi-subject inputs must use role:field=value"),
+    };
+    Ok(SubjectInput {
+        role: role.to_owned(),
+        field: field.to_owned(),
+        value: value.to_owned(),
+    })
+}
+
+fn read_subject_inputs(path: &Path) -> Result<Vec<SubjectInput>> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(std::io::Error::from)
+    .context("failed to open the private subjects file")?;
+    let mut file = File::from(descriptor);
+    validate_private_file(path, &file, 1, MAX_SUBJECTS_FILE_BYTES)
+        .context("subjects file must be an owner-only regular file")?;
+    let expected_bytes = file.metadata()?.len();
+    let mut bytes = Zeroizing::new(Vec::new());
+    std::io::Read::by_ref(&mut file)
+        .take(MAX_SUBJECTS_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to read the private subjects file")?;
+    if bytes.len() as u64 != expected_bytes || bytes.len() as u64 > MAX_SUBJECTS_FILE_BYTES {
+        bail!("subjects file changed while it was read or exceeds its byte limit");
+    }
+    validate_private_file(path, &file, expected_bytes, expected_bytes)
+        .context("subjects file failed its final file-safety check")?;
+    let parsed: SubjectInputFile = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow!("subjects file must be closed JSON with one subjects array"))?;
+    if parsed.subjects.is_empty() {
+        bail!("subjects file must contain at least one subject");
+    }
+    Ok(parsed.subjects)
 }
 
 fn validate_request_name(name: &str) -> Result<()> {
@@ -356,17 +443,20 @@ fn validate_request_name(name: &str) -> Result<()> {
 
 fn local_procedure_input<'a>(
     question: &'a dev::ReadyQuestionState,
-    subjects: &[(&'a dev::ReadySubjectState, &'a str)],
+    subjects: &'a [ValidatedSubject<'a>],
     audience: &'a str,
     response_format: PreparedResponseFormat,
 ) -> LocalProcedureInput<'a> {
     let subjects = subjects
         .iter()
-        .map(|(subject, value)| LocalProcedureSubject {
-            role: &subject.role,
+        .map(|subject| LocalProcedureSubject {
+            role: &subject.definition.role,
             selector: LocalProcedureSelector {
-                profile: &subject.selector_profile,
-                values: BTreeMap::from([(subject.selector_field.as_str(), *value)]),
+                profile: &subject.definition.selector_profile,
+                values: BTreeMap::from([(
+                    subject.definition.selector_field.as_str(),
+                    subject.value.as_str(),
+                )]),
             },
         })
         .collect::<Vec<_>>();
@@ -436,16 +526,16 @@ fn validate_local_relying_procedure(
 
 fn evidence_request_spec(
     procedure: LocalRelyingProcedure,
-    subjects: &[(&dev::ReadySubjectState, &str)],
+    subjects: &[ValidatedSubject<'_>],
 ) -> EvidenceRequestSpec {
     let subjects = subjects
         .iter()
-        .map(|(subject, value)| SubjectRequest {
-            role: subject.role.clone(),
-            selector_profile: subject.selector_profile.clone(),
+        .map(|subject| SubjectRequest {
+            role: subject.definition.role.clone(),
+            selector_profile: subject.definition.selector_profile.clone(),
             selector_values: Some(vec![(
-                subject.selector_field.clone(),
-                SelectorValue::String((*value).to_owned()),
+                subject.definition.selector_field.clone(),
+                SelectorValue::String(subject.value.to_string()),
             )]),
         })
         .collect();
