@@ -230,14 +230,23 @@ inspection, generation, fixture evaluation, change classification, and
 packaging. Both binaries use it directly:
 
 - `relay` owns `serve` and runtime diagnostics;
-- `relayctl` owns `init`, `inspect`, `check`, `generate`, `test`, `diff`, and
-  `package` authoring workflows.
+- `relayctl` owns `init`, `inspect`, `check`, `generate`, `test`, `diff`,
+  `package`, and the `tooling editor` / `tooling language-server` authoring
+  workflows.
 
 Diagnostics use stable value-free codes and package-relative locations. A
 best-effort `--json` rendering supports CI, but it is not a frozen inter-process
 protocol in Version one. `relayctl` does not spawn `relay`, parse human output,
 or reimplement compiler rules. A process protocol can be added later if an
 external consumer needs one.
+
+Editor authoring remains another caller of the compiler, not another compiler.
+`registry-language-server` recognizes a Relay V2 root by its regular
+`registry.yaml`, holds the bounded governed closure in memory, and passes the
+current buffers to `registry-relay-v2::authoring`. It never observes SQLite or
+source values. `relayctl tooling editor` embeds reproducible JSON Schemas
+derived from the strict `RegistryContract` and `RelayRuntime` Rust types and
+writes collision-safe project-local mappings for VS Code and Zed.
 
 ### Registry Core and response shapes
 
@@ -733,7 +742,7 @@ tests.
 ### 3. `relayctl` adopter workflow
 
 - Add `registry-relayctl` with `init`, `inspect`, `check`, `generate`, `test`,
-  `diff`, and `package`.
+  `diff`, `package`, and editor tooling.
 - Call the shared Relay compiler and fixture library directly for schema
   inspection, checking, generation, fixtures, semantic diff, and packaging.
 - Keep inspection schema-only by default. Generate local semantics,
@@ -747,8 +756,9 @@ tests.
   views, Record context, and semantic mappings. `relayctl` adds no diff rules.
 
 Gate: command tests against the shared compiler, deterministic packages,
-value-free diagnostics, and one complete authoring journey per acceptance
-Registry. No `registryctl` file or command changes.
+value-free diagnostics, generated-schema drift, VS Code and Zed launcher tests,
+and one complete authoring journey per acceptance Registry. No `registryctl`
+file or command changes.
 
 ### 4. HTTP service over the compiled kernel
 

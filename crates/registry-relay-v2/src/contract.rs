@@ -82,6 +82,25 @@ impl<T: Serialize> Serialize for OrderedMap<T> {
     }
 }
 
+#[cfg(feature = "schema")]
+impl<T: schemars::JsonSchema> schemars::JsonSchema for OrderedMap<T> {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Owned(format!("OrderedMap_of_{}", T::schema_name()))
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Owned(format!("OrderedMap<{}>", T::schema_id()))
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        <std::collections::BTreeMap<String, T>>::json_schema(generator)
+    }
+}
+
 struct OrderedMapVisitor<T>(std::marker::PhantomData<T>);
 
 impl<'de, T: Deserialize<'de>> Visitor<'de> for OrderedMapVisitor<T> {
@@ -133,6 +152,7 @@ impl ContractParseError {
 
 /// Governed Relay-owned Registry input. Unknown fields are rejected at every
 /// nested structure rather than silently becoming deployment behavior.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RegistryContract {
@@ -229,6 +249,7 @@ fn resource_access_rules(resource: &ResourceDefinition) -> impl Iterator<Item = 
         }))
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ContractMetadata {
@@ -237,6 +258,7 @@ pub struct ContractMetadata {
     pub title: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RegistryDefinition {
@@ -251,6 +273,7 @@ pub struct RegistryDefinition {
     pub alignment_targets: Vec<AlignmentTarget>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Institution {
@@ -258,6 +281,7 @@ pub struct Institution {
     pub name: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AlignmentTarget {
@@ -268,6 +292,7 @@ pub struct AlignmentTarget {
     pub status: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Governance {
@@ -276,6 +301,7 @@ pub struct Governance {
     pub audit_owner: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Semantics {
@@ -284,6 +310,7 @@ pub struct Semantics {
     pub alignments: Vec<SemanticAlignment>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SemanticAlignment {
@@ -294,6 +321,7 @@ pub struct SemanticAlignment {
     pub relation_required: bool,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ClassificationCatalog {
@@ -303,6 +331,7 @@ pub struct ClassificationCatalog {
     pub provenance_ref: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SchemeVersion {
@@ -310,6 +339,7 @@ pub struct SchemeVersion {
     pub version: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SourceDefinition {
@@ -318,6 +348,7 @@ pub struct SourceDefinition {
     pub expected_schema_fingerprint: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceProfile {
@@ -325,6 +356,7 @@ pub enum SourceProfile {
     LiveReadOnly,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ResourceDefinition {
@@ -346,6 +378,7 @@ pub struct ResourceDefinition {
     pub processing_descriptions: Vec<ProcessingDescription>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ResourceSource {
@@ -355,6 +388,7 @@ pub struct ResourceSource {
 
 /// One governed, pre-aggregated statistical dataset. The authored shape is
 /// independent of the fixed SDMX exchange binding compiled from it.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalDatasetDefinition {
@@ -378,12 +412,14 @@ pub struct StatisticalDatasetDefinition {
     pub processing_descriptions: Vec<ProcessingDescription>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalPublication {
     pub release_at: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalDimensionDefinition {
@@ -399,6 +435,7 @@ pub struct StatisticalDimensionDefinition {
     pub classification: ClassificationPartial,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalTimeDimensionDefinition {
@@ -411,6 +448,7 @@ pub struct StatisticalTimeDimensionDefinition {
     pub classification: ClassificationPartial,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum StatisticalTimeGranularity {
@@ -420,6 +458,7 @@ pub enum StatisticalTimeGranularity {
     Daily,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalMeasureDefinition {
@@ -434,6 +473,7 @@ pub struct StatisticalMeasureDefinition {
     pub classification: ClassificationPartial,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalAttributeDefinition {
@@ -450,6 +490,7 @@ pub struct StatisticalAttributeDefinition {
     pub classification: ClassificationPartial,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum StatisticalValueType {
@@ -460,6 +501,7 @@ pub enum StatisticalValueType {
     Boolean,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalQueryProfile {
@@ -468,6 +510,7 @@ pub struct StatisticalQueryProfile {
     pub maximum_offset: u32,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct StatisticalBindings {
@@ -475,6 +518,7 @@ pub struct StatisticalBindings {
 }
 
 /// Optional identity overrides for the fixed compiler-owned SDMX profile.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SdmxBindingDefinition {
@@ -490,6 +534,7 @@ pub struct SdmxBindingDefinition {
     pub concept_scheme_id: Option<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ClassificationPartial {
@@ -503,6 +548,7 @@ pub struct ClassificationPartial {
     pub status: Option<ReviewStatus>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub enum Handling {
@@ -512,6 +558,7 @@ pub enum Handling {
     Restricted,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewStatus {
@@ -520,6 +567,7 @@ pub enum ReviewStatus {
     Uncertain,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecordContext {
@@ -529,12 +577,14 @@ pub struct RecordContext {
     pub recorded_at: ColumnBinding,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ColumnBinding {
     pub source_column: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CodelistColumnBinding {
@@ -566,6 +616,7 @@ pub struct ScalarPropertyBinding {
     pub transform: Option<TransformDefinition>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PointPropertyBinding {
@@ -573,6 +624,7 @@ pub struct PointPropertyBinding {
     pub source: PointSourceDefinition,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PointSourceDefinition {
@@ -777,6 +829,76 @@ const PROPERTY_TYPES: &[&str] = &[
     "point",
 ];
 
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for PropertyDefinition {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("PropertyDefinition")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(concat!(module_path!(), "::PropertyDefinition"))
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        PropertyDefinitionSchema::json_schema(generator)
+    }
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+enum PropertyDefinitionSchema {
+    Scalar(ScalarPropertyDefinitionSchema),
+    Point(PointPropertyDefinitionSchema),
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ScalarPropertyDefinitionSchema {
+    label: String,
+    description: String,
+    source_column: String,
+    #[serde(rename = "type")]
+    data_type: DataType,
+    #[serde(default)]
+    codelist: Option<String>,
+    source_required: bool,
+    semantic_term: String,
+    #[serde(default)]
+    transform: Option<TransformDefinition>,
+    #[serde(default)]
+    classification: ClassificationPartial,
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PointPropertyDefinitionSchema {
+    label: String,
+    description: String,
+    #[serde(rename = "type")]
+    data_type: PointPropertyType,
+    crs: String,
+    source: PointSourceDefinition,
+    source_required: bool,
+    semantic_term: String,
+    #[serde(default)]
+    classification: ClassificationPartial,
+}
+
+#[cfg(feature = "schema")]
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+enum PointPropertyType {
+    Point,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DataType {
@@ -790,6 +912,7 @@ pub enum DataType {
     ControlledCode,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum TransformDefinition {
@@ -804,6 +927,7 @@ pub enum TransformDefinition {
     },
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum PartialStringReveal {
@@ -811,6 +935,7 @@ pub enum PartialStringReveal {
     Suffix,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DateInputType {
@@ -818,6 +943,7 @@ pub enum DateInputType {
     DateTime,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum DatePrecision {
@@ -825,12 +951,14 @@ pub enum DatePrecision {
     YearMonth,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct DisclosureProfile {
     pub properties: Vec<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Operations {
@@ -844,6 +972,7 @@ pub struct Operations {
     pub searches: Vec<SearchOperation>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ListOperation {
@@ -856,6 +985,7 @@ pub struct ListOperation {
     pub pagination: Pagination,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RecordOperation {
@@ -863,6 +993,7 @@ pub struct RecordOperation {
     pub access_profiles: OrderedMap<AccessProfileDefinition>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LookupOperation {
@@ -872,6 +1003,7 @@ pub struct LookupOperation {
     pub access_profiles: OrderedMap<AccessProfileDefinition>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SearchOperation {
@@ -883,6 +1015,7 @@ pub struct SearchOperation {
     pub pagination: Pagination,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
@@ -897,6 +1030,7 @@ pub enum SearchQueryDefinition {
     },
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AccessProfileDefinition {
@@ -904,6 +1038,7 @@ pub struct AccessProfileDefinition {
     pub disclosure_profile: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ClassificationReviewDocument {
@@ -920,6 +1055,7 @@ pub struct ClassificationReviewDocument {
     pub generated_identification: Option<GeneratedIdentificationBinding>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum IdentificationMethod {
@@ -928,6 +1064,7 @@ pub enum IdentificationMethod {
     Manual,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct GeneratedIdentificationBinding {
@@ -936,6 +1073,7 @@ pub struct GeneratedIdentificationBinding {
     pub rule_pack: RulePackBinding,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RulePackBinding {
@@ -944,6 +1082,7 @@ pub struct RulePackBinding {
     pub digest: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum AccessRule {
@@ -951,6 +1090,7 @@ pub enum AccessRule {
     Protected(ProtectedAccess),
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProtectedAccess {
@@ -961,6 +1101,7 @@ pub struct ProtectedAccess {
     pub authority_row_binding: Option<AuthorityRowBinding>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PurposeConstraint {
@@ -968,6 +1109,7 @@ pub struct PurposeConstraint {
     pub allowed: Vec<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum AuthorityRowBinding {
@@ -975,6 +1117,7 @@ pub enum AuthorityRowBinding {
     Principal(PrincipalRowBinding),
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ClaimRowBinding {
@@ -982,6 +1125,7 @@ pub struct ClaimRowBinding {
     pub source_column: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PrincipalRowBinding {
@@ -989,6 +1133,7 @@ pub struct PrincipalRowBinding {
     pub source_column: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FilterDefinition {
@@ -998,6 +1143,7 @@ pub struct FilterDefinition {
     pub data_type: DataType,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Pagination {
@@ -1005,6 +1151,7 @@ pub struct Pagination {
     pub maximum_page_size: u32,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LookupRequestBody {
@@ -1012,6 +1159,7 @@ pub struct LookupRequestBody {
     pub selectors: OrderedMap<SelectorDefinition>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct SelectorDefinition {
@@ -1026,6 +1174,7 @@ pub struct SelectorDefinition {
     pub codelist: Option<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ProcessingDescription {
@@ -1038,6 +1187,7 @@ pub struct ProcessingDescription {
     pub safeguards: Vec<String>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct MetadataVisibility {
@@ -1050,6 +1200,7 @@ pub struct MetadataVisibility {
     pub processing: Visibility,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum Visibility {
@@ -1059,6 +1210,7 @@ pub enum Visibility {
 }
 
 /// Deployment-local bindings. No governed field is accepted here.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RelayRuntime {
@@ -1172,24 +1324,28 @@ fn valid_runtime_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ServerRuntime {
     pub bind: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RuntimeSource {
     pub path: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuthenticationRuntime {
     pub issuer: Option<IssuerRuntime>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct IssuerRuntime {
@@ -1255,6 +1411,7 @@ impl IssuerRuntime {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditRuntime {
@@ -1262,6 +1419,7 @@ pub struct AuditRuntime {
     pub integrity_key_ref: String,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CursorRuntime {
@@ -1269,6 +1427,7 @@ pub struct CursorRuntime {
     pub maximum_age_seconds: u64,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct RuntimeLimits {
@@ -1276,6 +1435,7 @@ pub struct RuntimeLimits {
     pub concurrent_queries: u32,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct QuotaRuntime {
@@ -1283,6 +1443,7 @@ pub struct QuotaRuntime {
     pub burst: u32,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ShutdownRuntime {

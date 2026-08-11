@@ -79,19 +79,24 @@ command_name="$(basename -- "$0")"
 case "${command_name}" in
   registryctl)
     if [[ "${1:-}" == "--version" ]]; then
-      if [[ "${FAKE_REGISTRYCTL_VERSION_EXIT:-0}" != "0" ]]; then
-        exit "${FAKE_REGISTRYCTL_VERSION_EXIT}"
-      fi
-      if [[ -n "${FAKE_REGISTRYCTL_VERSION_OUTPUT:-}" ]]; then
-        printf '%s\n' "${FAKE_REGISTRYCTL_VERSION_OUTPUT}"
-      else
-        printf 'registryctl %s\n' "${FAKE_REGISTRYCTL_VERSION:-0.16.3}"
-      fi
+      printf 'registryctl %s\n' "${FAKE_REGISTRYCTL_VERSION:-0.16.3}"
     fi
     ;;
   evidencectl)
     if [[ "${1:-}" == "--version" ]]; then
-      printf 'evidencectl %s\n' "${FAKE_EVIDENCECTL_VERSION:-0.16.3}"
+      if [[ "${FAKE_EVIDENCECTL_VERSION_EXIT:-0}" != "0" ]]; then
+        exit "${FAKE_EVIDENCECTL_VERSION_EXIT}"
+      fi
+      if [[ -n "${FAKE_EVIDENCECTL_VERSION_OUTPUT:-}" ]]; then
+        printf '%s\n' "${FAKE_EVIDENCECTL_VERSION_OUTPUT}"
+      else
+        printf 'evidencectl %s\n' "${FAKE_EVIDENCECTL_VERSION:-0.16.3}"
+      fi
+    fi
+    ;;
+  relayctl)
+    if [[ "${1:-}" == "--version" ]]; then
+      printf 'relayctl %s\n' "${FAKE_RELAYCTL_VERSION:-0.16.3}"
     fi
     ;;
   node)
@@ -119,7 +124,7 @@ esac
 EOF
 chmod +x "${FAKE_BIN}/fake-command"
 
-for command_name in registryctl node npm code rustup cargo zed; do
+for command_name in registryctl evidencectl node npm code rustup cargo zed; do
   ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/${command_name}"
 done
 
@@ -151,31 +156,44 @@ vscode_output="${TEST_ROOT}/vscode-output"
 "${INSTALLER}" vscode \
   --profile 'Registry Stack Test' > "${vscode_output}"
 
-assert_contains 'registryctl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
-assert_not_contains 'registryctl <tooling> <editor>' "${COMMAND_LOG}"
-assert_not_contains 'registryctl <authoring>' "${COMMAND_LOG}"
+assert_contains 'evidencectl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
+assert_not_contains 'registryctl <' "${COMMAND_LOG}"
+assert_not_contains 'evidencectl <tooling> <editor>' "${COMMAND_LOG}"
+assert_not_contains 'evidencectl <authoring>' "${COMMAND_LOG}"
 assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <ci>" "${COMMAND_LOG}"
 assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <run> <package:dev>" "${COMMAND_LOG}"
 assert_contains "code <--profile> <Registry Stack Test> <--install-extension> <${FAKE_REPO_ROOT}/editors/vscode/registry-stack-dev.vsix> <--force>" "${COMMAND_LOG}"
 assert_not_contains '<--new-window>' "${COMMAND_LOG}"
 assert_contains 'Workspace trust remains your decision' "${vscode_output}"
-assert_contains 'Project setup remains a separate registryctl or evidencectl operation' "${vscode_output}"
+assert_contains 'Project setup remains a separate evidencectl or relayctl operation' "${vscode_output}"
+assert_contains 'Using evidencectl 0.16.3' "${vscode_output}"
 
-# registryctl is absent from PATH and evidencectl is the only Registry Stack
-# CLI available, so the installer must fall back to it and report it by name.
-# PATH is narrowed to FAKE_BIN plus REAL_TOOLS_PATH so this is a genuine
-# absence rather than a registryctl already installed on this machine
-# shadowing the removed fake symlink.
+# A registryctl on PATH is ignored, and Relay V2 can install from relayctl
+# alone when evidencectl is absent.
 reset_log
-rm -f "${FAKE_BIN}/registryctl"
-ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/evidencectl"
-evidencectl_output="${TEST_ROOT}/evidencectl-output"
-PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" "${INSTALLER}" vscode > "${evidencectl_output}"
-assert_contains 'evidencectl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
-assert_not_contains 'registryctl <' "${COMMAND_LOG}"
-assert_contains 'Using evidencectl 0.16.3' "${evidencectl_output}"
 rm -f "${FAKE_BIN}/evidencectl"
-ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/registryctl"
+ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/relayctl"
+relayctl_output="${TEST_ROOT}/relayctl-output"
+PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" "${INSTALLER}" vscode > "${relayctl_output}"
+assert_contains 'relayctl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
+assert_not_contains 'registryctl <' "${COMMAND_LOG}"
+assert_not_contains 'evidencectl <' "${COMMAND_LOG}"
+assert_contains 'Using relayctl 0.16.3' "${relayctl_output}"
+rm -f "${FAKE_BIN}/relayctl"
+ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/evidencectl"
+
+# An older evidencectl must not hide the matching Relay V2 CLI that can host
+# this checkout's language server.
+reset_log
+ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/relayctl"
+older_clis_output="${TEST_ROOT}/older-clis-output"
+FAKE_EVIDENCECTL_VERSION=0.10.0 \
+  "${INSTALLER}" vscode > "${older_clis_output}"
+assert_not_contains 'registryctl <' "${COMMAND_LOG}"
+assert_contains 'evidencectl <--version>' "${COMMAND_LOG}"
+assert_contains 'relayctl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
+assert_contains 'Using relayctl 0.16.3' "${older_clis_output}"
+rm -f "${FAKE_BIN}/relayctl"
 
 reset_log
 "${INSTALLER}" vscode > /dev/null
@@ -219,68 +237,69 @@ assert_contains "zed <${FAKE_OPEN_CANONICAL}>" "${COMMAND_LOG}"
 
 reset_log
 mismatch_output="${TEST_ROOT}/mismatch-output"
-if FAKE_REGISTRYCTL_VERSION=0.10.0 "${INSTALLER}" vscode \
+if FAKE_EVIDENCECTL_VERSION=0.10.0 "${INSTALLER}" vscode \
   > "${mismatch_output}" 2>&1; then
   fail 'version mismatch should fail'
 fi
-assert_contains 'this checkout is 0.16.3 but registryctl is 0.10.0' "${mismatch_output}"
+assert_contains 'this checkout is 0.16.3 but evidencectl is 0.10.0' "${mismatch_output}"
+assert_not_contains 'registryctl <' "${COMMAND_LOG}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
-# Both registryctl and evidencectl are on PATH and registryctl is the
-# version-mismatched one, so the installer must fall through to evidencectl
-# instead of aborting on registryctl's failure.
+# Both supported CLIs are on PATH and evidencectl is version-mismatched, so
+# the installer must fall through to relayctl instead of aborting.
 reset_log
-ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/evidencectl"
+ln -s "${FAKE_BIN}/fake-command" "${FAKE_BIN}/relayctl"
 both_present_output="${TEST_ROOT}/both-present-output"
-FAKE_REGISTRYCTL_VERSION=0.10.0 "${INSTALLER}" vscode > "${both_present_output}"
-assert_contains 'registryctl <--version>' "${COMMAND_LOG}"
-assert_not_contains 'registryctl <tooling>' "${COMMAND_LOG}"
-assert_contains 'evidencectl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
-assert_contains 'Using evidencectl 0.16.3' "${both_present_output}"
-rm -f "${FAKE_BIN}/evidencectl"
+FAKE_EVIDENCECTL_VERSION=0.10.0 "${INSTALLER}" vscode > "${both_present_output}"
+assert_not_contains 'registryctl <' "${COMMAND_LOG}"
+assert_contains 'evidencectl <--version>' "${COMMAND_LOG}"
+assert_contains 'relayctl <tooling> <language-server> <--help>' "${COMMAND_LOG}"
+assert_contains 'Using relayctl 0.16.3' "${both_present_output}"
+rm -f "${FAKE_BIN}/relayctl"
 
-# A registryctl built from this checkout reports a development version, which
+# An evidencectl built from this checkout reports a development version, which
 # is the ordinary case for anyone running this installer from source.
 reset_log
 development_output="${TEST_ROOT}/development-output"
-FAKE_REGISTRYCTL_VERSION=0.16.3-dev "${INSTALLER}" vscode \
+FAKE_EVIDENCECTL_VERSION=0.16.3-dev "${INSTALLER}" vscode \
   > "${development_output}"
-assert_contains 'Using registryctl 0.16.3-dev' "${development_output}"
+assert_contains 'Using evidencectl 0.16.3-dev' "${development_output}"
+assert_not_contains 'registryctl <' "${COMMAND_LOG}"
 assert_contains "npm <--prefix> <${FAKE_REPO_ROOT}/editors/vscode> <ci>" "${COMMAND_LOG}"
 
 reset_log
 development_mismatch_output="${TEST_ROOT}/development-mismatch-output"
-if FAKE_REGISTRYCTL_VERSION=0.10.0-dev "${INSTALLER}" vscode \
+if FAKE_EVIDENCECTL_VERSION=0.10.0-dev "${INSTALLER}" vscode \
   > "${development_mismatch_output}" 2>&1; then
   fail 'development build of another version should fail'
 fi
-assert_contains 'this checkout is 0.16.3 but registryctl is 0.10.0-dev' \
+assert_contains 'this checkout is 0.16.3 but evidencectl is 0.10.0-dev' \
   "${development_mismatch_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
-# The version probe runs registryctl --version itself, a step distinct from
+# The version probe runs evidencectl --version itself, a step distinct from
 # the version-mismatch cases above (which get a version back and reject it).
 # Both failure shapes below must still name the reason on stderr. PATH is
-# narrowed to FAKE_BIN plus REAL_TOOLS_PATH, as in the evidencectl fallback
-# case above, so registryctl is genuinely the only Registry Stack CLI found
-# rather than falling through to a real evidencectl elsewhere on this machine.
+# narrowed to FAKE_BIN plus REAL_TOOLS_PATH so evidencectl is genuinely the
+# only supported Registry Stack CLI found rather than falling through to a
+# real relayctl elsewhere on this machine.
 reset_log
 version_probe_exit_output="${TEST_ROOT}/version-probe-exit-output"
-if FAKE_REGISTRYCTL_VERSION_EXIT=7 PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
+if FAKE_EVIDENCECTL_VERSION_EXIT=7 PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
   "${INSTALLER}" vscode > "${version_probe_exit_output}" 2>&1; then
   fail 'a CLI whose --version exits nonzero should fail the installer'
 fi
-assert_contains 'could not run registryctl --version' "${version_probe_exit_output}"
+assert_contains 'could not run evidencectl --version' "${version_probe_exit_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
 reset_log
 version_probe_format_output="${TEST_ROOT}/version-probe-format-output"
-if FAKE_REGISTRYCTL_VERSION_OUTPUT='not a version line' \
+if FAKE_EVIDENCECTL_VERSION_OUTPUT='not a version line' \
   PATH="${FAKE_BIN}:${REAL_TOOLS_PATH}" \
   "${INSTALLER}" vscode > "${version_probe_format_output}" 2>&1; then
   fail 'a CLI whose --version output does not match the expected format should fail the installer'
 fi
-assert_contains 'unexpected registryctl version output: not a version line' \
+assert_contains 'unexpected evidencectl version output: not a version line' \
   "${version_probe_format_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 

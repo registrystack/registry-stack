@@ -1,0 +1,244 @@
+{
+  "$defs": {
+    "AuditRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "integrityKeyRef": {
+          "type": "string"
+        },
+        "sink": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sink",
+        "integrityKeyRef"
+      ],
+      "type": "object"
+    },
+    "AuthenticationRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "issuer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IssuerRuntime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CursorRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "integrityKeyRef": {
+          "type": "string"
+        },
+        "maximumAgeSeconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "integrityKeyRef",
+        "maximumAgeSeconds"
+      ],
+      "type": "object"
+    },
+    "IssuerRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "algorithms": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "discoveryUrl": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "tokenTypes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "discoveryUrl",
+        "audience",
+        "tokenTypes",
+        "algorithms"
+      ],
+      "type": "object"
+    },
+    "QuotaRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "burst": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestsPerMinute": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestsPerMinute",
+        "burst"
+      ],
+      "type": "object"
+    },
+    "RuntimeLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "concurrentQueries": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requestTimeoutMilliseconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestTimeoutMilliseconds",
+        "concurrentQueries"
+      ],
+      "type": "object"
+    },
+    "RuntimeSource": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "ServerRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "bind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
+    "ShutdownRuntime": {
+      "additionalProperties": false,
+      "properties": {
+        "gracePeriodMilliseconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "gracePeriodMilliseconds"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/registry-relay/authoring/runtime.v2alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Deployment-local bindings. No governed field is accepted here.",
+  "properties": {
+    "apiVersion": {
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditRuntime"
+    },
+    "authentication": {
+      "$ref": "#/$defs/AuthenticationRuntime"
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CursorRuntime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "kind": {
+      "type": "string"
+    },
+    "limits": {
+      "$ref": "#/$defs/RuntimeLimits"
+    },
+    "packagePath": {
+      "type": "string"
+    },
+    "quotas": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/QuotaRuntime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "server": {
+      "$ref": "#/$defs/ServerRuntime"
+    },
+    "shutdown": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ShutdownRuntime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "sources": {
+      "additionalProperties": {
+        "$ref": "#/$defs/RuntimeSource"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "server",
+    "packagePath",
+    "sources",
+    "authentication",
+    "audit",
+    "limits"
+  ],
+  "title": "Relay V2 deployment binding",
+  "type": "object"
+}

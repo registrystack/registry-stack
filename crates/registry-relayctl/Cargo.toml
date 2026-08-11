@@ -18,7 +18,13 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
+hex.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-language-server.workspace = true
 registry-relay-v2 = { workspace = true, features = ["tooling"] }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std", "rt"] }

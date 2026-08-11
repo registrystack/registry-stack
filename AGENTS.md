@@ -53,7 +53,7 @@ dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-relay-v2` | Contract-compiled Relay V2 runtime and the `relay` binary; additive beside legacy Relay |
 | `crates/registry-relayctl` | Relay V2 adopter tooling and the `relayctl` binary; it does not replace `registryctl` |
 | `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
-| `crates/registry-language-server` | Editor language server for Relay manifests and Evidence authoring documents, linked into both adopter tools |
+| `crates/registry-language-server` | Editor language server for legacy Relay, Relay V2, and Evidence authoring documents, hosted for adopters by `evidencectl` and `relayctl` |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
@@ -63,6 +63,17 @@ Relay V2 is developed additively under `registry-relay-v2` and
 `registry-relayctl`. It must not change the behavior or configuration contract
 of `registry-relay` or `registryctl`. Its approved contracts, coequal acceptance
 projects, and gates live under `products/relay-v2`.
+
+Relay V2 editor support uses the shared in-memory authoring compiler in
+`registry-relay-v2`; the language server must not observe SQLite or source
+values. Regenerate the committed editor schemas from the strict Rust types,
+never by hand:
+
+```bash
+cargo run -p registry-relay-v2 --features schema --example authoring-schema -- \
+  --output crates/registry-relayctl/schemas/authoring
+products/relay-v2/scripts/check-authoring-schema.sh
+```
 
 ## Evidence product boundary
 

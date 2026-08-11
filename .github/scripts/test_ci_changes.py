@@ -214,7 +214,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertCountEqual(assigned, self.workspace.package_names)
         self.assertEqual(len(assigned), len(set(assigned)))
 
-    def test_relay_v2_paths_select_only_the_v2_product_contract(self) -> None:
+    def test_relay_v2_paths_select_the_editor_and_reverse_dependents(self) -> None:
         outputs = classify(
             self.workspace,
             ("crates/registry-relay-v2/src/compiler.rs",),
@@ -223,18 +223,32 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-relayctl", outputs["rust_packages"])
         self.assertTrue(outputs["relay_v2_contracts"])
         self.assertFalse(outputs["relay_contracts"])
-        self.assertNotIn("registryctl", outputs["rust_packages"])
+        self.assertTrue(outputs["editors"])
+        for package in [
+            "registry-language-server",
+            "registry-relayctl",
+            "registryctl",
+            "registry-evidencectl",
+        ]:
+            self.assertIn(package, outputs["rust_packages"])
 
     def test_relay_v2_product_material_selects_runtime_and_tooling(self) -> None:
         outputs = classify(
             self.workspace,
-            ("products/relay-v2/contracts/security-invariants.yaml",),
+            ("products/relay-v2/contracts/security-invariant-matrix.yaml",),
         )
         self.assertEqual(
             set(outputs["rust_packages"]),
-            {"registry-relay-v2", "registry-relayctl"},
+            {
+                "registry-relay-v2",
+                "registry-language-server",
+                "registry-relayctl",
+                "registryctl",
+                "registry-evidencectl",
+            },
         )
         self.assertTrue(outputs["relay_v2_contracts"])
+        self.assertTrue(outputs["editors"])
 
     def test_example_pr_runs_only_affected_rust_shards(self) -> None:
         outputs = classify(
@@ -377,10 +391,11 @@ class CiChangesTest(unittest.TestCase):
         # A products/evidence path belongs to no crate directory, so it seeds
         # every Evidence package and its closure runs wider than the runtime
         # crate's. registry-language-server reads the authoring model and
-        # registryctl embeds the language server, so an authoring-form change
-        # reaches the editor tooling that has to keep agreeing with it. A
-        # product contract cannot say in advance which package it constrains,
-        # so it runs all four shards.
+        # The language server reads the authoring form, so a change reaches the
+        # editor tooling that has to keep agreeing with it. registryctl remains
+        # a compile-time reverse dependent even though it is not a supported
+        # editor launcher. A product contract cannot say in advance which
+        # package it constrains, so the closure reaches every dependent shard.
         for path in (
             "products/evidence/contracts/source-contract.yaml",
             "products/evidence/reference/request-adapter/ADAPTER-API.md",
@@ -392,20 +407,27 @@ class CiChangesTest(unittest.TestCase):
                 self.assertIn("registry-evidence", outputs["rust_packages"])
                 self.assertEqual(
                     {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-                    {"evidence", "mint", "developer-tools", "registryctl"},
+                    {
+                        "evidence",
+                        "mint",
+                        "relay-v2",
+                        "developer-tools",
+                        "registryctl",
+                    },
                 )
 
     def test_an_authoring_form_change_runs_the_editor_tooling_that_reads_it(self) -> None:
         # registry-language-server links registry-evidence-authoring to index
-        # an adopter's Evidence documents, and both evidencectl and registryctl
-        # link the language server. A change to the authoring form can therefore
-        # break an editor session without touching a line of either binary, so
-        # the closure has to carry it into their shards.
+        # an adopter's Evidence documents, and evidencectl and relayctl are its
+        # supported CLI hosts. registryctl remains a compile-time reverse
+        # dependent. A change to the authoring form can therefore break an
+        # editor session or dependent build without touching a host, so the
+        # closure has to carry it into their shards.
         outputs = classify(self.workspace, AUTHORING_FORM_CHANGE)
         self.assertTrue(outputs["evidence_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"evidence", "developer-tools", "registryctl"},
+            {"evidence", "relay-v2", "developer-tools", "registryctl"},
         )
         self.assertIn("registry-language-server", outputs["rust_packages"])
         self.assertIn("registryctl", outputs["rust_packages"])
@@ -423,7 +445,7 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertEqual(
             {entry["name"] for entry in strict["rust_matrix"]["include"]},
-            {"evidence", "developer-tools", "registryctl"},
+            {"evidence", "relay-v2", "developer-tools", "registryctl"},
         )
         self.assertIn("registry-language-server", strict["rust_packages"])
         self.assertIn("registryctl", strict["rust_packages"])
@@ -444,6 +466,25 @@ class CiChangesTest(unittest.TestCase):
                 ("crates/registry-evidence-client/src/lib.rs",),
             )["editors"]
         )
+
+    def test_a_relay_v2_contract_change_runs_its_compiler_editor_and_host_cli(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-relay-v2/src/contract.rs",),
+        )
+
+        self.assertTrue(outputs["relay_v2_contracts"])
+        self.assertTrue(outputs["editors"])
+        self.assertIn("registry-language-server", outputs["rust_packages"])
+        self.assertIn("registry-relayctl", outputs["rust_packages"])
+
+        strict = classify(
+            Workspace(normal_dependency_metadata(self.metadata)),
+            ("crates/registry-relay-v2/src/contract.rs",),
+        )
+        self.assertTrue(strict["editors"])
+        self.assertIn("registry-language-server", strict["rust_packages"])
+        self.assertIn("registry-relayctl", strict["rust_packages"])
 
     def test_a_test_only_editor_edge_does_not_satisfy_the_authoring_routing(
         self,

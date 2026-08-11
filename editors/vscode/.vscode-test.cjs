@@ -13,36 +13,36 @@ const projectBeta = path.join(testRunDirectory, 'project-beta');
 const projectEvidence = path.join(testRunDirectory, 'project-evidence');
 const workspaceFolder = path.join(testRunDirectory, 'multi-root.code-workspace');
 const languageServer = path.resolve(__dirname, '../../target/debug/registry-language-server');
-// The registryctl wrapper is deliberately kept off PATH and reachable only
+// The evidencectl wrapper is deliberately kept off PATH and reachable only
 // through the installer metadata below, so the tests can prove the metadata
-// route works. evidencectl sits in a directory added to PATH instead, so a
+// route works. relayctl sits in a directory added to PATH instead, so a
 // later test can delete the metadata and prove the PATH fallback tier finds
 // it on its own.
-const registryctlWrapper = path.join(testRunDirectory, 'registryctl');
+const evidencectlWrapper = path.join(testRunDirectory, 'evidencectl');
 const pathBinDirectory = path.join(testRunDirectory, 'path-bin');
-const evidencectlWrapper = path.join(pathBinDirectory, 'evidencectl');
-// An Evidence adopter can hold a registryctl built before the language server
-// was hosted in it. It stands ahead of evidencectl on PATH and must not be
+const relayctlWrapper = path.join(pathBinDirectory, 'relayctl');
+// An adopter can hold an evidencectl built before the language server was
+// hosted in it. It stands ahead of relayctl on PATH and must not be
 // taken for an answer, so the PATH tier is exercised against the shape that
 // once hid the CLI standing behind it.
-const legacyRegistryctlWrapper = path.join(pathBinDirectory, 'registryctl');
+const legacyEvidencectlWrapper = path.join(pathBinDirectory, 'evidencectl');
 const installerMetadata = path.join(__dirname, 'dist', 'registry-stack-cli-path');
 fs.mkdirSync(projectAlpha, { recursive: true });
 fs.mkdirSync(projectBeta, { recursive: true });
 fs.mkdirSync(path.join(projectEvidence, 'selectors'), { recursive: true });
 fs.mkdirSync(pathBinDirectory, { recursive: true });
-writeToolingLanguageServerWrapper(registryctlWrapper);
 writeToolingLanguageServerWrapper(evidencectlWrapper);
-writeLegacyWrapper(legacyRegistryctlWrapper);
+writeToolingLanguageServerWrapper(relayctlWrapper);
+writeLegacyWrapper(legacyEvidencectlWrapper);
 fs.mkdirSync(path.dirname(installerMetadata), { recursive: true });
-fs.writeFileSync(installerMetadata, `${registryctlWrapper}\n`);
+fs.writeFileSync(installerMetadata, `${evidencectlWrapper}\n`);
 fs.writeFileSync(
   path.join(projectAlpha, 'registry-stack.yaml'),
   'version: 1\nregistry: { id: alpha-registry }\nservices: {}\n',
 );
 fs.writeFileSync(
-  path.join(projectBeta, 'registry-stack.yaml'),
-  'version: 1\nregistry: { id: beta-registry }\nservices: {}\n',
+  path.join(projectBeta, 'registry.yaml'),
+  'apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\nregistry: { registryIdentifier: beta-registry }\n',
 );
 fs.writeFileSync(
   path.join(projectEvidence, 'evidence-project.yaml'),

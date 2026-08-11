@@ -20,13 +20,13 @@ use thiserror::Error;
 
 use crate::artifacts::{generate_artifacts, ArtifactSet};
 use crate::audit::RelayAudit;
+use crate::authoring::validate_runtime;
 use crate::compiler::{
     classification_inventory_digest, compile_contract_with_governed_files,
     referenced_governed_files, GovernedFileSet,
 };
 use crate::contract::{
-    contract_has_protected_access, runtime_cursor_configuration_is_valid, AccessRule,
-    ClassificationPartial, ClassificationReviewDocument, Handling, ProtectedAccess,
+    AccessRule, ClassificationPartial, ClassificationReviewDocument, Handling, ProtectedAccess,
     RegistryContract, RelayRuntime, ResourceSource, ReviewStatus, SdmxBindingDefinition,
     StatisticalAttributeDefinition, StatisticalBindings, StatisticalDimensionDefinition,
     StatisticalMeasureDefinition, StatisticalPublication, StatisticalQueryProfile,
@@ -1318,58 +1318,6 @@ fn capture_governed_files(
         );
     }
     Ok(files)
-}
-
-fn validate_runtime(
-    contract: &RegistryContract,
-    runtime: Option<&RelayRuntime>,
-) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    let Some(runtime) = runtime else {
-        return diagnostics;
-    };
-    if runtime.api_version != "relay.registrystack.org/v2alpha1" || runtime.kind != "RelayRuntime" {
-        diagnostics.push(diagnostic(
-            "runtime.identity_invalid",
-            "runtime.yaml",
-            "the deployment document identity is unsupported",
-        ));
-    }
-    let governed = contract.sources.keys().collect::<BTreeSet<_>>();
-    let bound = runtime.sources.keys().collect::<BTreeSet<_>>();
-    if governed != bound {
-        diagnostics.push(diagnostic(
-            "runtime.source_binding_mismatch",
-            "runtime.yaml.sources",
-            "runtime sources must bind exactly the governed source identifiers",
-        ));
-    }
-    if !runtime_cursor_configuration_is_valid(contract, runtime) {
-        diagnostics.push(diagnostic(
-            "runtime.cursor_missing",
-            "runtime.yaml.cursor",
-            "a Registry with a paginated data or resource-metadata list requires an opaque-cursor key and age bound",
-        ));
-    }
-    if contract_has_protected_access(contract) && runtime.authentication.issuer.is_none() {
-        diagnostics.push(diagnostic(
-            "runtime.issuer_missing",
-            "runtime.yaml.authentication.issuer",
-            "a Registry with protected operations requires one configured issuer",
-        ));
-    }
-    let has_lookup = contract
-        .resources
-        .iter()
-        .any(|resource| !resource.operations.lookups.is_empty());
-    if has_lookup && runtime.quotas.is_none() {
-        diagnostics.push(diagnostic(
-            "runtime.lookup_quota_missing",
-            "runtime.yaml.quotas",
-            "a Registry with an exact lookup requires a bounded operation quota",
-        ));
-    }
-    diagnostics
 }
 
 fn inspected_kind(kind: SchemaObjectKind) -> InspectedObjectKind {

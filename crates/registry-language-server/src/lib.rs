@@ -4,6 +4,7 @@
 mod evidence;
 mod refs;
 mod relay;
+mod relay_v2;
 mod safety;
 mod server;
 mod workspace;
@@ -11,7 +12,7 @@ mod yaml;
 
 pub use refs::{
     CompletionCandidate, EvidenceKind, HoverText, IndexedDiagnostic, IndexedLocation,
-    IndexedSymbol, ProjectIndex, RelayKind, SymbolKind,
+    IndexedSymbol, ProjectIndex, RelayKind, RelayV2Kind, SymbolKind,
 };
 pub use server::Backend;
 

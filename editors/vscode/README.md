@@ -2,13 +2,14 @@
 
 This beta integration is installed from a Registry Stack source release.
 It is not yet published to the VS Code Marketplace and no release VSIX is provided.
-For the stable beta path, run `registryctl init <directory> --template http` or
-`registryctl -C <project> tooling editor` for a Relay project, or
-`evidencectl tooling editor --project <directory>` for an Evidence authoring project, and use the
+For the stable beta path, run
+`evidencectl tooling editor --project <directory>` for an Evidence authoring project or
+`relayctl tooling editor <directory>` for Relay V2, and use the
 generated YAML schema settings. Install this integration for optional semantic navigation.
 
 This extension activates when a workspace contains a Registry Stack project marker at its root or
-below it. A Relay project root contains `registry-stack.yaml`. An Evidence authoring project root
+below it. A legacy Relay project root contains `registry-stack.yaml`, a Relay V2 root contains
+`registry.yaml`, and an Evidence authoring project root
 contains `evidence-project.yaml`, or the pre-marker pair of a `source.openapi.yaml` and a
 `questions` directory. A workspace folder that is itself a project starts its language server
 immediately. For a project nested below a workspace folder, opening its first YAML document starts
@@ -27,9 +28,8 @@ and virtual workspaces.
 
 ## Install and launch
 
-Prerequisites are Node.js 22 or newer, the `code` command-line tool, and either the `registryctl` or
-the `evidencectl` version that matches this source checkout. Both embed the same language server, so
-either satisfies the installer.
+Prerequisites are Node.js 22 or newer, the `code` command-line tool, and a matching
+`evidencectl` or `relayctl`. Both embed the same language server.
 
 1. From the repository root, install the integration into the active VS Code profile:
 
@@ -37,8 +37,8 @@ either satisfies the installer.
    ./editors/install.sh vscode
    ```
 
-   The installer checks the version and embedded language server of `registryctl`, or of
-   `evidencectl` when `registryctl` is absent, packages the extension, and installs it without
+   The installer checks the version and embedded language server of each adopter CLI in order,
+   packages the extension, and installs it without
    reading or changing a project. The locally built VSIX records the verified absolute path of the
    CLI it selected, so it also works when an existing VS Code process did not inherit the shell
    `PATH`. Use `--profile <name>` to select an existing profile.
@@ -64,8 +64,8 @@ either satisfies the installer.
 The source VSIX contains the extension runtime and the verified path to the CLI the installer
 selected, not a platform server binary. Its server discovery order is: the explicit
 `registryStack.languageServer.path` setting, the installer-selected CLI,
-`registry-language-server` on `PATH`, a matching `registryctl` on `PATH`, then a matching
-`evidencectl` on `PATH`. Every tier but the standalone server runs `<cli> tooling language-server`.
+`registry-language-server` on `PATH`, then a matching `evidencectl` or `relayctl` on `PATH`.
+Every tier but the standalone server runs `<cli> tooling language-server`.
 A CLI found on `PATH` is asked whether it hosts the server before it is used, so one built before
 the subcommand existed is passed over rather than taken as the answer, and the CLI behind it is
 still reached. A manually packaged VSIX omits the local path metadata and retains the PATH-based
@@ -100,7 +100,7 @@ and verifies that the VSIX contains no external `node_modules` runtime.
 
 ## Troubleshooting
 
-- If activation does not occur, confirm the workspace contains `registry-stack.yaml`,
+- If activation does not occur, confirm the workspace contains `registry-stack.yaml`, `registry.yaml`,
   `evidence-project.yaml`, or a `source.openapi.yaml` beside a `questions` directory, and that VS
   Code trusts the workspace. For a project below the workspace-folder root, open one of that
   project's YAML documents to start its folder's language server. Select **Workspaces: Manage
@@ -108,7 +108,7 @@ and verifies that the VSIX contains no external `node_modules` runtime.
   Server** if needed.
 - If startup reports that no server was found, set `registryStack.languageServer.path` to the
   standalone executable built for source iteration. Otherwise, add `registry-language-server` to
-  `PATH`, or ensure a matching `registryctl` or `evidencectl` is on the environment inherited by VS
+  `PATH`, or ensure a matching `evidencectl` or `relayctl` is on the environment inherited by VS
   Code and restart the language server. The output message names the project folder that failed.
 - If navigation is absent, confirm the file's VS Code language mode is YAML and inspect the output
   channel named for that workspace folder.

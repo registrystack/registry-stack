@@ -18,6 +18,15 @@ fn the_adopter_workflow_is_exposed_by_one_binary() {
         assert!(output.status.success(), "{command} help failed");
         assert!(output.stderr.is_empty(), "{command} help used stderr");
     }
+
+    for arguments in [
+        &["tooling", "editor", "--help"][..],
+        &["tooling", "language-server", "--help"][..],
+    ] {
+        let output = relayctl(arguments);
+        assert!(output.status.success(), "{arguments:?} help failed");
+        assert!(output.stderr.is_empty(), "{arguments:?} help used stderr");
+    }
 }
 
 #[test]

@@ -561,6 +561,9 @@ jobs:
       - name: Relay V2 contract consistency
         run: products/relay-v2/scripts/check-contracts.sh
 
+      - name: Reproduce Relay V2 authoring schemas
+        run: products/relay-v2/scripts/check-authoring-schema.sh
+
       - name: Relay V2 coequal HTTP journeys
         run: products/relay-v2/scripts/test-http.sh
 

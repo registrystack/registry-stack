@@ -88,7 +88,12 @@ enum SqliteTypeAffinity {
 
 pub type GovernedFileSet = BTreeMap<String, Vec<u8>>;
 
-pub(crate) fn referenced_governed_files(contract: &RegistryContract) -> BTreeSet<&str> {
+/// Every governed file directly named by a Registry contract.
+///
+/// A classification review may name its rationale and accepted identification
+/// report in turn. Callers add those after reading the directly referenced
+/// review document.
+pub fn referenced_governed_files(contract: &RegistryContract) -> BTreeSet<&str> {
     let mut references = BTreeSet::new();
     references.insert(contract.registry.identifier_lifecycle_policy_ref.as_str());
     references.insert(contract.classifications.provenance_ref.as_str());

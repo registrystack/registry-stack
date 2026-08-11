@@ -24,6 +24,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SymbolKind {
     Relay(RelayKind),
+    RelayV2(RelayV2Kind),
     Evidence(EvidenceKind),
 }
 
@@ -31,6 +32,7 @@ impl SymbolKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::Relay(kind) => kind.label(),
+            Self::RelayV2(kind) => kind.label(),
             Self::Evidence(kind) => kind.label(),
         }
     }
@@ -38,6 +40,7 @@ impl SymbolKind {
     pub fn lsp_kind(self) -> LspSymbolKind {
         match self {
             Self::Relay(kind) => kind.lsp_kind(),
+            Self::RelayV2(kind) => kind.lsp_kind(),
             Self::Evidence(kind) => kind.lsp_kind(),
         }
     }
@@ -55,6 +58,20 @@ impl SymbolKind {
             Self::Relay(RelayKind::Service) => CompletionItemKind::INTERFACE,
             Self::Relay(RelayKind::Consultation) => CompletionItemKind::FUNCTION,
             Self::Relay(RelayKind::Fixture) => CompletionItemKind::EVENT,
+            Self::RelayV2(RelayV2Kind::Registry | RelayV2Kind::Source) => {
+                CompletionItemKind::MODULE
+            }
+            Self::RelayV2(
+                RelayV2Kind::Resource
+                | RelayV2Kind::StatisticalDataset
+                | RelayV2Kind::DisclosureProfile,
+            ) => CompletionItemKind::INTERFACE,
+            Self::RelayV2(RelayV2Kind::Property | RelayV2Kind::StatisticalComponent) => {
+                CompletionItemKind::FIELD
+            }
+            Self::RelayV2(RelayV2Kind::AccessProfile) => CompletionItemKind::ENUM_MEMBER,
+            Self::RelayV2(RelayV2Kind::Operation) => CompletionItemKind::METHOD,
+            Self::RelayV2(RelayV2Kind::GovernedFile) => CompletionItemKind::FILE,
             Self::Evidence(EvidenceKind::Question) => CompletionItemKind::FUNCTION,
             Self::Evidence(EvidenceKind::Concept) => CompletionItemKind::FIELD,
             Self::Evidence(EvidenceKind::Source | EvidenceKind::AccessPolicy) => {
@@ -79,6 +96,7 @@ impl SymbolKind {
     pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
         match self {
             Self::Relay(_) => None,
+            Self::RelayV2(kind) => Some(format!("relay-v2/{rule}-{}", kind.slug())),
             Self::Evidence(kind) => Some(format!("evidence/{rule}-{}", kind.slug())),
         }
     }
@@ -93,6 +111,7 @@ impl SymbolKind {
     fn scope_label(self) -> &'static str {
         match self {
             Self::Relay(_) => "service",
+            Self::RelayV2(kind) => kind.scope_label(),
             Self::Evidence(_) => "question",
         }
     }
@@ -114,7 +133,7 @@ impl SymbolKind {
     fn reports_duplicates(self) -> bool {
         !matches!(
             self,
-            Self::Evidence(EvidenceKind::Concept | EvidenceKind::Operation)
+            Self::RelayV2(_) | Self::Evidence(EvidenceKind::Concept | EvidenceKind::Operation)
         )
     }
 }
@@ -128,6 +147,12 @@ impl From<RelayKind> for SymbolKind {
 impl From<EvidenceKind> for SymbolKind {
     fn from(kind: EvidenceKind) -> Self {
         Self::Evidence(kind)
+    }
+}
+
+impl From<RelayV2Kind> for SymbolKind {
+    fn from(kind: RelayV2Kind) -> Self {
+        Self::RelayV2(kind)
     }
 }
 
@@ -163,6 +188,80 @@ impl RelayKind {
             Self::Consultation => LspSymbolKind::FUNCTION,
             Self::Fixture => LspSymbolKind::EVENT,
             Self::Environment => LspSymbolKind::PACKAGE,
+        }
+    }
+}
+
+/// Names written by the governed Relay V2 contract and deployment binding.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RelayV2Kind {
+    Registry,
+    Source,
+    Resource,
+    StatisticalDataset,
+    Property,
+    StatisticalComponent,
+    DisclosureProfile,
+    AccessProfile,
+    Operation,
+    GovernedFile,
+}
+
+impl RelayV2Kind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Registry => "Relay V2 Registry",
+            Self::Source => "Relay V2 source",
+            Self::Resource => "Relay V2 resource",
+            Self::StatisticalDataset => "Relay V2 statistical dataset",
+            Self::Property => "Relay V2 property",
+            Self::StatisticalComponent => "Relay V2 statistical component",
+            Self::DisclosureProfile => "Relay V2 disclosure profile",
+            Self::AccessProfile => "Relay V2 access profile",
+            Self::Operation => "Relay V2 operation",
+            Self::GovernedFile => "Relay V2 governed file",
+        }
+    }
+
+    pub fn lsp_kind(self) -> LspSymbolKind {
+        match self {
+            Self::Registry => LspSymbolKind::NAMESPACE,
+            Self::Source => LspSymbolKind::MODULE,
+            Self::Resource | Self::StatisticalDataset | Self::DisclosureProfile => {
+                LspSymbolKind::INTERFACE
+            }
+            Self::Property | Self::StatisticalComponent => LspSymbolKind::FIELD,
+            Self::AccessProfile => LspSymbolKind::ENUM_MEMBER,
+            Self::Operation => LspSymbolKind::METHOD,
+            Self::GovernedFile => LspSymbolKind::FILE,
+        }
+    }
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Registry => "registry",
+            Self::Source => "source",
+            Self::Resource => "resource",
+            Self::StatisticalDataset => "statistical-dataset",
+            Self::Property => "property",
+            Self::StatisticalComponent => "statistical-component",
+            Self::DisclosureProfile => "disclosure-profile",
+            Self::AccessProfile => "access-profile",
+            Self::Operation => "operation",
+            Self::GovernedFile => "governed-file",
+        }
+    }
+
+    fn scope_label(self) -> &'static str {
+        match self {
+            Self::AccessProfile => "operation",
+            Self::Property | Self::DisclosureProfile | Self::Operation => "resource or dataset",
+            Self::StatisticalComponent => "statistical dataset",
+            Self::Registry
+            | Self::Source
+            | Self::Resource
+            | Self::StatisticalDataset
+            | Self::GovernedFile => "Registry",
         }
     }
 }
@@ -484,6 +583,23 @@ impl ProjectIndex {
         ))
     }
 
+    /// Loads and indexes one Relay V2 authoring project.
+    pub fn load_relay_v2(root: &Path) -> Result<Self> {
+        let root = root
+            .canonicalize()
+            .with_context(|| format!("failed to resolve project root {}", root.display()))?;
+        let loaded = crate::relay_v2::load_project_documents(&root)?;
+        if loaded.indexing_ceiling_path.is_some() {
+            return Ok(Self::diagnostics_only(&root, loaded.diagnostics));
+        }
+        Ok(Self::from_documents_with_diagnostics(
+            ProjectFamily::RelayV2,
+            &root,
+            &loaded.documents,
+            loaded.diagnostics,
+        ))
+    }
+
     /// Indexes documents already in memory as a Relay project, for the same reason as [`Self::load`].
     pub fn from_documents(root: &Path, documents: &BTreeMap<PathBuf, String>) -> Self {
         Self::from_documents_with_diagnostics(ProjectFamily::Relay, root, documents, Vec::new())
@@ -498,6 +614,9 @@ impl ProjectIndex {
         let root = root.to_path_buf();
         let mut parsed = BTreeMap::new();
         for (path, source) in documents {
+            if !family.parses_as_yaml(path) {
+                continue;
+            }
             match crate::yaml::parse_yaml(source) {
                 Ok(document) => {
                     parsed.insert(path.clone(), document);
