@@ -26,11 +26,11 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::bundle::{ArtifactFault, Bundle, SourceExtract};
 use crate::config::{
-    is_http_token_byte, is_uri_byte, validate_anonymous_https_demo_source_origin,
-    validate_local_unauthenticated_source_origin, AcquisitionPosture, CredentialPlacement,
-    FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig, PreparationChannelPolicy,
-    SchemaFault, SecretRef, SelectorInput, SourceAuthentication, SourceConfig, SourceSelectorSet,
-    SqliteParameterBinding, SqliteRequest, RESERVED_SQL_PARAMETER,
+    is_http_token_byte, is_uri_byte, validate_local_unauthenticated_source_origin,
+    AcquisitionPosture, CredentialPlacement, FixedRequest, HttpMethod, OutboundTlsConfig,
+    PathBindingConfig, PreparationChannelPolicy, SchemaFault, SecretRef, SelectorInput,
+    SourceAuthentication, SourceConfig, SourceSelectorSet, SqliteParameterBinding, SqliteRequest,
+    RESERVED_SQL_PARAMETER,
 };
 use crate::model::SelectorValue;
 use crate::rhai_runtime::{RequestParts, StatementParameters};
@@ -847,14 +847,6 @@ impl HttpTransport {
         {
             return Err(SourceError::InvalidPlan);
         }
-        if matches!(
-            **configured_authentication,
-            SourceAuthentication::AnonymousHttpsDemo {}
-        ) && (tls_trust_profile.is_some()
-            || validate_anonymous_https_demo_source_origin(configured_base_url).is_err())
-        {
-            return Err(SourceError::InvalidPlan);
-        }
         let timeout = Duration::from_millis(configured_request.timeout_milliseconds);
         if timeout.is_zero()
             || configured_request.timeout_milliseconds > 30_000
@@ -1655,9 +1647,7 @@ fn compile_authentication(
     admission_timeout: Duration,
 ) -> Result<AuthenticationPlan, SourceError> {
     match authentication {
-        SourceAuthentication::None {} | SourceAuthentication::AnonymousHttpsDemo {} => {
-            Ok(AuthenticationPlan::None)
-        }
+        SourceAuthentication::None {} => Ok(AuthenticationPlan::None),
         SourceAuthentication::Basic {
             username_ref,
             password_ref,

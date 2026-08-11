@@ -254,20 +254,24 @@ ordinary `summary` or `description` beside them is refused, and so are an
 operation-level `security`, a request body, and `servers` on either the path
 item or the operation.
 
-The question's subjects and that operation's parameters are then required to be
-the same set, one parameter per subject. `exact_path_selectors` in
-`crates/registry-evidencectl/src/authoring.rs` reads the path item's
-`parameters` and the operation's own as one list and compares its length to the
-number of subjects before it reads any of them, so an extra parameter of any
-kind, a query filter beside the selector included, is refused for the count
-alone. Each parameter is closed to `name`, `in`, `required`, and `schema`, so
-an ordinary `description` beside them, and a `$ref` to a shared parameter
-component, are unsupported keys; its `schema` is closed to `type`, so a
-`format`, a `pattern`, or a `minLength` is refused the same way. What is left
-must read `in: path`, `required: true`, and `schema.type: string`, and the
-parameter names must equal the subject selector names exactly, each named once.
-`subject.derivation` is no exception: every subject is compared, so a question
-naming an `operation` cannot carry a party the operation's path does not.
+The subjects named by that operation's path and the operation's parameters are
+then required to be the same set, one parameter per path-bound subject. A
+subject absent from the path is accepted only when it declares
+`derivation: true`; that subject remains available to the reviewed derivation
+but is omitted from the source selector inputs and path bindings.
+`exact_path_selectors` in `crates/registry-evidencectl/src/authoring.rs` reads
+the path item's `parameters` and the operation's own as one list and compares
+its length to the number of path-bound subjects before it reads any of them, so
+an extra parameter of any kind, a query filter beside the selector included,
+is refused for the count alone. Each parameter is closed to `name`, `in`,
+`required`, and `schema`, so an ordinary `description` beside them, and a
+`$ref` to a shared parameter component, are unsupported keys; its `schema` is
+closed to `type`, so a `format`, a `pattern`, or a `minLength` is refused the
+same way. What is left must read `in: path`, `required: true`, and
+`schema.type: string`, and the parameter names must equal the path-bound
+subject selector names exactly, each named once. A path-bound subject may also
+declare `derivation: true`; it then participates in both the fixed source read
+and the derivation.
 
 The path that operation is written under is held to the same shape. It starts
 with `/` and not `//`, holds no `?`, `#`, or `\`, and no segment of it is

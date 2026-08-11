@@ -178,9 +178,9 @@ invariants:
     enforcement: Rust projects assuranceProfile from the immutable bundle into Evidence, JWS, SD-JWT VC, discovery, and audit, while both protected-format verifiers fail with the generic policy error on a mismatch.
     negative_test: expected-assurance-profile-mismatch
   - id: V1-I36
-    rule: Credential-free source access exists only for local authoring, either against an exact numeric-loopback HTTP origin or one exact HTTPS demo origin, and never sends an authentication header.
-    threat: A local tutorial convenience becomes unauthenticated production access, weakens TLS verification, follows a redirect, or forwards caller-controlled authorization material.
-    enforcement: Bundle validation binds kind none to canonical loopback HTTP and kind anonymous-https-demo to a canonical HTTPS origin using system roots; both require assuranceProfile local, refuse a TLS trust profile, retain fixed request and redirect-denial controls, and compile to the core executor's header-free authentication plan. Production and evidence-grade reject both kinds.
+    rule: Credential-free source access exists only for local authoring against an exact numeric-loopback HTTP origin and never sends an authentication header.
+    threat: A local tutorial convenience becomes unauthenticated production access, reaches a remote host, or forwards caller-controlled authorization material.
+    enforcement: Bundle validation binds source authentication kind none to assuranceProfile local, a canonical loopback HTTP origin with an explicit non-zero port, no TLS trust profile, and the core executor's header-free authentication plan; production and evidence-grade reject the kind.
     negative_test: sec-local-source-none-boundary
   - id: V1-I37
     rule: Each configured authority claim names a distinct token member, and none names a registered JWT claim; only principalClaim may name sub.

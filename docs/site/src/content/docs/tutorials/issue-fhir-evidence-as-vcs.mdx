@@ -18,10 +18,11 @@ standards_referenced:
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Connect Evidence Gateway directly to the public SMART Health IT FHIR R4 server, then verify two
-minimum-disclosure answers as Selective Disclosure JSON Web Token Verifiable Credential
-(SD-JWT VC) responses. One answer protects a patient by disclosing a coverage result rather than a
-FHIR resource. The other demonstrates the same pattern for a healthcare establishment.
+Connect Evidence Gateway to the public SMART Health IT FHIR R4 server through a minimal local
+read-through adapter, then verify two minimum-disclosure answers as Selective Disclosure JSON Web
+Token Verifiable Credential (SD-JWT VC) responses. One answer protects a patient by disclosing a
+coverage result rather than a FHIR resource. The other demonstrates the same pattern for a
+healthcare establishment.
 
 <QuickstartMeta
   outcome="Two verified SD-JWT VC responses derived from live FHIR R4 Coverage and Organization resources."
@@ -234,6 +235,126 @@ Organization selector file: ready
 The selector files remain outside the project that you create next. Evidence Gateway reads them
 without placing their values in shell arguments or command output.
 
+## Run a live FHIR read-through adapter
+
+Evidence Gateway's frozen Version 1 bundle grammar permits credential-free source access only on
+numeric loopback under local assurance. Use this small adapter to preserve that boundary while
+forwarding each governed read to the real SMART FHIR server. It contains no fixtures or seeded
+responses, binds only to loopback, accepts only the two FHIR resource paths used below, denies
+redirects, validates the returned resource identity, bounds the response, and suppresses request
+logging so selectors do not enter logs.
+
+Create `fhir-read-through.py`:
+
+```python
+import json
+import re
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+BASE_URL = "https://r4.smarthealthit.org"
+MAXIMUM_BYTES = 1_048_576
+RESOURCE_PATH = re.compile(r"^/(Coverage|Organization)/([A-Za-z0-9.-]{1,64})$")
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+OPENER = build_opener(NoRedirect)
+
+
+class FhirReadThrough(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):
+        return
+
+    def send_body(self, status, body, content_type):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def fail(self, status):
+        self.send_body(status, b'{"error":"FHIR read failed"}\n', "application/json")
+
+    def do_GET(self):
+        if self.path == "/healthz":
+            self.send_body(200, b"ready\n", "text/plain")
+            return
+
+        match = RESOURCE_PATH.fullmatch(self.path)
+        if match is None:
+            self.fail(404)
+            return
+        resource_type, resource_id = match.groups()
+        request = Request(
+            f"{BASE_URL}/{resource_type}/{resource_id}",
+            headers={"Accept": "application/fhir+json"},
+        )
+        try:
+            with OPENER.open(request, timeout=20) as response:
+                if response.status != 200 or response.headers.get_content_type() not in {
+                    "application/fhir+json",
+                    "application/json",
+                }:
+                    self.fail(502)
+                    return
+                body = response.read(MAXIMUM_BYTES + 1)
+            if len(body) > MAXIMUM_BYTES:
+                self.fail(502)
+                return
+            resource = json.loads(body)
+            if (
+                resource.get("resourceType") != resource_type
+                or resource.get("id") != resource_id
+            ):
+                self.fail(502)
+                return
+        except HTTPError as error:
+            self.fail(404 if error.code in {404, 410} else 502)
+            return
+        except (URLError, TimeoutError, ValueError):
+            self.fail(502)
+            return
+
+        self.send_body(200, body, "application/fhir+json")
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 8000), FhirReadThrough)
+server.daemon_threads = True
+print("FHIR read-through adapter ready on 127.0.0.1:8000", flush=True)
+server.serve_forever()
+```
+
+Start it and confirm that it is ready:
+
+```sh
+umask 077
+python3 fhir-read-through.py >fhir-read-through.log 2>&1 &
+printf '%s\n' "$!" >fhir-read-through.pid
+
+for attempt in 1 2 3 4 5; do
+  if curl --silent --fail http://127.0.0.1:8000/healthz >/dev/null; then
+    break
+  fi
+  sleep 1
+done
+curl --silent --show-error --fail http://127.0.0.1:8000/healthz
+```
+
+```text
+ready
+```
+
+This is a transport adapter, not a mock FHIR server. Every Coverage or Organization response used
+by Evidence Gateway is fetched live from `https://r4.smarthealthit.org` at request time.
+
 ## Describe the exact FHIR reads
 
 A FHIR `CapabilityStatement` describes FHIR capabilities, but it is not an OpenAPI description.
@@ -248,7 +369,7 @@ info:
   title: SMART Health IT public FHIR R4 tutorial subset
   version: 1.0.0
 servers:
-  - url: https://r4.smarthealthit.org
+  - url: http://127.0.0.1:8000
 paths:
   /Coverage/{coverage_id}:
     get:
@@ -332,10 +453,9 @@ cd fhir-record-evidence
 Created an editable OpenAPI authoring project in fhir-record-evidence
 ```
 
-The local compiler recognizes the exact HTTPS server as an
-`anonymous-https-demo` source. This posture sends no authentication header, trusts normal system
-roots, denies redirects, and is accepted only under local assurance. Production and
-evidence-grade builds reject it.
+The local compiler recognizes the numeric-loopback server as a credential-free `none` source. The
+adapter owns the system-TLS connection to the public FHIR server. This arrangement is for local
+authoring only; a deployment must use a reviewed authenticated HTTPS source.
 
 ## Author the patient coverage question
 
@@ -465,9 +585,10 @@ Evidence ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-Evidence Gateway now reads the live SMART server. It fixes one GET path per question, asks for
-`application/fhir+json`, applies response-size and timeout bounds, denies redirects, and projects
-the response before the derivation runs.
+Evidence Gateway now reads the live SMART server through the loopback adapter. It fixes one GET
+path per question, asks for `application/fhir+json`, applies response-size and timeout bounds, and
+projects the response before the derivation runs. The adapter independently denies redirects and
+validates the remote FHIR resource identity before returning it.
 
 ## Request the patient coverage credential
 
@@ -572,8 +693,12 @@ evidencectl dev stop
 evidencectl audit show --last-operation
 evidencectl dev clean
 cd ..
+kill "$(cat fhir-read-through.pid)" 2>/dev/null || true
 rm -f \
   discover-fhir-records.py \
+  fhir-read-through.py \
+  fhir-read-through.log \
+  fhir-read-through.pid \
   fhir-coverage-subjects.json \
   fhir-organization-subjects.json
 ```
@@ -584,14 +709,15 @@ removes the local discovery script and selector files.
 
 ## What you built
 
-- Evidence Gateway read two real resources from one public FHIR R4 server.
+- Evidence Gateway read two live resources from one public FHIR R4 server through a local
+  read-through adapter, not a mock data service.
 - The patient question checked the Coverage-to-Patient relationship without fetching or disclosing
   the Patient resource.
 - The establishment question demonstrated the same bounded pattern outside patient data.
 - Two verified SD-JWT VC responses carried boolean answers and pseudonymous subject bindings
   instead of FHIR resources or identifiers.
-- The anonymous public-server posture remained local-only and cannot be promoted as production
-  source authentication.
+- The credential-free source remained loopback-only and cannot be promoted as production source
+  authentication.
 
 ## Next
 
@@ -610,7 +736,7 @@ removes the local discovery script and selector files.
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | Record discovery reports that no coherent records are available | The public demo data changed, was reset, or no current resource matches the tutorial's narrow conditions. | Remove any selector files already created, then rerun the discovery step later. Do not weaken the relationship or organization-type checks. |
-| `evidencectl dev` rejects `anonymous-https-demo` | The project is not using local assurance, the URL is not one exact HTTPS origin, or a custom TLS profile was added. | Recreate the tutorial project with `--profile local` and retain `https://r4.smarthealthit.org` exactly. |
+| The read-through adapter does not start | Port 8000 is already in use, Python cannot bind loopback, or the process exited. | Stop the process using port 8000, inspect the owner-only `fhir-read-through.log`, and start the adapter again. Do not change the OpenAPI origin without reviewing the local-source boundary. |
 | Evidence Gateway reports a source dependency failure | The record changed shape, no longer matches the narrow schema, timed out, redirected, or returned a non-success status. | Probe the exact read again. Update the OpenAPI subset only after comparing it with the server's current FHIR profile and reviewing the claim semantics. |
 | The verified answer is `false` | The live record no longer reports the governed status or type. | Treat `false` as the server's current administrative answer. Do not edit the derivation merely to recover the tutorial's former output. |
 | A production FHIR server refuses the request | This tutorial uses an explicitly local, anonymous demo posture. | Configure the institution's HTTPS trust and supported authentication, commonly SMART Backend Services, then build under production or evidence-grade assurance. |

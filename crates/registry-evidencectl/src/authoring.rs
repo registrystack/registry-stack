@@ -54,12 +54,6 @@ const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 
-#[derive(Debug)]
-struct AuthoringServer {
-    base_url: String,
-    authentication_kind: &'static str,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CompiledConceptForm {
     Boolean,
@@ -721,11 +715,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                 let authenticated = source
                     .pointer("/authentication/kind")
                     .and_then(Value::as_str)
-                    .is_some_and(|kind| {
-                        kind != "none"
-                            && kind != "anonymous-https-demo"
-                            && kind != "review-required"
-                    });
+                    .is_some_and(|kind| kind != "none" && kind != "review-required");
                 if !https || !authenticated {
                     bail!("every production source must use authenticated HTTPS");
                 }
@@ -1003,7 +993,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
         .questions
         .iter()
         .any(|authored| authored.question.source.source_ref.is_none());
-    let (spec, server) = if has_inline_source {
+    let (spec, base_url) = if has_inline_source {
         reject_unsupported_keys(
             inputs
                 .openapi
@@ -1020,7 +1010,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
                 inputs.openapi.clone(),
                 "retained OpenAPI document",
             )?),
-            Some(exact_authoring_server(&inputs.openapi)?),
+            Some(exact_loopback_server(&inputs.openapi)?),
         )
     } else {
         (None, None)
@@ -1030,7 +1020,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
         questions.push(compile_question_plan(
             &inputs.openapi,
             spec.as_ref(),
-            server.as_ref(),
+            base_url.as_deref(),
             &inputs.selectors,
             &inputs.sources,
             &inputs.schemas,
@@ -1068,7 +1058,7 @@ fn compile_plan(inputs: Inputs, profile: CompileProfile) -> Result<CompilePlan> 
 fn compile_question_plan(
     openapi: &Value,
     spec: Option<&Spec>,
-    server: Option<&AuthoringServer>,
+    base_url: Option<&str>,
     selectors: &BTreeMap<String, Value>,
     sources: &BTreeMap<String, Value>,
     schemas: &BTreeMap<String, Value>,
@@ -1203,7 +1193,7 @@ fn compile_question_plan(
     let source_id = local_source_id(&question.id);
     let (source_value, grant, requirement) = render_question_bundle_parts(
         question,
-        server.expect("inline source needs an authoring server"),
+        base_url.expect("inline source needs local base URL"),
         operation.path,
         &subjects,
         &response_media_type,
@@ -1625,67 +1615,47 @@ fn compile_concept(
     })
 }
 
-fn exact_authoring_server(document: &Value) -> Result<AuthoringServer> {
+fn exact_loopback_server(document: &Value) -> Result<String> {
     let servers = document
         .get("servers")
         .and_then(Value::as_array)
         .filter(|servers| servers.len() == 1)
-        .ok_or_else(|| anyhow!("OpenAPI must declare exactly one authoring server"))?;
+        .ok_or_else(|| anyhow!("OpenAPI must declare exactly one local server"))?;
     let server = servers[0]
         .as_object()
         .filter(|server| server.len() == 1)
-        .ok_or_else(|| anyhow!("the authoring OpenAPI server must contain only its fixed URL"))?;
+        .ok_or_else(|| anyhow!("the local OpenAPI server must contain only its fixed URL"))?;
     let value = server
         .get("url")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("the authoring OpenAPI server URL is missing"))?;
-    let url = Url::parse(value).context("parsing the authoring OpenAPI server URL")?;
-    if !url.username().is_empty()
+        .ok_or_else(|| anyhow!("the local OpenAPI server URL is missing"))?;
+    let url = Url::parse(value).context("parsing the local OpenAPI server URL")?;
+    let port = url
+        .port()
+        .filter(|port| *port != 0)
+        .ok_or_else(|| anyhow!("the local OpenAPI server needs an explicit non-zero port"))?;
+    if url.scheme() != "http"
+        || !url.username().is_empty()
         || url.password().is_some()
         || url.path() != "/"
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        bail!("the authoring OpenAPI server must be one exact origin");
+        bail!("the local OpenAPI server must be one canonical HTTP loopback origin");
     }
-    let (canonical, authentication_kind) = match url.scheme() {
-        "http" => {
-            let port = url.port().filter(|port| *port != 0).ok_or_else(|| {
-                anyhow!("an HTTP authoring server needs an explicit non-zero port")
-            })?;
-            let canonical = match url.host() {
-                Some(Host::Ipv4(address)) if address.is_loopback() => {
-                    format!("http://{address}:{port}")
-                }
-                Some(Host::Ipv6(address)) if address == std::net::Ipv6Addr::LOCALHOST => {
-                    format!("http://[{address}]:{port}")
-                }
-                _ => bail!("an HTTP authoring server must use a numeric loopback address"),
-            };
-            (canonical, "none")
+    let canonical = match url.host() {
+        Some(Host::Ipv4(address)) if address.is_loopback() => {
+            format!("http://{address}:{port}")
         }
-        "https" => {
-            let host = match url.host() {
-                Some(Host::Domain(host)) => host.to_owned(),
-                Some(Host::Ipv4(host)) => host.to_string(),
-                Some(Host::Ipv6(host)) => format!("[{host}]"),
-                None => bail!("the HTTPS authoring server must name a host"),
-            };
-            let canonical = match url.port() {
-                Some(port) => format!("https://{host}:{port}"),
-                None => format!("https://{host}"),
-            };
-            (canonical, "anonymous-https-demo")
+        Some(Host::Ipv6(address)) if address == std::net::Ipv6Addr::LOCALHOST => {
+            format!("http://[{address}]:{port}")
         }
-        _ => bail!("the authoring OpenAPI server must use HTTPS or numeric-loopback HTTP"),
+        _ => bail!("the local OpenAPI server must use a numeric loopback address"),
     };
     if canonical != value {
-        bail!("the authoring OpenAPI server must use its exact canonical origin spelling");
+        bail!("the local OpenAPI server must use its exact canonical origin spelling");
     }
-    Ok(AuthoringServer {
-        base_url: canonical,
-        authentication_kind,
-    })
+    Ok(canonical)
 }
 
 fn unique_operation<'a>(document: &'a Value, operation_id: &str) -> Result<Operation<'a>> {
@@ -2284,7 +2254,7 @@ fn render_derivation(authored: &str, concepts: &[ConceptPlan]) -> String {
 
 fn render_question_bundle_parts(
     question: &Question,
-    server: &AuthoringServer,
+    base_url: &str,
     path_template: &str,
     subjects: &[SubjectPlan],
     response_media_type: &str,
@@ -2323,9 +2293,9 @@ fn render_question_bundle_parts(
 
     let source_value = json!({
         "transport": "http-json",
-        "baseUrl": server.base_url,
+        "baseUrl": base_url,
         "posture": "field-projected",
-        "authentication": {"kind": server.authentication_kind},
+        "authentication": {"kind": "none"},
         "request": {
             "method": "GET",
             "pathTemplate": path_template,
@@ -4152,11 +4122,9 @@ factSchema: schemas/source-facts.schema.yaml
         plaintext["baseUrl"] = json!("http://records.example.test");
         let mut unauthenticated = production_http_source();
         unauthenticated["authentication"] = json!({"kind": "none"});
-        let mut anonymous_demo = production_http_source();
-        anonymous_demo["authentication"] = json!({"kind": "anonymous-https-demo"});
         let mut unreviewed = production_http_source();
         unreviewed["authentication"] = json!({"kind": "review-required"});
-        for broken in [plaintext, unauthenticated, anonymous_demo, unreviewed] {
+        for broken in [plaintext, unauthenticated, unreviewed] {
             let bundle = json!({"sources": {"people": broken}});
             assert_eq!(
                 validate_production_sources(&bundle)
@@ -4165,29 +4133,6 @@ factSchema: schemas/source-facts.schema.yaml
                 "every production source must use authenticated HTTPS"
             );
         }
-    }
-
-    #[test]
-    fn local_compiler_marks_an_exact_https_server_as_anonymous_demo_only() {
-        let openapi = OPENAPI.replace("http://127.0.0.1:8000", "https://r4.smarthealthit.org");
-        let fixture = Fixture::new(&openapi, QUESTION, ANSWER, true);
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("exact HTTPS authoring server compiles for local assurance");
-
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        let source_id = local_source_id("adult-status");
-        assert_eq!(bundle["assuranceProfile"], "local");
-        assert_eq!(
-            bundle["sources"][&source_id]["baseUrl"],
-            "https://r4.smarthealthit.org"
-        );
-        assert_eq!(
-            bundle["sources"][&source_id]["authentication"],
-            json!({"kind": "anonymous-https-demo"})
-        );
     }
 
     #[test]

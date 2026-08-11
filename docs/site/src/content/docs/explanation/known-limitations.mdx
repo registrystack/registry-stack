@@ -124,10 +124,10 @@ Read the full context in the [Evidence Gateway protocol](../../spec/rs-pr-eviden
 - Direct FHIR source compatibility is profiled, not generic: fixed HTTP sources accept the formal
   `application/fhir+json` media type, but Evidence Gateway does not implement FHIR search,
   pagination, subscriptions, or profile conformance. The governed source still fixes one bounded
-  HTTP operation and projects named leaves. Credential-free source access remains local-only:
-  `none` is restricted to an exact numeric-loopback HTTP origin, while
-  `anonymous-https-demo` permits one exact HTTPS origin using system roots for public synthetic
-  demonstrations. Production and evidence-grade bundles reject both kinds.
+  HTTP operation and projects named leaves. Credential-free source access remains restricted to
+  an exact numeric-loopback HTTP origin under local assurance. Connecting to a remote FHIR server
+  requires a local read-through adapter for development or a reviewed authenticated HTTPS source
+  for deployment.
   {/* Evidence: products/evidence/contracts/source-contract.yaml response_media_types and
   url_security; crates/registry-evidence/src/source.rs response_media_type. */}
 - Two deliberately narrow signing modes: local assurance uses a file-backed private JWK;

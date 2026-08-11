@@ -2051,22 +2051,6 @@ impl SourceConfig {
                         );
                     }
                 }
-                if matches!(
-                    **authentication,
-                    SourceAuthentication::AnonymousHttpsDemo {}
-                ) {
-                    if assurance_profile != AssuranceProfile::Local {
-                        return invalid(
-                            "anonymous HTTPS demo sources are permitted only by the local assurance profile",
-                        );
-                    }
-                    validate_anonymous_https_demo_source_origin(base_url)?;
-                    if tls_trust_profile.is_some() {
-                        return invalid(
-                            "an anonymous HTTPS demo source cannot use a TLS trust profile",
-                        );
-                    }
-                }
                 authentication.validate()?;
                 request.validate()?;
                 if let Some(batch) = batch {
@@ -2355,12 +2339,6 @@ pub enum SourceAuthentication {
     /// assurance profile and a canonical numeric-loopback HTTP origin with an
     /// explicit non-zero port. It is not a production authentication mode.
     None {},
-    /// No outbound credential is sent to one exact HTTPS demo origin.
-    ///
-    /// The containing bundle validator admits this only for the local
-    /// assurance profile, using system roots and an exact canonical HTTPS
-    /// origin. Production and evidence-grade profiles reject it.
-    AnonymousHttpsDemo {},
     Basic {
         #[serde(rename = "usernameRef")]
         username_ref: SecretRef,
@@ -2464,7 +2442,7 @@ pub enum SourceAuthentication {
 impl SourceAuthentication {
     fn validate(&self) -> Result<(), ConfigError> {
         match self {
-            Self::None {} | Self::AnonymousHttpsDemo {} => Ok(()),
+            Self::None {} => Ok(()),
             Self::Basic {
                 username_ref: _,
                 password_ref: _,
@@ -2562,7 +2540,7 @@ impl SourceAuthentication {
 
     pub fn secret_refs(&self) -> Vec<&SecretRef> {
         match self {
-            Self::None {} | Self::AnonymousHttpsDemo {} => Vec::new(),
+            Self::None {} => Vec::new(),
             Self::Basic {
                 username_ref,
                 password_ref,
@@ -4416,32 +4394,6 @@ pub(crate) fn validate_local_unauthenticated_source_origin(value: &str) -> Resul
     Ok(())
 }
 
-/// Validate the demo exception without making it a production mode.
-///
-/// The exact canonical HTTPS origin and system roots keep this distinct from
-/// both an authenticated provider connection and the loopback-only `none`
-/// mode. Redirects remain disabled by the fixed request executor.
-pub(crate) fn validate_anonymous_https_demo_source_origin(value: &str) -> Result<(), ConfigError> {
-    let url = validate_source_url(value, true)?;
-    if url.scheme() != "https" || url.path() != "/" || url.query().is_some() {
-        return invalid("anonymous HTTPS demo source must be an exact HTTPS origin");
-    }
-    let host = match url.host() {
-        Some(Host::Domain(host)) => host.to_owned(),
-        Some(Host::Ipv4(host)) => host.to_string(),
-        Some(Host::Ipv6(host)) => format!("[{host}]"),
-        None => return invalid("anonymous HTTPS demo source has no host"),
-    };
-    let canonical = match url.port() {
-        Some(port) => format!("https://{host}:{port}"),
-        None => format!("https://{host}"),
-    };
-    if value != canonical {
-        return invalid("anonymous HTTPS demo source must use its exact canonical origin spelling");
-    }
-    Ok(())
-}
-
 fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigError> {
     if !value.bytes().all(is_uri_byte) {
         return invalid("source URL contains characters a URI cannot carry");
@@ -5426,80 +5378,6 @@ mod tests {
             )
             .is_err(),
             "the none variant is closed"
-        );
-    }
-
-    #[test]
-    fn anonymous_https_demo_source_is_local_only_and_matches_the_bundle_schema() {
-        let mut local = EvidenceConfig::parse_yaml(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ))
-        .expect("strict fixture validates");
-        local.assurance_profile = AssuranceProfile::Local;
-        *http_authentication(&mut local) = SourceAuthentication::AnonymousHttpsDemo {};
-        *http_base_url(&mut local) = "https://r4.smarthealthit.org".to_owned();
-        local.validate().expect("public demo HTTPS origin loads");
-        assert!(http_authentication(&mut local).secret_refs().is_empty());
-
-        for origin in [
-            "http://127.0.0.1:18081",
-            "http://demo.example.test",
-            "https://demo.example.test/",
-            "https://demo.example.test/fhir",
-            "https://demo.example.test?query=true",
-            "https://demo.example.test#fragment",
-            "https://user@demo.example.test",
-        ] {
-            let mut candidate = local.clone();
-            *http_base_url(&mut candidate) = origin.to_owned();
-            assert!(
-                candidate.validate().is_err(),
-                "local assurance accepted malformed demo origin {origin}"
-            );
-        }
-
-        let mut with_tls_profile = local.clone();
-        *http_tls_trust_profile(&mut with_tls_profile) = Some("private-demo-ca".to_owned());
-        assert!(with_tls_profile.validate().is_err());
-
-        for profile in [
-            AssuranceProfile::Production,
-            AssuranceProfile::EvidenceGrade,
-        ] {
-            let mut candidate = local.clone();
-            candidate.assurance_profile = profile;
-            assert!(
-                candidate.validate().is_err(),
-                "{profile:?} accepted an anonymous HTTPS demo source"
-            );
-        }
-
-        let validator = bundle_contract_validator();
-        let mut instance = bundle_contract_instance(include_bytes!(
-            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
-        ));
-        instance["assuranceProfile"] = serde_json::json!("local");
-        instance["sources"]["source-a"]["baseUrl"] =
-            serde_json::json!("https://r4.smarthealthit.org");
-        instance["sources"]["source-a"]["authentication"] =
-            serde_json::json!({"kind": "anonymous-https-demo"});
-        assert!(
-            validator.is_valid(&instance),
-            "schema accepts the demo form"
-        );
-        instance["assuranceProfile"] = serde_json::json!("production");
-        assert!(
-            !validator.is_valid(&instance),
-            "schema rejects the demo exception in a deployable profile"
-        );
-
-        assert!(
-            serde_json::from_value::<SourceAuthentication>(serde_json::json!({
-                "kind": "anonymous-https-demo",
-                "tokenRef": "secret:file/unexpected"
-            }))
-            .is_err(),
-            "the anonymous HTTPS demo variant is closed"
         );
     }
 

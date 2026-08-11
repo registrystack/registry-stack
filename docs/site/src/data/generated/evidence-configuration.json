@@ -2795,7 +2795,6 @@
           "type": "string",
           "required": "conditional",
           "values": [
-            "anonymous-https-demo",
             "basic",
             "none",
             "oauth2-client-credentials",
@@ -2805,7 +2804,7 @@
           "values_conditional": false,
           "constraints": [],
           "conditional_constraints": [],
-          "description": "For `none`: Selects which credential the runtime presents to this source and closes the member set to that profile. `none` sends no credential and is admitted only by a `local` assurance bundle at a canonical numeric-loopback origin; production and evidence-grade bundles reject that kind. For `anonymous-https-demo`: Sends no credential to one exact HTTPS demo origin, using system roots. Only a `local` assurance bundle may use this authoring convenience; production and evidence-grade bundles reject it.",
+          "description": "Selects which credential the runtime presents to this source and closes the member set to that profile. `none` sends no credential and is admitted only by a `local` assurance bundle at a canonical numeric-loopback origin; production and evidence-grade bundles reject that kind.",
           "runtime_validation": null
         },
         {
@@ -2963,12 +2962,9 @@
           "conditional_constraints": [
             [
               "pattern: ^http://(?:127\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])|\\[::1\\]):(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
-            ],
-            [
-              "pattern: ^https://[^/?#]+$"
             ]
           ],
-          "description": "Fixed HTTPS origin the source's evidence-data requests target, with no path, query, fragment, user information, or runtime substitution. An HTTP numeric-loopback origin is accepted only when `sources.*.authentication.kind` is `none`. Anonymous access to one HTTPS demo origin requires `anonymous-https-demo` in a local bundle.",
+          "description": "Fixed HTTPS origin the source's evidence-data requests target, with no path, query, fragment, user information, or runtime substitution. An HTTP numeric-loopback origin is accepted only when `sources.*.authentication.kind` is `none`.",
           "runtime_validation": null
         },
         {
@@ -4172,7 +4168,7 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Logical name resolved to an exact private certificate authority file bound in `runtime.yaml`. Omission trusts only configured system roots, and the profile is rejected outright when `sources.*.authentication.kind` is `none` or `anonymous-https-demo`.",
+          "description": "Logical name resolved to an exact private certificate authority file bound in `runtime.yaml`. Omission trusts only configured system roots, and the profile is rejected outright when `sources.*.authentication.kind` is `none`.",
           "runtime_validation": null
         },
         {
