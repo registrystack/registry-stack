@@ -323,7 +323,7 @@ class FhirReadThrough(BaseHTTPRequestHandler):
             self.fail(502)
             return
 
-        self.send_body(200, body, "application/fhir+json")
+        self.send_body(200, body, "application/json")
 
 
 server = ThreadingHTTPServer(("127.0.0.1", 8000), FhirReadThrough)
@@ -353,7 +353,9 @@ ready
 ```
 
 This is a transport adapter, not a mock FHIR server. Every Coverage or Organization response used
-by Evidence Gateway is fetched live from `https://r4.smarthealthit.org` at request time.
+by Evidence Gateway is fetched live from `https://r4.smarthealthit.org` at request time. The
+adapter asks the upstream server for FHIR JSON, validates the resource, and exposes the same JSON
+body as `application/json`, which is inside Evidence Gateway's frozen v1 source contract.
 
 ## Describe the exact FHIR reads
 
@@ -383,7 +385,7 @@ paths:
         '200':
           description: One FHIR R4 Coverage resource
           content:
-            application/fhir+json:
+            application/json:
               schema:
                 type: object
                 required: [resourceType, id, status, beneficiary]
@@ -410,7 +412,7 @@ paths:
         '200':
           description: One FHIR R4 Organization resource
           content:
-            application/fhir+json:
+            application/json:
               schema:
                 type: object
                 required: [resourceType, id, active, type]
@@ -471,6 +473,7 @@ subjects:
     derivation: true
   - role: coverage-record
     selector: coverage_id
+    source: true
     derivation: true
 source:
   operation: getCoverage
@@ -488,8 +491,9 @@ disclosure:
   allow: [coverage_record_reports_active]
 ```
 
-Only `coverage_id` fills the FHIR path. The patient identifier is derivation-only, so it does not
-widen the source request or cause Evidence Gateway to fetch a Patient resource.
+Only the `coverage-record` role, marked `source: true`, fills the FHIR path. The patient identifier
+is derivation-only, so it does not widen the source request or cause Evidence Gateway to fetch a
+Patient resource.
 
 Create `derivations/fhir-coverage-status.rhai`:
 
@@ -586,9 +590,10 @@ Mint ready at http://127.0.0.1:8081
 ```
 
 Evidence Gateway now reads the live SMART server through the loopback adapter. It fixes one GET
-path per question, asks for `application/fhir+json`, applies response-size and timeout bounds, and
-projects the response before the derivation runs. The adapter independently denies redirects and
-validates the remote FHIR resource identity before returning it.
+path per question, asks the adapter for `application/json`, applies response-size and timeout
+bounds, and projects the response before the derivation runs. The adapter independently asks the
+upstream server for `application/fhir+json`, denies redirects, and validates the remote FHIR
+resource identity before returning it.
 
 ## Request the patient coverage credential
 
@@ -739,4 +744,4 @@ removes the local discovery script and selector files.
 | The read-through adapter does not start | Port 8000 is already in use, Python cannot bind loopback, or the process exited. | Stop the process using port 8000, inspect the owner-only `fhir-read-through.log`, and start the adapter again. Do not change the OpenAPI origin without reviewing the local-source boundary. |
 | Evidence Gateway reports a source dependency failure | The record changed shape, no longer matches the narrow schema, timed out, redirected, or returned a non-success status. | Probe the exact read again. Update the OpenAPI subset only after comparing it with the server's current FHIR profile and reviewing the claim semantics. |
 | The verified answer is `false` | The live record no longer reports the governed status or type. | Treat `false` as the server's current administrative answer. Do not edit the derivation merely to recover the tutorial's former output. |
-| A production FHIR server refuses the request | This tutorial uses an explicitly local, anonymous demo posture. | Configure the institution's HTTPS trust and supported authentication, commonly SMART Backend Services, then build under production or evidence-grade assurance. |
+| A production FHIR server refuses the request | This tutorial uses an explicitly local, anonymous demo posture and a loopback FHIR-to-JSON adapter. | Deploy a reviewed authenticated HTTPS adapter that applies the institution's FHIR trust and authentication, commonly SMART Backend Services, and exposes the bounded response as `application/json`; then build under production or evidence-grade assurance. |

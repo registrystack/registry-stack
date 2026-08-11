@@ -2539,43 +2539,6 @@ async fn projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_ex
 }
 
 #[tokio::test]
-async fn data_sources_accept_generic_graphql_and_fhir_json_media_types() {
-    for media_type in [
-        "application/json",
-        "application/graphql-response+json",
-        "application/fhir+json",
-    ] {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/data"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(r#"{"ok":true}"#, media_type))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let (_root, secrets) = resolver(&[("token", "token")]);
-        let source = fixed_source(
-            &server.uri(),
-            json!({"kind": "static-authorization", "tokenRef": "secret:file/token"}),
-        );
-        let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
-        assert_eq!(
-            executor
-                .execute(
-                    &[selector("record")],
-                    &prepared_http_request(&RequestParts {
-                        query: vec![],
-                        body: Some(json!({})),
-                    }),
-                    Utc::now(),
-                )
-                .await,
-            Ok(json!({"ok": true})),
-            "{media_type} remains inside the same bounded JSON parser and projection"
-        );
-    }
-}
-
-#[tokio::test]
 async fn source_executor_failure_matrix_is_exact_single_request_and_value_free() {
     let cases = [
         ("http-401", SourceError::Status(SourceStatus::Unauthorized)),

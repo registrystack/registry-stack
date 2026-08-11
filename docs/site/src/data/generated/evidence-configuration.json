@@ -4859,7 +4859,7 @@
       "marker": "evidence-authoring-question-key-paths",
       "status": "tooling",
       "reference": "products/evidence/reference/authoring-projects/CONFIG.md",
-      "field_count": 55,
+      "field_count": 57,
       "fields": [
         {
           "key_path": "answers",
@@ -5490,6 +5490,18 @@
           "runtime_validation": null
         },
         {
+          "key_path": "subject.source",
+          "kind": "property",
+          "type": "boolean | null",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Whether this role supplies an inline operation path selector.\n\nOmission keeps the unambiguous single-role shorthand. An explicit\nvalue is useful when multiple roles use the same selector field name.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "subjects",
           "kind": "property",
           "type": "array",
@@ -5559,6 +5571,18 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "subjects[].source",
+          "kind": "property",
+          "type": "boolean | null",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Whether this role supplies an inline operation path selector.\n\nOmission keeps the unambiguous single-role shorthand. An explicit\nvalue is useful when multiple roles use the same selector field name.",
           "runtime_validation": null
         }
       ]

@@ -52,7 +52,7 @@ An `http-json` provider must:
 - expose a bounded lookup at a fixed origin over HTTPS, except numeric loopback
   HTTP used only by deterministic local tests;
 - accept one fixed `GET` or `POST` and return JSON with media type
-  `application/json`, `application/graphql-response+json`, or `application/fhir+json`;
+  `application/json` or `application/graphql-response+json`;
 - let one response distinguish zero, one, and multiple matches, either through
   a trustworthy total count plus at most one minimized result, or through a
   caller-controlled hard result limit of at least two;

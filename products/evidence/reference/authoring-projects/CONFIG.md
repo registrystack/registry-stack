@@ -189,9 +189,10 @@ or `subjects` for a list of 1 to 8. Declaring both, or neither, is rejected.
 | `subject.role` | yes | What this party is to the question. Unique across the question's subjects. |
 | `subject.selector` | yes | The request field carrying this party's identifier. |
 | `subject.profile` | no | The selector profile the field belongs to. A question that names an `operation` must omit it, because `evidencectl` derives the profile from the operation. A question that names a `source.ref` may omit it only when exactly one alternative of that source's selector input for this role lists this field; no match and two matches are refused alike, so a field two profiles expose has to name its profile. |
+| `subject.source` | no | Inline `operation` only. `true` selects this role to supply a path selector and `false` excludes it. Omit it when the field names one role unambiguously. When several roles use the same path field, exactly one must be `true`. A question that names a `source.ref` must omit it. |
 | `subject.derivation` | no | Whether this party's selector value is offered to the derivation program. Defaults to `false`. |
 
-`subjects[]` carries the same four keys as `subject`.
+`subjects[]` carries the same five keys as `subject`.
 
 A question that names a `source.ref` has to reach its subjects through that
 source: `compile_referenced_subjects` in
@@ -254,14 +255,16 @@ ordinary `summary` or `description` beside them is refused, and so are an
 operation-level `security`, a request body, and `servers` on either the path
 item or the operation.
 
-The subjects named by that operation's path and the operation's parameters are
-then required to be the same set, one parameter per path-bound subject. A
-subject absent from the path is accepted only when it declares
+The selector fields named by that operation's path and the operation's
+parameters are then required to be the same set. A field used by one subject
+selects that role by default. When several roles use the same path field,
+exactly one must declare `source: true`; the others are derivation-only. A
+subject not selected for the path is accepted only when it declares
 `derivation: true`; that subject remains available to the reviewed derivation
 but is omitted from the source selector inputs and path bindings.
 `exact_path_selectors` in `crates/registry-evidencectl/src/authoring.rs` reads
 the path item's `parameters` and the operation's own as one list and compares
-its length to the number of path-bound subjects before it reads any of them, so
+its length to the number of distinct path selector fields before it reads any of them, so
 an extra parameter of any kind, a query filter beside the selector included,
 is refused for the count alone. Each parameter is closed to `name`, `in`,
 `required`, and `schema`, so an ordinary `description` beside them, and a
@@ -299,8 +302,7 @@ must say `combine: exactly-one`. Either mismatch is rejected by name, so a
 finding says which fact disagrees with its own path.
 
 A well-formed path still has to land on a value the response offers. The leaves
-are read from the selected operation's exact `200` `application/json` or
-`application/fhir+json` response
+are read from the selected operation's exact `200` `application/json` response
 schema, with no `default` or wildcard response standing in for it, and a
 container is never one of them.
 `crates/registry-evidence-authoring/src/openapi/flatten.rs` produces no leaf
@@ -639,12 +641,14 @@ subject.derivation
 subject.profile
 subject.role
 subject.selector
+subject.source
 subjects
 subjects[]
 subjects[].derivation
 subjects[].profile
 subjects[].role
 subjects[].selector
+subjects[].source
 ```
 <!-- evidence-authoring-question-key-paths:end -->
 

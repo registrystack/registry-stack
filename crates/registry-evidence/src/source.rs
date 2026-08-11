@@ -44,7 +44,6 @@ const PRIVATE_CA_MAXIMUM_BYTES: u64 = 1024 * 1024;
 const PROJECTED_RESPONSE_MAXIMUM_BYTES: usize = 65_536;
 const JSON_MEDIA_TYPE: &str = "application/json";
 const GRAPHQL_JSON_MEDIA_TYPE: &str = "application/graphql-response+json";
-const FHIR_JSON_MEDIA_TYPE: &str = "application/fhir+json";
 /// Scheme used when a source states no other, and the only scheme RFC 6750
 /// admits for an access token the runtime acquired itself.
 const DEFAULT_AUTHORIZATION_SCHEME: &str = "Bearer";
@@ -2259,10 +2258,7 @@ async fn parse_data_response(
 ) -> Result<JsonValue, SourceError> {
     reject_response_status(&response)?;
     let media_type = response_media_type(&response)?;
-    if !matches!(
-        media_type,
-        JSON_MEDIA_TYPE | GRAPHQL_JSON_MEDIA_TYPE | FHIR_JSON_MEDIA_TYPE
-    ) {
+    if media_type != JSON_MEDIA_TYPE && media_type != GRAPHQL_JSON_MEDIA_TYPE {
         return Err(SourceError::WrongMediaType);
     }
     let bytes = Zeroizing::new(
@@ -2395,8 +2391,6 @@ fn response_media_type(response: &reqwest::Response) -> Result<&str, SourceError
         Ok(JSON_MEDIA_TYPE)
     } else if media_type.eq_ignore_ascii_case(GRAPHQL_JSON_MEDIA_TYPE) {
         Ok(GRAPHQL_JSON_MEDIA_TYPE)
-    } else if media_type.eq_ignore_ascii_case(FHIR_JSON_MEDIA_TYPE) {
-        Ok(FHIR_JSON_MEDIA_TYPE)
     } else {
         Ok(media_type)
     }

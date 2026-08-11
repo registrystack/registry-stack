@@ -386,7 +386,6 @@ struct ConceptPlan {
 }
 
 struct CompiledFacts {
-    response_media_type: String,
     response_schema: Value,
     fact_schema: Value,
     extract_script: String,
@@ -1103,7 +1102,7 @@ fn compile_question_plan(
         "selected OpenAPI operation",
     )?;
 
-    let source_selector_fields = authored_subjects
+    let path_selector_fields = authored_subjects
         .iter()
         .filter(|subject| {
             let placeholder = format!("{{{}}}", subject.selector);
@@ -1113,12 +1112,44 @@ fn compile_question_plan(
                 .any(|segment| segment == placeholder)
         })
         .map(|subject| subject.selector.as_str())
-        .collect::<Vec<_>>();
-    for subject in &authored_subjects {
-        if !source_selector_fields.contains(&subject.selector.as_str()) && !subject.derivation {
+        .collect::<BTreeSet<_>>();
+    let mut source_subjects = vec![false; authored_subjects.len()];
+    for selector in &path_selector_fields {
+        let candidates = authored_subjects
+            .iter()
+            .enumerate()
+            .filter(|(_, subject)| subject.selector == *selector)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let explicit = candidates
+            .iter()
+            .copied()
+            .filter(|index| authored_subjects[*index].source == Some(true))
+            .collect::<Vec<_>>();
+        let selected = match (explicit.as_slice(), candidates.as_slice()) {
+            ([selected], _) => *selected,
+            ([], [selected]) if authored_subjects[*selected].source != Some(false) => *selected,
+            ([], [_]) => {
+                bail!("an inline path selector cannot bind a subject with source: false")
+            }
+            ([], _) => {
+                bail!("shared selector fields require exactly one subject with source: true")
+            }
+            _ => {
+                bail!("an inline path selector must identify exactly one subject with source: true")
+            }
+        };
+        source_subjects[selected] = true;
+    }
+    for (index, subject) in authored_subjects.iter().enumerate() {
+        if subject.source == Some(true) && !source_subjects[index] {
+            bail!("a subject with source: true must supply an inline operation path selector");
+        }
+        if !source_subjects[index] && !subject.derivation {
             bail!("every question subject must be used by the source or declared for derivation");
         }
     }
+    let source_selector_fields = path_selector_fields.into_iter().collect::<Vec<_>>();
     exact_path_selectors(&operation, &source_selector_fields)?;
     let compiled_facts = compile_facts(
         spec.expect("inline source needs parsed OpenAPI"),
@@ -1147,7 +1178,6 @@ fn compile_question_plan(
             }
         });
 
-    let response_media_type = compiled_facts.response_media_type;
     let response_schema = compiled_facts.response_schema;
     let fact_schema = compiled_facts.fact_schema;
     let adapter_parameters_schema = json!({
@@ -1165,7 +1195,8 @@ fn compile_question_plan(
     let derivation_script = render_derivation(&authored.derivation, &concepts);
     let subjects = authored_subjects
         .iter()
-        .map(|authored_subject| {
+        .enumerate()
+        .map(|(index, authored_subject)| {
             let selector_profile = local_subject_selector_profile_id(
                 &question.id,
                 &authored_subject.role,
@@ -1185,7 +1216,7 @@ fn compile_question_plan(
                         }
                     },
                 }),
-                source: source_selector_fields.contains(&authored_subject.selector.as_str()),
+                source: source_subjects[index],
                 derivation: authored_subject.derivation,
             }
         })
@@ -1196,7 +1227,6 @@ fn compile_question_plan(
         base_url.expect("inline source needs local base URL"),
         operation.path,
         &subjects,
-        &response_media_type,
         &source_id,
         &BundleRequirement {
             requirement_uri: requirement_uri.clone(),
@@ -1319,6 +1349,9 @@ fn compile_referenced_subjects(
     let authored = question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
     let mut compiled = Vec::with_capacity(authored.len());
     for subject in authored {
+        if subject.source.is_some() {
+            bail!("subject.source is available only to an inline OpenAPI operation");
+        }
         let selector_profile = match &subject.profile {
             Some(profile) => profile.clone(),
             None => referenced_selector_profile(source, &subject.role, &subject.selector)?,
@@ -1785,8 +1818,7 @@ fn compile_facts(
         method: operation.method.to_ascii_uppercase(),
         path: operation.path.to_owned(),
     };
-    let (response_media_type, resolved) =
-        registry_evidence_authoring::openapi::json_response_schema(spec, &operation_key)?;
+    let resolved = spec.response_schema(&operation_key, "200", "application/json")?;
     for fact in &source.facts {
         validate_selected_schema_path(&resolved.schema.0, &fact.path)?;
     }
@@ -1798,7 +1830,7 @@ fn compile_facts(
     for fact in &source.facts {
         if !offered.contains(fact.path.as_str()) {
             bail!(
-                "source fact `{}` path `{}` is not a selectable scalar leaf in the supported 200 JSON response",
+                "source fact `{}` path `{}` is not a selectable scalar leaf in the 200 application/json response",
                 fact.name,
                 fact.path
             );
@@ -1914,7 +1946,6 @@ fn compile_facts(
     });
 
     Ok(CompiledFacts {
-        response_media_type: response_media_type.to_owned(),
         response_schema,
         fact_schema,
         extract_script: render_fact_extraction(&source.facts),
@@ -2257,7 +2288,6 @@ fn render_question_bundle_parts(
     base_url: &str,
     path_template: &str,
     subjects: &[SubjectPlan],
-    response_media_type: &str,
     source_id: &str,
     requirement: &BundleRequirement,
 ) -> (Value, Value, Value) {
@@ -2300,7 +2330,7 @@ fn render_question_bundle_parts(
             "method": "GET",
             "pathTemplate": path_template,
             "pathBindings": path_bindings,
-            "fixedHeaders": [{"name": "Accept", "value": response_media_type}],
+            "fixedHeaders": [{"name": "Accept", "value": "application/json"}],
             "selectorInputs": selector_inputs,
             "prepareScript": format!("adapters/{}-source-prepare.rhai", question.id),
             "adapterParameters": {"operationId": question.source.operation.as_deref().expect("inline source")},
@@ -3703,6 +3733,38 @@ properties:
             2
         );
 
+        let shared_selector = question
+            .replace(
+                "    selector: person_id\n    derivation: true",
+                "    selector: person_id\n    source: true\n    derivation: true",
+            )
+            .replace("    selector: beneficiary_id", "    selector: person_id");
+        let fixture = Fixture::new(OPENAPI, &shared_selector, ANSWER, true);
+        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("an explicit role disambiguates a shared selector field");
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        assert_eq!(
+            bundle["sources"][local_source_id("adult-status")]["request"]["selectorInputs"],
+            json!([{
+                "role": "person",
+                "alternatives": [{
+                    "profile": local_subject_selector_profile_id("adult-status", "person", 2),
+                    "fields": ["person_id"]
+                }]
+            }])
+        );
+
+        let ambiguous = shared_selector.replace("    source: true\n", "");
+        let fixture = Fixture::new(OPENAPI, &ambiguous, ANSWER, true);
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a shared selector field needs one explicit source role");
+        assert!(error
+            .to_string()
+            .contains("shared selector fields require exactly one subject with source: true"));
+
         let without_derivation = question.replace(
             "  - role: expected-beneficiary\n    selector: beneficiary_id\n    derivation: true",
             "  - role: expected-beneficiary\n    selector: beneficiary_id",
@@ -3713,23 +3775,6 @@ properties:
         assert!(error.to_string().contains(
             "every question subject must be used by the source or declared for derivation"
         ));
-    }
-
-    #[test]
-    fn inline_openapi_uses_the_fhir_json_response_and_accept_header() {
-        let openapi = OPENAPI.replace("application/json:", "application/fhir+json:");
-        let fixture = Fixture::new(&openapi, QUESTION, ANSWER, true);
-
-        compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
-            .expect("FHIR JSON response compiles");
-        let bundle: Value = serde_norway::from_slice(
-            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
-        )
-        .expect("bundle parses");
-        assert_eq!(
-            bundle["sources"][local_source_id("adult-status")]["request"]["fixedHeaders"],
-            json!([{"name": "Accept", "value": "application/fhir+json"}])
-        );
     }
 
     #[test]

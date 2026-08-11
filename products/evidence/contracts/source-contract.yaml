@@ -45,7 +45,7 @@ evidence_data_request:
   owner: Core runtime.
   method_allowlist: [GET, POST]
   request_media_types: [application/json]
-  response_media_types: [application/json, application/graphql-response+json, application/fhir+json]
+  response_media_types: [application/json, application/graphql-response+json]
   redirects: deny
   maximum_response_bytes: {required: true, upper_bound: 1048576, applied: before parsing and projection}
   timeout_milliseconds: {required: true, range: [1, 30000], applies_to: [source-concurrency-admission, OAuth-single-flight-admission, HTTP-exchange]}
