@@ -185,8 +185,12 @@ MUST be between 1 and 100000 inclusive, `quotas.requestsPerMinute` MUST be non-z
 `shutdown.gracePeriodMilliseconds` MUST be non-zero.
 The runtime MUST refuse to start on a document that violates any of these bounds, and MUST NOT
 silently clamp an out-of-range value to a supported one.
-The runtime defaults a missing cursor maximum age to 300 seconds and a missing shutdown grace
-period to 30 seconds.
+`cursor` and `shutdown` are optional sections, and every field inside a present section is required.
+The runtime defaults the cursor maximum age to 300 seconds when the whole `cursor` section is
+absent, and the shutdown grace period to 30 seconds when the whole `shutdown` section is absent. A
+present section that omits a field is a rejected document, not a defaulted one.
+A document MUST set `cursor` when its contract binds any list or search operation, or when more
+than one resource can appear in metadata; the runtime refuses to start without it.
 
 REQ-OP-POSTURE-110: `limits.concurrentQueries` MUST bound admission at the source boundary: every
 query MUST acquire an admission permit before it runs, and `limits.requestTimeoutMilliseconds` MUST

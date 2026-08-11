@@ -1,6 +1,6 @@
 ---
 title: Relayctl command reference
-description: Reference for the Relay adopter command line, covering project initialization, schema inspection, validation, artifact generation, fixtures, change classification, and sealed packaging.
+description: Reference for the Relay adopter command line, covering project initialization, schema inspection, validation, artifact generation, fixtures, change classification, sealed packaging, and editor integration.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,8 +13,9 @@ standards_referenced: []
 
 `relayctl` is Relay adopter tooling. It initializes an authoring project, inspects SQLite structure,
 compiles and validates the project, generates reviewable artifacts, runs the project's offline
-fixture cases, classifies changes between two project revisions, and builds a sealed deployment
-package. It serves no request, starts no listener, and performs no deployment action.
+fixture cases, classifies changes between two project revisions, builds a sealed deployment
+package, and hosts the editor integration surfaces. It serves no request, opens no socket, and
+performs no deployment action.
 
 ## Contract status
 
@@ -28,7 +29,7 @@ command line is not generated, so the source files win on any disagreement.
 
 ## Commands
 
-Seven commands, with no subcommand nesting.
+Eight commands. Seven are flat; `relayctl tooling` groups the two editor-integration subcommands.
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
@@ -39,6 +40,8 @@ Seven commands, with no subcommand nesting.
 | `relayctl test <PROJECT>` | Project fixture inputs | Runs the project's offline fixture cases through the shared kernel | Start a listener, contact a network source, or start `relay` |
 | `relayctl diff <PREVIOUS> <CURRENT>` | Two project directories | Classifies meaning, disclosure, and security changes between the reviewed project and the candidate | Add or remove change classes, or decide whether the change is acceptable |
 | `relayctl package <PROJECT> --output <DIRECTORY>` | Project that compiles under the production profile | Builds a sealed package directory carrying `relay-package.json` | Sign the package, deploy it, or write into a destination that already exists |
+| `relayctl tooling editor [PROJECT]` | Authoring project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports each file written | Install an extension, change editor settings outside the project, or read any database |
+| `relayctl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Relay V2 authoring diagnostics from the shared in-memory authoring compiler, as an editor types | Open a socket, observe SQLite, or read source values |
 
 ## Global options
 
