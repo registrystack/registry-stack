@@ -17,13 +17,13 @@ common:
     fixedHeaders: [{name: Accept, value: application/json}]
 cases:
   - {id: positive, source: {total: 1, official_residence_code: R-101}, expected_value: REGION-NORTH, expected_lookup: match, derivation_runs: true, signed_success: true}
-  - {id: negative-unknown-code, source: {total: 1, official_residence_code: R-999}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
+  - {id: negative-unknown-code, source: {total: 1, official_residence_code: R-999}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
   - {id: negative-overly-precise-output, injected_derivation: [{concept_id: urn:example:demo:concept:residence-region, value: R-101}], expected: output-gate-rejection}
   - {id: boundary-other-coarse-region, source: {total: 1, official_residence_code: R-201}, expected_value: REGION-SOUTH, expected_lookup: match, derivation_runs: true, signed_success: true}
-  - {id: missing-fact, source: {total: 1}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
-  - {id: no-match, source: {total: 0}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
-  - {id: ambiguous, source: {total: 2}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
-  - {id: source-failure, source_failure: http-503, expected_public_problem: dependency_unavailable, signed_success: false}
+  - {id: missing-fact, source: {total: 1}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
+  - {id: no-match, source: {total: 0}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
+  - {id: ambiguous, source: {total: 2}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
+  - {id: source-failure, source_failure: http-503, expected_public_problem: source.unavailable, signed_success: false}
   - {id: anti-reconstruction, companion_bundle: geographic-overlap, expected: bundle-rejection}
 privacy_expectation:
   evidence_contains: [urn:example:demo:concept:residence-region, REGION-NORTH]

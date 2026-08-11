@@ -771,10 +771,10 @@ cases:
   - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}}
   - {{id: negative-false-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}}
   - {{id: boundary-on, legal_local_date: '2026-08-02', source: {{total: 1, date_of_birth: '2008-08-02'}}, expected_value: true, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}}
+  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: source-failure, source_failure: timeout, expected_public_problem: source.unavailable, signed_success: false}}
   - {{id: negative-wrong-derived-type, injected_derivation: [{{concept_id: {CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
   - {{id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}}
 privacy_expectation:
@@ -1157,10 +1157,10 @@ cases:
   - {{id: positive, source: {{total: 1, date_of_birth: '2000-01-01'}}, expected_value: 25-to-64, expected_lookup: match, derivation_runs: true, signed_success: true}}
   - {{id: negative-under-18-is-success, source: {{total: 1, date_of_birth: '2010-01-01'}}, expected_value: under-18, expected_lookup: match, derivation_runs: true, signed_success: true}}
   - {{id: boundary-on-18, source: {{total: 1, date_of_birth: '2008-08-02'}}, expected_value: 18-to-24, expected_lookup: match, derivation_runs: true, signed_success: true}}
-  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}}
+  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: source-failure, source_failure: timeout, expected_public_problem: source.unavailable, signed_success: false}}
   - {{id: negative-wrong-derived-type, injected_derivation: [{{concept_id: {AGE_CONCEPT}, value: true}}], expected: output-gate-rejection}}
   - {{id: anti-reconstruction, companion_bundle: threshold-ladder, expected: bundle-rejection}}
 privacy_expectation:
@@ -1208,10 +1208,10 @@ cases:
     expected_lookup: match
     derivation_runs: true
     signed_success: true
-  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}}
+  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: source-failure, source_failure: timeout, expected_public_problem: source.unavailable, signed_success: false}}
   - id: negative-wrong-derived-type
     injected_derivation:
       - {{concept_id: {SCHEDULE_CONCEPT}, value: true}}
@@ -1257,10 +1257,10 @@ cases:
     derivation_runs: true
     signed_success: true
     expected_subject_roles: [child, candidate-parent]
-  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}}
-  - {{id: source-failure, source_failure: timeout, expected_public_problem: dependency_unavailable, signed_success: false}}
+  - {{id: missing-fact, source: {{total: 1}}, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: no-match, source: {{total: 0}}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: ambiguous, source: {{total: 2}}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}}
+  - {{id: source-failure, source_failure: timeout, expected_public_problem: source.unavailable, signed_success: false}}
   - {{id: negative-wrong-derived-type, injected_derivation: [{{concept_id: {RELATIONSHIP_CONCEPT}, value: 'true'}}], expected: output-gate-rejection}}
   - {{id: anti-reconstruction, companion_bundle: relationship-graph, expected: bundle-rejection}}
 privacy_expectation:
