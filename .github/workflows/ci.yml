@@ -1048,12 +1048,6 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
-      - name: Cache Registryctl authoring-reference build
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: docs-authoring-reference
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       - name: Install docs shell dependency
         run: |
           sudo apt-get update
