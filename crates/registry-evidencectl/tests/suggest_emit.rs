@@ -354,6 +354,32 @@ fn facts_schema_stub_is_minimal_and_parses() {
     assert!(facts_schema.contains("TODO(evidencectl)"));
 }
 
+/// The parameters schema stub stays an empty-properties draft (the closed
+/// Version 1 subset admits no placeholder property), but it must carry a
+/// must-edit comment: without one, the schema-node validator's opaque
+/// "schema objects must declare bounded properties" is the reader's only
+/// signal that this file needs attention.
+#[test]
+fn parameters_schema_stub_is_empty_but_carries_a_must_edit_comment() {
+    let artifacts = emit::draft(&base_inputs()).expect("draft");
+    let parameters_schema = file_contents(&artifacts, "schemas/search-a-parameters.schema.yaml");
+
+    assert!(parameters_schema.contains("TODO(evidencectl)"));
+    assert!(parameters_schema.contains("http-json"));
+
+    let parsed: serde_norway::Value =
+        serde_norway::from_str(parameters_schema).expect("parameters schema parses as YAML");
+    let mapping = parsed.as_mapping().expect("parameters schema is a mapping");
+    let properties = mapping
+        .get(serde_norway::Value::String("properties".to_owned()))
+        .and_then(|v| v.as_mapping())
+        .expect("properties is a mapping");
+    assert!(
+        properties.is_empty(),
+        "the draft must stay a must-edit stub, not a placeholder property"
+    );
+}
+
 #[test]
 fn extract_script_uses_get_path_for_every_selected_leaf_with_wildcard_substitution() {
     let artifacts = emit::draft(&base_inputs()).expect("draft");
