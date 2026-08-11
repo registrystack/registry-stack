@@ -1370,6 +1370,18 @@ pub(crate) enum IssuerAlgorithm {
 
 impl IssuerRuntime {
     pub(crate) fn profile(&self) -> Option<IssuerProfile> {
+        self.profile_with_supervised_loopback(false)
+    }
+
+    #[cfg(feature = "tooling")]
+    pub(crate) fn supervised_local_profile(&self) -> Option<IssuerProfile> {
+        self.profile_with_supervised_loopback(true)
+    }
+
+    fn profile_with_supervised_loopback(
+        &self,
+        allow_supervised_loopback: bool,
+    ) -> Option<IssuerProfile> {
         if !valid_runtime_id(&self.id)
             || self.audience.trim().is_empty()
             || self.audience.len() > MAXIMUM_ISSUER_AUDIENCE_BYTES
@@ -1384,7 +1396,12 @@ impl IssuerRuntime {
             _ => return None,
         };
         let discovery_url = Url::parse(&self.discovery_url).ok()?;
-        if discovery_url.scheme() != "https"
+        let production_https = discovery_url.scheme() == "https";
+        let supervised_loopback = allow_supervised_loopback
+            && discovery_url.scheme() == "http"
+            && discovery_url.host_str() == Some("127.0.0.1")
+            && discovery_url.port().is_some_and(|port| port != 0);
+        if (!production_https && !supervised_loopback)
             || discovery_url.host_str().is_none()
             || !discovery_url.username().is_empty()
             || discovery_url.password().is_some()

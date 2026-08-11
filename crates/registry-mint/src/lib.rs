@@ -3,12 +3,13 @@
 //! Mint exists to answer one question that a JWKS alone cannot answer: *which
 //! principal signed this token, and what is that principal allowed to assert?*
 //!
-//! A resource server such as Evidence verifies an access token by selecting a
-//! key from a JWKS using the token's own `kid` header, then reading the
-//! authority claims out of the payload. Nothing in that flow binds a key to a
-//! permitted claim set, so every key published in a JWKS is equally
-//! authoritative for every claim. Distributing signing keys directly to callers
-//! therefore makes each caller an issuer able to speak as any other.
+//! A resource server such as Evidence Gateway or Registry Relay verifies an
+//! access token by selecting a key from a JWKS using the token's own `kid`
+//! header, then reading the authority claims out of the payload. Nothing in
+//! that flow binds a key to a permitted claim set, so every key published in a
+//! JWKS is equally authoritative for every claim. Distributing signing keys
+//! directly to callers therefore makes each caller an issuer able to speak as
+//! any other.
 //!
 //! Mint keeps that binding server-side. Callers hold their own private keys and
 //! authenticate with an RFC 7523 `private_key_jwt` client assertion. Mint
@@ -24,8 +25,9 @@
 //! - The client registry is reloadable, so onboarding, offboarding, and key
 //!   rotation for callers never require restarting a resource server.
 //!
-//! That split is the point of running Mint as a separate process: Evidence
-//! keeps its immutable governed bundle while the caller population changes.
+//! That split is the point of running Mint as a separate process: resource
+//! servers keep their immutable governed contracts while the caller population
+//! changes.
 //!
 //! # Naming
 //!

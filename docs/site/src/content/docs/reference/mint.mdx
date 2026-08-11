@@ -1,11 +1,11 @@
 ---
 title: Registry Mint reference
-description: Configuration fields, the token endpoint contract, and the Evidence Gateway verification path for the Registry Mint token issuer.
+description: Configuration fields, authority profiles, token endpoint contract, and resource-server verification paths for Registry Mint.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-12"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -78,7 +78,7 @@ following tables group the surface by the struct that owns each field.
 | `activePublicJwkFile` | path | required | Exact public P-256 JWK for the signer. Its `kid` must be the derived RFC 7638 thumbprint. |
 | `publishedPublicJwkFiles` | list of paths | `[]` | Other current public P-256 JWKs that remain in JWKS during a planned rotation. |
 | `revokedKeyIds` | list of thumbprints | `[]` | Denylisted service keys. They cannot be active, published, or returned by JWKS. |
-| `jwksPath` | string | `/.well-known/jwks.json` | A plain absolute path: one or more non-empty segments of `A-Z a-z 0-9 - . _ ~`, no dot segments, and no query, fragment, or route pattern. Must not be `/token`, `/health`, `/ready`, or `/.well-known/oauth-authorization-server`. |
+| `jwksPath` | string | `/.well-known/jwks.json` | A plain absolute path: one or more non-empty segments of `A-Z a-z 0-9 - . _ ~`, no dot segments, and no query, fragment, or route pattern. Must not be `/token`, `/health`, `/ready`, `/.well-known/oauth-authorization-server`, or `/.well-known/openid-configuration`. |
 
 ### Signer
 
@@ -123,8 +123,8 @@ principals, authority values, actors, and subject values are not stored.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `audiences` | list of strings (1..=16 entries, 1..=512 bytes each) | required | Written as the minted token's `aud`. |
-| `lifetimeSeconds` | integer (`u64`) | required | Bounded `60..=3600`. |
-| `claims` | object | required | See [Access token claim names](#access-token-claim-names). |
+| `lifetimeSeconds` | integer (`u64`) | required | Bounded `60..=3600`; a deployment with any standard authorization registration is further bounded to `<=900`. |
+| `claims` | object | none | Evidence claim names. Required when any client uses the Evidence authority profile. Scoped-only deployments omit it. |
 
 ### Access token claim names
 
@@ -137,9 +137,9 @@ principals, authority values, actors, and subject values are not stored.
 | `grantAuthority` | string | required | |
 | `actor` | string, optional | none | Required only to issue delegated tokens. |
 
-These names must match the resource server's own claim-name configuration exactly. Claim names
+These names must match Evidence Gateway's own claim-name configuration exactly. Claim names
 must be distinct, must not shadow the registered JWT claims Registry Mint writes itself
-(`iss`, `aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`), and `sub` may only be used for
+(`iss`, `aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`, `scope`), and `sub` may only be used for
 `principal`.
 
 ### Client assertion
@@ -165,11 +165,27 @@ One file per client, parsed by `crates/registry-mint/src/clients.rs`.
 | --- | --- | --- | --- |
 | `clientId` | string | required | |
 | `principal` | string (at most 512 bytes) | required | |
-| `evidenceAudience` | string | required | |
-| `requesterTags` | list of strings (at most 32 entries) | required | |
-| `grant` | object: `id`, `authority` | none, optional | Required together or not at all. |
-| `delegation` | object: `actors`, `subjectClaims` | none, optional | Enables delegated tokens bound to one subject; see `crates/registry-mint/README.md`. |
+| `evidenceAudience` | string | Evidence profile only | Required with `requesterTags`; cannot coexist with `authorization`. |
+| `requesterTags` | list of strings (1..=32 entries) | Evidence profile only | Required with `evidenceAudience`; cannot coexist with `authorization`. |
+| `grant` | object: `id`, `authority` | Evidence profile only, optional | Both fields are required when the object is present. Cannot coexist with `authorization`. |
+| `delegation` | object: `actors`, `subjectClaims` | Evidence profile only, optional | Enables delegated tokens bound to one subject; cannot coexist with `authorization`. See `crates/registry-mint/README.md`. |
+| `authorization` | object: `scopes`, `claims` | Standard profile only | `scopes` has 1..=64 unique RFC 6749 scope-tokens. `claims` has at most 32 direct strings. Cannot coexist with Evidence fields. |
 | `keys` | list of public JWKs (at most 8 entries) | required | A document carrying a private key member is rejected. |
+
+Every registration selects exactly one profile. Evidence authority consists of
+`evidenceAudience` plus `requesterTags`, with optional `grant` and `delegation`. Standard
+authorization consists of `authorization.scopes` plus optional `authorization.claims`. A
+registration that selects neither profile or combines both profiles fails the whole registry
+load.
+
+Each standard scope is 1 to 256 bytes and follows the RFC 6749 scope-token grammar. Direct claim
+names are 1 to 128 bytes. Direct claim values are non-empty strings of at most 512 bytes. The
+names `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`, `sub`, and `scope` are reserved and
+cannot be configured as direct claims. When `accessTokens.claims` is present, direct standard
+claims also cannot reuse any configured Evidence claim name.
+Mint projects the complete maximum-width signed response for each standard registration and
+refuses startup or reload when that response could exceed the shared private-key-JWT provider's
+16 KiB read ceiling.
 
 ## Token endpoint contract
 
@@ -205,10 +221,12 @@ configured `clientAssertion.audience`, a `jti`, and `iat`/`exp` inside
 
 `access_token` is a compact JWS with header `{"alg": "ES256", "typ": "at+jwt",
 "kid": "<RFC-7638-thumbprint>"}`. Its claims carry the standard `iss`, `aud`, `iat`, `nbf`,
-`exp`, `jti`, `client_id`, and `sub` (the principal), plus the authority claims named under
-`accessTokens.claims`. `expires_in` equals `accessTokens.lifetimeSeconds`. Mint durably appends
-the matching token-release audit record before sending this response. If that append fails, the
-token is not released.
+`exp`, `jti`, `client_id`, and `sub` (the principal). An Evidence-profile token adds the
+authority claims named under `accessTokens.claims` and omits the response `scope` member. A
+standard-profile token adds its space-delimited `scope` claim and direct registered string
+claims; its response adds the same `scope` string. `expires_in` equals
+`accessTokens.lifetimeSeconds`. Mint durably appends the matching token-release audit record
+before sending this response. If that append fails, the token is not released.
 
 ### Errors
 
@@ -228,6 +246,7 @@ Every response body is `{"error": "<code>"}`, from
 | --- | --- |
 | `GET <signing.jwksPath>` (default `/.well-known/jwks.json`) | Public keys for verifying minted tokens, `application/jwk-set+json`. |
 | `GET /.well-known/oauth-authorization-server` | Metadata pointing at the token endpoint and the key set. |
+| `GET /.well-known/openid-configuration` | The same metadata at the OIDC discovery path used by Registry Relay and other OIDC-compatible verifiers. |
 | `GET /health` | Liveness. |
 | `GET /ready` | Readiness. Returns `503` while no client is registered, after an audit write failure poisons the writer, or while the signing provider is unavailable. Provider readiness recovers after a successful self-test. |
 
@@ -301,6 +320,34 @@ deployment and feeds the minted token to Evidence Gateway's own authenticator;
 Evidence Gateway's own entitlement match and selector resolution over a token minted by the real Registry
 Mint router. The dependency runs one way only: Registry Mint's tests exercise Evidence Gateway's
 authenticator, and Evidence Gateway does not depend on Registry Mint.
+
+## How Registry Relay verifies these tokens
+
+Registry Relay configures one issuer and one exact audience per deployment. Its ordinary OAuth
+JWT verifier validates Mint's issuer, audience, `at+jwt` token type, ES256 signature, key,
+lifetime, principal, token identifier, and space-delimited `scope` claim. The selected operation
+or access profile then requires one exact compiled scope. Optional purpose and row-authority
+checks read direct verified string claims.
+
+Pairing therefore requires four exact configuration matches:
+
+- `accessTokens.audiences` is a one-entry list equal to the Relay runtime's issuer audience.
+- `authorization.scopes` contains only the operation and access-profile scopes registered for
+  that client.
+- `authorization.claims` supplies the configured purpose or row-authority values that the
+  selected Relay access rule requires.
+- `accessTokens.lifetimeSeconds` is between 60 and 900 seconds, within Relay's fixed 15-minute
+  token-lifetime ceiling.
+
+Registry Mint fixes these values in the server-side registration. The token request has no
+`scope` or authority form member, and Mint does not copy authority from the client assertion.
+Registry Relay has no Mint-specific verifier branch and keeps working with any authorization
+server that emits the same token profile.
+
+The compatibility test in `crates/registry-relay-v2/tests/acceptance_http.rs` starts the real
+Mint router and the real Relay router. The Registry Relay client obtains a token through its
+shared private-key-JWT provider and uses the registered scope, purpose, and row authority to
+complete a protected, disclosure-limited lookup.
 
 ## Next
 

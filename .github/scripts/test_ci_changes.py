@@ -613,6 +613,20 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertFalse(relay_client_matrix["all_features"])
 
+    def test_mint_change_runs_the_direct_relay_pairing_without_relay_fanout(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-mint/src/clients.rs",),
+        )
+        self.assertIn("registry-mint", outputs["rust_packages"])
+        # Relay V2 owns the real Mint-to-Relay router journey through a dev
+        # dependency. That test suite must run for a Mint token-profile change,
+        # but the test-only edge must not select Relay's normal dependents.
+        self.assertIn("registry-relay-v2", outputs["rust_packages"])
+        self.assertNotIn("registry-relayctl", outputs["rust_packages"])
+        self.assertTrue(outputs["relay_v2_contracts"])
+        self.assertTrue(outputs["evidence_tutorial"])
+
     def test_oid4vci_change_runs_rust_contracts_and_its_registered_tutorial(self) -> None:
         outputs = classify(
             self.workspace,

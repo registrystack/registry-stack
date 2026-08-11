@@ -27,6 +27,7 @@ registry-platform-audit.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto = { workspace = true, features = ["transit"] }
+registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 reqwest.workspace = true
 rustix.workspace = true

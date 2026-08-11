@@ -107,7 +107,10 @@ const BEARER_TOKEN_TYPE: &str = "bearer";
 
 /// Longest token response this provider will read. A token response is a small
 /// JSON object; anything larger is not one.
-const MAXIMUM_TOKEN_RESPONSE_BYTES: u64 = 16 * 1024;
+///
+/// Authorization servers may use this value to reject registered authority
+/// that could only produce a response this provider would refuse.
+pub const MAXIMUM_TOKEN_RESPONSE_BYTES: u64 = 16 * 1024;
 
 /// The two readings the provider reasons about.
 ///

@@ -564,7 +564,7 @@ multi-issuer selection wait for demonstrated deployments.
 
 The token may come from an institution's existing identity provider or authorization server. Registry Mint is an optional issuer for machine-to-machine deployments that do not have one. Relay has no production runtime dependency on Mint and does not need to know which conforming issuer produced a token.
 
-Mint can be improved separately to issue product-neutral, registered scopes and audiences for Relay, with optional authority-controlled purpose and row-binding claims. Mint must write that authority server-side rather than copy authority from a caller. This is an interoperability profile between two independent products, not a special Mint authentication mode in Relay.
+Mint issues product-neutral, registered scopes and audiences for Relay, with optional authority-controlled purpose and row-binding claims. Mint writes that authority server-side rather than copying authority from a caller. The real-router acceptance journey exercises the same Relay verifier and access-decision path used with an external issuer. This is an interoperability profile between two independent products, not a special Mint authentication mode in Relay.
 
 Public operations may explicitly allow anonymous access. They still use the same compiled disclosure, validation, bounds, provenance, and audit model appropriate to public publication.
 

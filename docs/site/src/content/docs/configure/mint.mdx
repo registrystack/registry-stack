@@ -1,24 +1,25 @@
 ---
 title: Configure Registry Mint
-description: Configure Registry Mint to issue short-lived, audience-bound access tokens to registered clients when a deployment has no identity provider.
+description: Configure Registry Mint to issue short-lived, audience-bound access tokens for Evidence Gateway or Registry Relay when a deployment has no identity provider.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-12"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Configure Registry Mint when a deployment needs to hand short-lived access tokens to a closed
-set of registered machine clients and has no identity provider to issue them.
+Configure Registry Mint when Evidence Gateway or Registry Relay needs short-lived access tokens
+for a closed set of registered machine clients and the deployment has no identity provider to
+issue them.
 
 ## When to use Registry Mint
 
 Registry Mint is a supporting service, not a product pattern of its own. Use it when a resource
-server such as Evidence Gateway needs signed, expiring, audience-bound tokens and standing up a
-general-purpose identity provider is not an option for the deployment.
+server such as Evidence Gateway or Registry Relay needs signed, expiring, audience-bound tokens
+and standing up a general-purpose identity provider is not an option for the deployment.
 
 Version 1 runs one active Mint process. Its client-assertion replay cache is memory-only and
 clears on restart. Do not claim high availability or durable replay protection for this deployment
@@ -50,8 +51,9 @@ authenticate directly, that is an identity provider's job, not Registry Mint's.
 
 You need:
 
-- The registered clients this deployment will serve: one client id, principal, evidence
-  audience, and set of requester tags per client.
+- The registered clients this deployment will serve. Each client needs one id, one principal,
+  and either Evidence authority fields or a standard authorization block with fixed scopes and
+  direct claims.
 - A governed public P-256 JWK for Registry Mint itself. Its service `kid` is the derived RFC 7638
   thumbprint. Strict deployments use a workload-local Vault or OpenBao Transit proxy; supervised
   local development may use an owner-only local P-256 private JWK.
@@ -63,9 +65,9 @@ You need:
 - An owner-only directory on durable storage for the keyed Mint audit chain. Plan its capacity,
   backup, and retention because Registry Mint rotates segments but never deletes or compacts
   them.
-- The claim names the resource server (Evidence Gateway, for example) reads its principal, requester
-  tags, evidence audience, and grant pair from, so Registry Mint's `accessTokens.claims` can be
-  set to match them exactly.
+- For an Evidence deployment, the claim names Evidence Gateway reads for its principal,
+  requester tags, evidence audience, and grant pair. Registry Mint's `accessTokens.claims` must
+  match them exactly. A scoped-only Relay deployment omits this block.
 - TLS in front of Registry Mint for strict deployments. Registry Mint serves plain HTTP and expects
   TLS termination it does not manage. Supervised local development alone admits the exact
   `http://127.0.0.1:<nonzero-port>` issuer and matching token and JWKS paths.
@@ -120,12 +122,13 @@ clients:
 ```
 
 `issuer` must be an `https` URL with a host and no credentials, query, or fragment; resource
-servers compare it exactly. `accessTokens.lifetimeSeconds` is bounded to `60..=3600`: short
-enough that a leaked token expires quickly, long enough to survive verifier clock skew.
-`accessTokens.claims` must match the resource server's own claim names field for field, because
-that is the only place the two configurations have to agree. `clientAssertion.audience` is the
-value every client's signed request must carry as its own `aud`, which stops a request built for
-one endpoint from being replayed at another.
+servers compare it exactly. `accessTokens.lifetimeSeconds` is bounded to `60..=3600` for
+Evidence-only deployments. A standard authorization registration reduces the maximum to 900
+seconds so the token cannot exceed Registry Relay's fixed lifetime ceiling.
+`accessTokens.claims` must match Evidence Gateway's own claim names field for field. A deployment
+may omit `accessTokens.claims` only when every registered client uses standard authorization.
+`clientAssertion.audience` is the value every client's signed request must carry as its own
+`aud`, which stops a request built for one endpoint from being replayed at another.
 
 `validationMode` defaults to `strict`, which requires the Transit signer. Set it to
 `supervised-local-development` only for the disposable local developer environment; that mode may
@@ -152,7 +155,7 @@ walkthrough covers the base, undelegated flow.
 For the complete field list, including every default, see the
 [Registry Mint reference](../../reference/mint/).
 
-## Register a client
+## Register an Evidence client
 
 Add one file per client under the directory named in `clients.directory`:
 
@@ -171,6 +174,49 @@ keys:
 `keys` accepts public JWKs only; a document carrying a private key member is rejected outright.
 Loading the client registry is all-or-nothing, so one malformed registration fails the whole
 load rather than serving a partial registry.
+
+## Register a Relay client
+
+Use the standard authorization profile when Registry Mint issues tokens for Registry Relay:
+
+```yaml
+clientId: registry-consumer
+principal: urn:example:consumer
+authorization:
+  scopes:
+    - registry:business:read
+  claims:
+    purpose: statutory-consultation
+    authority: district-17
+keys:
+  - kty: OKP
+    crv: Ed25519
+    kid: registry-consumer-2026-01
+    x: "<public-key-x-coordinate>"
+```
+
+Set `accessTokens.audiences` to the one exact audience in the Relay runtime's issuer
+configuration. Set `authorization.scopes` to the exact operation or access-profile scopes this
+client may use. Add a direct string under `authorization.claims` only when the compiled Relay
+access rule reads that claim for purpose or authority-to-row binding.
+
+The registration is the only authority source. Registry Mint joins the registered scopes into
+the access token's space-delimited `scope` claim and copies the direct claims as strings. The
+client assertion and token form cannot provide or override these values. A Relay registration
+cannot also contain `evidenceAudience`, `requesterTags`, `grant`, or `delegation`.
+
+The standard profile admits 1 to 64 unique RFC 6749 scope-tokens and at most 32 direct claims.
+Each direct value is a non-empty string of at most 512 bytes. Claim names cannot shadow `iss`,
+`aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`, `sub`, or `scope`.
+When `accessTokens.claims` is configured for Evidence clients in the same deployment, a scoped
+client's direct claims cannot reuse any of those configured Evidence names.
+Mint projects the complete signed response and refuses a standard registration whose token
+response could exceed the shared client's 16 KiB read ceiling.
+
+Registry Relay validates the resulting token through its standard OAuth JWT verifier. It has no
+Registry Mint-specific authentication branch. The Relay client library's private-key-JWT token
+provider can acquire, retain, and refresh this token; see the
+[Registry Relay client API](../../reference/relay-client-api/).
 
 Validate the deployment before opening a socket:
 
@@ -245,6 +291,10 @@ curl -sS https://mint.example.org/token \
 }
 ```
 
+This is the Evidence-profile response. A standard authorization response also carries `scope`
+with the same space-delimited value Mint placed in the access token, for example
+`"scope": "registry:business:read"`.
+
 Confirm the published key set resolves at the configured `signing.jwksPath` (default
 `/.well-known/jwks.json`), and that `GET /ready` returns success once at least one client is
 registered, the audit writer is healthy, and the signing provider passes its self-test.
@@ -269,4 +319,5 @@ records were corrupted or reordered.
 | `mint check` refuses the configuration over audit | The audit hash key file is missing, is not owner-only, or is too short. `check` does not open the chain, so it never reports a running writer as a fault. | Restore the key file with owner-only permissions. Use `mint verify-audit` for the chain itself. |
 | The token request fails with `500 server_error` and readiness changes to `503` | Mint could not durably append the audit decision and permanently poisoned the writer for this process. | Stop traffic, restore writable durable storage, preserve and verify the retained chain, then restart Mint. The failed request did not receive an access token. |
 | Evidence Gateway rejects a token that Registry Mint minted | `accessTokens.claims` on Registry Mint and the resource server's own claim-name configuration name different claims for the same authority field. | Align every claim name (`principal`, `requesterTags`, `evidenceAudience`, `grantId`, `grantAuthority`, and `actor` where used) between the two configurations. |
+| Registry Relay conceals a registered operation as `404 resource.not_found` | The Mint registration does not contain the selected operation or access-profile scope, or the token audience does not equal the Relay runtime audience. | Set `accessTokens.audiences` to the one Relay audience and register the exact compiled scope for this client. Do not copy scope from the request. |
 | `GET /ready` returns `503` | No client is currently registered, the client registry failed to load, the audit writer is poisoned, or the signing provider is unavailable. | Check startup or reload diagnostics and audit storage. Add a valid client, restore and verify audit storage, or restore the Transit proxy and pinned version. Provider readiness recovers after a successful self-test. |

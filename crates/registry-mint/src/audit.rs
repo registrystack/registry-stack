@@ -167,16 +167,24 @@ impl MintAuditLog {
         token: &MintedToken,
     ) -> Result<AuditEnvelope, MintAuditError> {
         let client_pseudonym = self.pseudonym("client", authenticated.client.client_id())?;
-        let grant = authenticated
-            .client
-            .grant()
-            .map(|grant| serde_json::json!({"id": grant.id, "authority": grant.authority}));
-        let authority = serde_json::json!({
-            "principal": authenticated.client.principal(),
-            "evidenceAudience": authenticated.client.evidence_audience(),
-            "requesterTags": authenticated.client.requester_tags(),
-            "grant": grant,
-        });
+        let authority = if let Some(authorization) = authenticated.client.authorization() {
+            serde_json::json!({
+                "principal": authenticated.client.principal(),
+                "scopes": authorization.scopes,
+                "claims": authorization.claims,
+            })
+        } else {
+            let grant = authenticated
+                .client
+                .grant()
+                .map(|grant| serde_json::json!({"id": grant.id, "authority": grant.authority}));
+            serde_json::json!({
+                "principal": authenticated.client.principal(),
+                "evidenceAudience": authenticated.client.evidence_audience(),
+                "requesterTags": authenticated.client.requester_tags(),
+                "grant": grant,
+            })
+        };
         let authority = canonicalize_json(&authority).map_err(|_| MintAuditError::Reference)?;
         let authority = String::from_utf8(authority).map_err(|_| MintAuditError::Reference)?;
         let authority_pseudonym = self.pseudonym("authority", &authority)?;
