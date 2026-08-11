@@ -23,11 +23,6 @@ IMAGE_DIGEST = "sha256:" + "c" * 64
 CONFIG_DIGEST = "sha256:" + "d" * 64
 LAYER_DIGEST = "sha256:" + "e" * 64
 ATTESTATION_DIGEST = "sha256:" + "f" * 64
-POSTGRESQL_REF = (
-    SCRIPT.parent.parent / "registryctl-postgresql-image.ref"
-).read_text(encoding="utf-8").strip()
-
-
 def load_module():
     spec = importlib.util.spec_from_file_location("release_candidate", SCRIPT)
     if spec is None or spec.loader is None:
@@ -46,9 +41,7 @@ def json_bytes(value: object) -> bytes:
 
 
 def security_evidence_members(
-    image_names: tuple[str, ...] = ("registry-relay",),
-    *,
-    include_postgresql: bool = True,
+    image_names: tuple[str, ...] = ("relay",),
 ) -> dict[str, bytes]:
     refs = {
         name: f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
@@ -60,35 +53,12 @@ def security_evidence_members(
             {
                 "schema_version": "registry-stack.advisory-verdict.v2",
                 "verdict": "passed",
-                "subjects": sorted(
-                    [f"{name}-image" for name in image_names]
-                    + (["postgresql-runtime"] if include_postgresql else [])
-                ),
+                "subjects": sorted(f"{name}-image" for name in image_names),
             }
         ),
     }
-    if include_postgresql:
-        refs["postgresql"] = POSTGRESQL_REF
-        members["images/postgresql.digest"] = f"{POSTGRESQL_REF}\n".encode()
     for name, image_ref in refs.items():
         spdx = {"spdxVersion": "SPDX-2.3", "packages": []}
-        if name == "postgresql":
-            subject_id = "SPDXRef-RegistryStack-postgresql-digest-subject"
-            spdx["documentDescribes"] = [subject_id]
-            spdx["packages"] = [
-                {
-                    "SPDXID": subject_id,
-                    "name": image_ref,
-                    "externalRefs": [
-                        {
-                            "referenceLocator": (
-                                "pkg:oci/postgresql@"
-                                f"{image_ref.rsplit('@', 1)[1]}"
-                            )
-                        }
-                    ],
-                }
-            ]
         members[f"image-sbom/{name}.spdx.json"] = json_bytes(spdx)
         members[f"syft/{name}.syft.json"] = json_bytes(
             {
@@ -146,182 +116,6 @@ def security_evidence_tar(
     return output.getvalue()
 
 
-def fixture(root: Path, *, now: datetime) -> dict:
-    payload = "registry-stack-release-candidate-payload-123-2"
-    files = {
-        "registry-stack-candidate-build-a-123-2/build.json": b'{"build":"a"}\n',
-        "registry-stack-candidate-build-b-123-2/build.json": b'{"build":"b"}\n',
-        "registry-stack-candidate-macos-arm64-123-2/build.json": b'{"platform":"macos"}\n',
-        "registry-stack-candidate-linux-arm64-123-2/build.json": b'{"platform":"linux"}\n',
-        f"{payload}/dist/bin/registryctl-v1.2.3-linux-amd64": b"registryctl",
-        f"{payload}/dist/images/storage-measurement.json": b'{"peak_bytes":123}\n',
-        f"{payload}/dist/grype/grype-db-status.json": b'{"status":"valid"}\n',
-    }
-    for name in ("registry-notary", "registry-relay"):
-        files[f"{payload}/dist/sbom/{name}.spdx.json"] = f"{name} spdx".encode()
-        files[f"{payload}/dist/sbom/{name}.syft.json"] = f"{name} syft".encode()
-        files[f"{payload}/dist/grype/{name}.grype.json"] = f"{name} grype".encode()
-    inventories: dict[str, list[dict]] = {}
-    for relative, payload in sorted(files.items()):
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(payload)
-        artifact_name = relative.split("/", 1)[0]
-        inventories.setdefault(artifact_name, []).append(
-            {"path": relative, "sha256": sha256(payload), "size": len(payload)}
-        )
-    payload = "registry-stack-release-candidate-payload-123-2"
-    images = []
-    for name in ("registry-notary", "registry-relay"):
-        images.append(
-            {
-                "name": name,
-                "staging_repository": f"ghcr.io/registrystack/{name}-candidate",
-                "index_digest": IMAGE_DIGEST,
-                "application_manifest_digest": ATTESTATION_DIGEST,
-                "platform": "linux/amd64",
-                "config_digest": CONFIG_DIGEST,
-                "ordered_layer_digests": [LAYER_DIGEST],
-                "topology": {
-                    "application_descriptor": {
-                        "digest": ATTESTATION_DIGEST,
-                        "media_type": "application/vnd.oci.image.manifest.v1+json",
-                        "platform": "linux/amd64",
-                    },
-                    "provenance_descriptors": [
-                        {
-                            "digest": "sha256:" + "8" * 64,
-                            "media_type": "application/vnd.oci.image.manifest.v1+json",
-                            "platform": "unknown/unknown",
-                            "subject_digest": ATTESTATION_DIGEST,
-                            "kind": "buildkit-provenance",
-                        }
-                    ],
-                },
-                "sbom": {
-                    "spdx_path": f"{payload}/dist/sbom/{name}.spdx.json",
-                    "spdx_sha256": sha256(
-                        files[f"{payload}/dist/sbom/{name}.spdx.json"]
-                    ),
-                    "syft_json_path": f"{payload}/dist/sbom/{name}.syft.json",
-                    "syft_json_sha256": sha256(
-                        files[f"{payload}/dist/sbom/{name}.syft.json"]
-                    ),
-                },
-                "scan": {
-                    "grype_path": f"{payload}/dist/grype/{name}.grype.json",
-                    "grype_sha256": sha256(
-                        files[f"{payload}/dist/grype/{name}.grype.json"]
-                    ),
-                    "subject": (
-                        f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
-                    ),
-                    "tool": {
-                        "version": "0.114.0",
-                        "binary_sha256": "33932517107dbb633f31756a757dc51433e520b81ba9b51f44c626ef9960b955",
-                    },
-                    "database": {
-                        "checksum": "sha256:" + "7" * 64,
-                        "built": (now - timedelta(hours=1)).strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        ),
-                        "fresh_until": (now + timedelta(days=4)).strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        ),
-                        "status_path": f"{payload}/dist/grype/grype-db-status.json",
-                        "status_sha256": sha256(
-                            files[f"{payload}/dist/grype/grype-db-status.json"]
-                        ),
-                    },
-                },
-                "comparison": {"config_equal": True, "layers_equal": True},
-            }
-        )
-    created = now - timedelta(hours=1)
-    return {
-        "schema_version": "registry-stack.release-candidate-receipt.v1",
-        "repository": "registrystack/registry-stack",
-        "workflow": {
-            "path": ".github/workflows/release-candidate.yml",
-            "ref": "refs/heads/main",
-            "sha": SOURCE_SHA,
-            "run_id": 123,
-            "run_attempt": 2,
-            "event": "repository_dispatch",
-        },
-        "release": {
-            "version": "1.2.3",
-            "release_id": "beta-20",
-            "source_sha": SOURCE_SHA,
-            "tag": "v1.2.3",
-            "proof_level": "standard",
-        },
-        "validity": {
-            "created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "expires_at": (created + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        },
-        "builders": {
-            "binary_image": "rust:1.95-trixie@sha256:" + "0" * 64,
-            "binary_fingerprint": "1" * 64,
-            "binary_recipe_fingerprint": "2" * 64,
-            "image_buildkit_image": "moby/buildkit:v1@sha256:" + "3" * 64,
-            "image_buildx_version": "v0.33.0",
-            "image_recipe_fingerprint": "4" * 64,
-        },
-        "builds": {
-            "a": {
-                "job_id": "build-a-111",
-                "cargo_cache": {
-                    "mode": "exact-key-restore",
-                    "primary_key": "candidate-cache-key",
-                    "exact_key_hit": True,
-                    "action_output": "true",
-                },
-            },
-            "b": {
-                "job_id": "build-b-222",
-                "cargo_cache": {
-                    "mode": "cold",
-                    "primary_key": None,
-                    "exact_key_hit": False,
-                },
-            },
-            "other_platforms": [
-                {"platform": "linux-arm64", "job_id": "platform-linux"},
-                {"platform": "macos-arm64", "job_id": "platform-macos"},
-            ],
-        },
-        "artifacts": [
-            {
-                "name": name,
-                "artifact_id": 987 + index,
-                "archive_sha256": ARCHIVE_SHA,
-                "files": inventories[name],
-            }
-            for index, name in enumerate(sorted(inventories))
-        ],
-        "images": images,
-        "comparisons": {
-            "binary_bytes": True,
-            "image_config_and_layers": True,
-        },
-        "scans": {"policy": "passed", "immutable_digests": True},
-        "storage": {
-            "budget_status": "measurement_required",
-            "measurement_path": f"{payload}/dist/images/storage-measurement.json",
-            "measurement_sha256": sha256(
-                files[f"{payload}/dist/images/storage-measurement.json"]
-            ),
-        },
-        "attestation": {
-            "receipt_subject": "release-candidate-receipt.json",
-            "workflow_identity": (
-                "registrystack/registry-stack/"
-                ".github/workflows/release-candidate.yml@refs/heads/main"
-            ),
-        },
-        "promotion": {"state": "candidate", "identity": "beta-20:1.2.3"},
-    }
 
 
 class ReleaseCandidateTest(TestCase):
@@ -330,8 +124,6 @@ class ReleaseCandidateTest(TestCase):
         self.now = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.receipt = fixture(self.root, now=self.now)
-        self.expected_builders = copy.deepcopy(self.receipt["builders"])
         self.workflow_run_metadata = {
             "id": 123,
             "run_attempt": 2,
@@ -344,141 +136,13 @@ class ReleaseCandidateTest(TestCase):
                 "%Y-%m-%dT%H:%M:%SZ"
             ),
         }
-        self.artifact_metadata = {
-            record["artifact_id"]: (record["name"], record["archive_sha256"])
-            for record in self.receipt["artifacts"]
-        }
 
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def verify(self, receipt: dict | None = None, **kwargs):
-        workflow_run_metadata = kwargs.pop(
-            "workflow_run_metadata", self.workflow_run_metadata
-        )
-        return self.module.validate_receipt(
-            receipt or self.receipt,
-            artifact_root=self.root,
-            artifact_metadata=self.artifact_metadata,
-            expected_source_sha=SOURCE_SHA,
-            expected_version="1.2.3",
-            expected_release_id="beta-20",
-            expected_run_id=123,
-            expected_run_attempt=2,
-            now=self.now,
-            promotion=True,
-            workflow_run_metadata=workflow_run_metadata,
-            expected_builders=self.expected_builders,
-            **kwargs,
-        )
 
-    def test_valid_closed_receipt_passes_promotion(self) -> None:
-        validated = self.verify()
-        self.assertEqual("beta-20:1.2.3", validated["promotion"]["identity"])
 
-    def test_single_build_candidate_records_comparisons_as_not_performed(self) -> None:
-        candidate = copy.deepcopy(self.receipt)
-        del candidate["builds"]["b"]
-        candidate["artifacts"] = [
-            artifact
-            for artifact in candidate["artifacts"]
-            if not artifact["name"].startswith("registry-stack-candidate-build-b-")
-        ]
-        (
-            self.root
-            / "registry-stack-candidate-build-b-123-2"
-            / "build.json"
-        ).unlink()
-        candidate["comparisons"] = {
-            "binary_bytes": False,
-            "image_config_and_layers": False,
-        }
-        for image in candidate["images"]:
-            image["comparison"] = {
-                "config_equal": False,
-                "layers_equal": False,
-            }
 
-        self.verify(candidate)
-
-    def test_exact_attempt_artifact_inventory_includes_receipt(self) -> None:
-        artifacts = []
-        for index, name in enumerate(
-            sorted(self.module.expected_attempt_artifact_names(123, 2))
-        ):
-            artifacts.append(
-                {
-                    "id": 1000 + index,
-                    "name": name,
-                    "digest": "sha256:" + f"{index + 1:064x}",
-                    "expired": False,
-                    "workflow_run": {"id": 123},
-                }
-            )
-        for index, name in enumerate(
-            sorted(self.module.expected_attempt_artifact_names(123, 1))
-        ):
-            artifacts.append(
-                {
-                    "id": 2000 + index,
-                    "name": name,
-                    "digest": "sha256:" + f"{index + 20:064x}",
-                    "expired": False,
-                    "workflow_run": {"id": 123},
-                }
-            )
-        selected = self.module.validate_attempt_artifact_inventory(
-            {"artifacts": artifacts},
-            run_id=123,
-            run_attempt=2,
-        )
-        self.assertEqual(
-            self.module.expected_attempt_artifact_names(123, 2), set(selected)
-        )
-
-        platform_report = {
-            "id": 9998,
-            "name": "registry-stack-candidate-cli-linux-arm64-123-2",
-            "digest": "sha256:" + "8" * 64,
-            "expired": False,
-            "workflow_run": {"id": 123},
-        }
-        selected = self.module.validate_attempt_artifact_inventory(
-            {"artifacts": [*artifacts, platform_report]},
-            run_id=123,
-            run_attempt=2,
-        )
-        self.assertIn(platform_report["name"], selected)
-
-        with self.assertRaisesRegex(self.module.CandidateError, "incomplete"):
-            self.module.validate_attempt_artifact_inventory(
-                {
-                    "artifacts": [
-                        item
-                        for item in artifacts
-                        if item["name"] != "registry-stack-candidate-build-a-123-2"
-                    ]
-                },
-                run_id=123,
-                run_attempt=2,
-            )
-
-        unexpected = copy.deepcopy(artifacts)
-        unexpected.append(
-            {
-                "id": 9999,
-                "name": "registry-stack-candidate-unknown-123-2",
-                "digest": "sha256:" + "9" * 64,
-                "expired": False,
-                "workflow_run": {"id": 123},
-            }
-        )
-        with self.assertRaisesRegex(self.module.CandidateError, "unexpected"):
-            self.module.validate_attempt_artifact_inventory(
-                {"artifacts": unexpected},
-                run_id=123,
-                run_attempt=2,
-            )
 
     def test_full_github_run_api_response_is_normalized_to_closed_metadata(
         self,
@@ -494,13 +158,12 @@ class ReleaseCandidateTest(TestCase):
             self.workflow_run_metadata,
             self.module.workflow_run_from_json(response),
         )
-        self.verify(workflow_run_metadata=self.module.workflow_run_from_json(response))
 
     def test_slsa_subject_contract_rejects_one_extra_provenance_subject(self) -> None:
         contract = self.root / "subjects.json"
         provenance = self.root / "provenance.intoto.jsonl"
         expected = [
-            {"name": "registryctl-v1.2.3-linux-amd64", "sha256": "1" * 64},
+            {"name": "relayctl-v1.2.3-linux-amd64", "sha256": "1" * 64},
             {"name": "SHA256SUMS", "sha256": "2" * 64},
         ]
         contract.write_text(json.dumps(expected), encoding="utf-8")
@@ -536,7 +199,7 @@ class ReleaseCandidateTest(TestCase):
         write_provenance(expected)
         self.assertEqual(
             {
-                ("registryctl-v1.2.3-linux-amd64", "1" * 64),
+                ("relayctl-v1.2.3-linux-amd64", "1" * 64),
                 ("SHA256SUMS", "2" * 64),
             },
             self.module.validate_slsa_subject_set(provenance, contract),
@@ -545,7 +208,7 @@ class ReleaseCandidateTest(TestCase):
         write_provenance(expected, github_attestation_bundle=True)
         self.assertEqual(
             {
-                ("registryctl-v1.2.3-linux-amd64", "1" * 64),
+                ("relayctl-v1.2.3-linux-amd64", "1" * 64),
                 ("SHA256SUMS", "2" * 64),
             },
             self.module.validate_slsa_subject_set(provenance, contract),
@@ -620,308 +283,28 @@ class ReleaseCandidateTest(TestCase):
                 expected_sha256=self.module.sha256_file(unsafe),
             )
 
-    def test_promotion_state_rejects_replay_and_partial_publication(self) -> None:
-        receipt_sha = sha256(self.module.canonical_json(self.receipt))
-        empty = {
-            "schema_version": "registry-stack.release-promotion-state.v1",
-            "github_release": {"exists": False, "asset_names": []},
-            "public_images": {
-                "registry-notary": None,
-                "registry-relay": None,
-            },
-            "promoted_candidates": [],
-        }
-        self.module.validate_promotion_state(
-            empty,
-            receipt=self.receipt,
-            receipt_sha256=receipt_sha,
-            phase="prewrite",
-        )
 
-        partial = copy.deepcopy(empty)
-        partial["public_images"]["registry-notary"] = IMAGE_DIGEST
-        with self.assertRaisesRegex(self.module.CandidateError, "partial publication"):
-            self.module.validate_promotion_state(
-                partial,
-                receipt=self.receipt,
-                receipt_sha256=receipt_sha,
-                phase="prewrite",
-            )
 
-        replay = copy.deepcopy(empty)
-        replay["promoted_candidates"].append(
-            {
-                "identity": "beta-20:1.2.3",
-                "run_id": 999,
-                "run_attempt": 1,
-                "receipt_sha256": "9" * 64,
-            }
-        )
-        with self.assertRaisesRegex(
-            self.module.CandidateError, "already been promoted"
-        ):
-            self.module.validate_promotion_state(
-                replay,
-                receipt=self.receipt,
-                receipt_sha256=receipt_sha,
-                phase="prewrite",
-            )
 
-        promoted = copy.deepcopy(empty)
-        promoted["public_images"] = {
-            "registry-notary": IMAGE_DIGEST,
-            "registry-relay": IMAGE_DIGEST,
-        }
-        self.module.validate_promotion_state(
-            promoted,
-            receipt=self.receipt,
-            receipt_sha256=receipt_sha,
-            phase="prerelease",
-        )
 
-    def test_cache_restore_miss_is_recorded_not_rejected(self) -> None:
-        self.receipt["builds"]["a"]["cargo_cache"]["exact_key_hit"] = False
-        self.receipt["builds"]["a"]["cargo_cache"]["action_output"] = "false"
-        self.verify()
 
-    def test_payload_mutation_fails(self) -> None:
-        (
-            self.root
-            / "registry-stack-release-candidate-payload-123-2/dist/bin/registryctl-v1.2.3-linux-amd64"
-        ).write_bytes(b"tampered")
-        with self.assertRaisesRegex(self.module.CandidateError, "sha256 mismatch"):
-            self.verify()
 
-    def test_partial_or_extra_upload_fails_exact_inventory(self) -> None:
-        missing = (
-            self.root
-            / "registry-stack-release-candidate-payload-123-2/dist/grype/registry-relay.grype.json"
-        )
-        missing.unlink()
-        with self.assertRaisesRegex(self.module.CandidateError, "regular non-symlink"):
-            self.verify()
-        missing.write_bytes(b"registry-relay grype")
-        (self.root / "unexpected").write_text("unexpected", encoding="utf-8")
-        with self.assertRaisesRegex(self.module.CandidateError, "inventory mismatch"):
-            self.verify()
 
-    def test_replay_of_promoted_identity_fails(self) -> None:
-        with self.assertRaisesRegex(
-            self.module.CandidateError, "already been promoted"
-        ):
-            self.verify(promoted_identities={"beta-20:1.2.3"})
 
-    def test_stale_expired_and_future_dated_candidates_fail(self) -> None:
-        stale = copy.deepcopy(self.receipt)
-        stale["validity"]["created_at"] = (self.now - timedelta(hours=73)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        stale["validity"]["expires_at"] = (self.now + timedelta(days=3)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        with self.assertRaisesRegex(self.module.CandidateError, "stale"):
-            workflow_run = dict(self.workflow_run_metadata)
-            workflow_run["created_at"] = (self.now - timedelta(hours=74)).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            )
-            self.module.validate_receipt(
-                stale,
-                artifact_root=self.root,
-                artifact_metadata=self.artifact_metadata,
-                now=self.now,
-                promotion=True,
-                workflow_run_metadata=workflow_run,
-                expected_builders=self.expected_builders,
-            )
 
-        future = copy.deepcopy(self.receipt)
-        future["validity"]["created_at"] = (self.now + timedelta(minutes=6)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        future["validity"]["expires_at"] = (self.now + timedelta(days=6)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        with self.assertRaisesRegex(self.module.CandidateError, "future-dated"):
-            self.verify(future)
 
-    def test_stale_scan_database_fails(self) -> None:
-        stale = copy.deepcopy(self.receipt)
-        stale["images"][0]["scan"]["database"]["built"] = (
-            self.now - timedelta(days=1)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        stale["images"][0]["scan"]["database"]["fresh_until"] = (
-            self.now - timedelta(seconds=1)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with self.assertRaisesRegex(self.module.CandidateError, "database is stale"):
-            self.verify(stale)
 
-    def test_mutation_matrix_fails_closed(self) -> None:
-        mutations = {
-            "source sha": lambda r: r["release"].__setitem__("source_sha", "9" * 40),
-            "workflow identity": lambda r: r["workflow"].__setitem__(
-                "path", ".github/workflows/ci.yml"
-            ),
-            "run attempt": lambda r: r["workflow"].__setitem__("run_attempt", 3),
-            "release input": lambda r: r["release"].__setitem__(
-                "release_id", "beta-21"
-            ),
-            "builder fingerprint": lambda r: r["builders"].__setitem__(
-                "binary_fingerprint", "9" * 64
-            ),
-            "artifact digest": lambda r: r["artifacts"][0].__setitem__(
-                "archive_sha256", "9" * 64
-            ),
-            "OCI digest": lambda r: r["images"][0].__setitem__(
-                "index_digest", "sha256:" + "9" * 64
-            ),
-            "scan coordinate": lambda r: r["images"][0]["scan"].__setitem__(
-                "subject",
-                "ghcr.io/registrystack/registry-notary-candidate@" + CONFIG_DIGEST,
-            ),
-            "receipt attestation identity": lambda r: r["attestation"].__setitem__(
-                "workflow_identity",
-                "registrystack/other/.github/workflows/release.yml@main",
-            ),
-            "binary comparison": lambda r: r["comparisons"].__setitem__(
-                "binary_bytes", False
-            ),
-            "image config comparison": lambda r: r["images"][0][
-                "comparison"
-            ].__setitem__("config_equal", False),
-            "scan policy": lambda r: r["scans"].__setitem__("policy", "failed"),
-        }
-        for label, mutate in mutations.items():
-            with self.subTest(label=label):
-                candidate = copy.deepcopy(self.receipt)
-                mutate(candidate)
-                with self.assertRaises(self.module.CandidateError):
-                    self.verify(candidate)
 
-    def test_unknown_fields_fail_closed_at_every_security_boundary(self) -> None:
-        for path in (
-            (),
-            ("workflow",),
-            ("release",),
-            ("builders",),
-            ("builds", "a", "cargo_cache"),
-            ("artifacts", 0),
-            ("images", 0, "scan"),
-            ("attestation",),
-            ("promotion",),
-        ):
-            candidate = copy.deepcopy(self.receipt)
-            target = candidate
-            for part in path:
-                target = target[part]
-            target["unexpected"] = True
-            with self.subTest(path=path):
-                with self.assertRaisesRegex(
-                    self.module.CandidateError, "non-closed schema"
-                ):
-                    self.verify(candidate)
-
-    def test_artifact_api_cross_attempt_mismatch_fails(self) -> None:
-        with self.assertRaisesRegex(self.module.CandidateError, "metadata mismatch"):
-            self.module.validate_receipt(
-                self.receipt,
-                artifact_root=self.root,
-                artifact_metadata={
-                    key + 100: value for key, value in self.artifact_metadata.items()
-                },
-                expected_run_id=123,
-                expected_run_attempt=2,
-                now=self.now,
-                promotion=True,
-                workflow_run_metadata=self.workflow_run_metadata,
-                expected_builders=self.expected_builders,
-            )
-
-    def test_attempt_bound_artifact_name_substitution_or_extra_fails(self) -> None:
-        substituted = copy.deepcopy(self.receipt)
-        substituted["artifacts"][0]["name"] = "registry-stack-candidate-build-a-123-1"
-        with self.assertRaisesRegex(self.module.CandidateError, "attempt-bound"):
-            self.module.validate_receipt(
-                substituted,
-                now=self.now,
-                promotion=True,
-                workflow_run_metadata=self.workflow_run_metadata,
-                expected_builders=self.expected_builders,
-            )
-
-        extra = copy.deepcopy(self.receipt)
-        record = copy.deepcopy(extra["artifacts"][0])
-        record["name"] = "registry-stack-candidate-extra-123-2"
-        record["artifact_id"] = 9999
-        record["files"][0]["path"] = "extra/file"
-        extra["artifacts"].append(record)
-        with self.assertRaises(self.module.CandidateError):
-            self.module.validate_receipt(
-                extra,
-                now=self.now,
-                promotion=True,
-                workflow_run_metadata=self.workflow_run_metadata,
-                expected_builders=self.expected_builders,
-            )
-
-    def test_topology_change_extra_and_misbound_provenance_fail(self) -> None:
-        changed = copy.deepcopy(self.receipt)
-        changed["images"][0]["topology"]["application_descriptor"]["digest"] = (
-            "sha256:" + "7" * 64
-        )
-        with self.assertRaisesRegex(
-            self.module.CandidateError, "application descriptor"
-        ):
-            self.verify(changed)
-
-        extra = copy.deepcopy(self.receipt)
-        extra["images"][0]["topology"]["unexpected_descriptors"] = []
-        with self.assertRaisesRegex(self.module.CandidateError, "non-closed schema"):
-            self.verify(extra)
-
-        misbound = copy.deepcopy(self.receipt)
-        misbound["images"][0]["topology"]["provenance_descriptors"][0][
-            "subject_digest"
-        ] = CONFIG_DIGEST
-        with self.assertRaisesRegex(self.module.CandidateError, "not bound"):
-            self.verify(misbound)
-
-    def test_trusted_run_age_and_timestamp_substitution_fail(self) -> None:
-        fresh_receipt = copy.deepcopy(self.receipt)
-        workflow_run = dict(self.workflow_run_metadata)
-        workflow_run["created_at"] = (self.now - timedelta(hours=73)).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        with self.assertRaisesRegex(self.module.CandidateError, "stale"):
-            self.module.validate_receipt(
-                fresh_receipt,
-                artifact_root=self.root,
-                artifact_metadata=self.artifact_metadata,
-                now=self.now,
-                promotion=True,
-                workflow_run_metadata=workflow_run,
-            )
-
-        substituted = copy.deepcopy(self.receipt)
-        substituted["validity"]["created_at"] = (
-            self.now - timedelta(hours=3)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        substituted["validity"]["expires_at"] = (
-            self.now - timedelta(hours=3) + timedelta(days=7)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with self.assertRaisesRegex(self.module.CandidateError, "predates"):
-            self.verify(substituted)
 
     def test_tag_binding_is_closed_and_binds_exact_manifest(self) -> None:
-        receipt_path = self.root.parent / "receipt.json"
-        receipt_path.write_bytes(self.module.canonical_json(self.receipt))
-        receipt_sha = self.module.sha256_file(receipt_path)
-        message = self.module.render_tag_binding(123, 2, receipt_sha)
+        manifest_sha = "7" * 64
+        message = self.module.render_tag_binding(123, 2, manifest_sha)
         self.assertEqual(
             {
                 "schema_version": "registry-stack.release-candidate.v2",
                 "run_id": 123,
                 "run_attempt": 2,
-                "manifest_sha256": receipt_sha,
+                "manifest_sha256": manifest_sha,
             },
             self.module.parse_tag_binding(message),
         )
@@ -934,7 +317,7 @@ class ReleaseCandidateTest(TestCase):
             message + "extra: accepted\n",
             message.replace("run_attempt: 2", "run_attempt: 3"),
             message.replace(
-                TAG_LINE := f"manifest_sha256: {receipt_sha}", TAG_LINE.upper()
+                TAG_LINE := f"manifest_sha256: {manifest_sha}", TAG_LINE.upper()
             ),
         ):
             if "run_attempt: 3" in tampered:
@@ -943,17 +326,6 @@ class ReleaseCandidateTest(TestCase):
             else:
                 with self.assertRaises(self.module.CandidateError):
                     self.module.parse_tag_binding(tampered)
-
-        legacy = self.module.render_legacy_tag_binding(123, 2, receipt_sha)
-        self.assertEqual(
-            {
-                "schema_version": "registry-stack.release-candidate-receipt.v1",
-                "run_id": 123,
-                "run_attempt": 2,
-                "receipt_sha256": receipt_sha,
-            },
-            self.module.parse_tag_binding(legacy),
-        )
 
     def replace_security_evidence(
         self,
@@ -974,9 +346,7 @@ class ReleaseCandidateTest(TestCase):
 
     def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
         bundle_root = self.root / "v2-bundle"
-        evidence_members = security_evidence_members(
-            ("relay",), include_postgresql=False
-        )
+        evidence_members = security_evidence_members(("relay",))
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
         payload_inventory = self.module._relay_v2_payload_inventory("1.2.3")
         files = {
@@ -1089,37 +459,6 @@ class ReleaseCandidateTest(TestCase):
         }
         return candidate, bundle_path, bundle_root, run
 
-    def make_legacy_v2_candidate(self) -> dict:
-        candidate, _, _, _ = self.make_v2_candidate()
-        candidate["release"]["version"] = "0.18.0"
-        candidate["release"]["tag"] = "v0.18.0"
-        evidence = next(
-            item
-            for item in candidate["payloads"]
-            if item["kind"] == "security-evidence"
-        )
-        evidence["name"] = "registry-stack-v0.18.0-security-evidence.tar.gz"
-        candidate["bundle"]["name"] = "registry-stack-v0.18.0-candidate.tar.gz"
-        candidate["images"][0]["name"] = "registry-relay"
-        candidate["images"][0]["candidate_ref"] = (
-            "ghcr.io/registrystack/registry-relay-candidate@"
-            f"{IMAGE_DIGEST}"
-        )
-        candidate["images"][0]["final_ref"] = (
-            "ghcr.io/registrystack/registry-relay:v0.18.0"
-        )
-        candidate["scans"][0]["image"] = "registry-relay"
-        docs = next(
-            item
-            for item in candidate["payloads"]
-            if item["kind"] == "docs"
-        )
-        docs_name = "registry-docs-v0.18.0.tar.gz"
-        docs_sha = "8" * 64
-        docs.update(name=docs_name, size=128, sha256=docs_sha)
-        candidate["docs"] = {"name": docs_name, "sha256": docs_sha}
-        return candidate
-
     def test_v2_candidate_requires_source_to_equal_workflow_revision(self) -> None:
         candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
         validated = self.module.validate_candidate_manifest(
@@ -1147,63 +486,23 @@ class ReleaseCandidateTest(TestCase):
                 now=self.now,
             )
 
-    def test_v2_candidate_image_inventory_is_version_aware(self) -> None:
+
+
+    def test_pre_v0_19_candidate_uses_tag_checkout_diagnostic(self) -> None:
+        candidate, _, _, _ = self.make_v2_candidate()
+        candidate["release"]["version"] = "0.18.0"
+        candidate["release"]["tag"] = "v0.18.0"
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "pre-v0.19 candidates.*corresponding release tag",
+        ):
+            self.module.validate_candidate_manifest(candidate, now=self.now)
+
+    def test_v2_candidate_docs_contract_is_version_aware(self) -> None:
         current, _, _, _ = self.make_v2_candidate()
         self.module.validate_candidate_manifest(current, now=self.now)
 
-        previous = self.make_legacy_v2_candidate()
-        self.module.validate_candidate_manifest(previous, now=self.now)
-
-        historical = copy.deepcopy(previous)
-        historical["release"]["version"] = "0.16.3"
-        historical["release"]["tag"] = "v0.16.3"
-        historical_evidence = next(
-            item
-            for item in historical["payloads"]
-            if item["kind"] == "security-evidence"
-        )
-        historical_evidence["name"] = (
-            "registry-stack-v0.16.3-security-evidence.tar.gz"
-        )
-        historical["bundle"]["name"] = (
-            "registry-stack-v0.16.3-candidate.tar.gz"
-        )
-        historical["images"][0]["final_ref"] = (
-            "ghcr.io/registrystack/registry-relay:v0.16.3"
-        )
-
-        with self.assertRaisesRegex(
-            self.module.CandidateError,
-            "image inventory must be exactly.*registry-notary",
-        ):
-            self.module.validate_candidate_manifest(historical, now=self.now)
-
-        historical["images"].append(
-            {
-                "name": "registry-notary",
-                "candidate_ref": (
-                    "ghcr.io/registrystack/registry-notary-candidate@"
-                    f"{CONFIG_DIGEST}"
-                ),
-                "digest": CONFIG_DIGEST,
-                "final_ref": "ghcr.io/registrystack/registry-notary:v0.16.3",
-            }
-        )
-        historical["scans"].append(
-            {
-                "image": "registry-notary",
-                "name": "security/registry-notary.grype.json",
-                "sha256": ARCHIVE_SHA,
-                "status": "passed",
-            }
-        )
-        self.module.validate_candidate_manifest(historical, now=self.now)
-
-    def test_v2_candidate_docs_contract_is_version_aware(self) -> None:
-        legacy = self.make_legacy_v2_candidate()
-        self.module.validate_candidate_manifest(legacy, now=self.now)
-
-        missing_field = copy.deepcopy(legacy)
+        missing_field = copy.deepcopy(current)
         missing_field.pop("docs")
         with self.assertRaisesRegex(
             self.module.CandidateError,
@@ -1211,7 +510,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.validate_candidate_manifest(missing_field, now=self.now)
 
-        missing_payload = copy.deepcopy(legacy)
+        missing_payload = copy.deepcopy(current)
         missing_payload["payloads"] = [
             item for item in missing_payload["payloads"] if item["kind"] != "docs"
         ]
@@ -1221,32 +520,14 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.validate_candidate_manifest(missing_payload, now=self.now)
 
-        current, _, _, _ = self.make_v2_candidate()
-        current["release"]["version"] = "0.19.0"
-        current["release"]["tag"] = "v0.19.0"
+        v0_19_0 = copy.deepcopy(current)
+        v0_19_0["release"]["version"] = "0.19.0"
+        v0_19_0["release"]["tag"] = "v0.19.0"
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "manifest has a non-closed schema: unknown docs",
         ):
-            self.module.validate_candidate_manifest(current, now=self.now)
-
-        current.pop("docs")
-        current["payloads"] = [
-            item for item in current["payloads"] if item["kind"] != "docs"
-        ]
-
-        too_old, _, _, _ = self.make_v2_candidate()
-        too_old["release"]["version"] = "0.15.2"
-        too_old["release"]["tag"] = "v0.15.2"
-        too_old.pop("docs")
-        too_old["payloads"] = [
-            item for item in too_old["payloads"] if item["kind"] != "docs"
-        ]
-        with self.assertRaisesRegex(
-            self.module.CandidateError,
-            "candidate v2 requires version 0.16.0 or later",
-        ):
-            self.module.validate_candidate_manifest(too_old, now=self.now)
+            self.module.validate_candidate_manifest(v0_19_0, now=self.now)
 
     def test_v2_candidate_payload_inventory_is_exact_and_excludes_registryctl(
         self,
@@ -1329,9 +610,7 @@ class ReleaseCandidateTest(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             current_path = root / "current.tar.gz"
-            current_members = security_evidence_members(
-                ("relay",), include_postgresql=False
-            )
+            current_members = security_evidence_members(("relay",))
             current_path.write_bytes(
                 security_evidence_tar(sorted(current_members.items()))
             )
@@ -1351,50 +630,6 @@ class ReleaseCandidateTest(TestCase):
                 },
                 advisory_sha256=sha256(
                     current_members["advisory-verdict.json"]
-                ),
-            )
-
-            historical_refs = {
-                "registry-relay": (
-                    "ghcr.io/registrystack/registry-relay-candidate@"
-                    f"{IMAGE_DIGEST}"
-                ),
-                "registry-notary": (
-                    "ghcr.io/registrystack/registry-notary-candidate@"
-                    f"{IMAGE_DIGEST}"
-                ),
-            }
-            with self.assertRaisesRegex(
-                self.module.CandidateError,
-                "security evidence archive has unexpected member",
-            ):
-                self.module.validate_security_evidence_archive(
-                    current_path,
-                    product_image_refs=historical_refs,
-                    product_scan_sha256={},
-                    advisory_sha256=sha256(
-                        current_members["advisory-verdict.json"]
-                    ),
-                )
-
-            historical_path = root / "historical.tar.gz"
-            historical_members = security_evidence_members(
-                ("registry-notary", "registry-relay")
-            )
-            historical_path.write_bytes(
-                security_evidence_tar(sorted(historical_members.items()))
-            )
-            self.module.validate_security_evidence_archive(
-                historical_path,
-                product_image_refs=historical_refs,
-                product_scan_sha256={
-                    name: sha256(
-                        historical_members[f"grype/{name}.grype.json"]
-                    )
-                    for name in historical_refs
-                },
-                advisory_sha256=sha256(
-                    historical_members["advisory-verdict.json"]
                 ),
             )
 
@@ -1487,6 +722,12 @@ class ReleaseCandidateTest(TestCase):
         self.assertIn(
             "docs", payload_schema["items"]["properties"]["kind"]["enum"]
         )
+        self.assertEqual(
+            "^0\\.(?:[0-9]|1[0-8])\\.",
+            schema["properties"]["release"]["properties"]["version"]["not"][
+                "pattern"
+            ],
+        )
         version_branch = schema["allOf"][0]
         docs_version_patterns = [
             branch["pattern"]
@@ -1494,7 +735,7 @@ class ReleaseCandidateTest(TestCase):
                 "properties"
             ]["version"]["anyOf"]
         ]
-        self.assertIn("^0\\.1[6-8]\\.[0-9]+$", docs_version_patterns)
+        self.assertNotIn("^0\\.1[6-8]\\.[0-9]+$", docs_version_patterns)
         self.assertIn("^0\\.19\\.[1-9][0-9]*$", docs_version_patterns)
         self.assertIn(
             "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+$",
@@ -1550,7 +791,7 @@ class ReleaseCandidateTest(TestCase):
         self,
     ) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
-        members = security_evidence_members(("relay",), include_postgresql=False)
+        members = security_evidence_members(("relay",))
         required = self.module._security_evidence_required_files({"relay"})
         for missing in sorted(required):
             with self.subTest(missing=missing):
@@ -1579,9 +820,7 @@ class ReleaseCandidateTest(TestCase):
     ) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
         members = sorted(
-            security_evidence_members(
-                ("relay",), include_postgresql=False
-            ).items()
+            security_evidence_members(("relay",)).items()
         )
         cases = (
             (
@@ -1595,7 +834,7 @@ class ReleaseCandidateTest(TestCase):
             (
                 security_evidence_tar(
                     members,
-                    link=("grype/latest", "postgresql.grype.json"),
+                    link=("grype/latest", "relay.grype.json"),
                 ),
                 "non-regular entry",
             ),
@@ -1643,7 +882,7 @@ class ReleaseCandidateTest(TestCase):
 
     def test_v2_security_evidence_archive_rejects_unbound_contents(self) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
-        base = security_evidence_members(("relay",), include_postgresql=False)
+        base = security_evidence_members(("relay",))
 
         unbound_syft = dict(base)
         syft = json.loads(unbound_syft["syft/relay.syft.json"])
@@ -2012,20 +1251,22 @@ class ReleaseCandidateTest(TestCase):
             )
         self.assertEqual(1, missing_identity)
 
-    def test_seal_writes_canonical_bytes_and_refuses_open_draft(self) -> None:
+    def test_seal_candidate_writes_canonical_bytes_and_refuses_open_draft(self) -> None:
         draft = self.root.parent / "draft.json"
         output = self.root.parent / "sealed.json"
-        receipt = fixture(
-            self.root,
-            now=datetime.now(timezone.utc).replace(microsecond=0),
-        )
-        draft.write_text(json.dumps(receipt), encoding="utf-8")
-        self.module.write_closed_receipt(draft, output)
-        self.assertEqual(self.module.canonical_json(receipt), output.read_bytes())
-        receipt["unknown"] = True
-        draft.write_text(json.dumps(receipt), encoding="utf-8")
+        candidate, _, _, _ = self.make_v2_candidate()
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        candidate["validity"] = {
+            "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "expires_at": (now + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        draft.write_text(json.dumps(candidate), encoding="utf-8")
+        self.module.write_candidate_manifest(draft, output)
+        self.assertEqual(self.module.canonical_json(candidate), output.read_bytes())
+        candidate["unknown"] = True
+        draft.write_text(json.dumps(candidate), encoding="utf-8")
         with self.assertRaisesRegex(self.module.CandidateError, "non-closed schema"):
-            self.module.write_closed_receipt(draft, output)
+            self.module.write_candidate_manifest(draft, output)
 
 
 if __name__ == "__main__":

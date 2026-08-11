@@ -37,8 +37,8 @@ writeLegacyWrapper(legacyEvidencectlWrapper);
 fs.mkdirSync(path.dirname(installerMetadata), { recursive: true });
 fs.writeFileSync(installerMetadata, `${evidencectlWrapper}\n`);
 fs.writeFileSync(
-  path.join(projectAlpha, 'registry-stack.yaml'),
-  'version: 1\nregistry: { id: alpha-registry }\nservices: {}\n',
+  path.join(projectAlpha, 'registry.yaml'),
+  'apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\nregistry: { registryIdentifier: alpha-registry }\n',
 );
 fs.writeFileSync(
   path.join(projectBeta, 'registry.yaml'),

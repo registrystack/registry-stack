@@ -229,7 +229,7 @@ sealed package and a new process, never a live reload. Registry Stack product te
 
 ## 4. Governance and safeguards terms
 
-**PDP**: Policy decision point. The shared Registry Platform primitive (`registry-platform-pdp`) that evaluates a governed policy against trusted request and source context and returns permit, permit with redaction, or deny. It survives as a vocabulary source for Registry Manifest metadata field names. No maintained runtime calls it: the retired Relay 1.0 governed path was its only consumer, and Evidence Gateway has never used one, because its authorization is one decision over the verified token, the requirement, and the matched grant. Registry Stack product term.
+**PDP**: Policy decision point. Relay 1.0 used a shared Registry Platform primitive to evaluate governed policy against trusted request and source context. That runtime and its `registry-platform-pdp` crate are retired and removed. Registry Manifest retains descriptive PDP-gate and ODRL vocabulary, but no maintained runtime evaluates it. Evidence Gateway has never used a PDP because its authorization is one decision over the verified token, the requirement, and the matched grant. Registry Stack product term.
 
 **governed evidence**: Evidence metadata bound to a governed evidence ecosystem binding (`type: governed-evidence`). In a metadata manifest, governed evidence requires evidence-pack metadata such as pack identity, source basis, semantic profile, evidence envelope, required PDP gates, allowed outputs, policy identity, policy hash, and ODRL enforcement profile. Registry Manifest validates that metadata. It is portable description, not runtime behavior: no maintained runtime consumes an evidence pack to reach an access decision.
 
@@ -329,8 +329,7 @@ This specification is `verified`: the definitions are distilled from published r
     context, capability families, and package verification these terms name.
     crates/registry-relayctl/src/ carries the seven commands. crates/registry-manifest-core/src/lib.rs
     still holds REQUIRED_EVIDENCE_PACK_GATES, ODRL_ENFORCEMENT_PROFILE, and the policy-hash checks the
-    Section 4 manifest terms describe, and crates/registry-platform-pdp has no consumer among the
-    maintained runtimes. */}
+    Section 4 manifest terms describe. The retired registry-platform-pdp crate is absent. */}
 
 ## Next
 

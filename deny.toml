@@ -11,24 +11,9 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Advisory ignores must include a scoped rationale and a review trigger.
 ignore = [
-    # RUSTSEC-2023-0089: the all-features graph reaches `atomic-polyfill`
-    # through Crosswalk -> phonenumber -> postcard -> heapless 0.7. Phonenumber
-    # uses postcard at build time and runtime, but heapless selects
-    # `atomic-polyfill` only for AVR, riscv32i/riscv32imc, thumbv6m, and
-    # xtensa-esp32s2, not Registry Stack's supported x86_64/aarch64 Linux or
-    # x86_64 macOS service targets. Reviewed 2026-07-25 for the canonical
-    # attribute-release runtime. Review when the chain removes it, before
-    # supporting an affected embedded target, or if the advisory scope changes.
-    "RUSTSEC-2023-0089",
-    # RUSTSEC-2024-0436: `paste` is an unmaintained build-time procedural macro
-    # pulled in by Relay's DataFusion and Parquet graph. It does not remain in
-    # the runtime binary as request-facing parser code. Review when DataFusion
-    # or Arrow/Parquet removes `paste` from the resolved graph, or before
-    # upgrading those major versions.
-    "RUSTSEC-2024-0436",
     # RUSTSEC-2026-0249: `smartstring` 1.0.1 is unmaintained and has no patched
-    # release. It is pulled in by Rhai 1.25.1 for Evidence, its authoring tools,
-    # and legacy Relay. This is a maintenance-status advisory, not a reported
+    # release. It is pulled in by Rhai 1.25.1 for Evidence and its authoring
+    # tools. This is a maintenance-status advisory, not a reported
     # vulnerability; Registry Stack executes only deployment-authored, bounded
     # Rhai programs rather than requester-supplied scripts. Reviewed 2026-08-10.
     # Review when Rhai replaces `smartstring`, before accepting untrusted
@@ -44,7 +29,6 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "BSL-1.0",
-    "bzip2-1.0.6",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
     "ISC",
@@ -58,7 +42,6 @@ allow = [
     # pulled in transitively by the `rhai` script runtime.
     "MPL-2.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Unlicense",
     "Zlib",
 ]
@@ -81,9 +64,7 @@ workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
 allow-workspace = false
-deny = [
-    { name = "cel", deny-multiple-versions = true },
-]
+deny = []
 skip = []
 skip-tree = []
 
@@ -91,6 +72,4 @@ skip-tree = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = [
-    "https://github.com/PublicSchema/crosswalk",
-]
+allow-git = []

@@ -200,7 +200,7 @@ Product names are always in English, including on future translated pages.
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
 
   <dt>PDP</dt>
-  <dd>Policy decision point. A shared Registry Platform primitive (`crates/registry-platform-pdp`) that evaluates a governed policy against trusted request and source context and returns permit, permit with redaction, or deny. Only the retired Relay 1.0 runtime linked it; no binary in the current release calls a PDP, and Registry Relay decides access from the compiled access profiles in its sealed package instead.</dd>
+  <dd>Policy decision point. Relay 1.0 used a shared Registry Platform primitive to evaluate governed policy against trusted request and source context. That runtime and its `registry-platform-pdp` crate are retired and removed. Registry Relay now decides access from the compiled access profiles in its sealed package instead.</dd>
 
   <dt>PDP gate</dt>
   <dd>A named policy decision point check, such as policy identity, ODRL terms, purpose, jurisdiction, assurance, source freshness, legal basis, consent, and redaction. Registry Manifest still validates the required-gate list a governed evidence pack declares; the gates are metadata that describes an intended enforcement, and no maintained runtime evaluates them.</dd>

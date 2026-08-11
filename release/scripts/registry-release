@@ -8,7 +8,6 @@ import hashlib
 import json
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,15 +17,6 @@ from pathlib import Path
 from typing import Any
 
 import release_candidate
-from registryctl_image_lock import (
-    PLATFORM as RELEASE_IMAGE_LOCK_PLATFORM,
-    PRODUCT_IMAGE_REPOSITORIES,
-    SCHEMA_V2 as RELEASE_IMAGE_LOCK_SCHEMA_V2,
-    SCHEMA_V3 as RELEASE_IMAGE_LOCK_SCHEMA_V3,
-    read_reviewed_postgresql_image_ref,
-    schema_for_release_version,
-    validate_images,
-)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,42 +27,12 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
-RELEASE_IMAGE_LOCK_MINIMUM_VERSION = (0, 9, 0)
-EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION = (0, 10, 0)
-NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
-EVIDENCE_RELEASE_MINIMUM_VERSION = (0, 17, 0)
-EVIDENCE_OID4VCI_MINIMUM_VERSION = (0, 18, 0)
-REGISTRYCTL_INSTALLER_MINIMUM_VERSION = (0, 14, 0)
 RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
 DOCS_RELEASE_RESUMPTION_VERSION = (0, 19, 1)
 RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
 IDENTIFIER_CATALOG_RELEASE_MINIMUM_VERSION = (0, 19, 1)
 IDENTIFIER_CATALOG_RELATIVE_PATH = "products/identifiers/generated/catalog.v1.json"
-# Historical v0.10-v0.16 releases shipped the V1 Relay and Notary identities.
-# Current v0.19+ releases are validated against RELAY_V2_ARTIFACT_INVENTORY.
-EXACT_ARTIFACT_INVENTORY = {
-    "registry-notary",
-    "registry-notary-cel-worker",
-    "registry-relay",
-    "registry-relay-rhai-worker",
-    "registry-manifest-cli",
-    "registryctl",
-    "registryctl-image-lock",
-    "registry-docs",
-}
-POST_NOTARY_ARTIFACT_INVENTORY = EXACT_ARTIFACT_INVENTORY - {
-    "registry-notary",
-    "registry-notary-cel-worker",
-}
-EVIDENCE_RELEASE_ARTIFACTS = {
-    "evidence",
-    "evidencectl",
-    "mint",
-    "evidencectl-installer",
-    "evidence-client-node",
-    "evidence-client-python",
-}
 RELAY_V2_ARTIFACT_INVENTORY = {
     "registry-manifest",
     "relay",
@@ -85,15 +45,18 @@ RELAY_V2_ARTIFACT_INVENTORY = {
     "evidence-client-node",
     "evidence-client-python",
 }
-OPTIONAL_EXACT_ARTIFACTS = {
-    "registryctl-installer",
-    # Keep historical manifests valid if they declared the Evidence toolset
-    # before its first stable release. From v0.17.0 onward these are required.
-    *EVIDENCE_RELEASE_ARTIFACTS,
-    # The wallet delivery service joins the required inventory at v0.18.0.
-    "evidence-oid4vci",
-}
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
+RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+STRICT_SEMVER = re.compile(
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+)
+RELAY_V2_RELEASE_CHANGELOG_PATHS = (
+    "products/manifest/CHANGELOG.md",
+    "products/platform/CHANGELOG.md",
+)
+RELAY_V2_PRODUCT_RELEASE_NOTE_PATHS = (
+    "products/manifest/docs/release-notes.md",
+)
 CURRENT_DOCS_VERSION = "main source (unreleased)"
 DOCSET_AVAILABILITY_BY_MANIFEST_STATUS = {
     "draft": "unreleased",
@@ -105,31 +68,6 @@ DOCSET_STATUSES_BY_MANIFEST_STATUS = {
     "release-candidate": {"draft", "archived"},
     "released": {"archived"},
 }
-RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-STRICT_SEMVER = re.compile(
-    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
-)
-CROSSWALK_REPO = "PublicSchema/crosswalk"
-CROSSWALK_GIT_URL = "https://github.com/PublicSchema/crosswalk"
-RELEASE_CHANGELOG_GLOBS = (
-    "products/*/CHANGELOG.md",
-    "crates/*/CHANGELOG.md",
-)
-PRODUCT_RELEASE_NOTE_GLOBS = (
-    "products/*/docs/release-notes.md",
-    "crates/*/docs/release-notes.md",
-)
-OPENAPI_RELEASE_SURFACE_GLOBS = (
-    "products/*/openapi/*.openapi.json",
-    "crates/*/openapi/*.openapi.json",
-)
-RELAY_V2_RELEASE_CHANGELOG_PATHS = (
-    "products/manifest/CHANGELOG.md",
-    "products/platform/CHANGELOG.md",
-)
-RELAY_V2_PRODUCT_RELEASE_NOTE_PATHS = (
-    "products/manifest/docs/release-notes.md",
-)
 RELAY_V2_OPENAPI_RELEASE_SURFACE_PATHS = (
     "products/evidence/generated/registry-evidence.openapi.json",
 )
@@ -161,63 +99,23 @@ def release_version_tuple(version: str) -> tuple[int, int, int] | None:
 
 def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[str]:
     parsed_version = release_version_tuple(version)
+    if parsed_version is not None and parsed_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
+        return [
+            "pre-v0.19 release manifests are immutable historical evidence; "
+            "validate them with the corresponding release tag"
+        ]
     errors: list[str] = []
-    if (
-        parsed_version is not None
-        and RELEASE_IMAGE_LOCK_MINIMUM_VERSION
-        <= parsed_version
-        < RELAY_V2_RELEASE_MINIMUM_VERSION
-        and "registryctl-image-lock" not in artifacts
-    ):
-        errors.append(
-            "artifact registryctl-image-lock is required for versions "
-            "0.9.0 through 0.18.x"
-        )
-    if (
-        parsed_version is not None
-        and REGISTRYCTL_INSTALLER_MINIMUM_VERSION
-        <= parsed_version
-        < RELAY_V2_RELEASE_MINIMUM_VERSION
-        and "registryctl-installer" not in artifacts
-    ):
-        errors.append(
-            "artifact registryctl-installer is required for versions "
-            "0.14.0 through 0.18.x"
-        )
-    if (
-        parsed_version is not None
-        and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
-    ):
+    if parsed_version is not None:
         artifact_names = set(artifacts)
-        if parsed_version >= RELAY_V2_RELEASE_MINIMUM_VERSION:
-            expected_inventory = set(RELAY_V2_ARTIFACT_INVENTORY)
-            if parsed_version >= RELAY_INSTALLER_MINIMUM_VERSION:
-                expected_inventory.add("relay-installer")
-            if parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION:
-                expected_inventory.add("registry-docs")
-            if parsed_version >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
-                expected_inventory.update(
-                    {"relay-client-node", "relay-client-python"}
-                )
-        else:
-            expected_inventory = set(
-                POST_NOTARY_ARTIFACT_INVENTORY
-                if parsed_version >= NOTARY_RETIREMENT_MINIMUM_VERSION
-                else EXACT_ARTIFACT_INVENTORY
-            )
-            if parsed_version >= EVIDENCE_RELEASE_MINIMUM_VERSION:
-                expected_inventory.update(EVIDENCE_RELEASE_ARTIFACTS)
-            if parsed_version >= EVIDENCE_OID4VCI_MINIMUM_VERSION:
-                expected_inventory.add("evidence-oid4vci")
+        expected_inventory = set(RELAY_V2_ARTIFACT_INVENTORY)
+        if parsed_version >= RELAY_INSTALLER_MINIMUM_VERSION:
+            expected_inventory.add("relay-installer")
+        if parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION:
+            expected_inventory.add("registry-docs")
+        if parsed_version >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
+            expected_inventory.update({"relay-client-node", "relay-client-python"})
         missing = sorted(expected_inventory - artifact_names)
-        optional_artifacts = (
-            set()
-            if parsed_version >= RELAY_V2_RELEASE_MINIMUM_VERSION
-            else OPTIONAL_EXACT_ARTIFACTS
-        )
-        unexpected = sorted(
-            artifact_names - expected_inventory - optional_artifacts
-        )
+        unexpected = sorted(artifact_names - expected_inventory)
         if missing or unexpected:
             details = []
             if missing:
@@ -225,7 +123,7 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             if unexpected:
                 details.append(f"unexpected {', '.join(unexpected)}")
             errors.append(
-                "artifact inventory for version 0.10.0 or later must be exactly the "
+                "artifact inventory for version 0.19.0 or later must be exactly the "
                 f"supported release set: {'; '.join(details)}"
             )
     return errors
@@ -315,33 +213,6 @@ def identifier_catalog_errors(
     return errors
 
 
-def require_registryctl_image_lock_release_version(version: str) -> None:
-    parsed = release_version_tuple(version)
-    if parsed is None:
-        raise ValueError(
-            "registryctl image lock release version must be semantic version text, "
-            f"got {version!r}"
-        )
-    if parsed < RELEASE_IMAGE_LOCK_MINIMUM_VERSION:
-        raise ValueError(
-            "registryctl image lock releases require versions 0.9.0 through 0.18.x"
-        )
-    if parsed >= RELAY_V2_RELEASE_MINIMUM_VERSION:
-        raise ValueError(
-            "registryctl image lock releases are retired starting with version 0.19.0"
-        )
-
-
-def verify_registryctl_image_lock_release_version(version: str) -> int:
-    try:
-        require_registryctl_image_lock_release_version(version)
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    print(f"verified registryctl image lock release version {version}")
-    return 0
-
-
 def load_yaml(path: Path) -> object:
     try:
         import yaml
@@ -363,311 +234,6 @@ def load_json(path: Path) -> object:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def read_release_image_digest(path: Path, image_name: str) -> str:
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"{image_name} digest evidence must be a regular file: {path}")
-    if path.stat().st_size > 1024:
-        raise ValueError(f"{image_name} digest evidence exceeds 1024 bytes: {path}")
-    body = path.read_text(encoding="utf-8")
-    lines = body.splitlines()
-    if len(lines) != 1 or body not in {lines[0], f"{lines[0]}\n"}:
-        raise ValueError(f"{image_name} digest evidence must contain exactly one unpadded line")
-    digest_ref = lines[0]
-    match = IMAGE_DIGEST_REF.fullmatch(digest_ref)
-    if match is None:
-        raise ValueError(f"{image_name} digest ref must match image@sha256:<64 lowercase hex>")
-    expected_repository = PRODUCT_IMAGE_REPOSITORIES[image_name]
-    if match.group(1) != expected_repository:
-        raise ValueError(
-            f"{image_name} digest ref repository must be {expected_repository}, got {match.group(1)}"
-        )
-    return digest_ref
-
-
-def render_registryctl_image_lock(
-    manifest_path: Path,
-    relay_digest_path: Path,
-    notary_digest_path: Path | None,
-    postgresql_ref_path: Path | None,
-    tag_target: str,
-    source_sha: str | None,
-    output: Path,
-) -> int:
-    try:
-        manifest = load_yaml(manifest_path)
-        if not isinstance(manifest, dict) or not isinstance(manifest.get("stack"), dict):
-            raise ValueError("release manifest stack must be an object")
-        stack = manifest["stack"]
-        version = str(stack.get("version", ""))
-        require_registryctl_image_lock_release_version(version)
-        release_tag = str(stack.get("source_tag", ""))
-        if release_tag != f"v{version}":
-            raise ValueError(f"manifest stack.source_tag must be v{version}")
-        has_source_ref = "source_ref" in stack
-        has_status = "status" in stack
-        if has_source_ref != has_status:
-            raise ValueError(
-                "manifest stack.source_ref and stack.status must both be present "
-                "for a historical manifest or both omitted for an active manifest"
-            )
-        if has_source_ref:
-            manifest_source_ref = str(stack.get("source_ref", ""))
-            if HEX40.fullmatch(manifest_source_ref) is None:
-                raise ValueError(
-                    "manifest stack.source_ref must be 40 lowercase hexadecimal characters"
-                )
-            if source_sha is not None and source_sha != manifest_source_ref:
-                raise ValueError(
-                    "--source-sha must match historical manifest stack.source_ref"
-                )
-        else:
-            if source_sha is None or HEX40.fullmatch(source_sha) is None:
-                raise ValueError(
-                    "active release manifest requires --source-sha with 40 "
-                    "lowercase hexadecimal characters"
-                )
-            manifest_source_ref = source_sha
-        if HEX40.fullmatch(tag_target) is None:
-            raise ValueError("tag target must be 40 lowercase hexadecimal characters")
-        if not has_source_ref and tag_target != manifest_source_ref:
-            raise ValueError(
-                "active release image lock tag target must equal --source-sha"
-            )
-        expected_name = f"registryctl-v{version}-image-lock.json"
-        if output.name != expected_name:
-            raise ValueError(f"image lock output filename must be {expected_name}")
-        if output.is_symlink() or (output.exists() and not output.is_file()):
-            raise ValueError(f"image lock output must be a regular file path: {output}")
-
-        relay_digest = read_release_image_digest(relay_digest_path, "registry-relay")
-        schema_version = schema_for_release_version(version)
-        images = {"registry-relay": relay_digest}
-        if schema_version != RELEASE_IMAGE_LOCK_SCHEMA_V3:
-            if notary_digest_path is None:
-                raise ValueError(
-                    "historical registryctl release image locks require --notary-digest"
-                )
-            images["registry-notary"] = read_release_image_digest(
-                notary_digest_path,
-                "registry-notary",
-            )
-        elif notary_digest_path is not None:
-            raise ValueError(
-                "registryctl release image lock v3 does not accept --notary-digest"
-            )
-        if schema_version in {
-            RELEASE_IMAGE_LOCK_SCHEMA_V2,
-            RELEASE_IMAGE_LOCK_SCHEMA_V3,
-        }:
-            if postgresql_ref_path is None:
-                raise ValueError(
-                    "registryctl release image lock v2 or later requires "
-                    "--postgresql-ref-file"
-                )
-            images["postgresql"] = read_reviewed_postgresql_image_ref(
-                postgresql_ref_path
-            )
-        elif postgresql_ref_path is not None:
-            read_reviewed_postgresql_image_ref(postgresql_ref_path)
-        image_lock = {
-            "schema_version": schema_version,
-            "release_tag": release_tag,
-            "manifest_source_ref": manifest_source_ref,
-            "tag_target": tag_target,
-            "platform": RELEASE_IMAGE_LOCK_PLATFORM,
-            "images": images,
-        }
-        validate_registryctl_image_lock_document(
-            image_lock,
-            version=version,
-            release_tag=release_tag,
-            manifest_source_ref=manifest_source_ref,
-            tag_target=tag_target,
-        )
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(image_lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (KeyError, OSError, UnicodeError, ValueError, YamlDependencyError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-
-    print(f"rendered registryctl release image lock {output}")
-    return 0
-
-
-def validate_registryctl_image_lock_document(
-    data: object,
-    *,
-    version: str,
-    release_tag: str,
-    manifest_source_ref: str,
-    tag_target: str,
-) -> None:
-    if not isinstance(data, dict):
-        raise ValueError("registryctl release image lock must be a JSON object")
-    expected_keys = {
-        "schema_version",
-        "release_tag",
-        "manifest_source_ref",
-        "tag_target",
-        "platform",
-        "images",
-    }
-    if set(data) != expected_keys:
-        raise ValueError("registryctl release image lock has missing or unknown top-level fields")
-    expected_values = {
-        "schema_version": schema_for_release_version(version),
-        "release_tag": release_tag,
-        "manifest_source_ref": manifest_source_ref,
-        "tag_target": tag_target,
-        "platform": RELEASE_IMAGE_LOCK_PLATFORM,
-    }
-    for field, expected in expected_values.items():
-        if data.get(field) != expected:
-            raise ValueError(f"registryctl release image lock {field} must be {expected!r}")
-    validate_images(str(data.get("schema_version", "")), data.get("images"))
-    if data["release_tag"] != f"v{version}":
-        raise ValueError(f"registryctl release image lock release_tag must match v{version}")
-
-
-def verify_registryctl_binary_version(binary: Path, version: str) -> int:
-    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
-        print(f"error: expected registryctl version must be semantic version text, got {version!r}", file=sys.stderr)
-        return 1
-    if binary.is_symlink() or not binary.is_file():
-        print(f"error: registryctl binary must be a regular file: {binary}", file=sys.stderr)
-        return 1
-    try:
-        result = subprocess.run(
-            [str(binary.resolve()), "--version"],
-            text=True,
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        print(f"error: failed to execute registryctl binary {binary}: {exc}", file=sys.stderr)
-        return 1
-    expected = f"registryctl {version}"
-    if result.returncode != 0:
-        print(
-            f"error: registryctl binary --version exited {result.returncode}: {result.stderr.strip()}",
-            file=sys.stderr,
-        )
-        return 1
-    if result.stderr or result.stdout != f"{expected}\n":
-        print(
-            f"error: registryctl binary version must be exactly {expected!r}, got {result.stdout.strip()!r}",
-            file=sys.stderr,
-        )
-        return 1
-    print(f"verified registryctl binary version {version}: {binary}")
-    return 0
-
-
-def copy_required_asset(asset_dir: Path, name: str, output_dir: Path) -> None:
-    source = asset_dir / name
-    if not source.is_file():
-        raise FileNotFoundError(f"missing release asset {name}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, output_dir / name)
-
-
-def copy_optional_asset(asset_dir: Path, name: str, output_dir: Path) -> bool:
-    source = asset_dir / name
-    if not source.is_file():
-        return False
-    output_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, output_dir / name)
-    return True
-
-
-def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, image_evidence_dir: Path) -> int:
-    if SEMVER_TAG.fullmatch(tag) is None:
-        print(f"error: release tag must look like v0.8.0, got {tag}", file=sys.stderr)
-        return 1
-    if not asset_dir.is_dir():
-        print(f"error: release asset directory does not exist: {asset_dir}", file=sys.stderr)
-        return 1
-
-    parsed_version = release_version_tuple(tag.removeprefix("v"))
-    if parsed_version is None:
-        print(f"error: release tag must look like v0.8.0, got {tag}", file=sys.stderr)
-        return 1
-
-    binary_names = [
-        f"registryctl-{tag}-linux-amd64",
-        f"registry-manifest-{tag}-linux-amd64",
-        f"registry-relay-{tag}-linux-amd64",
-        "SHA256SUMS",
-    ]
-    if parsed_version < NOTARY_RETIREMENT_MINIMUM_VERSION:
-        binary_names.append(f"registry-notary-{tag}-linux-amd64")
-    optional_binary_names = [
-        f"registryctl-{tag}-macos-arm64",
-        f"registryctl-{tag}-linux-arm64",
-    ]
-    for evidence_binary in ("evidence", "evidencectl", "mint", "evidence-oid4vci"):
-        for platform_label in ("linux-amd64", "linux-arm64", "macos-arm64"):
-            optional_binary_names.append(f"{evidence_binary}-{tag}-{platform_label}")
-    worker_binary_names = [f"registry-relay-rhai-worker-{tag}-linux-amd64"]
-    if parsed_version < NOTARY_RETIREMENT_MINIMUM_VERSION:
-        worker_binary_names.append(
-            f"registry-notary-cel-worker-{tag}-linux-amd64"
-        )
-    if parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION:
-        binary_names.extend(worker_binary_names)
-    else:
-        # The dedicated worker binaries predate the exact v0.10+ artifact
-        # contract, so historical capsule backfills may omit them.
-        optional_binary_names.extend(worker_binary_names)
-
-    image_lock_name = f"registryctl-{tag}-image-lock.json"
-    required_release_file_names = []
-    optional_release_file_names = []
-    if parsed_version >= RELEASE_IMAGE_LOCK_MINIMUM_VERSION:
-        required_release_file_names.append(image_lock_name)
-    else:
-        optional_release_file_names.append(image_lock_name)
-    image_names = ["registry-relay"]
-    if parsed_version < NOTARY_RETIREMENT_MINIMUM_VERSION:
-        image_names.append("registry-notary")
-
-    staged_optional: list[str] = []
-    staged_release_files: list[str] = []
-    try:
-        for name in binary_names:
-            copy_required_asset(asset_dir, name, binary_dir)
-        for name in required_release_file_names:
-            copy_required_asset(asset_dir, name, binary_dir)
-        for name in optional_binary_names:
-            if copy_optional_asset(asset_dir, name, binary_dir):
-                staged_optional.append(name)
-        for name in optional_release_file_names:
-            if copy_optional_asset(asset_dir, name, binary_dir):
-                staged_release_files.append(name)
-        for image in image_names:
-            copy_required_asset(asset_dir, f"{image}.digest", image_evidence_dir)
-    except OSError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-
-    print(
-        f"staged {len(binary_names)} binary assets "
-        f"({len(staged_optional)}/{len(optional_binary_names)} optional binaries) "
-        f"and {len(required_release_file_names)} required release files "
-        f"and {len(staged_release_files)}/{len(optional_release_file_names)} optional release files "
-        f"and {len(image_names)} image digest assets for {tag}"
-    )
-    for name in optional_binary_names:
-        print(f"  optional binary {name}: {'staged' if name in staged_optional else 'absent (skipped)'}")
-    for name in optional_release_file_names:
-        print(
-            f"  optional release file {name}: "
-            f"{'staged' if name in staged_release_files else 'absent (skipped)'}"
-        )
-    return 0
 
 
 def validate(manifest_path: Path) -> int:
@@ -729,11 +295,15 @@ def validate(manifest_path: Path) -> int:
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
             errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")
-    crosswalk = external.get("crosswalk", {}) if isinstance(external, dict) else {}
-    if crosswalk.get("repo") != "PublicSchema/crosswalk":
-        errors.append("external.crosswalk.repo must be PublicSchema/crosswalk")
-    if not HEX40.fullmatch(str(crosswalk.get("ref", ""))):
-        errors.append("external.crosswalk.ref must be a 40-character commit")
+    crosswalk = external.get("crosswalk") if isinstance(external, dict) else None
+    if crosswalk is not None:
+        if not isinstance(crosswalk, dict):
+            errors.append("external.crosswalk must be an object")
+        else:
+            if crosswalk.get("repo") != "PublicSchema/crosswalk":
+                errors.append("external.crosswalk.repo must be PublicSchema/crosswalk")
+            if not HEX40.fullmatch(str(crosswalk.get("ref", ""))):
+                errors.append("external.crosswalk.ref must be a 40-character commit")
 
     if errors:
         for error in errors:
@@ -1040,114 +610,6 @@ def validate_source(manifest_path: Path, tag: str, repo: Path, default_branch: s
     return 0
 
 
-def find_one(root: Path, pattern: str) -> Path | None:
-    matches = sorted(path for path in root.rglob(pattern) if path.is_file())
-    return matches[0] if matches else None
-
-
-def find_image_evidence(root: Path, name: str, suffix: str) -> Path | None:
-    return find_one(root, f"{name}.digest-bound{suffix}") or find_one(root, f"{name}{suffix}")
-
-
-def severity_summary(grype_report: object) -> dict[str, int]:
-    summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "negligible": 0, "unknown": 0}
-    matches = grype_report.get("matches", []) if isinstance(grype_report, dict) else []
-    for match in matches:
-        vulnerability = match.get("vulnerability", {}) if isinstance(match, dict) else {}
-        severity = str(vulnerability.get("severity", "unknown")).lower()
-        summary[severity if severity in summary else "unknown"] += 1
-    return summary
-
-
-def release_decision_status(summary: dict[str, int]) -> str:
-    if summary.get("critical", 0) or summary.get("high", 0):
-        return "review-required"
-    return "no-high-or-critical-findings"
-
-
-def nested(data: object, *keys: str) -> object:
-    current = data
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def grype_subject(report: object) -> str | None:
-    for keys in (
-        ("source", "target", "userInput"),
-        ("source", "target", "imageID"),
-        ("source", "target", "manifestDigest"),
-    ):
-        value = nested(report, *keys)
-        if isinstance(value, str) and value:
-            return value
-    repo_digests = nested(report, "source", "target", "repoDigests")
-    if isinstance(repo_digests, list) and repo_digests:
-        return str(repo_digests[0])
-    return None
-
-
-def field_contains_digest(value: object, digest_ref: str, digest: str) -> bool:
-    return isinstance(value, str) and (digest_ref in value or digest in value)
-
-
-def spdx_subject_contains_digest(data: object, digest_ref: str, digest: str) -> bool:
-    if not isinstance(data, dict):
-        return False
-    described = data.get("documentDescribes")
-    packages = data.get("packages")
-    if not isinstance(described, list) or not isinstance(packages, list):
-        return False
-    described_ids = {item for item in described if isinstance(item, str)}
-    if not described_ids:
-        return False
-    for package in packages:
-        if not isinstance(package, dict) or package.get("SPDXID") not in described_ids:
-            continue
-        fields = (
-            package.get("name"),
-            package.get("packageFileName"),
-            package.get("downloadLocation"),
-            package.get("sourceInfo"),
-        )
-        if any(field_contains_digest(field, digest_ref, digest) for field in fields):
-            return True
-        refs = package.get("externalRefs")
-        if isinstance(refs, list):
-            for ref in refs:
-                if isinstance(ref, dict) and field_contains_digest(ref.get("referenceLocator"), digest_ref, digest):
-                    return True
-    return False
-
-
-def spdx_subject_contains_file_digest(data: object, file_name: str, digest: str) -> bool:
-    if not isinstance(data, dict):
-        return False
-    described = data.get("documentDescribes")
-    packages = data.get("packages")
-    if not isinstance(described, list) or not isinstance(packages, list):
-        return False
-    described_ids = {item for item in described if isinstance(item, str)}
-    if not described_ids:
-        return False
-    for package in packages:
-        if not isinstance(package, dict) or package.get("SPDXID") not in described_ids:
-            continue
-        if package.get("name") != file_name and package.get("packageFileName") != file_name:
-            continue
-        checksums = package.get("checksums")
-        if not isinstance(checksums, list):
-            continue
-        for checksum in checksums:
-            if not isinstance(checksum, dict):
-                continue
-            if checksum.get("algorithm") == "SHA256" and checksum.get("checksumValue") == digest:
-                return True
-    return False
-
-
 def bind_spdx_subject(spdx_path: Path, image_name: str, digest_ref: str) -> int:
     digest_match = IMAGE_DIGEST_REF.fullmatch(digest_ref)
     if digest_match is None:
@@ -1233,342 +695,6 @@ def bind_spdx_file_subject(spdx_path: Path, file_name: str, digest: str) -> int:
         return 1
     print(f"bound SPDX subject {subject_id} to {file_name} sha256:{digest}")
     return 0
-
-
-def grype_db_timestamp(report: object) -> str:
-    for keys in (
-        ("descriptor", "db", "built"),
-        ("descriptor", "db", "checksum"),
-        ("descriptor", "db", "schemaVersion"),
-    ):
-        value = nested(report, *keys)
-        if value:
-            return str(value)
-    return "not-recorded"
-
-
-def grype_version(report: object) -> str:
-    value = nested(report, "descriptor", "version")
-    return str(value) if value else "not-recorded"
-
-
-def parse_sha256s(path: Path) -> dict[str, str]:
-    checksums: dict[str, str] = {}
-    if not path.exists():
-        return checksums
-    for line in path.read_text(encoding="utf-8").splitlines():
-        parts = line.split()
-        if len(parts) >= 2:
-            checksums[parts[-1].lstrip("*")] = parts[0]
-    return checksums
-
-
-def verified_binary_sha256(path: Path, checksums: dict[str, str]) -> str:
-    expected = checksums.get(path.name)
-    if expected is None:
-        raise ValueError(f"{path.name} is missing from SHA256SUMS")
-    actual = sha256(path)
-    if expected != actual:
-        raise ValueError(f"{path.name} SHA256SUMS entry does not match file contents")
-    return actual
-
-
-def render_capsule(
-    manifest_path: Path,
-    tag: str,
-    version: str,
-    binary_dir: Path,
-    binary_sbom_dir: Path,
-    image_evidence_dir: Path,
-    output_json: Path,
-    output_markdown: Path,
-    workflow_name: str,
-    workflow_run_url: str,
-    workflow_run_id: str,
-    default_branch_protection: str,
-    repo: Path,
-    default_branch: str,
-    require_registryctl_image_lock: bool = False,
-    require_registry_docs_archive: bool = False,
-    require_registryctl_installer: bool = False,
-) -> int:
-    manifest = load_yaml(manifest_path)
-    if not isinstance(manifest, dict):
-        print("error: release manifest must be an object", file=sys.stderr)
-        return 1
-    if default_branch_protection not in {"verified", "unverified", "not-public"}:
-        print("error: default branch protection must be verified, unverified, or not-public", file=sys.stderr)
-        return 1
-    artifacts = manifest.get("artifacts", {})
-    if require_registryctl_installer and (
-        not isinstance(artifacts, dict)
-        or str(artifacts.get("registryctl-installer", "")) != version
-    ):
-        print(
-            "error: capsule requires manifest artifact registryctl-installer "
-            f"at version {version}",
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        checksums = parse_sha256s(binary_dir / "SHA256SUMS")
-        binaries = []
-        release_files = []
-        expected_image_lock_name = f"registryctl-v{version}-image-lock.json"
-        expected_docs_archive_name = f"registry-docs-v{version}.tar.gz"
-        expected_installer_name = f"registryctl-v{version}-install.sh"
-        expected_evidencectl_installer_name = f"evidencectl-v{version}-install.sh"
-        for path in sorted(binary_dir.iterdir()) if binary_dir.exists() else []:
-            if not path.is_file() or path.name == "SHA256SUMS":
-                continue
-            if path.name.endswith("-image-lock.json") and path.name != expected_image_lock_name:
-                raise ValueError(
-                    f"unexpected registryctl image lock filename {path.name}; expected {expected_image_lock_name}"
-                )
-            if path.name.startswith("registry-docs-") and path.name != expected_docs_archive_name:
-                raise ValueError(
-                    f"unexpected registry docs archive filename {path.name}; expected {expected_docs_archive_name}"
-                )
-            if path.name.startswith("registryctl-v") and path.name.endswith("-install.sh") and path.name != expected_installer_name:
-                raise ValueError(
-                    f"unexpected registryctl installer filename {path.name}; expected {expected_installer_name}"
-                )
-            if path.name.startswith("evidencectl-v") and path.name.endswith("-install.sh") and path.name != expected_evidencectl_installer_name:
-                raise ValueError(
-                    f"unexpected evidencectl installer filename {path.name}; expected {expected_evidencectl_installer_name}"
-                )
-            file_sha256 = verified_binary_sha256(path, checksums)
-            sbom = binary_sbom_dir / f"{path.name}.spdx.json"
-            if not sbom.is_file():
-                raise ValueError(f"{path.name} is missing a file SBOM")
-            sbom_report = load_json(sbom)
-            if not spdx_subject_contains_file_digest(sbom_report, path.name, file_sha256):
-                raise ValueError(f"{path.name} SBOM subject does not contain sha256:{file_sha256}")
-            file_evidence = {
-                "name": path.name,
-                "path": str(path),
-                "sha256": file_sha256,
-                "sbom": {
-                    "asset_name": sbom.name,
-                    "subject": path.name,
-                    "format": "spdx-json",
-                    "sha256": sha256(sbom),
-                },
-            }
-            if path.name == expected_image_lock_name:
-                file_evidence["kind"] = "registryctl-release-image-lock"
-                release_files.append(file_evidence)
-            elif path.name == expected_docs_archive_name:
-                file_evidence["kind"] = "registry-docs-archive"
-                release_files.append(file_evidence)
-            elif path.name == expected_installer_name:
-                file_evidence["kind"] = "registryctl-installer"
-                release_files.append(file_evidence)
-            elif path.name == expected_evidencectl_installer_name:
-                file_evidence["kind"] = "evidencectl-installer"
-                release_files.append(file_evidence)
-            else:
-                binaries.append(file_evidence)
-
-        image_locks = [
-            entry for entry in release_files
-            if entry["kind"] == "registryctl-release-image-lock"
-        ]
-        docs_archives = [
-            entry for entry in release_files
-            if entry["kind"] == "registry-docs-archive"
-        ]
-        installers = [
-            entry for entry in release_files
-            if entry["kind"] == "registryctl-installer"
-        ]
-        if require_registryctl_image_lock and len(image_locks) != 1:
-            raise ValueError(
-                f"capsule requires exactly one registryctl release image lock named {expected_image_lock_name}"
-            )
-        if require_registry_docs_archive and len(docs_archives) != 1:
-            raise ValueError(
-                f"capsule requires exactly one registry docs archive named {expected_docs_archive_name}"
-            )
-        if require_registryctl_installer and len(installers) != 1:
-            raise ValueError(
-                f"capsule requires exactly one registryctl installer named {expected_installer_name}"
-            )
-
-        images = []
-        for digest_path in sorted(image_evidence_dir.rglob("*.digest")):
-            name = digest_path.stem
-            digest_ref = digest_path.read_text(encoding="utf-8").strip()
-            digest_match = IMAGE_DIGEST_REF.fullmatch(digest_ref)
-            if digest_match is None:
-                raise ValueError(f"{name} digest ref must match image@sha256:<64 hex>")
-            digest = digest_match.group(2)
-            sbom = find_image_evidence(image_evidence_dir, name, ".spdx.json")
-            grype = find_image_evidence(image_evidence_dir, name, ".grype.json")
-            if sbom is None:
-                raise ValueError(f"{name} is missing an SBOM file")
-            if grype is None:
-                raise ValueError(f"{name} is missing a Grype report")
-            sbom_report = load_json(sbom)
-            if not spdx_subject_contains_digest(sbom_report, digest_ref, digest):
-                raise ValueError(f"{name} SBOM subject does not contain digest {digest_ref}")
-            grype_report = load_json(grype)
-            subject = grype_subject(grype_report)
-            if not subject:
-                raise ValueError(f"{name} Grype report has no digest-bound subject")
-            accepted_subjects = {digest_ref, digest}
-            public_repo = digest_ref.rsplit("@", 1)[0]
-            if (
-                name in {"registry-notary", "registry-relay"}
-                and public_repo == f"ghcr.io/registrystack/{name}"
-            ):
-                accepted_subjects.add(f"{public_repo}-candidate@{digest}")
-            if subject not in accepted_subjects:
-                raise ValueError(f"{name} Grype subject {subject} does not match digest ref {digest_ref}")
-            summary = severity_summary(grype_report)
-            is_supporting_runtime = name == "postgresql"
-            image = {
-                "name": name,
-                "role": (
-                    "supporting-runtime-image"
-                    if is_supporting_runtime
-                    else "released-product-image"
-                ),
-                "digest_ref": digest_ref,
-                "digest": digest,
-                "tag": None if is_supporting_runtime else tag,
-                "tag_ref": (
-                    None
-                    if is_supporting_runtime
-                    else f"{digest_ref.rsplit('@', 1)[0]}:{tag}"
-                ),
-                "sbom": {
-                    "asset_name": sbom.name,
-                    "subject": digest_ref,
-                    "format": "spdx-json",
-                    "sha256": sha256(sbom),
-                },
-                "vulnerability_scan": {
-                    "asset_name": grype.name,
-                    "subject": digest_ref,
-                    "scanner": "grype",
-                    "scanner_version": grype_version(grype_report),
-                    "vulnerability_db_timestamp": grype_db_timestamp(grype_report),
-                    "severity_summary": summary,
-                    "release_decision_status": release_decision_status(summary),
-                    "sha256": sha256(grype),
-                },
-            }
-            images.append(image)
-
-        errors, source = source_lineage(manifest, tag, repo, default_branch)
-        if errors:
-            raise ValueError("; ".join(errors))
-        for release_file in release_files:
-            if release_file["kind"] != "registryctl-release-image-lock":
-                continue
-            validate_registryctl_image_lock_document(
-                load_json(Path(release_file["path"])),
-                version=version,
-                release_tag=tag,
-                manifest_source_ref=str(manifest["stack"]["source_ref"]),
-                tag_target=source["source_commit"],
-            )
-        evidence = {
-            "release_tag": tag,
-            "version": version,
-            "repository": manifest["stack"]["source_repo"],
-            "source": source,
-            "workflow": {
-                "name": workflow_name,
-                "run_url": workflow_run_url,
-                "run_id": workflow_run_id,
-            },
-            "manifest": {
-                "path": str(manifest_path),
-                "sha256": sha256(manifest_path),
-            },
-            "default_branch_protection": {"status": default_branch_protection},
-            "external_pinned_inputs": manifest.get("external", {}),
-            "binaries": binaries,
-            "release_files": release_files,
-            "images": images,
-            "warnings": manifest.get("warnings", []),
-            "hosted_publication_status": hosted_publication_status(manifest),
-        }
-        if not binaries:
-            raise ValueError("capsule requires at least one binary artifact")
-        if not images:
-            raise ValueError("capsule requires at least one image artifact")
-    except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-
-    output_json.parent.mkdir(parents=True, exist_ok=True)
-    output_markdown.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    output_markdown.write_text(capsule_markdown(evidence), encoding="utf-8")
-    print(f"rendered release capsule {output_json} and {output_markdown}")
-    return 0
-
-
-def capsule_markdown(evidence: dict) -> str:
-    lines = [
-        f"# RegistryStack {evidence['release_tag']} Release Trust Capsule",
-        "",
-        f"- Version: `{evidence['version']}`",
-        f"- Source repository: `{evidence['repository']}`",
-        f"- Source tag: `{evidence['source']['source_tag']}`",
-        f"- Source ref: `{evidence['source']['source_ref']}`",
-        f"- Workflow: {evidence['workflow']['name']} run `{evidence['workflow']['run_id']}` ({evidence['workflow']['run_url']})",
-        f"- Manifest: `{evidence['manifest']['path']}` (`{evidence['manifest']['sha256']}`)",
-        f"- Default branch protection: `{evidence['default_branch_protection']['status']}`",
-        f"- Hosted/public announcement status: `{evidence['hosted_publication_status']}`",
-        "",
-        "## Binaries",
-        "",
-    ]
-    for binary in evidence["binaries"]:
-        lines.append(
-            f"- `{binary['name']}` sha256 `{binary['sha256']}`; "
-            f"SBOM `{binary['sbom']['asset_name']}`"
-        )
-    release_files = evidence.get("release_files") or []
-    if release_files:
-        lines.extend(["", "## Release files", ""])
-        for release_file in release_files:
-            lines.append(
-                f"- `{release_file['name']}` ({release_file['kind']}) sha256 "
-                f"`{release_file['sha256']}`; SBOM `{release_file['sbom']['asset_name']}`"
-            )
-    lines.extend(["", "## Images", ""])
-    for image in evidence["images"]:
-        scan = image["vulnerability_scan"]
-        if image["role"] == "supporting-runtime-image":
-            identity = f"supporting runtime digest `{image['digest_ref']}`"
-        else:
-            identity = f"tag `{image['tag_ref']}` digest `{image['digest_ref']}`"
-        lines.append(
-            f"- `{image['name']}` {identity}; SBOM "
-            f"`{image['sbom']['asset_name']}`; Grype `{scan['asset_name']}`"
-        )
-    lines.extend(["", "## Caveats", ""])
-    warnings = evidence.get("warnings") or []
-    if warnings:
-        for warning in warnings:
-            lines.append(f"- `{warning.get('code', 'warning')}`: {warning.get('detail', '')}")
-    else:
-        lines.append("- No release warnings recorded.")
-    return "\n".join(lines) + "\n"
-
-
-def hosted_publication_status(manifest: dict) -> str:
-    warnings = manifest.get("warnings", []) if isinstance(manifest, dict) else []
-    for warning in warnings:
-        if isinstance(warning, dict) and warning.get("code") == "hosted-publication-held":
-            return "held"
-    return "not-recorded"
 
 
 def audit(import_map_path: Path) -> int:
@@ -2013,10 +1139,7 @@ def validate_workspace_versions(repo: Path, version: str) -> dict[str, Any]:
         package
         for package in packages
         if isinstance(package, dict)
-        and (
-            str(package.get("name", "")).startswith("registry-")
-            or package.get("name") == "registryctl"
-        )
+        and str(package.get("name", "")).startswith("registry-")
         and "source" not in package
     ]
     if not workspace_packages:
@@ -2044,8 +1167,7 @@ def selected_docsets(
     external = record["data"].get("external")
     if not isinstance(external, dict):
         raise ReleasePlanError("selected manifest external must be an object")
-    path = repo / "docs" / "site" / "src" / "data" / "docsets.yaml"
-    data = required_yaml(path)
+    data = required_yaml(repo / "docs/site/src/data/docsets.yaml")
     if not isinstance(data, dict) or not isinstance(data.get("docsets"), list):
         raise ReleasePlanError("docsets.yaml must contain a docsets list")
     docsets = data["docsets"]
@@ -2071,10 +1193,7 @@ def selected_docsets(
     for name, product in sorted(current["products"].items()):
         if not isinstance(product, dict):
             raise ReleasePlanError(f"current docset product {name} must be an object")
-        if (
-            product.get("version") != CURRENT_DOCS_VERSION
-            or product.get("ref") != "HEAD"
-        ):
+        if product.get("version") != CURRENT_DOCS_VERSION or product.get("ref") != "HEAD":
             raise ReleasePlanError(
                 f"current docset product {name} must use version "
                 f"{CURRENT_DOCS_VERSION!r} and ref HEAD"
@@ -2089,34 +1208,23 @@ def selected_docsets(
         if manifest_status is None
         else DOCSET_STATUSES_BY_MANIFEST_STATUS.get(manifest_status)
     )
-    if allowed_statuses is None:
+    if allowed_statuses is None or selected.get("status") not in allowed_statuses:
+        expected = " or ".join(sorted(allowed_statuses or set()))
         raise ReleasePlanError(
-            f"selected manifest status {manifest_status!r} has no docset status mapping"
-        )
-    if selected.get("status") not in allowed_statuses:
-        expected = " or ".join(sorted(allowed_statuses))
-        raise ReleasePlanError(
-            f"docset {tag} status must be {expected} "
-            f"for manifest status {manifest_status!r}"
+            f"docset {tag} status must be {expected} for manifest status {manifest_status!r}"
         )
     expected_availability = (
         "candidate"
         if manifest_status is None
         else DOCSET_AVAILABILITY_BY_MANIFEST_STATUS.get(manifest_status)
     )
-    if expected_availability is None:
-        raise ReleasePlanError(
-            f"selected manifest status {manifest_status!r} has no docset availability mapping"
-        )
-    if selected.get("availability") != expected_availability:
+    if expected_availability is None or selected.get("availability") != expected_availability:
         raise ReleasePlanError(
             f"docset {tag} availability must be {expected_availability!r} "
             f"for manifest status {manifest_status!r}"
         )
     if selected.get("source") != f"registry-stack-{tag}":
-        raise ReleasePlanError(
-            f"docset {tag} source must be registry-stack-{tag}"
-        )
+        raise ReleasePlanError(f"docset {tag} source must be registry-stack-{tag}")
     if selected.get("path") != f"/v/{version}/":
         raise ReleasePlanError(f"docset {tag} path must be /v/{version}/")
     products = selected.get("products")
@@ -2131,35 +1239,28 @@ def selected_docsets(
                 raise ReleasePlanError(
                     f"docset {tag} external {name} ref must match the selected manifest"
                 )
-            continue
-        if product.get("version") != tag or product.get("ref") != source_ref:
+        elif product.get("version") != tag or product.get("ref") != source_ref:
             raise ReleasePlanError(
                 f"docset {tag} product {name} must use version {tag} and selected source_ref"
             )
     for name in external:
         if name not in products:
             raise ReleasePlanError(f"docset {tag} is missing external product {name}")
-
-    generated_path = repo / "docs" / "site" / "src" / "data" / "generated" / "docsets.json"
-    generated = required_json(generated_path)
+    generated = required_json(repo / "docs/site/src/data/generated/docsets.json")
     if json_compatible(data) != generated:
         raise ReleasePlanError("generated/docsets.json does not exactly mirror docsets.yaml")
     return data, selected, selected_index
 
 
 def validate_repo_docs(repo: Path) -> int:
-    path = repo / "docs" / "site" / "src" / "data" / "repo-docs.yaml"
-    data = required_yaml(path)
+    data = required_yaml(repo / "docs/site/src/data/repo-docs.yaml")
     repos = data.get("repos") if isinstance(data, dict) else None
     if not isinstance(repos, dict) or not repos:
         raise ReleasePlanError("repo-docs.yaml must contain a non-empty repos object")
     for name, entry in sorted(repos.items()):
         if not isinstance(entry, dict):
             raise ReleasePlanError(f"repo-docs.yaml repo {name} must be an object")
-        if (
-            entry.get("version") != CURRENT_DOCS_VERSION
-            or entry.get("ref") != "HEAD"
-        ):
+        if entry.get("version") != CURRENT_DOCS_VERSION or entry.get("ref") != "HEAD":
             raise ReleasePlanError(
                 f"repo-docs.yaml repo {name} must use version "
                 f"{CURRENT_DOCS_VERSION!r} and ref HEAD"
@@ -2167,24 +1268,12 @@ def validate_repo_docs(repo: Path) -> int:
     return len(repos)
 
 
-def release_surface_files(repo: Path, patterns: tuple[str, ...]) -> list[Path]:
-    paths: set[Path] = set()
-    for pattern in patterns:
-        paths.update(path for path in repo.glob(pattern) if path.is_file())
-    return sorted(paths)
-
-
-def release_surface_files_for_version(
+def required_release_surface_files(
     repo: Path,
-    version: str,
     *,
-    legacy_patterns: tuple[str, ...],
     current_paths: tuple[str, ...],
     label: str,
 ) -> list[Path]:
-    parsed = release_version_tuple(version)
-    if parsed is None or parsed < RELAY_V2_RELEASE_MINIMUM_VERSION:
-        return release_surface_files(repo, legacy_patterns)
     paths = [repo / relative for relative in current_paths]
     missing = [relative_path(repo, path) for path in paths if not path.is_file()]
     if missing:
@@ -2200,10 +1289,8 @@ def validate_release_documents(
     release_id: str,
 ) -> dict[str, Any]:
     heading = re.compile(rf"^##\s+\[?v?{re.escape(version)}\]?(?:\s|$)", re.MULTILINE)
-    changelogs = release_surface_files_for_version(
+    changelogs = required_release_surface_files(
         repo,
-        version,
-        legacy_patterns=RELEASE_CHANGELOG_GLOBS,
         current_paths=RELAY_V2_RELEASE_CHANGELOG_PATHS,
         label="changelog",
     )
@@ -2214,10 +1301,8 @@ def validate_release_documents(
             raise ReleasePlanError(
                 f"changelog {relative_path(repo, path)} has no {version} release heading"
             )
-    product_notes = release_surface_files_for_version(
+    product_notes = required_release_surface_files(
         repo,
-        version,
-        legacy_patterns=PRODUCT_RELEASE_NOTE_GLOBS,
         current_paths=RELAY_V2_PRODUCT_RELEASE_NOTE_PATHS,
         label="product release-note",
     )
@@ -2249,10 +1334,8 @@ def validate_release_documents(
 
 
 def validate_openapi_versions(repo: Path, version: str) -> list[Path]:
-    paths = release_surface_files_for_version(
+    paths = required_release_surface_files(
         repo,
-        version,
-        legacy_patterns=OPENAPI_RELEASE_SURFACE_GLOBS,
         current_paths=RELAY_V2_OPENAPI_RELEASE_SURFACE_PATHS,
         label="OpenAPI",
     )
@@ -2268,104 +1351,15 @@ def validate_openapi_versions(repo: Path, version: str) -> list[Path]:
     return paths
 
 
-def validate_crosswalk(
-    record: dict[str, Any],
-    workspace: dict[str, Any],
-    selected_docset: dict[str, Any] | None,
-    release_text: str,
-) -> dict[str, Any]:
-    dependencies = workspace["cargo"]["workspace"]["dependencies"]
-    crosswalk_dependencies = {
-        name: entry
-        for name, entry in dependencies.items()
-        if name.startswith("crosswalk-")
-    }
-    if not crosswalk_dependencies or not all(
-        isinstance(entry, dict) for entry in crosswalk_dependencies.values()
-    ):
-        raise ReleasePlanError(
-            "Cargo.toml Crosswalk workspace dependencies must use pinned dependency tables"
-        )
-    workspace_refs = {entry.get("rev") for entry in crosswalk_dependencies.values()}
-    workspace_repos = {entry.get("git") for entry in crosswalk_dependencies.values()}
-    if len(workspace_refs) != 1 or not all(
-        isinstance(ref, str) and HEX40.fullmatch(ref) is not None
-        for ref in workspace_refs
-    ):
-        raise ReleasePlanError("Cargo.toml Crosswalk dependencies must share one exact rev")
-    if workspace_repos != {CROSSWALK_GIT_URL}:
-        raise ReleasePlanError(
-            f"Cargo.toml Crosswalk dependencies must use {CROSSWALK_GIT_URL}"
-        )
-    crosswalk_ref = next(iter(workspace_refs))
-
-    lock_packages = [
-        package
-        for package in workspace["cargo_lock"]["package"]
-        if isinstance(package, dict)
-        and str(package.get("name", "")).startswith("crosswalk-")
-    ]
-    if not lock_packages:
-        raise ReleasePlanError("Cargo.lock must contain Crosswalk packages")
-    expected_prefix = f"git+{CROSSWALK_GIT_URL}?"
-    for package in lock_packages:
-        source = package.get("source")
-        if not isinstance(source, str) or not source.startswith(expected_prefix):
-            raise ReleasePlanError(
-                f"Cargo.lock Crosswalk package {package.get('name')} must use the canonical repository"
-            )
-        if f"rev={crosswalk_ref}" not in source or not source.endswith(f"#{crosswalk_ref}"):
-            raise ReleasePlanError(
-                f"Cargo.lock Crosswalk package {package.get('name')} must resolve rev {crosswalk_ref}"
-            )
-
-    external = record["data"].get("external")
-    manifest_crosswalk = external.get("crosswalk") if isinstance(external, dict) else None
-    if not isinstance(manifest_crosswalk, dict):
-        raise ReleasePlanError("selected manifest external.crosswalk must be an object")
-    if manifest_crosswalk.get("repo") != CROSSWALK_REPO:
-        raise ReleasePlanError(
-            f"selected manifest external.crosswalk.repo must be {CROSSWALK_REPO}"
-        )
-    if manifest_crosswalk.get("ref") != crosswalk_ref:
-        raise ReleasePlanError(
-            "selected manifest external.crosswalk.ref must match the Cargo.toml pin"
-        )
-    core = crosswalk_dependencies.get("crosswalk-core")
-    core_version = core.get("version") if isinstance(core, dict) else None
-    if not isinstance(core_version, str):
-        raise ReleasePlanError("Cargo.toml crosswalk-core must declare an exact version")
-    if selected_docset is not None:
-        products = selected_docset.get("products")
-        docset_crosswalk = (
-            products.get("crosswalk") if isinstance(products, dict) else None
-        )
-        if (
-            not isinstance(docset_crosswalk, dict)
-            or docset_crosswalk.get("ref") != crosswalk_ref
-        ):
-            raise ReleasePlanError(
-                "selected docset Crosswalk ref must match the Cargo.toml pin"
-            )
-        if docset_crosswalk.get("version") != f"crosswalk-core-v{core_version}":
-            raise ReleasePlanError(
-                "selected docset Crosswalk version must match Cargo.toml crosswalk-core"
-            )
-    if crosswalk_ref not in release_text:
-        raise ReleasePlanError("release note must record the exact Crosswalk ref")
-    return {
-        "repo": CROSSWALK_REPO,
-        "ref": crosswalk_ref,
-        "version": core_version,
-        "workspace_dependencies": sorted(crosswalk_dependencies),
-        "lock_packages": sorted(str(package.get("name")) for package in lock_packages),
-    }
-
-
 def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[str, Any]:
     repo = repo.resolve()
     if not repo.is_dir():
         raise ReleasePlanError(f"repository does not exist: {repo}")
+    if strict_semver(version) < RELAY_V2_RELEASE_MINIMUM_VERSION:
+        raise ReleasePlanError(
+            "pre-v0.19 releases are immutable historical evidence; use the "
+            f"corresponding v{version} Git tag and archived assets"
+        )
     selected, previous, advisory = select_release_history(repo, version, release_id)
     validate_selected_manifest(repo, selected)
     checks = [
@@ -2391,11 +1385,7 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
         )
     )
     parsed_version = release_version_tuple(version)
-    uses_release_docs = (
-        parsed_version is None
-        or parsed_version < RELAY_V2_RELEASE_MINIMUM_VERSION
-        or parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION
-    )
+    uses_release_docs = parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION
     docsets_data = None
     selected_docset = None
     selected_docset_index = None
@@ -2432,23 +1422,6 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
             f"{len(openapi_paths)} committed OpenAPI documents use {version}",
         )
     )
-    crosswalk = validate_crosswalk(
-        selected,
-        workspace,
-        selected_docset,
-        documents["release_text"],
-    )
-    crosswalk_surfaces = (
-        "workspace, lock, manifest, docset, and release note"
-        if uses_release_docs
-        else "workspace, lock, manifest, and release note"
-    )
-    checks.append(
-        passed_check(
-            "crosswalk-pin",
-            f"{crosswalk_surfaces} agree on {crosswalk['ref']}",
-        )
-    )
     if uses_release_docs:
         checks.append(
             passed_check(
@@ -2467,7 +1440,6 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
         "selected_docset_index": selected_docset_index,
         "documents": documents,
         "openapi_paths": openapi_paths,
-        "crosswalk": crosswalk,
         "uses_release_docs": uses_release_docs,
         "checks": checks,
     }
@@ -2536,218 +1508,8 @@ def build_prepare_plan(repo: Path, version: str, release_id: str) -> dict[str, A
         "requested": {"version": version, "release_id": release_id},
         "previous": previous,
         "selected": manifest_plan_identity(context["repo"], context["selected"]),
-        "crosswalk": context["crosswalk"],
         "checks": context["checks"],
         "changes": prepare_changes(context),
-    }
-
-
-def load_exact_generated_mirror(repo: Path, name: str, source: Any) -> Any:
-    path = repo / "docs" / "site" / "src" / "data" / "generated" / f"{name}.json"
-    generated = required_json(path)
-    if json_compatible(source) != generated:
-        raise ReleasePlanError(f"generated/{name}.json does not exactly mirror {name}.yaml")
-    return generated
-
-
-def ref_change(
-    repo: Path,
-    path: Path,
-    pointer: str,
-    old: str,
-    new: str,
-) -> dict[str, str]:
-    return {
-        "path": relative_path(repo, path),
-        "pointer": pointer,
-        "kind": "replace",
-        "from": old,
-        "to": new,
-    }
-
-
-def candidate_registry_stack_url_match(
-    url: Any,
-    candidate: str,
-) -> re.Match[str] | None:
-    if not isinstance(url, str):
-        return None
-    prefix = "https://github.com/registrystack/registry-stack/"
-    return re.fullmatch(
-        re.escape(prefix)
-        + rf"(?:blob|tree)/(?P<ref>{re.escape(candidate)})/[^?#]+"
-        + r"(?:\?[^#]*)?(?:#.*)?",
-        url,
-    )
-
-
-def candidate_registry_stack_url(url: Any, candidate: str) -> bool:
-    return candidate_registry_stack_url_match(url, candidate) is not None
-
-
-def replace_url_ref(url: str, old: str, new: str) -> str:
-    match = candidate_registry_stack_url_match(url, old)
-    if match is None:
-        raise ReleasePlanError(f"candidate Registry Stack URL has an ambiguous ref: {url}")
-    start, end = match.span("ref")
-    return f"{url[:start]}{new}{url[end:]}"
-
-
-def finalize_ref_changes(
-    context: dict[str, Any],
-    promotion_commit: str,
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    repo = context["repo"]
-    candidate = context["selected"]["data"]["stack"]["source_ref"]
-    source_changes = [
-        ref_change(
-            repo,
-            context["selected"]["path"],
-            "/stack/source_ref",
-            candidate,
-            promotion_commit,
-        )
-    ]
-    mirror_changes: list[dict[str, str]] = []
-
-    if context["uses_release_docs"]:
-        docsets_path = repo / "docs/site/src/data/docsets.yaml"
-        generated_docsets_path = repo / "docs/site/src/data/generated/docsets.json"
-        external_names = set(context["selected"]["data"].get("external", {}))
-        products = context["selected_docset"]["products"]
-        docset_index = context["selected_docset_index"]
-        for name in sorted(products):
-            product = products[name]
-            if name in external_names or product.get("ref") != candidate:
-                continue
-            pointer = f"/docsets/{docset_index}/products/{name}/ref"
-            source_changes.append(
-                ref_change(repo, docsets_path, pointer, candidate, promotion_commit)
-            )
-            mirror_changes.append(
-                ref_change(
-                    repo,
-                    generated_docsets_path,
-                    pointer,
-                    candidate,
-                    promotion_commit,
-                )
-            )
-
-    contracts_path = repo / "docs/site/src/data/contracts.yaml"
-    contracts = required_yaml(contracts_path)
-    if not isinstance(contracts, list):
-        raise ReleasePlanError("contracts.yaml must contain a top-level list")
-    load_exact_generated_mirror(repo, "contracts", contracts)
-    generated_contracts_path = repo / "docs/site/src/data/generated/contracts.json"
-    for index, contract in enumerate(contracts):
-        source = contract.get("source_of_truth") if isinstance(contract, dict) else None
-        url = source.get("url") if isinstance(source, dict) else None
-        if not candidate_registry_stack_url(url, candidate):
-            continue
-        replacement = replace_url_ref(url, candidate, promotion_commit)
-        pointer = f"/{index}/source_of_truth/url"
-        source_changes.append(ref_change(repo, contracts_path, pointer, url, replacement))
-        mirror_changes.append(
-            ref_change(repo, generated_contracts_path, pointer, url, replacement)
-        )
-
-    standards_path = repo / "docs/site/src/data/standards.yaml"
-    standards = required_yaml(standards_path)
-    if not isinstance(standards, list):
-        raise ReleasePlanError("standards.yaml must contain a top-level list")
-    load_exact_generated_mirror(repo, "standards", standards)
-    generated_standards_path = repo / "docs/site/src/data/generated/standards.json"
-    for entry_index, standard in enumerate(standards):
-        evidence = standard.get("evidence_docs") if isinstance(standard, dict) else None
-        if not isinstance(evidence, list):
-            continue
-        for evidence_index, item in enumerate(evidence):
-            url = item.get("url") if isinstance(item, dict) else None
-            if not candidate_registry_stack_url(url, candidate):
-                continue
-            replacement = replace_url_ref(url, candidate, promotion_commit)
-            pointer = f"/{entry_index}/evidence_docs/{evidence_index}/url"
-            source_changes.append(ref_change(repo, standards_path, pointer, url, replacement))
-            mirror_changes.append(
-                ref_change(repo, generated_standards_path, pointer, url, replacement)
-            )
-    return source_changes, mirror_changes
-
-
-def build_finalize_plan(
-    repo: Path,
-    version: str,
-    release_id: str,
-    promotion_commit: str,
-    default_branch: str,
-) -> dict[str, Any]:
-    context = prepare_release_context(repo, version, release_id)
-    stack = context["selected"]["data"]["stack"]
-    if stack.get("status") != "release-candidate":
-        raise ReleasePlanError(
-            "finalize requires the selected manifest to have release-candidate status"
-        )
-    candidate = stack.get("source_ref")
-    if not isinstance(candidate, str) or HEX40.fullmatch(candidate) is None:
-        raise ReleasePlanError(
-            "finalize requires the selected manifest to record one exact candidate source_ref"
-        )
-    resolved_promotion = resolve_commit(context["repo"], promotion_commit, "promotion commit")
-    resolved_default = resolve_commit(context["repo"], default_branch, "default branch")
-    if not is_ancestor(context["repo"], candidate, resolved_promotion):
-        raise ReleasePlanError(
-            f"candidate source_ref {candidate} is not an ancestor of promotion commit "
-            f"{resolved_promotion}"
-        )
-    if not is_ancestor(context["repo"], resolved_promotion, resolved_default):
-        raise ReleasePlanError(
-            f"promotion commit {resolved_promotion} is not reachable from default branch "
-            f"{default_branch} ({resolved_default})"
-        )
-    source_changes, mirror_changes = finalize_ref_changes(context, resolved_promotion)
-    checks = list(context["checks"])
-    checks.extend(
-        [
-            passed_check(
-                "release-candidate",
-                f"selected manifest records exact candidate source_ref {candidate}",
-            ),
-            passed_check(
-                "promotion-lineage",
-                f"candidate is an ancestor of exact promotion commit {resolved_promotion}",
-            ),
-            passed_check(
-                "default-branch-reachability",
-                f"promotion commit is reachable from {default_branch} at {resolved_default}",
-            ),
-            passed_check(
-                "generated-finalization-mirrors",
-                "contracts, standards, and docset generated mirrors match their YAML sources",
-            ),
-        ]
-    )
-    previous = manifest_plan_identity(context["repo"], context["previous"])
-    previous["advisory_next_release_id"] = context["advisory"]
-    selected = manifest_plan_identity(context["repo"], context["selected"])
-    selected["candidate_source_ref"] = candidate
-    selected["promotion_commit"] = resolved_promotion
-    return {
-        "schema_version": RELEASE_PLAN_SCHEMA,
-        "operation": "finalize",
-        "status": "ready",
-        "requested": {
-            "version": version,
-            "release_id": release_id,
-            "promotion_commit": resolved_promotion,
-            "default_branch": default_branch,
-            "default_branch_commit": resolved_default,
-        },
-        "previous": previous,
-        "selected": selected,
-        "crosswalk": context["crosswalk"],
-        "checks": checks,
-        "changes": source_changes + mirror_changes,
     }
 
 
@@ -2765,31 +1527,14 @@ def emit_release_plan(plan: dict[str, Any], plan_output: Path | None) -> None:
     print(body, end="")
 
 
-def run_release_plan(
-    operation: str,
+def run_prepare_plan(
     repo: Path,
     version: str,
     release_id: str,
     plan_output: Path | None,
-    *,
-    promotion_commit: str | None = None,
-    default_branch: str = "origin/main",
 ) -> int:
     try:
-        if operation == "prepare":
-            plan = build_prepare_plan(repo, version, release_id)
-        elif operation == "finalize":
-            if promotion_commit is None:
-                raise AssertionError("finalize promotion commit was not parsed")
-            plan = build_finalize_plan(
-                repo,
-                version,
-                release_id,
-                promotion_commit,
-                default_branch,
-            )
-        else:
-            raise AssertionError(operation)
+        plan = build_prepare_plan(repo, version, release_id)
         emit_release_plan(plan, plan_output)
     except (OSError, UnicodeError, ReleasePlanError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -3165,363 +1910,6 @@ def verify_candidate_run(
         return manifest, binding
 
 
-def verify_candidate_run_for_finalize(
-    repo: Path,
-    *,
-    repository: str,
-    candidate_run: int,
-    version: str,
-    release_id: str,
-    source_sha: str,
-) -> tuple[dict[str, Any], str]:
-    with tempfile.TemporaryDirectory(prefix="registry-candidate-") as directory:
-        temporary = Path(directory)
-        run_path = temporary / "trusted-run.json"
-        artifacts_path = temporary / "artifact-metadata.json"
-        run_document = json.loads(
-            run_checked(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{repository}/actions/runs/{candidate_run}",
-                ]
-            )
-        )
-        run_path.write_text(json.dumps(run_document), encoding="utf-8")
-        artifacts_document = json.loads(
-            run_checked(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{repository}/actions/runs/{candidate_run}/artifacts?per_page=100",
-                ]
-            )
-        )
-        artifacts_path.write_text(json.dumps(artifacts_document), encoding="utf-8")
-        workflow_run = release_candidate.workflow_run_from_json(run_document)
-        run_attempt = workflow_run["run_attempt"]
-        try:
-            attempt_artifacts = release_candidate.validate_attempt_artifact_inventory(
-                artifacts_document,
-                run_id=candidate_run,
-                run_attempt=run_attempt,
-            )
-        except release_candidate.CandidateError as exc:
-            raise ReleasePlanError(
-                f"candidate attempt artifact inventory is invalid: {exc}"
-            ) from exc
-        receipt_artifact_name = (
-            f"{RELEASE_CANDIDATE_RECEIPT_ARTIFACT}-{candidate_run}-{run_attempt}"
-        )
-        receipt_artifact = attempt_artifacts[receipt_artifact_name]
-        receipt_dir = temporary / "receipt"
-        download_candidate_artifact(
-            repository,
-            receipt_artifact["id"],
-            receipt_dir,
-            expected_archive_sha256=receipt_artifact["archive_sha256"],
-        )
-        receipt_path = receipt_dir / "release-candidate-receipt.json"
-        receipt_document = release_candidate.read_json(receipt_path)
-        if not isinstance(receipt_document, dict):
-            raise ReleasePlanError("candidate receipt must be an object")
-        try:
-            artifact_records = receipt_document["artifacts"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ReleasePlanError(f"candidate receipt identity is malformed: {exc}") from exc
-
-        artifact_root = temporary / "payload"
-        if not isinstance(artifact_records, list):
-            raise ReleasePlanError("candidate receipt artifacts must be an array")
-        for record in artifact_records:
-            if not isinstance(record, dict) or not isinstance(record.get("name"), str):
-                raise ReleasePlanError("candidate receipt artifact record is malformed")
-            artifact_id = int(record.get("artifact_id", 0))
-            artifact_name = record["name"]
-            metadata = attempt_artifacts.get(artifact_name)
-            if (
-                metadata is None
-                or metadata["id"] != artifact_id
-                or metadata["archive_sha256"] != record.get("archive_sha256")
-            ):
-                raise ReleasePlanError(
-                    f"candidate artifact {artifact_name!r} does not match the exact "
-                    "current-attempt API inventory"
-                )
-            download_candidate_artifact(
-                repository,
-                artifact_id,
-                artifact_root / artifact_name,
-                expected_archive_sha256=metadata["archive_sha256"],
-            )
-
-        expected_builders_path = temporary / "expected-builders.json"
-        expected_builders = candidate_builder_contract(repo)
-        expected_builders_path.write_text(
-            json.dumps(expected_builders, sort_keys=True), encoding="utf-8"
-        )
-        promoted_identities: set[str] = set()
-        release_pages = json.loads(
-            run_checked(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{repository}/releases?per_page=100",
-                    "--paginate",
-                    "--slurp",
-                ]
-            )
-        )
-        if not isinstance(release_pages, list) or any(
-            not isinstance(page, list) for page in release_pages
-        ):
-            raise ReleasePlanError("GitHub Releases response is malformed")
-        releases = [release for page in release_pages for release in page]
-        for published_release in releases:
-            assets = (
-                published_release.get("assets")
-                if isinstance(published_release, dict)
-                else None
-            )
-            if not isinstance(assets, list):
-                continue
-            for asset in assets:
-                name = asset.get("name") if isinstance(asset, dict) else None
-                api_url = asset.get("url") if isinstance(asset, dict) else None
-                if (
-                    not isinstance(name, str)
-                    or not name.endswith("-candidate-receipt.json")
-                    or not isinstance(api_url, str)
-                ):
-                    continue
-                prior_path = temporary / f"promoted-{asset.get('id')}.json"
-                download_gh_api_bytes(
-                    api_url,
-                    prior_path,
-                    headers=("Accept: application/octet-stream",),
-                )
-                prior = release_candidate.read_json(prior_path)
-                identity = (
-                    prior.get("promotion", {}).get("identity")
-                    if isinstance(prior, dict)
-                    else None
-                )
-                if not isinstance(identity, str):
-                    raise ReleasePlanError(
-                        f"published candidate receipt {name} has no release identity"
-                    )
-                promoted_identities.add(identity)
-        try:
-            receipt = release_candidate.validate_receipt(
-                receipt_document,
-                artifact_root=artifact_root,
-                artifact_metadata=release_candidate.artifact_metadata_from_json(
-                    artifacts_document
-                ),
-                expected_source_sha=source_sha,
-                expected_version=version,
-                expected_release_id=release_id,
-                expected_run_id=candidate_run,
-                expected_run_attempt=run_attempt,
-                promotion=True,
-                workflow_run_metadata=workflow_run,
-                expected_builders=expected_builders,
-                promoted_identities=promoted_identities,
-            )
-        except release_candidate.CandidateError as exc:
-            raise ReleasePlanError(f"candidate verification failed: {exc}") from exc
-
-        signer = f"{repository}/{RELEASE_CANDIDATE_WORKFLOW}"
-        attested_files = [receipt_path]
-        attested_files.extend(
-            artifact_root / file_record["path"]
-            for artifact in receipt["artifacts"]
-            for file_record in artifact["files"]
-        )
-        for path in attested_files:
-            run_checked(
-                [
-                    "gh",
-                    "attestation",
-                    "verify",
-                    str(path),
-                    "--repo",
-                    repository,
-                    "--signer-workflow",
-                    signer,
-                    "--signer-digest",
-                    source_sha,
-                    "--source-ref",
-                    "refs/heads/main",
-                    "--source-digest",
-                    source_sha,
-                    "--deny-self-hosted-runners",
-                ]
-            )
-
-        receipt_sha = release_candidate.sha256_file(receipt_path)
-        binding = release_candidate.render_tag_binding(
-            candidate_run, run_attempt, receipt_sha
-        )
-        return receipt, binding
-
-
-def finalize_with_candidate(
-    repo: Path,
-    version: str,
-    release_id: str,
-    promotion_commit: str,
-    default_branch: str,
-    candidate_run: int,
-    repository: str,
-    plan_output: Path | None,
-) -> int:
-    try:
-        context = prepare_release_context(repo, version, release_id)
-        stack = context["selected"]["data"]["stack"]
-        if stack.get("status") != "release-candidate":
-            raise ReleasePlanError(
-                "candidate finalize requires the selected manifest to have "
-                "release-candidate status"
-            )
-        tag = f"v{version}"
-        remote_main = refresh_protected_main(context["repo"], repository)
-        local_tag = subprocess.run(
-            ["git", "show-ref", "--verify", "--quiet", f"refs/tags/{tag}"],
-            cwd=context["repo"],
-            check=False,
-        )
-        if local_tag.returncode == 0:
-            raise ReleasePlanError(f"local tag {tag} already exists")
-        if local_tag.returncode != 1:
-            raise ReleasePlanError(f"could not prove local tag {tag} is absent")
-        remote_tag = subprocess.run(
-            [
-                "git",
-                "ls-remote",
-                "--exit-code",
-                "--tags",
-                "origin",
-                f"refs/tags/{tag}",
-            ],
-            cwd=context["repo"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if remote_tag.returncode == 0:
-            raise ReleasePlanError(f"remote tag {tag} already exists")
-        if remote_tag.returncode != 2:
-            raise ReleasePlanError(
-                f"could not prove remote tag {tag} is absent: "
-                f"{remote_tag.stderr.strip()}"
-            )
-        release_lookup = subprocess.run(
-            ["gh", "api", f"repos/{repository}/releases/tags/{tag}"],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if release_lookup.returncode == 0:
-            raise ReleasePlanError(
-                f"GitHub Release {tag} already exists; fix forward with a new version"
-            )
-        if (
-            "HTTP 404" not in release_lookup.stderr
-            and "Not Found" not in release_lookup.stderr
-        ):
-            raise ReleasePlanError(
-                f"could not prove GitHub Release {tag} is absent: "
-                f"{release_lookup.stderr.strip()}"
-            )
-        source_sha = resolve_commit(context["repo"], promotion_commit, "tag target")
-        default_sha = resolve_commit(context["repo"], default_branch, "default branch")
-        if source_sha != default_sha or default_sha != remote_main:
-            raise ReleasePlanError(
-                f"candidate tag target {source_sha} must equal current {default_branch} "
-                f"and trusted origin/main at {remote_main}"
-            )
-        manifest_source = stack.get("source_ref")
-        if (
-            not isinstance(manifest_source, str)
-            or HEX40.fullmatch(manifest_source) is None
-            or not is_ancestor(context["repo"], manifest_source, source_sha)
-        ):
-            raise ReleasePlanError(
-                "candidate tag target must descend from the exact manifest source_ref"
-            )
-        receipt, binding = verify_candidate_run_for_finalize(
-            repo,
-            repository=repository,
-            candidate_run=candidate_run,
-            version=version,
-            release_id=release_id,
-            source_sha=source_sha,
-        )
-        final_remote_main = refresh_protected_main(context["repo"], repository)
-        if final_remote_main != source_sha:
-            raise ReleasePlanError(
-                "protected main moved while the candidate was being verified; "
-                "dispatch and verify a new candidate"
-            )
-        plan = {
-            "schema_version": RELEASE_PLAN_SCHEMA,
-            "operation": "finalize-candidate",
-            "status": "ready",
-            "requested": {
-                "version": version,
-                "release_id": release_id,
-                "tag_target": source_sha,
-                "default_branch": default_branch,
-                "default_branch_commit": default_sha,
-            },
-            "selected": manifest_plan_identity(context["repo"], context["selected"]),
-            "checks": list(context["checks"])
-            + [
-                passed_check(
-                    "candidate-source",
-                    f"tag target {source_sha} is current protected main and descends "
-                    f"from manifest source_ref {manifest_source}",
-                ),
-                passed_check(
-                    "candidate-receipt",
-                    f"candidate run {receipt['workflow']['run_id']}/"
-                    f"{receipt['workflow']['run_attempt']} passed local verification",
-                ),
-            ],
-            "changes": [],
-            "candidate": {
-                "run_id": receipt["workflow"]["run_id"],
-                "run_attempt": receipt["workflow"]["run_attempt"],
-                "receipt_sha256": hashlib.sha256(
-                    release_candidate.canonical_json(receipt)
-                ).hexdigest(),
-                "verification": "passed",
-            },
-        }
-        command = (
-            f"git tag -a {shlex.quote(tag)} {shlex.quote(source_sha)} "
-            f"-m {shlex.quote(binding.rstrip())}"
-        )
-        plan["tag_command"] = command
-        emit_release_plan(plan, plan_output)
-        print(
-            "Candidate verification passed. Run this exact annotated-tag command:\n"
-            f"{command}",
-            file=sys.stderr,
-        )
-    except (
-        OSError,
-        UnicodeError,
-        json.JSONDecodeError,
-        ReleasePlanError,
-        release_candidate.CandidateError,
-    ) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    return 0
-
-
 def verify_candidate_for_tag(
     repo: Path,
     *,
@@ -3659,21 +2047,6 @@ def main() -> int:
     bind_file_spdx_parser.add_argument("spdx", type=Path)
     bind_file_spdx_parser.add_argument("--file-name", required=True)
     bind_file_spdx_parser.add_argument("--sha256", required=True)
-    image_lock_parser = subparsers.add_parser("render-registryctl-image-lock")
-    image_lock_parser.add_argument("manifest", type=Path)
-    image_lock_parser.add_argument("--relay-digest", type=Path, required=True)
-    image_lock_parser.add_argument("--notary-digest", type=Path)
-    image_lock_parser.add_argument("--postgresql-ref-file", type=Path)
-    image_lock_parser.add_argument("--tag-target", required=True)
-    image_lock_parser.add_argument("--source-sha")
-    image_lock_parser.add_argument("--output", type=Path, required=True)
-    image_lock_version_parser = subparsers.add_parser(
-        "verify-registryctl-image-lock-release-version"
-    )
-    image_lock_version_parser.add_argument("--version", required=True)
-    binary_version_parser = subparsers.add_parser("verify-registryctl-binary-version")
-    binary_version_parser.add_argument("binary", type=Path)
-    binary_version_parser.add_argument("--version", required=True)
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("--version", required=True)
     prepare_parser.add_argument("--release-id", required=True)
@@ -3713,23 +2086,8 @@ def main() -> int:
         return bind_spdx_subject(args.spdx, args.image_name, args.digest_ref)
     if args.command == "bind-spdx-file-subject":
         return bind_spdx_file_subject(args.spdx, args.file_name, args.sha256)
-    if args.command == "render-registryctl-image-lock":
-        return render_registryctl_image_lock(
-            args.manifest,
-            args.relay_digest,
-            args.notary_digest,
-            args.postgresql_ref_file,
-            args.tag_target,
-            args.source_sha,
-            args.output,
-        )
-    if args.command == "verify-registryctl-image-lock-release-version":
-        return verify_registryctl_image_lock_release_version(args.version)
-    if args.command == "verify-registryctl-binary-version":
-        return verify_registryctl_binary_version(args.binary, args.version)
     if args.command == "prepare":
-        return run_release_plan(
-            "prepare",
+        return run_prepare_plan(
             args.repo,
             args.version,
             args.release_id,

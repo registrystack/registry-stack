@@ -23,8 +23,6 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "workspaceContains:registry-stack.yaml",
-    "workspaceContains:**/registry-stack.yaml",
     "workspaceContains:registry.yaml",
     "workspaceContains:**/registry.yaml",
     "workspaceContains:evidence-project.yaml",

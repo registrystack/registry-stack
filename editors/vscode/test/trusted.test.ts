@@ -11,7 +11,7 @@ suite('Registry Stack extension', () => {
     fs.rmSync(path.resolve(__dirname, '../../dist/registry-stack-cli-path'), { force: true });
   });
 
-  test('uses the installed adopter CLI for legacy Relay, Relay V2, and Evidence folders', async () => {
+  test('uses the installed adopter CLI for Relay V2 and Evidence folders', async () => {
     assert.strictEqual(vscode.workspace.isTrusted, true);
     assert.strictEqual(vscode.workspace.workspaceFolders?.length, 3);
 
@@ -23,7 +23,6 @@ suite('Registry Stack extension', () => {
     );
     assert.strictEqual(extension.packageJSON.capabilities?.virtualWorkspaces?.supported, false);
     for (const activationEvent of [
-      'workspaceContains:**/registry-stack.yaml',
       'workspaceContains:**/registry.yaml',
       'workspaceContains:**/evidence-project.yaml',
       'workspaceContains:**/source.openapi.yaml',
@@ -36,8 +35,8 @@ suite('Registry Stack extension', () => {
     await assertExtensionActivated(extension);
 
     // One client per workspace folder serves both the Relay and Evidence
-    // project families; alpha is legacy Relay, beta is Relay V2, and evidence
-    // is an Evidence authoring project, all discovered through the same
+    // project families; alpha and beta are Relay V2, while evidence is an
+    // Evidence authoring project, all discovered through the same
     // installer-selected evidencectl.
     await assertWorkspaceSymbol('alpha-registry');
     await assertWorkspaceSymbol('beta-registry');
@@ -46,16 +45,16 @@ suite('Registry Stack extension', () => {
     const alphaFolder = vscode.workspace.workspaceFolders?.find((folder) => folder.name === 'alpha');
     assert.ok(alphaFolder, 'alpha workspace folder is available');
     fs.writeFileSync(
-      path.join(alphaFolder.uri.fsPath, 'registry-stack.yaml'),
-      'version: 1\nregistry: { id: alpha-reloaded }\nservices: {}\n',
+      path.join(alphaFolder.uri.fsPath, 'registry.yaml'),
+      'apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\nregistry: { registryIdentifier: alpha-reloaded }\n',
     );
     await assertWorkspaceSymbol('alpha-reloaded');
 
     const gammaPath = path.join(path.dirname(alphaFolder.uri.fsPath), 'project-gamma');
     fs.mkdirSync(gammaPath);
     fs.writeFileSync(
-      path.join(gammaPath, 'registry-stack.yaml'),
-      'version: 1\nregistry: { id: gamma-registry }\nservices: {}\n',
+      path.join(gammaPath, 'registry.yaml'),
+      'apiVersion: relay.registrystack.org/v2alpha1\nkind: RegistryContract\nregistry: { registryIdentifier: gamma-registry }\n',
     );
     assert.strictEqual(
       vscode.workspace.updateWorkspaceFolders(3, 0, {

@@ -23,10 +23,6 @@ for file in clippy.toml rustfmt.toml; do
     "${template_root}/${file}" \
     "${file}"
   compare \
-    "${repo_root}/crates/registry-relay/${file}" \
-    "${template_root}/${file}" \
-    "crates/registry-relay/${file}"
-  compare \
     "${platform_root}/${file}" \
     "${template_root}/${file}" \
     "products/platform/${file}"

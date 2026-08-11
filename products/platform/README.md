@@ -10,23 +10,24 @@ and related registry services.
 The workspace is consumed by applications through a pinned git tag. It centralizes
 the pieces that should behave identically across services: outbound HTTP policy,
 authentication helpers, OIDC verification, audit chaining, browser-facing HTTP
-security, SD-JWT VC support, crypto primitives, operations posture contracts,
-and integration-test fixtures.
+security, SD-JWT VC support, crypto primitives, bounded SQLite reads, and
+integration-test fixtures.
 
 ## Crates
 
 | Crate | Purpose |
 | --- | --- |
-| [`registry-config-report`](crates/registry-config-report/README.md) | Shared configuration diagnostic and explanation report schemas, fixtures, serde types, and redaction helpers. |
 | [`registry-platform-audit`](crates/registry-platform-audit/README.md) | Tamper-evident audit envelopes, async sinks, JSONL verification, and redaction helpers. |
 | [`registry-platform-authcommon`](crates/registry-platform-authcommon/README.md) | Provider-independent authentication helpers for Bearer tokens and API-key fingerprints. |
-| [`registry-platform-config`](crates/registry-platform-config/README.md) | Config Bundle v1 manifests, trust anchors, file-closure verification, and local break-glass override contracts. |
+| [`registry-platform-buildinfo`](crates/registry-platform-buildinfo/README.md) | Shared build and version metadata. |
+| [`registry-platform-canonical-json`](crates/registry-platform-canonical-json/README.md) | Canonical JSON serialization for digests and signatures. |
+| [`registry-platform-config`](crates/registry-platform-config/README.md) | Environment expansion and shared configuration parsing helpers. |
 | [`registry-platform-crypto`](crates/registry-platform-crypto/README.md) | Ed25519 JWK parsing, provider-backed signing, verification, DID validation, and JSON canonicalization. |
 | [`registry-platform-httpsec`](crates/registry-platform-httpsec/README.md) | Axum/Tower HTTP security middleware, CORS policy validation, body limits, and RFC 9457 Problem Details responses. |
 | [`registry-platform-httputil`](crates/registry-platform-httputil/README.md) | Outbound HTTP clients, bounded response reads, URL construction, and SSRF-resistant fetch validation. |
 | [`registry-platform-oidc`](crates/registry-platform-oidc/README.md) | OIDC discovery, JWKS caching, and JWT verifier configuration shared by registry services. |
-| [`registry-platform-ops`](crates/registry-platform-ops/README.md) | Shared public operations posture schemas, examples, and redaction fixtures. |
 | [`registry-platform-sdjwt`](crates/registry-platform-sdjwt/README.md) | SD-JWT VC issuance and holder-proof validation helpers. |
+| [`registry-platform-sqlite`](crates/registry-platform-sqlite/README.md) | Bounded read-only SQLite execution shared by Relay and Evidence. |
 | [`registry-platform-testing`](crates/registry-platform-testing/README.md) | Mock IdP, mock HTTP upstreams, key fixtures, and cross-crate assertions for consumers. |
 
 ## Design Principles
@@ -81,13 +82,12 @@ Run checks from the workspace root:
 
 ```sh
 cargo fmt --check
-cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
-cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings
-cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
-cargo llvm-cov --locked -p registry-config-report -p 'registry-platform-*' --all-features --fail-under-lines 80
+cargo build --locked -p 'registry-platform-*' --all-targets --all-features
+cargo clippy --locked -p 'registry-platform-*' --all-targets --all-features -- -D warnings
+cargo test --locked -p 'registry-platform-*' --all-targets --all-features
+cargo llvm-cov --locked -p 'registry-platform-*' --all-features --fail-under-lines 80
 cargo deny check
 products/platform/scripts/check-hygiene-alignment.sh
-products/platform/scripts/audit-configs.sh --check --format paths
 gitleaks dir --config .gitleaks.toml --no-banner --redact --timeout 120 .
 ```
 
@@ -115,11 +115,6 @@ cargo test -p registry-platform-oidc
 This repository contains reusable primitives, not a complete application security
 boundary. Consumers remain responsible for service authorization, tenant
 isolation, audit retention, secret provisioning, and deployment configuration.
-
-Governed runtime configuration integrations should follow the public
-[`governed-configuration`](docs/governed-configuration.md) guide for signed
-local bundle verification, trust anchors, anti-rollback state, emergency
-override files, and verification result vocabulary.
 
 Secret-provider integrations should follow the
 [`secret-provider-readiness`](docs/secret-provider-readiness.md) contract for

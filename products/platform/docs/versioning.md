@@ -1,7 +1,7 @@
 # Platform versioning in the Registry Stack monorepo
 
-The `registry-platform-*` crates and `registry-config-report` are workspace
-members of Registry Stack. They share the version in the root `Cargo.toml`, are
+The `registry-platform-*` crates are workspace members of Registry Stack. They
+share the version in the root `Cargo.toml`, are
 verified from the root, and are released with the Registry Stack source tree.
 There is no separate platform workspace tag or consumer pin to coordinate
 inside this repository.
@@ -29,13 +29,12 @@ Run from the monorepo root:
 
 ```sh
 cargo fmt --check
-cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
-cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings
-cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
-cargo llvm-cov --locked -p registry-config-report -p 'registry-platform-*' --all-features --fail-under-lines 80
+cargo build --locked -p 'registry-platform-*' --all-targets --all-features
+cargo clippy --locked -p 'registry-platform-*' --all-targets --all-features -- -D warnings
+cargo test --locked -p 'registry-platform-*' --all-targets --all-features
+cargo llvm-cov --locked -p 'registry-platform-*' --all-features --fail-under-lines 80
 cargo deny check
 products/platform/scripts/check-hygiene-alignment.sh
-products/platform/scripts/audit-configs.sh --check --format paths
 gitleaks dir --config .gitleaks.toml --no-banner --redact --timeout 120 .
 ```
 

@@ -25,14 +25,14 @@ configured sources, under its own closed contract names.
 
 ## There is no shared runtime policy vocabulary
 
-Earlier versions of this page described a shared policy vocabulary in `registry-platform-pdp`,
+Earlier versions of this page described a shared policy vocabulary in a
+`registry-platform-pdp` crate,
 covering legal basis, consent, jurisdiction, assurance, and source freshness, which Registry Relay
 consumed at request time. That is no longer the model. Registry Relay carries no policy decision
-point, evaluates no external policy, and reads none of that vocabulary. The crate has no current
-runtime consumer.
+point, evaluates no external policy, and reads none of that vocabulary. The retired crate has
+been removed.
 
-{/* Evidence: crates/registry-platform-pdp is listed as a dependency only by
-     crates/registry-relay (the retired runtime) and by itself; crates/registry-relay-v2 contains
+{/* Evidence: the retired registry-platform-pdp crate is absent; crates/registry-relay-v2 contains
      no PDP, ODRL, trust-context, or policy-evaluation path. */}
 
 What replaced it is narrower and easier to review: each product declares its own constraints in its

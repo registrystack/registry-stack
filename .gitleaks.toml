@@ -30,9 +30,3 @@ regexes = [
   '''"AKIAABCDEFGHIJKLMNOP"''',
   '''"eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJzdWJqZWN0In0\.abcdefghijklmnop"''',
 ]
-
-[[allowlists]]
-description = "Allow synthetic OpenCRVS response JWTs used by registryctl project-authoring tests."
-paths = [
-  "^crates/registryctl/tests/fixtures/project-authoring/opencrvs(?:-country-variant)?/integrations/birth-record/fixtures/bodies/(?:ambiguous|match|no-match)\\.json$",
-]

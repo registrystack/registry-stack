@@ -19,17 +19,12 @@ from pathlib import Path
 SCRIPT = Path(__file__).with_name("check-release-image-oci-labels.py")
 SMOKE_SCRIPT = Path(__file__).with_name("smoke-release-image-oci-labels.sh")
 ROOT = SCRIPT.parents[2]
-IMAGE_REF = "example.invalid/registry-relay@sha256:" + "a" * 64
+IMAGE_REF = "example.invalid/relay@sha256:" + "a" * 64
 SOURCE = "https://github.com/registrystack/registry-stack"
 REVISION = "b" * 40
-VERSION = "v0.12.0"
-RELAY_FEATURE_LABEL = "org.registrystack.registry-relay.features"
-RELAY_FEATURES = (
-    Path(__file__).resolve().parents[2]
-    / "crates"
-    / "registry-relay"
-    / "canonical-release-features.txt"
-).read_text(encoding="utf-8").strip()
+VERSION = "v0.19.1"
+EXPECTED_POLICY_LABEL = "org.registrystack.release.policy"
+EXPECTED_POLICY = "verified"
 BUILDKIT_IMAGE = (
     "moby/buildkit:v0.31.2@sha256:"
     "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
@@ -276,7 +271,7 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
             run.call_args_list[1].args[0],
         )
         self.assertEqual(
-            f"example.invalid/registry-relay@{application_digest}",
+            f"example.invalid/relay@{application_digest}",
             run.call_args_list[2].args[0][-1],
         )
 
@@ -329,14 +324,14 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
             "org.opencontainers.image.source": SOURCE,
             "org.opencontainers.image.revision": REVISION,
             "org.opencontainers.image.version": VERSION,
-            RELAY_FEATURE_LABEL: RELAY_FEATURES,
+            EXPECTED_POLICY_LABEL: EXPECTED_POLICY,
         }
 
         result, _, stderr, _ = self.run_with_inspect(
             stdout=config_json(labels),
             extra_args=[
                 "--expected-label",
-                f"{RELAY_FEATURE_LABEL}={RELAY_FEATURES}",
+                f"{EXPECTED_POLICY_LABEL}={EXPECTED_POLICY}",
             ],
         )
 
@@ -353,12 +348,12 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
             stdout=config_json(labels),
             extra_args=[
                 "--expected-label",
-                f"{RELAY_FEATURE_LABEL}={RELAY_FEATURES}",
+                f"{EXPECTED_POLICY_LABEL}={EXPECTED_POLICY}",
             ],
         )
 
         self.assertEqual(1, result)
-        self.assertIn(RELAY_FEATURE_LABEL, stderr)
+        self.assertIn(EXPECTED_POLICY_LABEL, stderr)
 
     def test_malformed_additional_expected_label_is_rejected(self) -> None:
         result, _, stderr, _ = self.run_with_inspect(
@@ -459,7 +454,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("--provenance=false", result.stdout)
-        self.assertNotIn(RELAY_FEATURE_LABEL, result.stdout)
+        self.assertNotIn(EXPECTED_POLICY_LABEL, result.stdout)
 
     def test_retained_oci_layout_disables_timestamped_provenance(self) -> None:
         result = self.run_wrapper(

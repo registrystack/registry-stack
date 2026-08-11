@@ -1,0 +1,44 @@
+# Shape of the projected collection response, checked before extraction runs.
+# The prepared request asks for a page of two, so a third record is a provider
+# that ignored the bound rather than an ambiguous lookup. Whether the page and
+# the further-pages flag agree stays with the script: that is a reading across
+# fields, not a shape.
+type: object
+additionalProperties: false
+required: [items, pageInfo]
+properties:
+  items:
+    type: array
+    minItems: 0
+    maxItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required: [domainData]
+      properties:
+        domainData:
+          type: object
+          additionalProperties: false
+          # No projected leaf can be required of every item. Projection drops
+          # a leaf the source did not carry, and an ambiguous page is decided
+          # before any item is read, so an item on that page need not be
+          # complete.
+          required: []
+          properties:
+            recordReference:
+              type: string
+              minLength: 1
+              maxLength: 64
+            region:
+              type: string
+              minLength: 1
+              maxLength: 32
+  pageInfo:
+    type: object
+    additionalProperties: false
+    required: [nextCursor]
+    properties:
+      nextCursor:
+        type: [string, 'null']
+        minLength: 1
+        maxLength: 256

@@ -1,9 +1,0 @@
-name: match
-classification: synthetic
-input: { project_id: pw_001 }
-interactions:
-  - expect: { method: GET, path: /snapshot }
-    respond: { status: 200, body: { status: active } }
-expect:
-  outcome: match
-  outputs: { status: active }

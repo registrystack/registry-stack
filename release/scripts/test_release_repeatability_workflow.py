@@ -59,44 +59,25 @@ class ReleaseRepeatabilityWorkflowTest(unittest.TestCase):
             'if grep -Fqx -- "${release_manifest}" <<<"${release_assets}"',
             self.workflow,
         )
-        self.assertIn("minor == 16 && patch >= 3", self.workflow)
-        self.assertIn(
-            'echo "${TAG} has neither ${release_manifest} nor ${image_lock}"',
-            self.workflow,
-        )
+        self.assertNotIn("image_lock", self.workflow)
         self.assertIn('--pattern "${image_metadata}"', self.workflow)
         self.assertIn(
             "jq -er '.images[] | [.name,.final_ref,.digest] | @tsv'",
             self.workflow,
         )
-        self.assertIn("select(.key | startswith(\"registry-\"))", self.workflow)
         self.assertIn(
             'test "$(crane digest "${published_ref}")" = "${index_digest}"',
             self.workflow,
         )
         self.assertIn("compare-release-image-layouts.py", self.workflow)
 
-    def test_v0152_image_lock_fixture_maps_only_registry_images(self) -> None:
-        digest = f"sha256:{'1' * 64}"
-        rows = self.jq_rows(
-            '.images | to_entries[] | select(.key | startswith("registry-")) '
-            '| [.key,.value,(.value | split("@")[1])] | @tsv',
-            {
-                "images": {
-                    "postgresql": f"docker.io/library/postgres@{digest}",
-                    "registry-notary": f"ghcr.io/registrystack/registry-notary@{digest}",
-                    "registry-relay": f"ghcr.io/registrystack/registry-relay@{digest}",
-                },
-                "release_tag": "v0.15.2",
-            },
+    def test_pre_v0_19_requests_fail_before_release_discovery(self) -> None:
+        diagnostic = (
+            "pre-v0.19 releases are immutable historical evidence; use the "
+            "corresponding ${tag} Git tag and archived assets"
         )
-        self.assertEqual(
-            rows,
-            [
-                ["registry-notary", f"ghcr.io/registrystack/registry-notary@{digest}", digest],
-                ["registry-relay", f"ghcr.io/registrystack/registry-relay@{digest}", digest],
-            ],
-        )
+        self.assertIn(diagnostic, self.workflow)
+        self.assertLess(self.workflow.index(diagnostic), self.workflow.index("gh release view"))
 
     def test_current_release_manifest_fixture_carries_the_public_digest(self) -> None:
         digest = f"sha256:{'2' * 64}"

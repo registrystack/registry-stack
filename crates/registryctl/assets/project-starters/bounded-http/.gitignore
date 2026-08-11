@@ -1,4 +1,0 @@
-.registry-stack/
-# Owner-only local request and credential artifacts live below this path.
-.registry-stack/dev/
-.registry-stack/dev-artifacts/

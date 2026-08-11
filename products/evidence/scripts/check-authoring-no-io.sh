@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # `registry-evidence-authoring` is linked into the language server, which is
-# linked into `registryctl` and `evidencectl` and speaks JSON-RPC over standard
+# hosted by `relayctl` and `evidencectl` and speaks JSON-RPC over standard
 # input and output. Its licence to run in that process is that it reads no file,
 # opens no socket, starts no process and touches neither standard stream.
 #

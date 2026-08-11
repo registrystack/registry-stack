@@ -8,15 +8,14 @@ completion, and formatting to the editor's YAML language server: the authoring f
 already complete the keys through the project-local `yaml.schemas` mapping `evidencectl` writes, and
 a second list of the same keys would be a second list to disagree with the first.
 
-## Three document families
+## Document families
 
-The server reads three unrelated authoring surfaces and keeps them apart. Each root belongs to exactly
+The server reads unrelated authoring surfaces and keeps them apart. Each root belongs to exactly
 one family, and a diagnostic names the family that produced it in its `source` field, so a workspace
 holding both can be read without guessing which tool is talking.
 
 | Family | A directory is a root when it holds | Diagnostic source |
 |---|---|---|
-| Relay | `registry-stack.yaml` | `registry-stack` |
 | Relay V2 | `registry.yaml` | `relay-v2` |
 | Evidence | `evidence-project.yaml`, or both `source.openapi.yaml` and a `questions/` directory | `evidence` |
 
@@ -27,14 +26,6 @@ made of authors for the editor's convenience.
 
 A symbolic link declares nothing at either name. A link is how a directory borrows a shape it does
 not have, and a borrowed shape must not anchor a root the loader will then read files from.
-
-### Relay
-
-- registry, integration, entity, service, consultation, fixture, and environment definitions;
-- integration and entity aliases across the project manifest, their definition files, and
-  environment files;
-- consultation integration references, records-service entity references, and environment
-  integration and entity bindings.
 
 ### Evidence
 

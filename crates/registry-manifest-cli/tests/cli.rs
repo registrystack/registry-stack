@@ -34,23 +34,6 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
-fn collect_yaml_files(root: &Path, paths: &mut Vec<PathBuf>) {
-    let entries = fs::read_dir(root)
-        .unwrap_or_else(|error| panic!("read profile directory {}: {error}", root.display()));
-    for entry in entries {
-        let entry = entry.expect("directory entry");
-        let path = entry.path();
-        if entry.file_type().expect("file type").is_dir() {
-            collect_yaml_files(&path, paths);
-        } else if matches!(
-            path.extension().and_then(|value| value.to_str()),
-            Some("yaml" | "yml")
-        ) {
-            paths.push(path);
-        }
-    }
-}
-
 fn write_minimal_manifest(path: &Path, body: &str) {
     fs::write(
         path,
@@ -691,24 +674,6 @@ fn validate_profiles_checks_canonical_examples_without_relay_copies() {
             "missing canonical fixture for {profile}"
         );
     }
-
-    let relay_profiles = workspace_root().join("crates/registry-relay/profiles");
-    let mut copied_yaml = Vec::new();
-    for entry in fs::read_dir(&relay_profiles).expect("Relay profiles directory") {
-        let entry = entry.expect("Relay profile entry");
-        if entry.file_type().expect("Relay profile file type").is_dir()
-            && entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("example-"))
-        {
-            collect_yaml_files(&entry.path(), &mut copied_yaml);
-        }
-    }
-    assert!(
-        copied_yaml.is_empty(),
-        "example profile YAML must be owned by products/manifest/profiles, not copied into Relay: {copied_yaml:?}"
-    );
 }
 
 #[test]
@@ -762,40 +727,6 @@ datasets: []
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-#[test]
-fn validate_profiles_rejects_legacy_relay_schema_version() {
-    let root = temp_dir("legacy-profile-schema");
-    let profile_dir = root.join("legacy");
-    fs::create_dir_all(&profile_dir).expect("profile dir");
-    fs::write(
-        profile_dir.join("profile.yaml"),
-        r#"
-schema_version: registry-relay-profile/v1
-profile:
-  id: legacy
-  version: "1"
-supported_input_artifacts:
-  - kind: metadata_manifest
-unsupported_mappings:
-  - source: runtime source
-conformance_checks:
-  - id: legacy.check
-fixtures:
-  - path: fixtures/metadata.yaml
-"#,
-    )
-    .expect("write profile");
-
-    let output = Command::new(bin())
-        .args(["validate-profiles", root.to_str().unwrap()])
-        .output()
-        .expect("run cli");
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("metadata.profile.version_unsupported"));
 }
 
 fn assert_index_urls_exist(out: &Path, index: &serde_json::Value) {

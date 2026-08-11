@@ -259,7 +259,7 @@ datasets:
         entity: person
         lookup_keys: [id]
         access:
-          kind: registry-relay-verification
+          kind: registry-evidence
           ruleset: exact
 codelists: []
 "#,
@@ -294,7 +294,7 @@ datasets:
         entity: person
         lookup_keys: [id]
         access:
-          kind: registry-relay-verification
+          kind: registry-evidence
           ruleset: exact
           x_post_beta_access_hint: optional future access metadata
 codelists: []
@@ -470,7 +470,7 @@ evidence_types:
     title: Birth Record
     source_connections:
       civil:
-        base_url: http://registry-relay:8080
+        base_url: http://registry-service:8080
 codelists: []
 "#,
             "source_connections",
@@ -1871,7 +1871,7 @@ datasets:
         entity: person
         lookup_keys: [id]
         access:
-          kind: registry-relay-verification
+          kind: registry-evidence
           ruleset: exact
   - id: second
     title: Second
@@ -1891,7 +1891,7 @@ datasets:
         entity: person
         lookup_keys: [id]
         access:
-          kind: registry-relay-verification
+          kind: registry-evidence
           ruleset: exact
 "#,
     )
@@ -1946,7 +1946,7 @@ datasets:
         entity: person
         lookup_keys: [id]
         access:
-          kind: registry-relay-verification
+          kind: registry-evidence
           ruleset: exact
 "#,
     )

@@ -82,8 +82,10 @@ question.
 - Capabilities that V1 documented and V2 does not implement are recorded in
   [Known limitations](/explanation/known-limitations/) rather than being
   dropped silently.
-- The retired crates stay in the source tree. They are still needed to validate
-  historical releases, and this decision does not archive source.
+- The retired crates and their executable compatibility tooling are removed
+  from current `main`. Current release tooling validates and repeats v0.19.0
+  and later releases. To verify an earlier release, use its exact source tag
+  and archived release assets.
 
 ## Superseded by
 

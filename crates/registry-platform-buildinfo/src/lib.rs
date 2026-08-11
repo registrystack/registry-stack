@@ -4,8 +4,8 @@
 //! Every executable that reports a version reports [`DISPLAY_VERSION`] rather
 //! than its Cargo package version, so an operator can tell a published release
 //! from a build of the same source revision. The Cargo package version stays
-//! canonical semantic version text, which the release manifests, image locks,
-//! and candidate schemas all require.
+//! canonical semantic version text, which the release manifests and candidate
+//! schemas require.
 //!
 //! The release build sets `REGISTRY_RELEASE_TAG` to the exact tag it is
 //! building. Absence of that marker is the ordinary case and yields a

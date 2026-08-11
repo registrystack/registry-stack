@@ -8,8 +8,7 @@ For the stable beta path, run
 generated YAML schema settings. Install this integration for optional semantic navigation.
 
 This extension activates when a workspace contains a Registry Stack project marker at its root or
-below it. A legacy Relay project root contains `registry-stack.yaml`, a Relay V2 root contains
-`registry.yaml`, and an Evidence authoring project root
+below it. A Relay V2 root contains `registry.yaml`, and an Evidence authoring project root
 contains `evidence-project.yaml`, or the pre-marker pair of a `source.openapi.yaml` and a
 `questions` directory. A workspace folder that is itself a project starts its language server
 immediately. For a project nested below a workspace folder, opening its first YAML document starts
@@ -100,7 +99,7 @@ and verifies that the VSIX contains no external `node_modules` runtime.
 
 ## Troubleshooting
 
-- If activation does not occur, confirm the workspace contains `registry-stack.yaml`, `registry.yaml`,
+- If activation does not occur, confirm the workspace contains `registry.yaml`,
   `evidence-project.yaml`, or a `source.openapi.yaml` beside a `questions` directory, and that VS
   Code trusts the workspace. For a project below the workspace-folder root, open one of that
   project's YAML documents to start its folder's language server. Select **Workspaces: Manage

@@ -29,14 +29,11 @@ production_text="$temporary_root/production-rust.txt"
 
 # `registry-language-server` is here because `evidencectl` links it, so every
 # line of it ships inside Evidence adopter tooling. The whole crate is swept,
-# not only its `evidence/` modules: the parts it shares with its Relay half
+# not only its `evidence/` modules: the parts it shares with its Relay V2 half
 # (`yaml.rs`, `workspace.rs`, `refs.rs`, `safety.rs`, `server.rs`) are exactly
 # where a term would leak from one half into the other, and a per-directory
-# carve-out would leave that spine unread. The Relay half loses nothing by the
-# rule, because it indexes Registry Manifest structure, which is portable by
-# construction and names manifest keys rather than any source product. Where
-# the Relay family does name one, in `registryctl`'s starter templates, that
-# code is not linked into `evidencectl` and is not swept here.
+# carve-out would leave that spine unread. Relay V2 authoring is itself
+# source-neutral, so the complete shared crate can satisfy the same rule.
 source_roots=(
   "$repository_root/crates/registry-evidence/src"
   "$repository_root/crates/registry-evidence-authoring/src"

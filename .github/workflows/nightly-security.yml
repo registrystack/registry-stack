@@ -56,9 +56,6 @@ jobs:
               Cargo.toml|Cargo.lock|deny.toml|rust-toolchain*)
                 return 0
                 ;;
-              crates/registry-relay/*)
-                return 0
-                ;;
               crates/registry-platform-authcommon/*|crates/registry-platform-crypto/*)
                 return 0
                 ;;
@@ -116,19 +113,6 @@ jobs:
         with:
           persist-credentials: false
           submodules: false
-
-      - name: Test assurance ratchets
-        run: |
-          python3 -m unittest \
-            crates/registry-relay/tests/security_assurance_check_test.py \
-            crates/registry-relay/tests/advisory_baseline_check_test.py
-
-      - name: Relay exposure and container checks
-        working-directory: crates/registry-relay
-        run: |
-          python3 scripts/check_security_assurance.py manifest
-          python3 scripts/check_security_assurance.py dockerfile-secrets
-          python3 scripts/check_security_assurance.py openapi-strategy
 
       - name: Release and adopter image Dockerfile checks
         run: |

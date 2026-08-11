@@ -710,15 +710,15 @@ Relay V2 should reuse mature product-neutral primitives directly and avoid inher
 
 - `registry-platform-crypto` is useful for signed configuration, digests, and pseudonymization support, but Relay V2 does not sign registry responses.
 - `registry-platform-httputil` is used indirectly by OIDC. Relay's SQLite-only version has no general outbound data-source boundary.
-- `registry-platform-ops` may provide generic readiness, posture, and audit-shipping contracts after checking that they do not pull in the existing Relay control-plane lifecycle.
+- The retired `registry-platform-ops` crate was not reused; Relay owns its fixed readiness and audit behavior.
 - Registry Mint is an optional conforming token issuer, not a platform dependency. Any wider audience, scope, purpose, or binding support belongs in Mint's own product-neutral token profile.
 
 ### Do not reuse in the initial core
 
-- `registry-platform-pdp`: its broad context, ODRL, redaction, assurance, consent, jurisdiction, and credential-format model is outside the small Relay V2 access decision.
+- The retired `registry-platform-pdp` model was not reused: its broad context, ODRL, redaction, assurance, consent, jurisdiction, and credential-format model is outside the small Relay V2 access decision.
 - `registry-platform-sdjwt`: signed assertions remain Evidence's responsibility.
 - existing Relay API-key, state-plane, hot-reload, destination, materialization, policy, aggregate, and protocol-specific machinery.
-- the earlier `registryctl` crate, commands, project model, or compatibility surface.
+- the retired and removed `registryctl` crate, commands, project model, or compatibility surface.
 
 ### Registry Manifest boundary
 

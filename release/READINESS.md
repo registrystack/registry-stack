@@ -46,18 +46,9 @@ write.
 - [x] Inventory of standards and specification claims across docs and specs.
       Evidence: [`standards-claims-inventory.md`](notes/standards-claims-inventory.md).
 - [ ] Per-claim evidence recorded (conformance run, test vectors, or interop).
-- [ ] OpenID conformance evidence for supported surfaces. The release-owned
-      [Relay OIDC smoke](conformance/relay-oidc/README.md) is source-ready and
-      directly runnable against a digest-pinned published candidate, but no
-      reviewed 1.0 candidate result exists yet. The retired Notary OID4VCI
-      wrapper was product-specific and is no longer an active gate; its
-      [initial report](conformance/openid/initial-report.md) remains historical
-      evidence only.
-- [ ] Source-read and field-projection evidence for a published Relay image.
-      The same Relay OIDC smoke now asserts that a row reaches the caller from
-      the mounted source only under the entity's own read scope, and that the
-      returned record carries the authored projection rather than the source
-      column. It is source-ready and unrun, so no release may yet cite it.
+- [ ] OpenID conformance evidence for supported surfaces. The retired Relay V1
+      OIDC smoke is no longer a release gate; its historical report remains
+      evidence only. Relay V2 conformance is owned by its product contracts.
 - [ ] OpenCRVS and DHIS2 project-authored integration proof (#72). The prior
       integration packet was Notary-specific and was retired on 2026-08-03.
       No current Relay or Evidence interoperability claim replaces it.
@@ -68,9 +59,9 @@ Tests written alongside generated code confirm the implementation; this
 section is about challenging it.
 
 - [ ] Maintainer adversarial review of the load-bearing crates:
-      `registry-platform-pdp`, `registry-platform-sdjwt`,
-      `registry-platform-crypto`, `registry-platform-authcommon`, Relay scope
-      enforcement, and Evidence assertion evaluation and signing.
+      `registry-platform-sdjwt`, `registry-platform-crypto`,
+      `registry-platform-authcommon`, Relay V2 authorization enforcement, and
+      Evidence assertion evaluation and signing.
 - [ ] Negative-path test coverage mapped against the attack checklist;
       gaps closed with tests that assert denial and correct audit records.
       Mapping evidence: [`negative-path-coverage-map.md`](notes/negative-path-coverage-map.md).
@@ -105,8 +96,9 @@ GH#123, GH#127, GH#128, GH#129.
       [`unsafe-code-inventory.md`](notes/unsafe-code-inventory.md).
 - [x] Dependency vetting policy documented. Evidence:
       [`dependency-vetting-policy.md`](notes/dependency-vetting-policy.md).
-- [x] Crosswalk pinned-dependency rationale and review trigger documented in
-      `external/`. Evidence: [`external/README.md`](../external/README.md).
+- [x] Historical Crosswalk input and its retirement from current release builds
+      documented in `external/`. Evidence:
+      [`external/README.md`](../external/README.md).
 
 ## 7. Operations and lifecycle
 

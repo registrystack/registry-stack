@@ -13,7 +13,6 @@ use tower_lsp_server::ls_types::{
 };
 
 use crate::{
-    relay,
     workspace::ProjectFamily,
     yaml::{written_as, ScalarStyle},
 };
@@ -23,7 +22,6 @@ use crate::{
 /// references.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum SymbolKind {
-    Relay(RelayKind),
     RelayV2(RelayV2Kind),
     Evidence(EvidenceKind),
 }
@@ -31,7 +29,6 @@ pub enum SymbolKind {
 impl SymbolKind {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Relay(kind) => kind.label(),
             Self::RelayV2(kind) => kind.label(),
             Self::Evidence(kind) => kind.label(),
         }
@@ -39,7 +36,6 @@ impl SymbolKind {
 
     pub fn lsp_kind(self) -> LspSymbolKind {
         match self {
-            Self::Relay(kind) => kind.lsp_kind(),
             Self::RelayV2(kind) => kind.lsp_kind(),
             Self::Evidence(kind) => kind.lsp_kind(),
         }
@@ -53,11 +49,6 @@ impl SymbolKind {
     /// array, and the kinds that would have used one fall back to the word beside it.
     pub fn lsp_completion_kind(self) -> CompletionItemKind {
         match self {
-            Self::Relay(RelayKind::Registry | RelayKind::Integration | RelayKind::Entity)
-            | Self::Relay(RelayKind::Environment) => CompletionItemKind::MODULE,
-            Self::Relay(RelayKind::Service) => CompletionItemKind::INTERFACE,
-            Self::Relay(RelayKind::Consultation) => CompletionItemKind::FUNCTION,
-            Self::Relay(RelayKind::Fixture) => CompletionItemKind::EVENT,
             Self::RelayV2(RelayV2Kind::Registry | RelayV2Kind::Source) => {
                 CompletionItemKind::MODULE
             }
@@ -95,7 +86,6 @@ impl SymbolKind {
     /// client sees, which is a decision for the Relay surface rather than a side effect of this one.
     pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
         match self {
-            Self::Relay(_) => None,
             Self::RelayV2(kind) => Some(format!("relay-v2/{rule}-{}", kind.slug())),
             Self::Evidence(kind) => Some(format!("evidence/{rule}-{}", kind.slug())),
         }
@@ -110,7 +100,6 @@ impl SymbolKind {
     /// happened to need a scope first.
     fn scope_label(self) -> &'static str {
         match self {
-            Self::Relay(_) => "service",
             Self::RelayV2(kind) => kind.scope_label(),
             Self::Evidence(_) => "question",
         }
@@ -138,12 +127,6 @@ impl SymbolKind {
     }
 }
 
-impl From<RelayKind> for SymbolKind {
-    fn from(kind: RelayKind) -> Self {
-        Self::Relay(kind)
-    }
-}
-
 impl From<EvidenceKind> for SymbolKind {
     fn from(kind: EvidenceKind) -> Self {
         Self::Evidence(kind)
@@ -153,42 +136,6 @@ impl From<EvidenceKind> for SymbolKind {
 impl From<RelayV2Kind> for SymbolKind {
     fn from(kind: RelayV2Kind) -> Self {
         Self::RelayV2(kind)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum RelayKind {
-    Registry,
-    Integration,
-    Entity,
-    Service,
-    Consultation,
-    Fixture,
-    Environment,
-}
-
-impl RelayKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Registry => "registry",
-            Self::Integration => "integration",
-            Self::Entity => "entity",
-            Self::Service => "service",
-            Self::Consultation => "consultation",
-            Self::Fixture => "fixture",
-            Self::Environment => "environment",
-        }
-    }
-
-    pub fn lsp_kind(self) -> LspSymbolKind {
-        match self {
-            Self::Registry => LspSymbolKind::NAMESPACE,
-            Self::Integration | Self::Entity => LspSymbolKind::MODULE,
-            Self::Service => LspSymbolKind::INTERFACE,
-            Self::Consultation => LspSymbolKind::FUNCTION,
-            Self::Fixture => LspSymbolKind::EVENT,
-            Self::Environment => LspSymbolKind::PACKAGE,
-        }
     }
 }
 
@@ -547,25 +494,6 @@ pub struct ProjectIndex {
 }
 
 impl ProjectIndex {
-    /// Loads and indexes one Relay project. The multi-family path runs through
-    /// [`crate::workspace`], which knows which family a root belongs to; this entry point serves
-    /// callers that already have a Relay project in hand and asks nothing of them.
-    pub fn load(root: &Path) -> Result<Self> {
-        let root = root
-            .canonicalize()
-            .with_context(|| format!("failed to resolve project root {}", root.display()))?;
-        let loaded = relay::load_project_documents(&root)?;
-        if loaded.indexing_ceiling_path.is_some() {
-            return Ok(Self::diagnostics_only(&root, loaded.diagnostics));
-        }
-        Ok(Self::from_documents_with_diagnostics(
-            ProjectFamily::Relay,
-            &root,
-            &loaded.documents,
-            loaded.diagnostics,
-        ))
-    }
-
     /// Loads and indexes one Evidence authoring project, the counterpart to [`Self::load`].
     pub fn load_evidence(root: &Path) -> Result<Self> {
         let root = root
@@ -598,11 +526,6 @@ impl ProjectIndex {
             &loaded.documents,
             loaded.diagnostics,
         ))
-    }
-
-    /// Indexes documents already in memory as a Relay project, for the same reason as [`Self::load`].
-    pub fn from_documents(root: &Path, documents: &BTreeMap<PathBuf, String>) -> Self {
-        Self::from_documents_with_diagnostics(ProjectFamily::Relay, root, documents, Vec::new())
     }
 
     pub(crate) fn from_documents_with_diagnostics(
@@ -1299,18 +1222,9 @@ fn location_cmp(left: &IndexedLocation, right: &IndexedLocation) -> std::cmp::Or
 mod tests {
     use super::*;
 
-    /// Each family names the container in its own words. A Relay consultation is declared inside the
-    /// service that offers it; an Evidence concept is answered by a question, and an Evidence
-    /// authoring project has no services at all.
+    /// An Evidence concept is answered by the question that owns it.
     #[test]
     fn a_scope_is_named_in_the_vocabulary_of_the_family_that_owns_it() {
-        assert_eq!(
-            scope_suffix(
-                SymbolKind::Relay(RelayKind::Consultation),
-                Some("person-records")
-            ),
-            " in service 'person-records'"
-        );
         assert_eq!(
             scope_suffix(
                 SymbolKind::Evidence(EvidenceKind::Concept),
@@ -1320,13 +1234,9 @@ mod tests {
         );
     }
 
-    /// A name with no scope says nothing about where it is written, in either family.
+    /// A name with no scope says nothing about where it is written.
     #[test]
     fn a_name_with_no_scope_carries_no_suffix() {
-        assert_eq!(
-            scope_suffix(SymbolKind::Relay(RelayKind::Service), None),
-            String::new()
-        );
         assert_eq!(
             scope_suffix(SymbolKind::Evidence(EvidenceKind::Question), None),
             String::new()
@@ -1344,7 +1254,6 @@ mod tests {
         assert!(!SymbolKind::Evidence(EvidenceKind::Concept).reports_duplicates());
         assert!(!SymbolKind::Evidence(EvidenceKind::Operation).reports_duplicates());
         assert!(SymbolKind::Evidence(EvidenceKind::Question).reports_duplicates());
-        assert!(SymbolKind::Relay(RelayKind::Consultation).reports_duplicates());
     }
 
     /// A name is quoted at the width of a name, and a whole sentence at the width of a sentence.

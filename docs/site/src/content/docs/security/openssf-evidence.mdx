@@ -47,15 +47,12 @@ Current public security assets include:
 - One checksum-covered security-evidence archive.
 - One compact release manifest recording candidate and promotion identity.
 
-Releases from `v0.19.0` onward publish no container image lock.
-The publication workflow requires that asset only for releases before `v0.19.0`,
-and the release tool refuses to cut an image-lock release at or after that
-version.
-{/* Evidence: .github/workflows/release.yml gates the required
-     registryctl-${tag}-image-lock.json asset on ((major == 0 && minor < 19));
-     release/scripts/registry-release raises "registryctl image lock releases
-     are retired starting with version 0.19.0" and its
-     RELAY_V2_ARTIFACT_INVENTORY carries no image-lock entry;
+Releases from `v0.19.0` onward publish no container image lock. Current-main
+release tooling rejects earlier release shapes before asset discovery and
+directs operators to verify them from the corresponding source tag and
+archived assets.
+{/* Evidence: release/scripts/registry-release rejects pre-v0.19 requests;
+     .github/workflows/release.yml has no image-lock fallback; and
      release/manifests/registry-stack-beta-29.yaml records the retirement. */}
 
 Current releases do not publish a second generic SLSA provenance envelope,

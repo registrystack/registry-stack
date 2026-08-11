@@ -69,8 +69,8 @@ license and advisory status, feature selection, transitive impact, and any
 accepted risk with a review trigger.
 
 Git dependencies require an immutable commit pin, a rationale, and a documented
-review trigger. Crosswalk's current pin rationale lives in
-[`external/README.md`](external/README.md).
+review trigger. [`external/README.md`](external/README.md) records the retired
+Crosswalk input and the review required before any reintroduction.
 
 For new Rust YAML parsing or serialization, use the workspace-pinned
 `serde_norway` dependency. Do not introduce a direct `serde_yaml` dependency
@@ -129,7 +129,7 @@ cargo check --locked --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo deny check
-(cd crates/registry-relay && just openapi-contract)
+products/relay-v2/scripts/check-contracts.sh
 ```
 
 The root gate runs the full `cargo deny check`, advisories included. Open

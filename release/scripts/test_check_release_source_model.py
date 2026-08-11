@@ -80,15 +80,6 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("REGISTRY_RELEASE_SOURCE_MODE=monorepo", result.stderr)
 
-    def test_monorepo_mode_ignores_retired_relay_and_registryctl_crates(self) -> None:
-        with MonorepoFixture() as stack_root:
-            shutil.rmtree(stack_root / "crates" / "registry-relay")
-            shutil.rmtree(stack_root / "crates" / "registryctl")
-
-            result = run_monorepo_validator(stack_root)
-
-        self.assertEqual(0, result.returncode, result.stderr)
-
     def test_monorepo_mode_rejects_missing_relay_v2_crate(self) -> None:
         with MonorepoFixture() as stack_root:
             shutil.rmtree(stack_root / "crates" / "registry-relay-v2")
@@ -170,57 +161,6 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing required external.registry-atlas", result.stderr)
 
-    def test_monorepo_mode_rejects_latest_manifest_crosswalk_pin_drift(self) -> None:
-        with MonorepoFixture() as stack_root:
-            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
-            manifest.write_text(
-                manifest.read_text(encoding="utf-8").replace(
-                    "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-                    "4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
-                ),
-                encoding="utf-8",
-            )
-
-            result = run_monorepo_validator(stack_root)
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("external.crosswalk.ref must match the live Cargo pin", result.stderr)
-
-    def test_monorepo_mode_rejects_crosswalk_lock_pin_drift(self) -> None:
-        with MonorepoFixture() as stack_root:
-            cargo_lock = stack_root / "Cargo.lock"
-            cargo_lock.write_text(
-                cargo_lock.read_text(encoding="utf-8").replace(
-                    "#1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
-                    "#4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-
-            result = run_monorepo_validator(stack_root)
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("Cargo.lock Crosswalk packages must resolve", result.stderr)
-
-    def test_monorepo_mode_rejects_missing_crosswalk(self) -> None:
-        with MonorepoFixture() as stack_root:
-            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
-            manifest.write_text(
-                MANIFEST_YAML.replace(
-                    "  crosswalk:\n"
-                    "    repo: PublicSchema/crosswalk\n"
-                    "    ref: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a\n",
-                    "",
-                ),
-                encoding="utf-8",
-            )
-
-            result = run_monorepo_validator(stack_root)
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("missing required external.crosswalk", result.stderr)
-
     def test_monorepo_mode_rejects_missing_manifests(self) -> None:
         with MonorepoFixture() as stack_root:
             shutil.rmtree(stack_root / "release" / "manifests")
@@ -243,34 +183,17 @@ class MonorepoFixture:
         (stack_root / "Cargo.toml").write_text(
             "[workspace]\n"
             "members = []\n\n"
-            "[workspace.dependencies]\n"
-            'crosswalk-core = { git = "https://github.com/PublicSchema/crosswalk", '
-            'rev = "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a" }\n'
-            'crosswalk-functions = { git = "https://github.com/PublicSchema/crosswalk", '
-            'rev = "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a" }\n',
+            "[workspace.dependencies]\n",
             encoding="utf-8",
         )
         (stack_root / "Cargo.lock").write_text(
-            "version = 4\n\n"
-            "[[package]]\n"
-            'name = "crosswalk-core"\n'
-            'version = "0.0.1"\n'
-            'source = "git+https://github.com/PublicSchema/crosswalk?'
-            'rev=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a#'
-            '1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"\n\n'
-            "[[package]]\n"
-            'name = "crosswalk-functions"\n'
-            'version = "0.0.1"\n'
-            'source = "git+https://github.com/PublicSchema/crosswalk?'
-            'rev=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a#'
-            '1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"\n',
+            "version = 4\n",
             encoding="utf-8",
         )
         for crate_dir in (
             "crates/registry-platform-authcommon",
             "crates/registry-manifest-core",
             "crates/registry-notary-server",
-            "crates/registry-relay",
             "crates/registry-relay-v2",
             "crates/registry-relayctl",
             "crates/registry-relay-http-contract",
@@ -281,7 +204,6 @@ class MonorepoFixture:
             "crates/registry-evidencectl",
             "crates/registry-mint",
             "crates/registry-evidence-oid4vci",
-            "crates/registryctl",
         ):
             (stack_root / crate_dir).mkdir(parents=True)
             (stack_root / crate_dir / ".keep").write_text("", encoding="utf-8")

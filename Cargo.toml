@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/registry-cli-docs",
-    "crates/registry-config-report",
     "crates/registry-evidence",
     "crates/registry-evidence-authoring",
     "crates/registry-evidence-client",
@@ -19,15 +18,12 @@ members = [
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
     "crates/registry-platform-oidc",
-    "crates/registry-platform-ops",
-    "crates/registry-platform-pdp",
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-sqlite",
     "crates/registry-platform-testing",
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
     "crates/registry-mint",
-    "crates/registry-relay",
     "crates/registry-relay-http-contract",
     "crates/registry-relay-client",
     "crates/registry-relay-client-node",
@@ -35,7 +31,6 @@ members = [
     "crates/registry-relay-v2",
     "crates/registry-relayctl",
     "crates/registry-language-server",
-    "crates/registryctl",
 ]
 exclude = [
     "products/platform/fuzz",
@@ -55,7 +50,6 @@ repository = "https://github.com/registrystack/registry-stack"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
-registry-config-report = { path = "crates/registry-config-report", version = "0.19.0" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.19.0" }
 registry-evidence-authoring = { path = "crates/registry-evidence-authoring", version = "0.19.0" }
 registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.19.0" }
@@ -67,7 +61,6 @@ registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.19.0
 registry-language-server = { path = "crates/registry-language-server", version = "0.19.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.19.0" }
 registry-mint = { path = "crates/registry-mint", version = "0.19.0" }
-registry-relay = { path = "crates/registry-relay", version = "0.19.0" }
 registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.19.0" }
 registry-relay-client = { path = "crates/registry-relay-client", version = "0.19.0" }
 registry-relay-client-node = { path = "crates/registry-relay-client-node", version = "0.19.0" }
@@ -83,17 +76,11 @@ registry-platform-crypto = { path = "crates/registry-platform-crypto", version =
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.19.0", default-features = false }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.19.0" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.19.0" }
-registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.19.0" }
-registry-platform-pdp = { path = "crates/registry-platform-pdp", version = "0.19.0" }
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.19.0" }
 registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.19.0" }
 registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.19.0" }
 
-crosswalk-core = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }
-crosswalk-functions = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }
-
 anyhow = { version = "1" }
-arc-swap = { version = "1" }
 assert-json-diff = { version = "2" }
 async-trait = { version = "0.1" }
 aws-lc-rs = { version = "1" }
@@ -101,33 +88,22 @@ axum = { version = "0.8" }
 axum-test = { version = "20" }
 base64 = { version = "0.22" }
 bytes = { version = "1" }
-calamine = { version = "0.36" }
-cel = { version = "0.13" }
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
 chrono = { version = "0.4" }
 chrono-tz = { version = "0.10.4" }
 clap = { version = "4", features = ["derive", "env"] }
-crc32fast = { version = "1.4" }
 criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 csv = { version = "1" }
-datafusion = { version = "53.1" }
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
 fs2 = { version = "0.4" }
 futures = { version = "0.3" }
 futures-core = { version = "0.3" }
-geo = { version = "0.33" }
-geo-types = { version = "0.7" }
-geojson = { version = "1.0", features = ["geo-types"] }
 getrandom = { version = "0.4" }
 hickory-resolver = { version = "0.26.1", default-features = false, features = ["system-config", "tokio"] }
 hex = { version = "0.4" }
 hmac = { version = "0.13" }
 http = { version = "1" }
-humantime-serde = { version = "1" }
-hyper = { version = "1", features = ["http1", "http2", "server"] }
-hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 inquire = { version = "0.9.4" }
-insta = { version = "1", features = ["json"] }
 ipnet = { version = "2" }
 # Default features pull an HTTP client for remote $ref resolution and a command
 # line parser for the bundled CLI. Every consumer here compiles schemas it
@@ -137,12 +113,9 @@ jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_r
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }
-native-tls = { version = "0.2" }
-ogcapi-types = { version = "0.3.0", features = ["features"] }
 p256 = { version = "0.13", features = ["ecdsa"] }
 pkcs1 = { version = "0.7", features = ["alloc"] }
 pkcs8 = { version = "0.10" }
-postgres-native-tls = { version = "0.5" }
 proptest = { version = "1" }
 pyo3 = { version = "0.29.1", features = ["abi3-py310"] }
 pyo3-build-config = { version = "0.29.1" }
@@ -162,7 +135,6 @@ serde_json = { version = "1" }
 schemars = { version = "=1.2.1" }
 serde_norway = { version = "0.9" }
 serde_path_to_error = { version = "0.1" }
-serde-saphyr = { version = "0.0.26" }
 serde_yaml_ng = { version = "0.10.0" }
 sha2 = { version = "0.11" }
 signal-hook = { version = "0.3" }
@@ -171,10 +143,7 @@ tempfile = { version = "3" }
 thiserror = { version = "2" }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 tokio = { version = "1", features = ["fs", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-postgres = { version = "0.7.18", features = ["with-time-0_3"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-tokio-util = { version = "0.7" }
-toml = { version = "1.1" }
 tower = { version = "0.5" }
 tower-lsp-server = { version = "0.23" }
 tree-sitter = { version = "0.26" }
@@ -188,9 +157,7 @@ url = { version = "2" }
 utoipa = { version = "5" }
 uuid = { version = "1", features = ["v4"] }
 wiremock = { version = "0.6" }
-wkt = { version = "0.14", features = ["geo-types"] }
 zeroize = { version = "1", features = ["derive"] }
-zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.dev]
 debug = "line-tables-only"

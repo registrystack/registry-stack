@@ -3473,7 +3473,7 @@ mod tests {
         for project in [
             "dhis2-tracker-evidence",
             "opencrvs-family-evidence",
-            "relay-protected-read-evidence",
+            "protected-read-evidence",
         ] {
             let project_root = projects_root.join(project);
             RuntimeConfig::parse_yaml(

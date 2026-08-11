@@ -696,15 +696,15 @@ mod tests {
 
     #[test]
     fn only_file_uris_name_a_document_on_this_filesystem() {
-        let path = Path::new("/projects/demo/registry-stack.yaml");
+        let path = Path::new("/projects/demo/registry.yaml");
         assert_eq!(
             document_path(&Uri::from_file_path(path).unwrap()),
             Some(path.to_path_buf())
         );
         for foreign in [
             "untitled:Untitled-1",
-            "zipfile:///archive.zip::/registry-stack.yaml",
-            "https://example.test/registry-stack.yaml",
+            "zipfile:///archive.zip::/registry.yaml",
+            "https://example.test/registry.yaml",
         ] {
             let uri = serde_json::from_str::<Uri>(&format!("{foreign:?}")).unwrap();
             assert_eq!(document_path(&uri), None, "{foreign}");

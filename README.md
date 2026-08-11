@@ -46,7 +46,7 @@ Registry Stack contains two independent runtime patterns:
 
 Evidence can use a Relay-protected API as one of its fixed sources. The stack
 also includes Registry Mint for short-lived access tokens, Registry Manifest
-for portable metadata, Registry Platform shared primitives, `registryctl` and
+for portable metadata, Registry Platform shared primitives, `relayctl` and
 `evidencectl` adopter tooling, and release tooling for validating the public
 source model.
 
@@ -71,7 +71,7 @@ flowchart LR
 ## Repository Layout
 
 - `crates/`: Rust crates and runnable binaries for Platform, Manifest, Relay,
-  Evidence, Mint, `registryctl`, and `evidencectl`. Evidence lives in one
+  Evidence, Mint, `relayctl`, and `evidencectl`. Evidence lives in one
   `crates/registry-evidence` crate with one `evidence` binary.
 - `products/`: product-owned docs, examples, Docker inputs, specs, security
   material, scripts, performance harnesses, and fixtures that are not normal
@@ -97,7 +97,7 @@ Useful first checks:
 cargo metadata --locked --format-version 1
 cargo fmt --check
 cargo check --locked --workspace --all-targets
-cargo test --locked -p registryctl
+cargo test --locked -p registry-evidence
 ```
 
 Release source checks:

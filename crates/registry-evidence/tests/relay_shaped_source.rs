@@ -3,9 +3,8 @@
 //! Relay protected read API, authenticated with OAuth client credentials.
 //!
 //! The mock mirrors the Relay wire shape by hand: the templated protected
-//! read path and the minimal single-record JSON response body of
-//! `GET /v1/datasets/{dataset_id}/entities/{entity}/records/{id}` in
-//! `crates/registry-relay/openapi/registry-relay.openapi.json`. Evidence
+//! fixed read path and the cursor-paginated response body of
+//! `GET /v2/resources/{resource}/records`. Evidence
 //! proves the composition without importing or depending on any Relay code,
 //! per the Evidence product boundary rules, so no Relay crate, type, or
 //! fixture appears here and the record content stays synthetic and
@@ -40,7 +39,7 @@ use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPoli
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk};
 use serde_json::json;
 use tempfile::TempDir;
-use wiremock::matchers::{body_string_contains, header, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// One prepared HTTP request, in the shape the executor consumes.
@@ -48,13 +47,8 @@ fn prepared_http_request(parts: &RequestParts) -> PreparedSourceRequest {
     PreparedSourceRequest::Http(parts.clone())
 }
 
-/// The Relay-shaped protected read for one synthetic record: the templated
-/// `/v1/datasets/{dataset_id}/entities/{entity}/records/{id}` path with
-/// domain-neutral dataset and entity segments and the subject's record key.
-const RECORD_PATH: &str = "/v1/datasets/synthetic-units/entities/unit-record/records/REC-0001";
-/// Relay requires a `Data-Purpose` header on entity record reads; the
-/// deployment pins it as a reviewed fixed header.
-const DATA_PURPOSE: &str = "https://relying.invalid/purpose/fixture-routing";
+/// The Relay-shaped protected read for one synthetic record.
+const RECORD_PATH: &str = "/v2/resources/residence-record/records";
 /// Raw record material from the mirrored Relay response body. None of it may
 /// reach the signed assertion payload.
 const RAW_FIELD_NAME_CANARY: &str = "area_geometry";
@@ -66,16 +60,36 @@ const AUDIENCE: &str = "https://relying.invalid/residence-procedure";
 const BINDING_KEY: &[u8] = b"relay-composition-binding-key-32-bytes-minimum";
 const REQUIREMENT: &str = "urn:example:fixture:requirement:residence-region:v1";
 
-/// The reviewed bounded request preparation: the Relay read is a completely
-/// fixed request, so both dynamic channels stay empty.
-const PREPARE_SCRIPT: &str = "fn prepare(selectors, parameters) { #{query: [], body: ()} }";
+/// The reviewed bounded request preparation: the subject supplies only the
+/// exact record reference. Projection and the two-result ambiguity bound are
+/// fixed deployment parameters.
+const PREPARE_SCRIPT: &str = r#"
+fn prepare(selectors, context) {
+    let parameters = context["parameters"];
+    let subject = selectors["subject"];
+    #{
+        query: [
+            #{name: "recordReference", value: subject["values"]["record_reference"]},
+            #{name: "fields", value: parameters["providerFields"]},
+            #{name: "pageSize", value: parameters["pageSize"]}
+        ],
+        body: ()
+    }
+}
+"#;
 
 /// The reviewed extraction over the Rust-projected response: only the
-/// projected `region` field is visible here, and it becomes the one declared
+/// projected item page is visible here, and its region becomes the one declared
 /// fact for the residence-region acceptance derivation.
 const EXTRACT_SCRIPT: &str = r#"
 fn extract(source_response, parameters) {
-    let region_code = get_path(source_response, "/region");
+    let items = source_response["items"];
+    let next_cursor = source_response["pageInfo"]["nextCursor"];
+    if items.len == 0 { return #{outcome: "no_match"}; }
+    if items.len > 1 || !is_missing(next_cursor) {
+        return #{outcome: "ambiguous"};
+    }
+    let region_code = items[0]["domainData"]["region"];
     if is_missing(region_code) { return #{outcome: "no_match"}; }
     #{outcome: "match", facts: #{official_residence_code: region_code}}
 }
@@ -100,18 +114,9 @@ fn relay_shaped_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
         },
         "request": {
             "method": "GET",
-            "pathTemplate": "/v1/datasets/synthetic-units/entities/unit-record/records/{record}",
-            "pathBindings": {
-                "record": {
-                    "from": "selector",
-                    "role": "subject",
-                    "profile": "residence-record-v1",
-                    "field": "record_reference"
-                }
-            },
+            "path": "/v2/resources/residence-record/records",
             "fixedHeaders": [
-                {"name": "Accept", "value": "application/json"},
-                {"name": "Data-Purpose", "value": DATA_PURPOSE}
+                {"name": "Accept", "value": "application/json"}
             ],
             "selectorInputs": [{
                 "role": "subject",
@@ -120,10 +125,13 @@ fn relay_shaped_source(base_url: &str, token_endpoint: &str) -> SourceConfig {
                 ]
             }],
             "prepareScript": "adapters/prepare.rhai",
-            "adapterParameters": {},
+            "adapterParameters": {
+                "providerFields": "recordReference,region",
+                "pageSize": "2"
+            },
             "adapterParametersSchema": "schemas/parameters.schema.yaml",
-            "preparationLimits": {"query": "forbidden", "jsonBody": "forbidden"},
-            "projection": ["/region"],
+            "preparationLimits": {"query": "required", "jsonBody": "forbidden"},
+            "projection": ["/items/*/domainData/region", "/pageInfo/nextCursor"],
             "redirects": "deny",
             "timeoutMilliseconds": 1000,
             "maximumResponseBytes": 65536,
@@ -273,20 +281,37 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
         .mount(&token_server)
         .await;
 
-    // The record endpoint mirrors the Relay wire shape by hand (hardcoded
-    // JSON, no Relay code): the single-record body follows the OpenAPI entity
-    // example shape of `id`, one codelist field, and one extra raw field.
+    // The record endpoint mirrors the Relay V2 wire shape by hand (hardcoded
+    // JSON, no Relay code): mandatory Registry Core fields stay non-selectable,
+    // selected values live in domainData, and the collection has items,
+    // pageInfo, and meta.
     // Only a request carrying the exact issued bearer, the pinned Accept
-    // header, and Relay's required Data-Purpose header is answered.
+    // header and V2-shaped request are answered.
     Mock::given(method("GET"))
         .and(path(RECORD_PATH))
         .and(header("authorization", format!("Bearer {access_token}")))
         .and(header("accept", "application/json"))
-        .and(header("data-purpose", DATA_PURPOSE))
+        .and(query_param("recordReference", RECORD_KEY))
+        .and(query_param("fields", "recordReference,region"))
+        .and(query_param("pageSize", "2"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": RECORD_KEY,
-            "region": RAW_REGION_CODE,
-            "area_geometry": RAW_FIELD_VALUE_CANARY
+            "items": [{
+                "registryIdentifier": "urn:example:registry:residence-records",
+                "recordIdentifier": "SYNTHETIC-RECORD",
+                "revisionIdentifier": "1",
+                "lifecycleState": "ACTIVE",
+                "schemaReference": "https://records.invalid/v2/artifacts/residence-record.schema.json",
+                "semanticModelReference": "https://records.invalid/v2/artifacts/residence-record.vocabulary.jsonld",
+                "authorityIdentifier": "urn:example:institution:residence-register",
+                "recordedAt": "2026-08-02T00:00:00Z",
+                "domainData": {
+                    "recordReference": RECORD_KEY,
+                    "region": RAW_REGION_CODE,
+                    "area_geometry": RAW_FIELD_VALUE_CANARY
+                }
+            }],
+            "pageInfo": {"nextCursor": null},
+            "meta": {}
         })))
         .with_priority(1)
         .expect(1)
@@ -361,7 +386,10 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
         .materialize_request(&transport_selectors, &prepared_http_request(&prepared))
         .expect("Relay-shaped request materializes");
     assert_eq!(materialized.path(), Some(RECORD_PATH));
-    assert_eq!(materialized.query(), None);
+    assert_eq!(
+        materialized.query(),
+        Some("recordReference=REC-0001&fields=recordReference%2Cregion&pageSize=2")
+    );
     assert_eq!(materialized.body(), None);
 
     // One end-to-end source execution: token acquisition, the authenticated
@@ -374,7 +402,13 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
         )
         .await
         .expect("Relay-shaped source read succeeds");
-    assert_eq!(projected, json!({"region": RAW_REGION_CODE}));
+    assert_eq!(
+        projected,
+        json!({
+            "items": [{"domainData": {"region": RAW_REGION_CODE}}],
+            "pageInfo": {"nextCursor": null}
+        })
+    );
     let projected_text = serde_json::to_string(&projected).expect("projected response serializes");
     for stripped in [RAW_FIELD_NAME_CANARY, RAW_FIELD_VALUE_CANARY, RECORD_KEY] {
         assert!(
@@ -385,8 +419,35 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     let response_schema = jsonschema::JSONSchema::compile(&json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["region"],
-        "properties": {"region": {"type": "string", "minLength": 1, "maxLength": 32}}
+        "required": ["items", "pageInfo"],
+        "properties": {
+            "items": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 2,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["domainData"],
+                    "properties": {
+                        "domainData": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["region"],
+                            "properties": {
+                                "region": {"type": "string", "minLength": 1, "maxLength": 32}
+                            }
+                        }
+                    }
+                }
+            },
+            "pageInfo": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["nextCursor"],
+                "properties": {"nextCursor": {"type": ["string", "null"]}}
+            }
+        }
     }))
     .expect("response schema compiles");
     assert!(
@@ -570,7 +631,15 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
     let record_request = &record_requests[0];
     assert_eq!(record_request.method.as_str(), "GET");
     assert_eq!(record_request.url.path(), RECORD_PATH);
-    assert!(record_request.url.query().is_none());
+    let query: BTreeMap<_, _> = record_request.url.query_pairs().into_owned().collect();
+    assert_eq!(
+        query,
+        BTreeMap::from([
+            ("fields".to_owned(), "recordReference,region".to_owned()),
+            ("pageSize".to_owned(), "2".to_owned()),
+            ("recordReference".to_owned(), RECORD_KEY.to_owned()),
+        ])
+    );
     assert!(record_request.body.is_empty());
     assert_eq!(
         record_request
@@ -580,11 +649,5 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
         Some(format!("Bearer {access_token}").as_str()),
         "the record read carried the issued bearer"
     );
-    assert_eq!(
-        record_request
-            .headers
-            .get("data-purpose")
-            .and_then(|value| value.to_str().ok()),
-        Some(DATA_PURPOSE)
-    );
+    assert!(record_request.headers.get("data-purpose").is_none());
 }

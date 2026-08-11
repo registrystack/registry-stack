@@ -39,10 +39,8 @@ use zeroize::Zeroizing;
 
 use crate::{is_cloud_metadata_ip, DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT};
 
-pub mod input_pattern;
 pub mod json;
 pub mod oauth;
-pub mod signed_dci;
 
 mod sensitive_json;
 
@@ -4387,7 +4385,7 @@ mod tests {
 
         assert_eq!(
             DataDestinationPolicy::new(
-                "local-relay",
+                "local-service",
                 "http://10.89.0.4:8080/",
                 DestinationProfile::LocalPrivateDevelopmentHttp,
                 &[],
@@ -4397,7 +4395,7 @@ mod tests {
         );
         assert_eq!(
             DataDestinationPolicy::new(
-                "production-relay",
+                "production-service",
                 "http://10.89.0.4:8080/",
                 DestinationProfile::ProductionHttps,
                 &[cidr("10.89.0.4/32")],
@@ -4410,8 +4408,8 @@ mod tests {
     #[test]
     fn private_service_http_is_dns_pinned_to_private_address_space() {
         let policy = DataDestinationPolicy::new(
-            "notary-relay",
-            "http://registry-relay-consultation:8080/",
+            "private-service",
+            "http://registry-service:8080/",
             DestinationProfile::PrivateServiceHttp,
             &[],
         )
@@ -4426,8 +4424,8 @@ mod tests {
         }
 
         let narrowed = DataDestinationPolicy::new(
-            "notary-relay",
-            "http://registry-relay-consultation:8080/",
+            "private-service",
+            "http://registry-service:8080/",
             DestinationProfile::PrivateServiceHttp,
             &[cidr("10.89.0.0/24")],
         )
@@ -4439,8 +4437,8 @@ mod tests {
         );
         assert_eq!(
             DataDestinationPolicy::new(
-                "notary-relay",
-                "https://registry-relay-consultation:8080/",
+                "private-service",
+                "https://registry-service:8080/",
                 DestinationProfile::PrivateServiceHttp,
                 &[],
             )

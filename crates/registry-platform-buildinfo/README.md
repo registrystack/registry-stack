@@ -22,5 +22,5 @@ than downgrading to a development version, because that combination is a
 misconfigured release build and not an ordinary one.
 
 The Cargo package version is untouched by all of this. It stays canonical
-`MAJOR.MINOR.PATCH` text, which the release manifests, candidate schemas,
-image locks, and the Evidence development build all require.
+`MAJOR.MINOR.PATCH` text, which the release manifests, candidate schemas, and
+the Evidence development build all require.

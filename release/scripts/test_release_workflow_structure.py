@@ -286,7 +286,7 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
 
 
 class CandidateWorkflowStructureTest(unittest.TestCase):
-    def test_current_release_pipeline_has_no_retired_notary_surface(self) -> None:
+    def test_current_release_pipeline_has_no_pre_v0_19_surface(self) -> None:
         paths = (
             WORKFLOWS / "release-candidate.yml",
             WORKFLOWS / "release.yml",
@@ -300,6 +300,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                     "registry-notary",
                     path.read_text(encoding="utf-8").lower(),
                 )
+                self.assertNotIn(
+                    "registryctl",
+                    path.read_text(encoding="utf-8").lower(),
+                )
         self.assertFalse((ROOT / "release/docker/Dockerfile.registry-notary").exists())
 
         repeatability = (WORKFLOWS / "release-repeatability.yml").read_text(
@@ -309,16 +313,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             ".images[] | [.name,.final_ref,.digest] | @tsv",
             repeatability,
         )
-        self.assertIn(
-            '.images | to_entries[] | select(.key | startswith("registry-"))',
-            repeatability,
-        )
-        self.assertIn("minor == 16 && patch >= 3", repeatability)
-        self.assertIn(
-            'echo "${TAG} has neither ${release_manifest} nor ${image_lock}"',
-            repeatability,
-        )
-        self.assertNotIn("for name in registry-notary registry-relay", repeatability)
+        self.assertNotIn("image_lock", repeatability)
+        self.assertNotIn("minor < 19", repeatability)
 
         module_path = ROOT / "release/scripts/release_candidate.py"
         spec = importlib.util.spec_from_file_location("release_candidate", module_path)
@@ -326,9 +322,43 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        self.assertEqual({"registry-relay"}, module.CURRENT_IMAGE_NAMES)
+        self.assertEqual({"relay"}, module.RELAY_V2_IMAGE_NAMES)
         self.assertFalse(
             any("registry-notary" in name for name in module.SECURITY_EVIDENCE_REQUIRED_FILES)
+        )
+
+    def test_pre_v0_19_requests_fail_before_release_discovery(self) -> None:
+        _, candidate_document = workflow("release-candidate.yml")
+        candidate = step_run(
+            candidate_document,
+            "validate",
+            "Validate request, source, CI, and destinations",
+        )
+        self.assertIn(
+            "pre-v0.19 releases are immutable historical evidence",
+            candidate,
+        )
+        self.assertIn("Git tag and archived assets", candidate)
+        for discovery in ("git fetch", "git ls-remote", "gh api"):
+            self.assertLess(
+                candidate.index("pre-v0.19 releases"),
+                candidate.index(discovery),
+            )
+
+        _, publication_document = workflow("release.yml")
+        publication = step_run(
+            publication_document,
+            "verify",
+            "Resolve exact tag identity",
+        )
+        self.assertIn(
+            "pre-v0.19 releases are immutable historical evidence",
+            publication,
+        )
+        self.assertIn("Git tag and archived assets", publication)
+        self.assertLess(
+            publication.index("pre-v0.19 releases"),
+            publication.index("git fetch"),
         )
 
     def test_keeps_one_candidate_pipeline_with_narrow_permissions(self) -> None:
@@ -553,7 +583,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
 
 
 class PublicationWorkflowStructureTest(unittest.TestCase):
-    def test_is_a_manual_main_workflow_with_six_recoverable_jobs(self) -> None:
+    def test_is_a_manual_main_workflow_with_recoverable_jobs(self) -> None:
         text, document = workflow("release.yml")
         self.assertIn("workflow_dispatch:", text.split("permissions:", 1)[0])
         self.assertNotIn("push:", text.split("permissions:", 1)[0])
@@ -573,10 +603,6 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(
             document["jobs"]["promote-images"]["permissions"],
             {"actions": "read", "contents": "write", "packages": "write"},
-        )
-        self.assertEqual(
-            document["jobs"]["dispatch-docs"]["permissions"],
-            {"actions": "write"},
         )
 
     def test_binds_an_annotated_tag_to_exact_candidate_and_main_revisions(self) -> None:
@@ -683,15 +709,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         ]
         for name in current_retryable_names:
             self.assertIn(name, retryable_roster)
-        self.assertIn("if ((major == 0 && minor < 19)); then", retryable_roster)
-        self.assertIn(
-            'printf \'%s\\n\' "registryctl-${tag}-image-lock.json"',
-            retryable_roster,
-        )
-        for name in (
-            *current_retryable_names,
-            '"registryctl-${tag}-image-lock.json"',
-        ):
+        self.assertNotIn("registryctl", retryable_roster)
+        self.assertNotIn("minor < 19", retryable_roster)
+        for name in current_retryable_names:
             self.assertNotIn(name, finalize)
         self.assertLess(
             stage.index('"${RUNNER_TEMP}/staged-draft.json" >/dev/null'),
@@ -747,7 +767,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("Generate signed 1.x lock", text)
         self.assertNotIn("registry-release-lock.v1.json", text)
 
-    def test_dispatches_docs_for_historical_and_resumed_release_candidates(self) -> None:
+    def test_dispatches_docs_for_current_release_candidates(self) -> None:
         text, document = workflow("release.yml")
         self.assertIn("Recheck complete signed release and exact public images", text)
         self.assertIn("Publish immutable release", text)
@@ -759,13 +779,16 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "verify",
             "Verify binding, candidate, and attestations",
         )
-        self.assertIn(
-            "(major == 0 && minor >= 16 && minor < 19) ||",
-            verify,
-        )
+        self.assertNotIn("minor >= 16", verify)
+        self.assertNotIn("minor < 19", verify)
+        self.assertIn("major > 0", verify)
         self.assertIn("(minor == 19 && patch >= 1)", verify)
         self.assertIn(".docs.sha256", verify)
         self.assertIn("docs_sha256=${docs_sha256}", verify)
+        self.assertEqual(
+            document["jobs"]["verify"]["outputs"]["docs_sha256"],
+            "${{ steps.candidate.outputs.docs_sha256 }}",
+        )
         dispatch = document["jobs"]["dispatch-docs"]
         self.assertEqual(
             dispatch["if"],

@@ -420,10 +420,10 @@
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/manifest/README.md
     - label: Retired Relay V1 catalog tests (ODRL offer assertions)
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-relay/tests/catalog_entity.rs
-    - label: Registry Platform PDP ODRL enforcement profile constants
+    - label: Retired Registry Platform PDP ODRL enforcement profile constants
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-platform-pdp/src/lib.rs
   last_checked: 2026-08-11
-  notes: Registry Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. Dataset-scoped ODRL Offers in catalog JSON-LD and the governed PDP evaluation path belonged to the retired Relay V1 runtime, and the contract-compiled Relay emits no ODRL document and evaluates no ODRL constraint, because its authorization boundary is the compiled access profile. The `registry-platform-pdp` crate still declares the enforcement profile vocabulary, including `odrl:purpose` and `odrl:spatial`, but no maintained runtime consumes it, so nothing in the stack enforces an ODRL term today. The technical identifier remains `registry-evidence-gateway-pdp/v1` for compatibility and does not name the Evidence Gateway product.
+  notes: Registry Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. Dataset-scoped ODRL Offers in catalog JSON-LD and the governed PDP evaluation path belonged to the retired Relay V1 runtime, and the contract-compiled Relay emits no ODRL document and evaluates no ODRL constraint, because its authorization boundary is the compiled access profile. The retired `registry-platform-pdp` crate is removed; Registry Manifest retains the enforcement profile vocabulary, including `odrl:purpose` and `odrl:spatial`, as descriptive metadata, so nothing in the stack enforces an ODRL term today. The technical identifier remains `registry-evidence-gateway-pdp/v1` for compatibility and does not name the Evidence Gateway product.
 - id: sdmx
   name: Statistical Data and Metadata eXchange (SDMX)
   standards_body: SDMX

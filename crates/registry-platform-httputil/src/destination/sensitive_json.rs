@@ -20,10 +20,6 @@ impl SensitiveJsonValue {
     pub(super) const fn value_mut(&mut self) -> &mut Value {
         &mut self.0
     }
-
-    pub(super) fn into_value(mut self) -> Value {
-        mem::take(&mut self.0)
-    }
 }
 
 impl Drop for SensitiveJsonValue {

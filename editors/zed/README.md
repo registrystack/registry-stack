@@ -82,14 +82,14 @@ what that means in practice.
 - Use `dev: open language server logs` to inspect how the server was launched. Use
   `zed: open log` for extension errors. For verbose extension output, close Zed and relaunch it with
   `zed --foreground "$REGISTRY_STACK_SMOKE_PROJECT"`.
-- Confirm the project root contains `registry-stack.yaml`, `registry.yaml`, or an Evidence marker and the active file language is YAML.
+- Confirm the project root contains `registry.yaml`, or an Evidence marker and the active file language is YAML.
 
 The Extensions page identifies a successful local install as a development extension. Remove it
 from that page after the smoke test if you do not want the override to remain active.
 
 Zed does not permit shipping an external language server inside the extension.
 The current Zed extension API registers a language server against a language name, but has no
-worktree-root predicate for `registry-stack.yaml`, `registry.yaml`, or `evidence-project.yaml`.
+worktree-root predicate for `registry.yaml`, or `evidence-project.yaml`.
 The integration therefore attaches to YAML while the development extension remains installed.
 It has no Registry Stack behavior without a server binary, but Zed can log a missing-server error
 when you open unrelated YAML in another worktree.

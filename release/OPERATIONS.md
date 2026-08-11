@@ -172,7 +172,8 @@ Publication:
 
 The candidate attestation and signed checksum chain are the Beta provenance
 model. Ordinary Beta publication does not generate a second generic SLSA
-provenance asset or run the 1.0 release-lock and first-country finalizer.
+provenance asset. Pre-v0.19 release finalizers remain only in their immutable
+historical release tags.
 
 ## Failure handling
 
