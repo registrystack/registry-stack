@@ -84,6 +84,9 @@ identifier catalog path, SHA-256 digest, and active entry count. The planner
 checks that binding against the source tree. Live resolver availability remains
 an asynchronous publication smoke rather than a candidate-build gate.
 
+Release documentation also resumes with `0.19.1`. Version `0.19.0` remains a
+published historical exception and must not be modified after publication.
+
 ## Request and verify one candidate
 
 Resolve current protected `main` and request the candidate:
@@ -104,6 +107,8 @@ candidate workflow then:
 
 - Validates the release identity, manifests, pins, recipes, and destinations.
 - Builds the release payloads and OCI image once.
+- Builds the exact locked release documentation archive once and includes it in
+  the candidate payload closure.
 - Publishes images only to private candidate packages.
 - Scans the exact candidate image digests and enforces the advisory decision.
 - Runs the release payload checks.
@@ -160,6 +165,10 @@ Publication:
 4. Adds `SHA256SUMS` and one keyless Sigstore bundle for the checksum file.
 5. Rechecks the full asset inventory, checksum signature, and image digests,
    then publishes a public, non-prerelease GitHub Release.
+6. Dispatches the docs workflow with the exact released documentation digest.
+   The same workflow rebuilds `/dev/` on every push to protected `main` while
+   retaining the latest authenticated docs-bearing release at the canonical
+   and versioned routes.
 
 The candidate attestation and signed checksum chain are the Beta provenance
 model. Ordinary Beta publication does not generate a second generic SLSA
@@ -174,6 +183,7 @@ provenance asset or run the 1.0 release-lock and first-country finalizer.
 | Candidate byte, recipe, scan, or advisory decision changes | Build and verify a new candidate |
 | Candidate expires before the tag is pushed | Request and verify a new candidate |
 | Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then dispatch `release.yml` again with the same tag |
+| Documentation deployment fails after publication | Rerun `docs-pages.yml`; its optional exact tag and digest inputs fail closed if the request is stale |
 | One final image tag already has the expected digest | Retry; publication accepts and re-verifies the exact digest |
 | A final image tag has a different digest, or a published asset differs | Stop and patch forward with a new version |
 | Repeatability, canary, Scorecard, telemetry, hosted, or announcement failure | Record follow-up work; do not change the public release result |

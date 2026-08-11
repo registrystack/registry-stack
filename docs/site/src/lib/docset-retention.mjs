@@ -18,6 +18,15 @@ function compareReleaseDocsets(left, right) {
   return 0;
 }
 
+function releaseIsAtOrBelow(version, maximumVersion) {
+  for (let index = 0; index < version.length; index += 1) {
+    if (version[index] !== maximumVersion[index]) {
+      return version[index] < maximumVersion[index];
+    }
+  }
+  return true;
+}
+
 export function publishedArchiveLimit(manifest) {
   const limit = manifest.published_archive_limit;
   if (limit === undefined) return Number.POSITIVE_INFINITY;
@@ -27,9 +36,29 @@ export function publishedArchiveLimit(manifest) {
   return limit;
 }
 
-export function publishedArchiveDocsets(manifest) {
+export function publishedArchiveDocsets(
+  manifest,
+  maximumDocsetId = /** @type {string | null} */ (null),
+) {
   const limit = publishedArchiveLimit(manifest);
-  const archived = manifest.docsets.filter((docset) => docset.status === 'archived');
+  let maximumVersion = null;
+  if (maximumDocsetId !== null) {
+    maximumVersion = releaseVersion({ id: maximumDocsetId });
+    const maximumDocset = manifest.docsets.find(
+      (docset) => docset.id === maximumDocsetId && docset.status === 'archived',
+    );
+    if (!maximumVersion || !maximumDocset) {
+      throw new Error(
+        'maximum published docset must name a declared archived release docset',
+      );
+    }
+  }
+  const archived = manifest.docsets.filter((docset) => {
+    if (docset.status !== 'archived') return false;
+    const version = releaseVersion(docset);
+    if (!maximumVersion || !version) return maximumVersion === null;
+    return releaseIsAtOrBelow(version, maximumVersion);
+  });
   if (limit === Number.POSITIVE_INFINITY) return archived;
   return archived
     .filter((docset) => releaseVersion(docset))
@@ -37,9 +66,12 @@ export function publishedArchiveDocsets(manifest) {
     .slice(0, limit);
 }
 
-export function selectableDocsets(manifest) {
+export function selectableDocsets(
+  manifest,
+  maximumDocsetId = /** @type {string | null} */ (null),
+) {
   const publishedIds = new Set(
-    publishedArchiveDocsets(manifest).map((docset) => docset.id),
+    publishedArchiveDocsets(manifest, maximumDocsetId).map((docset) => docset.id),
   );
   return manifest.docsets.filter(
     (docset) => docset.id === manifest.current || publishedIds.has(docset.id),

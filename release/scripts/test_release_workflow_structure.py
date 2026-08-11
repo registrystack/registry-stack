@@ -29,7 +29,11 @@ def step_run(document: dict, job: str, name: str) -> str:
     )
 
 
-def verify_latest_release_fixture(metadata: dict, expected_tag: str) -> subprocess.CompletedProcess[str]:
+def verify_latest_release_fixture(
+    metadata: list[dict],
+    expected_tag: str,
+    expected_sha256: str,
+) -> subprocess.CompletedProcess[str]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         metadata_path = Path(temporary_directory) / "release.json"
         metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
@@ -41,6 +45,8 @@ def verify_latest_release_fixture(metadata: dict, expected_tag: str) -> subproce
                 str(metadata_path),
                 "--expected-tag",
                 expected_tag,
+                "--expected-sha256",
+                expected_sha256,
             ],
             capture_output=True,
             text=True,
@@ -376,12 +382,14 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("Reverify all bytes before requesting OIDC", text)
         self.assertIn("Attest manifest and bundle after re-verification", text)
 
-    def test_current_candidate_excludes_registry_docs(self) -> None:
+    def test_current_candidate_builds_and_seals_registry_docs(self) -> None:
         text, _ = workflow("release-candidate.yml")
-        self.assertNotIn("registry-docs-", text)
-        self.assertNotIn("kind=docs", text)
-        self.assertNotIn("docs_name", text)
-        self.assertNotIn("validate-docsets", text)
+        self.assertIn("registry-docs-", text)
+        self.assertIn("kind=docs", text)
+        self.assertIn("docs_name", text)
+        self.assertIn("validate-docsets", text)
+        self.assertIn("npm run build:archive", text)
+        self.assertIn("--verify-lock", text)
 
     def test_every_published_binary_is_built_as_a_release_build(self) -> None:
         _, document = workflow("release-candidate.yml")
@@ -739,7 +747,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("Generate signed 1.x lock", text)
         self.assertNotIn("registry-release-lock.v1.json", text)
 
-    def test_dispatches_docs_only_for_legacy_candidate_retries(self) -> None:
+    def test_dispatches_docs_for_historical_and_resumed_release_candidates(self) -> None:
         text, document = workflow("release.yml")
         self.assertIn("Recheck complete signed release and exact public images", text)
         self.assertIn("Publish immutable release", text)
@@ -752,9 +760,10 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "Verify binding, candidate, and attestations",
         )
         self.assertIn(
-            "if ((major == 0 && minor >= 16 && minor < 19)); then",
+            "(major == 0 && minor >= 16 && minor < 19) ||",
             verify,
         )
+        self.assertIn("(minor == 19 && patch >= 1)", verify)
         self.assertIn(".docs.sha256", verify)
         self.assertIn("docs_sha256=${docs_sha256}", verify)
         dispatch = document["jobs"]["dispatch-docs"]
@@ -765,7 +774,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         dispatch_run = step_run(
             document,
             "dispatch-docs",
-            "Dispatch authenticated legacy docs promotion",
+            "Dispatch authenticated docs promotion",
         )
         self.assertIn('released_tag=${{ needs.verify.outputs.tag }}', dispatch_run)
         self.assertIn(
@@ -783,12 +792,17 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn(".isPrerelease == false", verify)
         self.assertNotIn(".isPrerelease == true", verify)
 
-    def test_docs_deploy_rechecks_latest_published_release(self) -> None:
+    def test_docs_deploys_main_and_rechecks_latest_docs_release(self) -> None:
         text, document = workflow("docs-pages.yml")
-        latest_endpoint = 'gh api "repos/${GITHUB_REPOSITORY}/releases/latest"'
+        releases_endpoint = '"repos/${GITHUB_REPOSITORY}/releases?per_page=100"'
         helper = "release/scripts/verify_latest_published_release.py"
-        self.assertEqual(text.count(latest_endpoint), 2)
+        self.assertEqual(text.count(releases_endpoint), 2)
         self.assertEqual(text.count(f"python3 {helper}"), 2)
+        trigger = text.split("permissions:", 1)[0]
+        self.assertIn("push:", trigger)
+        self.assertIn("- main", trigger)
+        self.assertIn("required: false", trigger)
+        self.assertIn("ref: ${{ github.sha }}", text)
         self.assertIn(".prerelease==false", text)
         self.assertIn(
             ".github/workflows/release.yml@refs/heads/main",
@@ -799,7 +813,7 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             index
             for index, step in enumerate(deploy_steps)
             if step.get("name")
-            == "Recheck latest published release immediately before deployment"
+            == "Recheck latest published docs release immediately before deployment"
         )
         deployment = next(
             index
@@ -809,27 +823,72 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(recheck + 1, deployment)
         self.assertEqual(deploy_steps[deployment]["with"]["timeout"], 600_000)
 
-    def test_latest_release_fixture_rejects_stale_or_nonpublished_dispatches(
+    def test_latest_docs_release_fixture_rejects_stale_or_nonpublished_dispatches(
         self,
     ) -> None:
+        digest = "a" * 64
         release = {
             "tag_name": "v1.4.0",
             "draft": False,
             "prerelease": False,
             "published_at": "2026-07-29T10:00:00Z",
+            "assets": [
+                {
+                    "name": "registry-docs-v1.4.0.tar.gz",
+                    "digest": f"sha256:{digest}",
+                },
+                {"name": "SHA256SUMS"},
+                {"name": "registry-stack-v1.4.0-SHA256SUMS.sigstore.json"},
+            ],
         }
         self.assertEqual(
-            verify_latest_release_fixture(release, "v1.4.0").returncode,
+            verify_latest_release_fixture([release], "v1.4.0", digest).returncode,
             0,
         )
-        stale = verify_latest_release_fixture(release, "v1.3.0")
+        no_docs = {
+            **release,
+            "tag_name": "v1.5.0",
+            "assets": [],
+        }
+        self.assertEqual(
+            verify_latest_release_fixture(
+                [release, no_docs], "v1.4.0", digest
+            ).returncode,
+            0,
+        )
+        stale = verify_latest_release_fixture([release], "v1.3.0", digest)
         self.assertNotEqual(stale.returncode, 0)
         self.assertIn("is stale", stale.stderr)
+        mismatched_digest = verify_latest_release_fixture(
+            [release], "v1.4.0", "b" * 64
+        )
+        self.assertNotEqual(mismatched_digest.returncode, 0)
+        self.assertIn("does not match", mismatched_digest.stderr)
+        incomplete = {
+            **release,
+            "assets": release["assets"][:-1],
+        }
+        missing_signature = verify_latest_release_fixture(
+            [incomplete], "v1.4.0", digest
+        )
+        self.assertNotEqual(missing_signature.returncode, 0)
+        self.assertIn("must carry exactly one", missing_signature.stderr)
+        duplicated = {
+            **release,
+            "assets": [*release["assets"], release["assets"][0]],
+        }
+        duplicate_docs = verify_latest_release_fixture(
+            [duplicated], "v1.4.0", digest
+        )
+        self.assertNotEqual(duplicate_docs.returncode, 0)
+        self.assertIn("must carry exactly one", duplicate_docs.stderr)
         for field in ("draft", "prerelease"):
             with self.subTest(field=field):
                 invalid = dict(release)
                 invalid[field] = True
-                result = verify_latest_release_fixture(invalid, "v1.4.0")
+                result = verify_latest_release_fixture(
+                    [invalid], "v1.4.0", digest
+                )
                 self.assertNotEqual(result.returncode, 0)
 
     def test_canary_is_async_and_has_no_public_write_permission(self) -> None:
@@ -841,8 +900,8 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             permissions = job.get("permissions", {})
             self.assertNotEqual(permissions.get("contents"), "write")
             self.assertNotEqual(permissions.get("packages"), "write")
-        self.assertNotIn("registry-docs-", text)
-        self.assertNotIn("docs_sha", text)
+        self.assertIn("registry-docs-", text)
+        self.assertIn("docs: {", text)
         self.assertNotIn("docs-dispatch", text)
 
     def test_scorecard_is_schedule_or_manual_only(self) -> None:

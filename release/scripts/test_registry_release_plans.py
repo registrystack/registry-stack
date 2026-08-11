@@ -45,6 +45,7 @@ RELAY_V2_ARTIFACT_INVENTORY = (
     "evidencectl",
     "evidencectl-installer",
     "mint",
+    "registry-docs",
     "registry-manifest",
     "relay",
     "relay-installer",
@@ -466,9 +467,12 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 "release-identity",
                 "immutable-release-tag",
                 "workspace-versions",
+                "docsets",
+                "repo-docs",
                 "release-documents",
                 "openapi-versions",
                 "crosswalk-pin",
+                "generated-docset-mirror",
             },
             {check["name"] for check in plan["checks"]},
         )
@@ -483,11 +487,11 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "docs/site/src/data/repo-docs.yaml",
             {change["path"] for change in plan["changes"]},
         )
-        self.assertNotIn(
+        self.assertIn(
             "docs/site/src/data/docsets.yaml",
             {change["path"] for change in plan["changes"]},
         )
-        self.assertNotIn(
+        self.assertIn(
             "docs/site/src/data/generated/docsets.json",
             {change["path"] for change in plan["changes"]},
         )
@@ -501,7 +505,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(result.stdout, repeated.stdout)
         self.assertEqual(before, self.repo.snapshot())
 
-    def test_prepare_does_not_require_release_docs_metadata(self) -> None:
+    def test_prepare_requires_release_docs_metadata(self) -> None:
         data_dir = self.repo.root / "docs/site/src/data"
         (data_dir / "docsets.yaml").unlink()
         (data_dir / "generated/docsets.json").unlink()
@@ -509,8 +513,9 @@ class RegistryReleasePlanTest(unittest.TestCase):
 
         result = self.prepare()
 
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual("ready", json.loads(result.stdout)["status"])
+        self.assertEqual(1, result.returncode)
+        self.assertIn("required release surface is missing", result.stderr)
+        self.assertIn("docs/site/src/data/docsets.yaml", result.stderr)
 
     def test_prepare_writes_an_identical_optional_plan_output(self) -> None:
         output = Path(self.temporary.name) / "release-plan.json"
@@ -569,7 +574,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual("", result.stdout)
         self.assertIn("Crosswalk", result.stderr)
 
-    def test_prepare_binds_crosswalk_manifest_without_a_docset(self) -> None:
+    def test_prepare_binds_crosswalk_manifest_and_docset(self) -> None:
         target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
         data = yaml.safe_load(target.read_text(encoding="utf-8"))
         data["external"]["crosswalk"]["ref"] = "2" * 40
@@ -580,7 +585,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertEqual("", result.stdout)
         self.assertIn(
-            "external.crosswalk.ref must match the Cargo.toml pin",
+            "docset v1.1.0 external crosswalk ref must match the selected manifest",
             result.stderr,
         )
 
@@ -649,7 +654,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertIn("missing relay", missing_relay.stderr)
 
         data["artifacts"]["relay"] = "1.1.0"
-        data["artifacts"]["registry-docs"] = "1.1.0"
+        data["artifacts"]["registryctl"] = "1.1.0"
         write_yaml(target, data)
         incomplete_inventory = self.prepare()
         self.assertEqual(1, incomplete_inventory.returncode)
@@ -658,7 +663,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "artifact inventory for version 0.10.0 or later must be exactly",
             incomplete_inventory.stderr,
         )
-        self.assertIn("unexpected registry-docs", incomplete_inventory.stderr)
+        self.assertIn("unexpected registryctl", incomplete_inventory.stderr)
 
     def test_prepare_uses_identifier_catalog_from_recorded_source_ref(self) -> None:
         write_json(
@@ -742,6 +747,18 @@ class RegistryReleasePlanTest(unittest.TestCase):
         data["stack"].pop("source_ref")
         data["stack"].pop("status")
         write_yaml(target, data)
+        data_dir = self.repo.root / "docs/site/src/data"
+        docsets = yaml.safe_load(
+            (data_dir / "docsets.yaml").read_text(encoding="utf-8")
+        )
+        selected = next(
+            item for item in docsets["docsets"] if item["id"] == "v1.1.0"
+        )
+        for name, product in selected["products"].items():
+            if name != "crosswalk":
+                product["ref"] = "v1.1.0"
+        write_yaml(data_dir / "docsets.yaml", docsets)
+        write_json(data_dir / "generated/docsets.json", docsets)
         result = self.prepare()
 
         self.assertEqual(0, result.returncode, result.stderr)

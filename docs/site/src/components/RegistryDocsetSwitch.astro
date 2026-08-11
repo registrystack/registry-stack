@@ -7,7 +7,10 @@ const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
 const activeDocset =
   docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
   docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
-const selectableDocsets = retainedDocsets(docsetsManifest) as typeof docsetsManifest.docsets;
+const selectableDocsets = retainedDocsets(
+  docsetsManifest,
+  process.env.DOCS_RELEASED_TAG || null,
+) as typeof docsetsManifest.docsets;
 
 const activePath = activeDocset?.path ?? '/';
 ---

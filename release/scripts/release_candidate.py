@@ -52,6 +52,7 @@ NOTARY_RETIREMENT_MINIMUM_VERSION = (0, 17, 0)
 CANDIDATE_V2_MINIMUM_VERSION = (0, 16, 0)
 RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
+DOCS_RELEASE_RESUMPTION_VERSION = (0, 19, 1)
 RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
 RELAY_V2_IMAGE_NAMES = {"relay"}
 ATTEMPT_ARTIFACT_PREFIXES = {
@@ -96,7 +97,7 @@ V2_TOP_LEVEL_FIELDS = {
     "advisory",
     "bundle",
 }
-LEGACY_V2_TOP_LEVEL_FIELDS = V2_TOP_LEVEL_FIELDS | {"docs"}
+DOCS_V2_TOP_LEVEL_FIELDS = V2_TOP_LEVEL_FIELDS | {"docs"}
 PAYLOAD_KINDS = {
     "binary",
     "client-package",
@@ -105,7 +106,7 @@ PAYLOAD_KINDS = {
     "sbom",
     "security-evidence",
 }
-LEGACY_V2_PAYLOAD_KINDS = PAYLOAD_KINDS | {"docs"}
+DOCS_V2_PAYLOAD_KINDS = PAYLOAD_KINDS | {"docs"}
 SECURITY_EVIDENCE_MAX_ARCHIVE_SIZE = 128 * 1024 * 1024
 SECURITY_EVIDENCE_MAX_ENTRY_SIZE = 64 * 1024 * 1024
 SECURITY_EVIDENCE_MAX_TOTAL_SIZE = 256 * 1024 * 1024
@@ -150,6 +151,14 @@ def _candidate_image_names(version: str) -> set[str]:
     if parsed >= NOTARY_RETIREMENT_MINIMUM_VERSION:
         return CURRENT_IMAGE_NAMES
     return LEGACY_IMAGE_NAMES
+
+
+def _version_uses_release_docs(version: tuple[int, int, int]) -> bool:
+    return (
+        CANDIDATE_V2_MINIMUM_VERSION
+        <= version
+        < RELAY_V2_RELEASE_MINIMUM_VERSION
+    ) or version >= DOCS_RELEASE_RESUMPTION_VERSION
 
 
 def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
@@ -197,6 +206,11 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
     ):
         inventory[f"relay-{tag}-install.sh"] = "installer"
         inventory["relay-install.sh"] = "installer"
+    if (
+        tuple(int(part) for part in version.split("."))
+        >= DOCS_RELEASE_RESUMPTION_VERSION
+    ):
+        inventory[f"registry-docs-{tag}.tar.gz"] = "docs"
     if (
         tuple(int(part) for part in version.split("."))
         >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION
@@ -1065,16 +1079,14 @@ def validate_candidate_manifest(
         if isinstance(version_hint, str) and VERSION.fullmatch(version_hint)
         else None
     )
-    legacy_v2 = (
+    uses_release_docs = (
         parsed_version_hint is not None
-        and CANDIDATE_V2_MINIMUM_VERSION
-        <= parsed_version_hint
-        < RELAY_V2_RELEASE_MINIMUM_VERSION
+        and _version_uses_release_docs(parsed_version_hint)
     )
     manifest = require_object(
         document,
         "manifest",
-        LEGACY_V2_TOP_LEVEL_FIELDS if legacy_v2 else V2_TOP_LEVEL_FIELDS,
+        DOCS_V2_TOP_LEVEL_FIELDS if uses_release_docs else V2_TOP_LEVEL_FIELDS,
     )
     if manifest["schema_version"] != V2_SCHEMA_VERSION:
         raise CandidateError(
@@ -1199,7 +1211,7 @@ def validate_candidate_manifest(
         if Path(name).name != name:
             raise CandidateError(f"{label}.name must be a public asset basename")
         allowed_payload_kinds = (
-            LEGACY_V2_PAYLOAD_KINDS if legacy_v2 else PAYLOAD_KINDS
+            DOCS_V2_PAYLOAD_KINDS if uses_release_docs else PAYLOAD_KINDS
         )
         if record["kind"] not in allowed_payload_kinds:
             raise CandidateError(f"{label}.kind is unsupported")
@@ -1209,7 +1221,7 @@ def validate_candidate_manifest(
         payload_by_name[name] = record
     singleton_kinds = (
         ("docs", "sbom", "security-evidence")
-        if legacy_v2
+        if uses_release_docs
         else ("sbom", "security-evidence")
     )
     for singleton_kind in singleton_kinds:
@@ -1300,7 +1312,7 @@ def validate_candidate_manifest(
             f"image inventory must be exactly {sorted(expected_image_names)!r}"
         )
 
-    singleton_fields = ("docs", "sbom") if legacy_v2 else ("sbom",)
+    singleton_fields = ("docs", "sbom") if uses_release_docs else ("sbom",)
     for kind in singleton_fields:
         record, name, digest = _validate_file_record(
             manifest[kind],

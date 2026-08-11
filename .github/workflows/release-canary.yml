@@ -113,6 +113,7 @@ jobs:
             -C "${evidence_root}" \
               image-sbom syft grype advisory-verdict.json
           sbom_sha="$(sha256sum canary/bundle-root/registry-stack-${tag}.sbom.spdx.json | awk '{print $1}')"
+          docs_sha="$(sha256sum canary/bundle-root/registry-docs-${tag}.tar.gz | awk '{print $1}')"
           evidence_sha="$(sha256sum "canary/bundle-root/${evidence_name}" | awk '{print $1}')"
           relay_scan_sha="$(sha256sum canary/bundle-root/security/relay.grype.json | awk '{print $1}')"
           advisory_sha="$(sha256sum canary/bundle-root/security/advisory-verdict.json | awk '{print $1}')"
@@ -162,6 +163,7 @@ jobs:
             --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg created_at "${created_at}" \
             --arg expires_at "${expires_at}" \
+            --arg docs_sha "${docs_sha}" \
             --arg sbom_sha "${sbom_sha}" \
             --argjson sbom_size "${sbom_size}" \
             --arg evidence_name "${evidence_name}" \
@@ -202,6 +204,10 @@ jobs:
                   final_ref: ("ghcr.io/registrystack/relay:" + $tag)
                 }
               ],
+              docs: {
+                name: ("registry-docs-" + $tag + ".tar.gz"),
+                sha256: $docs_sha
+              },
               sbom: {
                 name: ("registry-stack-" + $tag + ".sbom.spdx.json"),
                 sha256: $sbom_sha

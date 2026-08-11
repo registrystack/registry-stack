@@ -251,6 +251,21 @@ test('does not fall back after a published bundle fails digest verification', as
 
 test('skips the exact release bundle supplied by authenticated promotion', async (t) => {
   const { targetRoot } = await fixture(t);
+  const manifestPath = resolve(targetRoot, 'src/data/docsets.yaml');
+  const manifest = YAML.parse(await readFile(manifestPath, 'utf8'));
+  manifest.docsets.push({
+    ...docset,
+    id: 'v1.3.0',
+    label: 'v1.3.0',
+    path: '/v/1.3.0/',
+    source: 'registry-stack-v1.3.0',
+    availability: 'candidate',
+  });
+  await writeFile(manifestPath, YAML.stringify(manifest));
+  const lockPath = resolve(targetRoot, 'src/data/archive-lock.yaml');
+  const lock = YAML.parse(await readFile(lockPath, 'utf8'));
+  lock.archives['v1.3.0'] = { ...lock.archives[docset.id] };
+  await writeFile(lockPath, YAML.stringify(lock));
   const result = await assembleArchives({
     docsRoot: targetRoot,
     excludeDocsetId: docset.id,
@@ -261,6 +276,7 @@ test('skips the exact release bundle supplied by authenticated promotion', async
   });
 
   assert.deepEqual(result.skipped, [docset.id]);
+  assert.deepEqual(result.omitted, ['v1.3.0']);
   assert.equal(result.restored, 0);
   await assert.rejects(
     readFile(resolve(targetRoot, 'dist/v/1.2.3/index.html')),

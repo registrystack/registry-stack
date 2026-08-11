@@ -213,8 +213,12 @@ jobs:
               --deny-self-hosted-runners
           done
           docs_sha256=
-          IFS=. read -r major minor _ <<<"${{ steps.identity.outputs.version }}"
-          if ((major == 0 && minor >= 16 && minor < 19)); then
+          IFS=. read -r major minor patch <<<"${{ steps.identity.outputs.version }}"
+          if ((
+            (major == 0 && minor >= 16 && minor < 19) ||
+            major > 0 ||
+            (major == 0 && (minor > 19 || (minor == 19 && patch >= 1)))
+          )); then
             docs_sha256="$(
               jq -er '.docs.sha256 | select(test("^[0-9a-f]{64}$"))' \
                 "${manifest}"
@@ -1163,7 +1167,7 @@ jobs:
             published-release.json >/dev/null
 
   dispatch-docs:
-    name: Dispatch authenticated legacy docs promotion
+    name: Dispatch authenticated docs promotion
     if: needs.verify.outputs.docs_sha256 != ''
     needs:
       - verify
@@ -1173,7 +1177,7 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Dispatch authenticated legacy docs promotion
+      - name: Dispatch authenticated docs promotion
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
