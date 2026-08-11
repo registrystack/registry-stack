@@ -129,6 +129,17 @@ test('the FHIR tutorial test origin refuses a remote endpoint', async () => {
   }
 });
 
+test('the FHIR replay tracks the read-through adapter for cleanup', async () => {
+  const source = await readFile(gate, 'utf8');
+  const branch = source.match(
+    /\n\tissue-fhir-evidence-as-vcs\)[\s\S]*?\n\t\t;;/u,
+  )?.[0];
+  assert.ok(branch, 'the FHIR replay spec must exist');
+  assert.match(branch, /"run:3"\s+"track-pid:fhir-read-through\.pid"/u);
+  assert.match(source, /track-pid:\*\) emit_track_pid_step/u);
+  assert.match(source, /BACKGROUND_PIDS\+=\("\$tracked_pid"\)/u);
+});
+
 // Every follow-up below begins from the project first-evidence-assertion
 // builds. A full run gets that from the registration order, so a --only that
 // skipped it would fail on the reader directory rather than on the tutorial,

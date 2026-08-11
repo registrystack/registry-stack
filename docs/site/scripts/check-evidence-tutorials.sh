@@ -460,6 +460,7 @@ load_spec() {
 			"run:2"
 			"save:Run a live FHIR read-through adapter|python|1|fhir-read-through.py"
 			"run:3"
+			"track-pid:fhir-read-through.pid"
 			"save:Describe the exact FHIR reads|yaml|1|fhir-smart-r4.openapi.yaml"
 			"run:4"
 			"save:Author the patient coverage question|yaml|1|questions/fhir-coverage-status.yaml"
@@ -814,6 +815,14 @@ emit_fhir_mock_step() {
 	printf 'done\n'
 }
 
+emit_track_pid_step() {
+	local path="$1"
+	printf '\ntracked_pid="$(cat %q)"\n' "$path"
+	printf 'if [[ ! "$tracked_pid" =~ ^[1-9][0-9]*$ ]]; then printf %q >&2; exit 1; fi\n' \
+		"invalid tracked PID in $path\n"
+	printf 'BACKGROUND_PIDS+=("$tracked_pid")\n'
+}
+
 emit_journey() {
 	local slug="$1" fence_dir="$2" tutorial_file="$3"
 	local edit_dir="$WORK_ROOT/edits/$slug"
@@ -837,6 +846,7 @@ emit_journey() {
 		run-fails:*) emit_run_fails_step "$slug" "${step#run-fails:}" "$fence_dir" ;;
 		python-client) emit_python_client_step "$slug" ;;
 		fhir-mock) emit_fhir_mock_step ;;
+		track-pid:*) emit_track_pid_step "${step#track-pid:}" ;;
 		edit:*) emit_edit_step "$slug" "${step#edit:}" "$tutorial_file" "$edit_dir" ;;
 		save:*) emit_save_step "$slug" "${step#save:}" ;;
 		background:*) emit_background_step "$slug" "${step#background:}" "$fence_dir" ;;
