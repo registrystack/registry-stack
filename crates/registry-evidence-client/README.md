@@ -95,7 +95,7 @@ async fn accept(
 - Credentials are held in a buffer that is wiped on drop, marked sensitive on the
   outbound header, and never placed in an error, a `Debug` rendering, or a log
   line. Response bytes and header values are withheld from diagnostics too; a
-  failure carries the deployment's operation identifier for support correlation.
+  failure carries the deployment's trace_id identifier for support correlation.
 - A client signing key given to `PrivateKeyJwt` is held for the life of the
   provider and never rendered, logged, or serialized. Each token request signs its
   own single-use assertion with a fresh identifier, so a captured assertion is

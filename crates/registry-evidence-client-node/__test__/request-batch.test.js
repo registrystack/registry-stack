@@ -70,7 +70,7 @@ function batchRoute(spec, signingKey, resultForIndex) {
     );
     res.writeHead(200, {
       'content-type': BATCH_MEDIA_TYPE,
-      'x-request-id': 'nodebatchoperation',
+      traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
     });
     res.end(envelope(items));
   };
@@ -145,11 +145,11 @@ test('a live two-item request batch has the exact wire shape and verifies in ord
     const raw = await client.sendBatch(prepared);
     assert.ok(raw instanceof RawEvidenceRequestBatchResponse);
     assert.ok(raw instanceof native.RawEvidenceRequestBatchResponse);
-    assert.equal(raw.operation, 'nodebatchoperation');
+    assert.equal(raw.traceId, '4bf92f3577b34da6a3ce929d0e0e4736');
     assert.ok(Buffer.isBuffer(raw.body));
 
     const verified = client.verifyBatchAsOf(prepared, raw, Date.now());
-    assert.equal(verified.operation, 'nodebatchoperation');
+    assert.equal(verified.traceId, '4bf92f3577b34da6a3ce929d0e0e4736');
     assert.deepEqual(
       verified.items.map((item) => item.status),
       ['available', 'available'],

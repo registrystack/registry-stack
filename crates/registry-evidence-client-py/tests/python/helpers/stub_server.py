@@ -16,6 +16,9 @@ import time
 from dataclasses import dataclass, field
 
 
+TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+
 class _StubHTTPServer(http.server.ThreadingHTTPServer):
     def handle_error(self, request, client_address) -> None:  # noqa: ANN001
         # The oversized-response test deliberately makes the client stop
@@ -48,6 +51,7 @@ class StubRoute:
     # back long enough to make two concurrent client calls observably
     # overlap (or fail to) in wall-clock time.
     delay_seconds: float = 0.0
+    include_traceparent: bool = True
 
 
 class StubServer:
@@ -98,6 +102,10 @@ class StubServer:
                 if route.delay_seconds:
                     time.sleep(route.delay_seconds)
                 self.send_response(route.status)
+                if route.include_traceparent and not any(
+                    name.lower() == "traceparent" for name in route.headers
+                ):
+                    self.send_header("traceparent", TRACEPARENT)
                 for name, value in route.headers.items():
                     self.send_header(name, value)
                 self.send_header("Content-Length", str(len(route.body)))

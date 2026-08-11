@@ -149,7 +149,7 @@ export declare class RawEvidenceRequestBatchResponse {
   /** Response envelope bytes exactly as received. */
   get body(): Buffer
   /** Deployment correlation identifier for the whole batch exchange. */
-  get operation(): string | null
+  get traceId(): string | null
 }
 
 /**
@@ -165,10 +165,10 @@ export declare class RawEvidenceResponse {
    */
   get body(): Buffer
   /**
-   * The deployment's opaque identifier for this exchange, for support
-   * correlation.
+   * The validated W3C trace identifier for this exchange. It is support
+   * correlation only, not an Evidence audit operation identity.
    */
-  get operation(): string | null
+  get traceId(): string | null
 }
 
 /**
@@ -226,10 +226,11 @@ export interface VerifiedEvidence {
   /** The verified payload, serialized field for field with no hand mapping. */
   evidence: any
   /**
-   * The deployment's opaque identifier for the exchange that produced this
-   * payload.
+   * The validated W3C trace identifier for the exchange that produced this
+   * payload. It is support correlation only, not an Evidence audit operation
+   * identity.
    */
-  operation?: string
+  traceId?: string
   /**
    * The role-bound subject bindings this payload carries. Persist these
    * after a first-use acceptance and pass them back as `subjectExpectations:
@@ -241,7 +242,7 @@ export interface VerifiedEvidence {
 /** Every item of an atomically verified request-batch response. */
 export interface VerifiedEvidenceRequestBatch {
   items: Array<VerifiedEvidenceRequestBatchItem>
-  operation?: string
+  traceId?: string
 }
 
 /**

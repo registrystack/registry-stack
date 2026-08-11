@@ -69,7 +69,7 @@ cases:
         values: {record_reference: REC-0099}
     expected:
       lookup: no_match
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
 
@@ -80,7 +80,7 @@ cases:
         values: {record_reference: REC-0003}
     expected:
       lookup: ambiguous
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
 
@@ -90,7 +90,7 @@ cases:
         profile: record-reference-v1
         values: {record_reference: REC-0004}
     expected:
-      publicProblem: dependency_unavailable
+      publicProblem: source.unavailable
       signed: false
       sourceRequestCount: 1
 
@@ -113,21 +113,21 @@ cases:
         profile: record-reference-v1
         values: {record_reference: REC-0001}
     expected:
-      publicProblem: dependency_unavailable
+      publicProblem: source.unavailable
       signed: false
       sourceRequestCount: 1
 
   - id: source-failure
     sourceFailure: timeout
     expected:
-      publicProblem: dependency_unavailable
+      publicProblem: source.unavailable
       signed: false
       sourceRequestCount: 1
 
   - id: missing-statement-parameter
     sourceFailure: statement-parameter
     expected:
-      publicProblem: dependency_unavailable
+      publicProblem: source.unavailable
       signed: false
       sourceRequestCount: 1
 

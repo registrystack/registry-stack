@@ -67,7 +67,7 @@ test('every native prepared and raw response getter is wrapped', () => {
     'requestNonce',
     'subjectExpectations',
   ]);
-  assert.deepEqual(ownGetterNames(native.RawEvidenceResponse.prototype).sort(), ['body', 'operation']);
+  assert.deepEqual(ownGetterNames(native.RawEvidenceResponse.prototype).sort(), ['body', 'traceId']);
   assert.deepEqual(ownGetterNames(native.PreparedEvidenceRequestBatch.prototype).sort(), [
     'count',
     'policyDocuments',
@@ -76,7 +76,7 @@ test('every native prepared and raw response getter is wrapped', () => {
   ]);
   assert.deepEqual(ownGetterNames(native.RawEvidenceRequestBatchResponse.prototype).sort(), [
     'body',
-    'operation',
+    'traceId',
   ]);
 });
 
@@ -169,7 +169,7 @@ test('client.d.ts declares no EvidenceClientError field client.js never sets', (
     'kind',
     'status',
     'code',
-    'operation',
+    'traceId',
     'retryAfterSeconds',
     'transportKind',
     'tokenKind',

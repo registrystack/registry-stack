@@ -125,16 +125,13 @@ down, because the set is frozen in `products/evidence/contracts/problem-contract
 byte-diffs the generated schema against it; a second copy of the table here would drift without a
 gate to catch it.
 
-Two structural differences are worth knowing before reading the Evidence Gateway page. Evidence Gateway problem
-type URIs are `https://registrystack.org/problems/evidence/<code>` rather than the
-`https://id.registrystack.org/problems/...` form used elsewhere in the stack. And an Evidence Gateway
-problem body carries exactly five members (`type`, `title`, `status`, `code`, and `operation`,
-the request's ULID), with no `detail` member and no other extension, so the failure never carries
-subject data or source diagnostics back to the caller.
-
-Evidence Gateway answers with one of that closed set for every failure, including transport-level ones: a
-request body over the configured limit is refused as `malformed_request` rather than with a
-shared-middleware problem type (`crates/registry-evidence/src/server.rs`).
+Evidence Gateway type URIs use
+`https://id.registrystack.org/problems/registry-evidence/<code-path>`, where
+the dotted `code` is written with slashes in the URI path.
+Every problem body has exactly `type`, `title`, `status`, `detail`, `code`, and
+`traceId` members. Its static, value-free detail and public trace identifier
+never disclose subject data, source diagnostics, or the server-minted audit
+identifier.
 
 ## Registry Mint
 

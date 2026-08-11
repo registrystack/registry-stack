@@ -2,7 +2,7 @@
 //!
 //! Every variant is deliberately uninformative about response content. A
 //! rendering carries the HTTP status, the closed public problem code, and the
-//! opaque operation identifier for support correlation, and nothing else. It
+//! validated W3C trace identifier for support correlation, and nothing else. It
 //! never carries response bytes, a credential, a header value, a selector
 //! value, or a subject binding.
 
@@ -41,7 +41,7 @@ pub enum EvidenceClientError {
     Denied {
         status: u16,
         code: String,
-        operation: Option<String>,
+        trace_id: Option<String>,
         /// Present only when the deployment asked for a bounded wait.
         retry_after_seconds: Option<u64>,
     },
@@ -51,7 +51,7 @@ pub enum EvidenceClientError {
     /// and an unresolved derivation input into this one answer, so it must not
     /// be read as a statement about the subject.
     #[error("the deployment could not produce evidence for this request")]
-    NotAvailable { operation: Option<String> },
+    NotAvailable { trace_id: Option<String> },
 
     /// The response did not satisfy the wire contract, or the deployment
     /// reported a failure that is not a refusal.
@@ -59,7 +59,7 @@ pub enum EvidenceClientError {
     Protocol {
         status: u16,
         code: Option<String>,
-        operation: Option<String>,
+        trace_id: Option<String>,
         /// Present only when the deployment reported a bounded transient
         /// failure and asked for a wait. A relying party that honors it must
         /// still prepare a fresh request before trying again.
@@ -142,14 +142,15 @@ impl EvidenceClientError {
         }
     }
 
-    /// The opaque per-request identifier to quote when asking the deployment
-    /// operator about this failure.
+    /// The validated W3C trace identifier to quote when asking the deployment
+    /// operator about this failure. It is transport correlation only, not an
+    /// Evidence audit operation identity.
     #[must_use]
-    pub fn operation(&self) -> Option<&str> {
+    pub fn trace_id(&self) -> Option<&str> {
         match self {
-            Self::Denied { operation, .. }
-            | Self::NotAvailable { operation }
-            | Self::Protocol { operation, .. } => operation.as_deref(),
+            Self::Denied { trace_id, .. }
+            | Self::NotAvailable { trace_id }
+            | Self::Protocol { trace_id, .. } => trace_id.as_deref(),
             _ => None,
         }
     }
@@ -163,18 +164,18 @@ mod tests {
     fn renderings_carry_only_the_public_problem_members() {
         let denied = EvidenceClientError::Denied {
             status: 403,
-            code: "not_authorized".to_owned(),
-            operation: Some("01JZZZOPERATION".to_owned()),
+            code: "evidence.denied".to_owned(),
+            trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
             retry_after_seconds: None,
         };
         assert_eq!(
             denied.to_string(),
-            "the deployment refused the request: status 403, code not_authorized"
+            "the deployment refused the request: status 403, code evidence.denied"
         );
-        assert_eq!(denied.operation(), Some("01JZZZOPERATION"));
+        assert_eq!(denied.trace_id(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
 
         let unavailable = EvidenceClientError::NotAvailable {
-            operation: Some("01JZZZOPERATION".to_owned()),
+            trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
         };
         assert_eq!(
             unavailable.to_string(),
@@ -186,7 +187,7 @@ mod tests {
             transport.to_string(),
             "the Evidence request did not complete: the response body exceeded the configured maximum"
         );
-        assert_eq!(transport.operation(), None);
+        assert_eq!(transport.trace_id(), None);
     }
 
     /// The discriminant is what a binding, a metric label, or a caller's own
@@ -207,21 +208,21 @@ mod tests {
             (
                 EvidenceClientError::Denied {
                     status: 403,
-                    code: "not_authorized".to_owned(),
-                    operation: None,
+                    code: "evidence.denied".to_owned(),
+                    trace_id: None,
                     retry_after_seconds: None,
                 },
                 "denied",
             ),
             (
-                EvidenceClientError::NotAvailable { operation: None },
+                EvidenceClientError::NotAvailable { trace_id: None },
                 "not_available",
             ),
             (
                 EvidenceClientError::Protocol {
                     status: 200,
                     code: None,
-                    operation: None,
+                    trace_id: None,
                     retry_after_seconds: None,
                 },
                 "protocol",

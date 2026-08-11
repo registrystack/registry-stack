@@ -308,7 +308,7 @@ gateway responsibility.
 
 `POST /v1/evidence/batch` charges the request bucket once with cost equal to
 its complete item count. The debit is atomic: capacity for all items is
-reserved or the whole request returns `rate_limited` and charges nothing.
+reserved or the whole request returns `evidence.rate_limited` and charges nothing.
 Authentication occurs once and all items use one evaluation instant. Every
 item is validated and authorized before any credential is resolved or source
 is contacted.
@@ -344,10 +344,10 @@ The two lists are intersected and never unioned. A format is releasable only
 where the bundle and the one complete matched grant both name it, so enabling a
 format bundle-wide grants nothing by itself, and a grant cannot widen beyond the
 bundle. Requesting a format outside the intersection is refused with the
-ordinary `not_authorized` problem before credential acquisition and source
+ordinary `evidence.denied` problem before credential acquisition and source
 access, and the refusal does not reveal which layer withheld it. An `Accept`
 that names no known format at all, or that is duplicated, combined,
-parameterized, or weighted, returns `response_format_not_acceptable` with HTTP
+parameterized, or weighted, returns `format.unsupported` with HTTP
 406, also before source access.
 
 ```yaml
@@ -598,7 +598,8 @@ the generic `503` instead of the `403`. Authentication, malformed-request, and
 invalid-selector failures remain operational-only and create no native audit
 event.
 
-Operational logs contain route templates, operation identifiers, duration,
+Operational logs contain route templates, the public `trace_id`, the
+server-minted audit operation identifier, duration,
 status category, the public problem code, and safe internal error categories
 only. The internal category is narrower than the public problem code but is
 drawn from the same kind of fixed, closed set of service-chosen strings. It
@@ -611,7 +612,9 @@ and the public problem code reports both as the same shape regardless. A
 request that raises no failure logs a fixed placeholder in its place. Request
 bodies, selector profile identifiers and values, source requests and responses,
 authority grants, Rhai inputs, credentials, tokens, and disclosed values are
-excluded from logs, metrics, traces, snapshots, panics, and errors.
+excluded from logs, metrics, traces, snapshots, panics, and errors. The public
+trace identifier is a bounded correlation value, not an audit identity, and
+caller `tracestate` is never echoed.
 
 Audit and operational logging are separate channels and operators must not
 confuse them. The audit chain is the accountability record: durable, complete,
@@ -660,10 +663,10 @@ The serving process writes those records as line-delimited JSON on standard
 output, one per served request, and `EVIDENCE_LOG` selects verbosity with a
 default of `info`. Offline commands print their own result and emit no
 operational records. Every response, including responses to unrouted paths,
-carries the request's operation identifier in `X-Request-Id`; it is minted by
-Evidence and never taken from an inbound header, so a caller reporting a
-problem can quote an identifier the operator can find without disclosing
-anything about the request.
+carries a W3C `traceparent` header. Evidence reuses a valid inbound trace
+identifier or mints one, and returns it as `traceId` in a problem body. It
+never exposes the server-minted audit operation identifier and never echoes
+caller `tracestate`.
 
 Telemetry is off by default. Setting `metricsListener` in `runtime.yaml` serves
 `GET /metrics` in Prometheus text format on a second private binding, which must
@@ -922,10 +925,10 @@ fixed by the deployed contract rather than by anything a caller sends:
 The registered route templates are `/v1/evidence`,
 `/v1/evidence-definitions`, `/health`, `/ready`, `/openapi.json`,
 `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. The
-reviewed problem codes are the closed public set: `malformed_request`,
-`invalid_selector`, `authentication_failed`, `not_authorized`,
-`response_format_not_acceptable`, `evidence_not_available`, `rate_limited`,
-`dependency_unavailable`, and `service_unavailable`.
+reviewed problem codes are the closed public set: `evidence.invalid_request`,
+`request.selector_invalid`, `auth.invalid_credential`, `evidence.denied`,
+`resource.not_found`, `format.unsupported`, `evidence.unavailable`,
+`evidence.rate_limited`, `source.unavailable`, and `service.unavailable`.
 
 `status` is the outcome class and never the exact status code, because the
 exact status of a denial belongs to the closed public problem contract rather
@@ -945,7 +948,7 @@ An abbreviated exposition:
 # HELP evidence_http_requests_total Requests served by the Evidence boundary.
 # TYPE evidence_http_requests_total counter
 evidence_http_requests_total{route="/health",method="GET",status="success",error="none"} 2
-evidence_http_requests_total{route="/v1/evidence-definitions",method="GET",status="client_error",error="authentication_failed"} 1
+evidence_http_requests_total{route="/v1/evidence-definitions",method="GET",status="client_error",error="auth.invalid_credential"} 1
 # HELP evidence_http_request_duration_seconds Request duration at the Evidence boundary.
 # TYPE evidence_http_request_duration_seconds histogram
 evidence_http_request_duration_seconds_bucket{route="/health",method="GET",status="success",error="none",le="0.005"} 2
@@ -1110,7 +1113,7 @@ mutable, or invalid.
 A statement source holds no credential, so readiness has nothing to bootstrap
 for one. How old its mounted extract is still does not decide readiness. An
 extract past its source's `maximumExtractAgeSeconds` refuses every evaluation
-that reads it, with `dependency_unavailable` at the boundary and the
+that reads it, with `source.unavailable` at the boundary and the
 `source-extract-stale` audit category, while `/ready` stays `200` and the
 requirements on other sources keep being served. Every replica may mount the
 same file, so removing all of them from rotation would turn one stale source
@@ -1152,7 +1155,7 @@ GET /.well-known/jwt-vc-issuer
 ```
 
 `GET /openapi.json` publishes the generated public contract as
-`application/openapi+json`. It carries no credential requirement because the
+`application/json`. It carries no credential requirement because the
 served bytes are the released generated artifact: the same document shipped in
 `products/evidence/generated/`, independent of the deployed bundle.
 
@@ -1171,7 +1174,7 @@ A successful `POST /v1/evidence/batch` response uses only
 `registry.evidence-request-batch/v1` envelope preserves request order and has
 one `evidence` or `evidence_not_available` result per item. A request must send
 that exact `Accept`; missing, wildcard, singular, parameterized, combined, or
-weighted values return the existing `response_format_not_acceptable` problem
+weighted values return the existing `format.unsupported` problem
 before source access.
 
 `GET /.well-known/jwt-vc-issuer` is unauthenticated discovery for the SD-JWT VC
@@ -1187,7 +1190,7 @@ Source, signing, and dependency failures use stable safe problem codes and do
 not reflect protected inputs. Signing failure returns a safe transient failure.
 
 Every authorization refusal after successful authentication collapses to one
-generic problem with code `not_authorized` and HTTP 403 and reveals no layer
+generic problem with code `evidence.denied` and HTTP 403 and reveals no layer
 detail: a principal outside the bundle audience, a requirement no matched grant
 permits, an authority the grant does not carry, and an unsigned-envelope request
 the bundle or grant does not allow all return the same body. This is deliberate;
@@ -1199,10 +1202,10 @@ and subject roles; the grant carries the claimed authority; and, only for an
 unsigned request, both the bundle and that grant permit
 `application/vnd.registrystack.evidence-unsigned+json`. Before returning that
 problem, the keyed audit chain durably records the minimal refusal event under
-the response operation identifier. It proves that the authenticated requester
+its server-minted operation identifier. It proves that the authenticated requester
 was refused without recording which request field or authority check failed.
 The caller never sees the event. If the audit append fails, Evidence returns
-the generic `service_unavailable` problem with HTTP 503 instead. Authentication,
+the generic `service.unavailable` problem with HTTP 503 instead. Authentication,
 malformed-request, and invalid-selector failures are operational-only and do not
 create this event.
 
@@ -1303,10 +1306,10 @@ never how much arrives.
 
 Throughput below expectations is therefore diagnosed by finding the binding
 ceiling before changing anything, and the `error` label on
-`evidence_http_requests_total` separates the three rejections: `rate_limited`
-is the per-principal limiter, `service_unavailable` is the request timeout
+`evidence_http_requests_total` separates the three rejections: `evidence.rate_limited`
+is the per-principal limiter, `service.unavailable` is the request timeout
 budget running out, which under load is normally a request that never got an
-admission slot, and `dependency_unavailable` is the source failing rather than
+admission slot, and `source.unavailable` is the source failing rather than
 merely being slow. A saturated but healthy source produces
 none of those. It appears only as `evidence_http_request_duration_seconds`
 rising while the request count stays flat, because Evidence is waiting on the

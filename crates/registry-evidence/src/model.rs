@@ -281,17 +281,6 @@ impl<'de> Deserialize<'de> for SelectorValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ProblemBody {
-    #[serde(rename = "type")]
-    pub type_uri: String,
-    pub title: String,
-    pub status: u16,
-    pub code: String,
-    pub operation: String,
-}
-
 #[derive(Clone, PartialEq)]
 pub enum LookupResult {
     Match(BTreeMap<String, Value>),

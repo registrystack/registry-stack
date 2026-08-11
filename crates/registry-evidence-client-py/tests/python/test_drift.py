@@ -47,7 +47,7 @@ SETTABLE_EXCEPTION_ATTRIBUTES = {
     "kind",
     "status",
     "code",
-    "operation",
+    "trace_id",
     "retry_after_seconds",
     "transport_kind",
     "token_kind",

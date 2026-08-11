@@ -142,7 +142,7 @@ fn refusal() -> EvidenceClientError {
     EvidenceClientError::Protocol {
         status: 200,
         code: None,
-        operation: None,
+        trace_id: None,
         retry_after_seconds: None,
     }
 }

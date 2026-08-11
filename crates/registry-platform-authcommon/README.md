@@ -5,6 +5,8 @@ Provider-independent authentication helpers shared by registry services.
 ## What It Provides
 
 - Strict `Authorization: Bearer <token>` parsing.
+- Bounded compact access-token admission with strict JSON duplicate-member
+  rejection before OIDC verification.
 - Canonical API-key fingerprints in `sha256:<64 lowercase hex>` format.
 - Constant-time API-key fingerprint comparison through `subtle`.
 - A 32-byte minimum raw API-key entropy floor for generated keys.
@@ -32,7 +34,7 @@ Ok(())
 
 - The Bearer scheme is ASCII case-insensitive.
 - The scheme and token must be separated by exactly one ASCII space.
-- Empty tokens, extra token parts, and token whitespace are rejected.
+- Empty tokens, commas, extra token parts, and token whitespace are rejected.
 - Fingerprints must be lowercase hex and include the `sha256:` prefix.
 
 ## Security Notes

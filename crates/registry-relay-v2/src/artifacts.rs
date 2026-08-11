@@ -1100,7 +1100,7 @@ fn openapi(registry: &CompiledRegistry, public_only: bool) -> Value {
                 },
                 "Problem": {
                     "type": "object", "additionalProperties": false,
-                    "required": ["type", "title", "status", "code", "traceId"],
+                    "required": ["type", "title", "status", "detail", "code", "traceId"],
                     "properties": {
                         "type": {"type": "string", "format": "uri"},
                         "title": {"type": "string"},

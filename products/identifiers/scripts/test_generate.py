@@ -21,14 +21,17 @@ class CatalogGeneratorTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         (self.root / "schemas").mkdir()
         (self.root / "src").mkdir()
-        (self.root / "src" / "problem.rs").write_text("problem source\n")
+        (self.root / "src" / "relay-problem.rs").write_text("relay problem source\n")
+        (self.root / "src" / "evidence-problem.rs").write_text(
+            "evidence problem source\n"
+        )
         (self.root / "src" / "vocab.rs").write_text("vocabulary source\n")
         self.schema_uri = f"{generate.BASE_URL}/schemas/example/v1.json"
         (self.root / "schemas" / "v1.json").write_text(
             json.dumps({"$id": self.schema_uri, "title": "Example schema"})
         )
-        self.problem_catalog = self.root / "problems.json"
-        self.problem_catalog.write_text(
+        self.relay_problem_catalog = self.root / "relay-problems.json"
+        self.relay_problem_catalog.write_text(
             json.dumps(
                 {
                     "entries": [
@@ -43,20 +46,52 @@ class CatalogGeneratorTest(unittest.TestCase):
                 }
             )
         )
+        self.evidence_problem_catalog = self.root / "evidence-problems.json"
         self.config = self.root / "source.json"
         self.write_config()
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         self.track(".")
 
+    def write_evidence_problem_catalog(self) -> None:
+        self.evidence_problem_catalog.write_text(
+            json.dumps(
+                {
+                    "entries": [
+                        {
+                            "uri": f"{generate.BASE_URL}/problems/registry-evidence/example/failed",
+                            "code": "example.failed",
+                            "title": "Evidence example failed",
+                            "description": "the Evidence example failed",
+                            "httpStatuses": [422],
+                        }
+                    ]
+                }
+            )
+        )
+
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def write_config(self, records=None, exclusions=None) -> None:
+    def write_config(self, records=None, exclusions=None, problem_sources=None) -> None:
         self.config.write_text(
             json.dumps(
                 {
                     "version": 1,
                     "baseUrl": generate.BASE_URL,
+                    "problemSources": problem_sources
+                    if problem_sources is not None
+                    else [
+                        {
+                            "owner": "relay-v2",
+                            "status": "active",
+                            "compatibilityLine": "v2",
+                            "uriPrefix": f"{generate.BASE_URL}/problems/registry-relay/",
+                            "sourcePath": "src/relay-problem.rs",
+                            "exporterPath": "examples/relay-problem-catalog.rs",
+                            "cargoPackage": "relay-example",
+                            "cargoExample": "problem-catalog",
+                        }
+                    ],
                     "referenceExclusions": exclusions or [],
                     "schemaSources": [
                         {
@@ -92,12 +127,11 @@ class CatalogGeneratorTest(unittest.TestCase):
         )
 
     def build(self):
-        original = generate.PROBLEM_SOURCE
-        generate.PROBLEM_SOURCE = Path("src/problem.rs")
-        try:
-            return generate.build_catalog(self.root, self.config, self.problem_catalog)
-        finally:
-            generate.PROBLEM_SOURCE = original
+        return generate.build_catalog(
+            self.root,
+            self.config,
+            {"src/relay-problem.rs": self.relay_problem_catalog},
+        )
 
     def test_catalog_binds_problem_schema_and_vocabulary_sources(self) -> None:
         catalog = self.build()
@@ -149,11 +183,85 @@ class CatalogGeneratorTest(unittest.TestCase):
             self.build()
 
     def test_problem_code_must_match_its_uri(self) -> None:
-        document = json.loads(self.problem_catalog.read_text())
+        document = json.loads(self.relay_problem_catalog.read_text())
         document["entries"][0]["uri"] = f"{generate.BASE_URL}/problems/wrong"
-        self.problem_catalog.write_text(json.dumps(document))
+        self.relay_problem_catalog.write_text(json.dumps(document))
         with self.assertRaisesRegex(generate.CatalogError, "URI and code disagree"):
             self.build()
+
+    def test_two_problem_sources_are_merged(self) -> None:
+        self.write_evidence_problem_catalog()
+        document = json.loads(self.config.read_text())
+        document["problemSources"].append(
+            {
+                "owner": "evidence",
+                "status": "active",
+                "compatibilityLine": "v1",
+                "uriPrefix": f"{generate.BASE_URL}/problems/registry-evidence/",
+                "sourcePath": "src/evidence-problem.rs",
+                "exporterPath": "examples/evidence-problem-catalog.rs",
+                "cargoPackage": "evidence-example",
+                "cargoExample": "problem-catalog",
+            }
+        )
+        self.config.write_text(json.dumps(document))
+        catalog = generate.build_catalog(
+            self.root,
+            self.config,
+            {
+                "src/relay-problem.rs": self.relay_problem_catalog,
+                "src/evidence-problem.rs": self.evidence_problem_catalog,
+            },
+        )
+        problems = [entry for entry in catalog["entries"] if entry["kind"] == "problem"]
+        self.assertEqual([entry["owner"] for entry in problems], ["evidence", "relay-v2"])
+
+    def test_problem_source_prefix_must_match_its_catalog(self) -> None:
+        document = json.loads(self.relay_problem_catalog.read_text())
+        document["entries"][0]["uri"] = (
+            f"{generate.BASE_URL}/problems/registry-evidence/example/failed"
+        )
+        self.relay_problem_catalog.write_text(json.dumps(document))
+        with self.assertRaisesRegex(generate.CatalogError, "URI and code disagree"):
+            self.build()
+
+    def test_exact_problem_source_prefix_is_an_allowed_reference(self) -> None:
+        (self.root / "src" / "prefix.rs").write_text(
+            f'const PREFIX: &str = "^{generate.BASE_URL}/problems/registry-relay/$";\n'
+        )
+        self.track("src/prefix.rs")
+        self.build()
+
+    def test_duplicate_problem_identifier_is_rejected_across_sources(self) -> None:
+        self.write_evidence_problem_catalog()
+        document = json.loads(self.config.read_text())
+        document["problemSources"].append(
+            {
+                "owner": "evidence",
+                "status": "active",
+                "compatibilityLine": "v1",
+                "uriPrefix": f"{generate.BASE_URL}/problems/registry-relay/",
+                "sourcePath": "src/evidence-problem.rs",
+                "exporterPath": "examples/evidence-problem-catalog.rs",
+                "cargoPackage": "evidence-example",
+                "cargoExample": "problem-catalog",
+            }
+        )
+        self.config.write_text(json.dumps(document))
+        duplicate = json.loads(self.evidence_problem_catalog.read_text())
+        duplicate["entries"][0]["uri"] = (
+            f"{generate.BASE_URL}/problems/registry-relay/example/failed"
+        )
+        self.evidence_problem_catalog.write_text(json.dumps(duplicate))
+        with self.assertRaisesRegex(generate.CatalogError, "duplicated"):
+            generate.build_catalog(
+                self.root,
+                self.config,
+                {
+                    "src/relay-problem.rs": self.relay_problem_catalog,
+                    "src/evidence-problem.rs": self.evidence_problem_catalog,
+                },
+            )
 
     def test_retired_source_group_is_rejected(self) -> None:
         document = json.loads(self.config.read_text())
@@ -170,9 +278,9 @@ class CatalogGeneratorTest(unittest.TestCase):
             self.build()
 
     def test_catalog_contract_rejects_invalid_problem_statuses(self) -> None:
-        document = json.loads(self.problem_catalog.read_text())
+        document = json.loads(self.relay_problem_catalog.read_text())
         document["entries"][0]["httpStatuses"] = [99, 99]
-        self.problem_catalog.write_text(json.dumps(document))
+        self.relay_problem_catalog.write_text(json.dumps(document))
         with self.assertRaisesRegex(generate.CatalogError, "invalid HTTP statuses"):
             self.build()
 

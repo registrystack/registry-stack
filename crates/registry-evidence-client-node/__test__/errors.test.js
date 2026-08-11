@@ -19,6 +19,8 @@ const DUMMY_JWKS = {
     },
   ],
 };
+const TRACE_ID = '4bf92f3577b34da6a3ce929d0e0e4736';
+const TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
 
 /** None of these cases reach signature verification: the client maps them to
  * a failure before the response body is ever trusted, so the stub never
@@ -33,13 +35,26 @@ async function clientAndPrepared(stub) {
   return { client, prepared: client.prepare(requestSpec()) };
 }
 
-function problemBody(status, code, operation) {
+function problemBody(status, code, traceId) {
+  const [title, detail] = {
+    'evidence.invalid_request': ['Evidence request is invalid', 'the Evidence request is invalid'],
+    'request.selector_invalid': ['Selector is invalid', 'selector does not match an available request profile'],
+    'auth.invalid_credential': ['Bearer access token is invalid', 'bearer access token validation failed'],
+    'evidence.denied': ['Evidence request is not permitted', 'the Evidence request is not permitted'],
+    'format.unsupported': ['Requested format is not supported', 'the requested format is not supported'],
+    'evidence.unavailable': ['Evidence could not be produced', 'evidence could not be produced for this request'],
+    'evidence.rate_limited': ['Evidence request rate is exhausted', 'the Evidence request rate is exhausted'],
+    'source.unavailable': ['Authoritative source is unavailable', 'the authoritative source is unavailable'],
+    'service.unavailable': ['Service is unavailable', 'the request could not be served'],
+    'resource.not_found': ['Requested resource was not found', 'the requested resource was not found'],
+  }[code];
   return JSON.stringify({
-    type: 'https://registrystack.org/problems/example',
-    title: 'Example problem',
+    type: `https://id.registrystack.org/problems/registry-evidence/${code.replaceAll('.', '/')}`,
+    title,
     status,
+    detail,
     code,
-    operation,
+    traceId,
   });
 }
 
@@ -56,34 +71,34 @@ async function assertMappedFailure(stub, assertMapping) {
   }
 }
 
-test('401 with any code maps to a denied failure', async () => {
+test('401 with the registered code maps to a denied failure', async () => {
   const stub = await startStubServer({
     'POST /v1/evidence': (req, res) => {
-      res.writeHead(401, { 'content-type': 'application/problem+json', 'x-request-id': 'op401test' });
-      res.end(problemBody(401, 'authentication_failed', 'op401test'));
+      res.writeHead(401, { 'content-type': 'application/problem+json', traceparent: TRACEPARENT });
+      res.end(problemBody(401, 'auth.invalid_credential', TRACE_ID));
     },
   });
   await assertMappedFailure(stub, (mapped) => {
     assert.equal(mapped.kind, 'denied');
     assert.equal(mapped.status, 401);
-    assert.equal(mapped.code, 'authentication_failed');
-    assert.equal(mapped.operation, 'op401test');
+    assert.equal(mapped.code, 'auth.invalid_credential');
+    assert.equal(mapped.traceId, TRACE_ID);
     assert.equal(mapped.retryAfterSeconds, undefined);
   });
 });
 
-test('403 with any code maps to a denied failure', async () => {
+test('403 with the registered code maps to a denied failure', async () => {
   const stub = await startStubServer({
     'POST /v1/evidence': (req, res) => {
-      res.writeHead(403, { 'content-type': 'application/problem+json', 'x-request-id': 'op403test' });
-      res.end(problemBody(403, 'not_authorized', 'op403test'));
+      res.writeHead(403, { 'content-type': 'application/problem+json', traceparent: TRACEPARENT });
+      res.end(problemBody(403, 'evidence.denied', TRACE_ID));
     },
   });
   await assertMappedFailure(stub, (mapped) => {
     assert.equal(mapped.kind, 'denied');
     assert.equal(mapped.status, 403);
-    assert.equal(mapped.code, 'not_authorized');
-    assert.equal(mapped.operation, 'op403test');
+    assert.equal(mapped.code, 'evidence.denied');
+    assert.equal(mapped.traceId, TRACE_ID);
     assert.equal(mapped.retryAfterSeconds, undefined);
   });
 });
@@ -93,17 +108,17 @@ test('429 with a Retry-After header maps to a denied failure carrying the wait',
     'POST /v1/evidence': (req, res) => {
       res.writeHead(429, {
         'content-type': 'application/problem+json',
-        'x-request-id': 'op429test',
+        traceparent: TRACEPARENT,
         'retry-after': '30',
       });
-      res.end(problemBody(429, 'rate_limited', 'op429test'));
+      res.end(problemBody(429, 'evidence.rate_limited', TRACE_ID));
     },
   });
   await assertMappedFailure(stub, (mapped) => {
     assert.equal(mapped.kind, 'denied');
     assert.equal(mapped.status, 429);
-    assert.equal(mapped.code, 'rate_limited');
-    assert.equal(mapped.operation, 'op429test');
+    assert.equal(mapped.code, 'evidence.rate_limited');
+    assert.equal(mapped.traceId, TRACE_ID);
     assert.equal(mapped.retryAfterSeconds, 30);
   });
 });
@@ -113,15 +128,15 @@ test('422 with the not-available code maps to its own failure, with no status fi
     'POST /v1/evidence': (req, res) => {
       res.writeHead(422, {
         'content-type': 'application/problem+json',
-        'x-request-id': 'op422test',
+        traceparent: TRACEPARENT,
       });
-      res.end(problemBody(422, 'evidence_not_available', 'op422test'));
+      res.end(problemBody(422, 'evidence.unavailable', TRACE_ID));
     },
   });
   await assertMappedFailure(stub, (mapped) => {
     assert.equal(mapped.kind, 'not_available');
     assert.equal(mapped.status, undefined);
-    assert.equal(mapped.operation, 'op422test');
+    assert.equal(mapped.traceId, TRACE_ID);
   });
 });
 
@@ -130,16 +145,16 @@ test('400 with an ordinary contract code maps to a protocol failure', async () =
     'POST /v1/evidence': (req, res) => {
       res.writeHead(400, {
         'content-type': 'application/problem+json',
-        'x-request-id': 'op400test',
+        traceparent: TRACEPARENT,
       });
-      res.end(problemBody(400, 'malformed_request', 'op400test'));
+      res.end(problemBody(400, 'evidence.invalid_request', TRACE_ID));
     },
   });
   await assertMappedFailure(stub, (mapped) => {
     assert.equal(mapped.kind, 'protocol');
     assert.equal(mapped.status, 400);
-    assert.equal(mapped.code, 'malformed_request');
-    assert.equal(mapped.operation, 'op400test');
+    assert.equal(mapped.code, 'evidence.invalid_request');
+    assert.equal(mapped.traceId, TRACE_ID);
     assert.equal(mapped.retryAfterSeconds, undefined);
   });
 });

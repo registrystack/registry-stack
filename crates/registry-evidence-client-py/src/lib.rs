@@ -42,7 +42,7 @@ use convert::{
 // this crate does not freeze.
 //
 // Where the failure has them, an instance also carries `status`, `code`,
-// `operation`, `retry_after_seconds`, `transport_kind` (set for a "transport"
+// `trace_id`, `retry_after_seconds`, `transport_kind` (set for a "transport"
 // failure, and for a "token" failure whose `token_kind` is "transport"), and
 // `token_kind` (set only for a "token" failure).
 // A "protocol" failure with `status` 401, 403, or 429 is reachable: it means
@@ -167,7 +167,7 @@ fn to_py_err(py: Python<'_>, mapped: &MappedError) -> PyErr {
     set_attr!("kind", mapped.kind);
     set_attr!("status", mapped.status);
     set_attr!("code", mapped.code.as_deref());
-    set_attr!("operation", mapped.operation.as_deref());
+    set_attr!("trace_id", mapped.trace_id.as_deref());
     set_attr!("retry_after_seconds", mapped.retry_after_seconds);
     set_attr!("transport_kind", mapped.transport_kind);
     set_attr!("token_kind", mapped.token_kind);
@@ -316,8 +316,8 @@ impl RawEvidenceResponse {
     /// `VerifiedEvidence`, so a response that fails verification can still be
     /// reported against the deployment's own audit trail.
     #[getter]
-    fn operation(&self) -> Option<&str> {
-        self.inner.operation()
+    fn trace_id(&self) -> Option<&str> {
+        self.inner.trace_id()
     }
 }
 
@@ -344,8 +344,8 @@ impl RawEvidenceRequestBatchResponse {
 
     /// Deployment correlation identifier for the whole batch exchange.
     #[getter]
-    fn operation(&self) -> Option<&str> {
-        self.inner.operation()
+    fn trace_id(&self) -> Option<&str> {
+        self.inner.trace_id()
     }
 }
 
@@ -411,7 +411,7 @@ struct VerifiedEvidence {
     /// The deployment's opaque identifier for the exchange that produced this
     /// payload, for support correlation.
     #[pyo3(get)]
-    operation: Option<String>,
+    trace_id: Option<String>,
     /// The role-bound subject bindings this payload carries, as pinned
     /// expectations for a later request. Persist these after a first-use
     /// acceptance and pass them as `subject_expectations` from then on.
@@ -432,7 +432,7 @@ fn verified_evidence_to_python(
     let pinned_subject_expectations = json_to_python(py, &pinned_value)?.unbind();
     Ok(VerifiedEvidence {
         evidence,
-        operation: verified.operation().map(str::to_owned),
+        trace_id: verified.trace_id().map(str::to_owned),
         pinned_subject_expectations,
     })
 }
@@ -452,7 +452,7 @@ struct VerifiedEvidenceRequestBatch {
     #[pyo3(get)]
     items: Py<PyAny>,
     #[pyo3(get)]
-    operation: Option<String>,
+    trace_id: Option<String>,
 }
 
 fn verified_request_batch_to_python(
@@ -478,7 +478,7 @@ fn verified_request_batch_to_python(
     }
     Ok(VerifiedEvidenceRequestBatch {
         items: items.into_any().unbind(),
-        operation: verified.operation().map(str::to_owned),
+        trace_id: verified.trace_id().map(str::to_owned),
     })
 }
 

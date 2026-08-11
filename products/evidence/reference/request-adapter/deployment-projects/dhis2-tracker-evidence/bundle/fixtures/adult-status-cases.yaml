@@ -111,7 +111,7 @@ cases:
             - attribute: Oth00000001
               value: SOURCE-UNRELATED-CANARY
     expected:
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
 
@@ -125,7 +125,7 @@ cases:
       trackedEntities: []
     expected:
       lookup: no_match
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
 
@@ -147,7 +147,7 @@ cases:
         - attributes: []
     expected:
       lookup: ambiguous
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
 
@@ -262,21 +262,21 @@ cases:
     expected:
       lookup: match
       error: derivation_input_error
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: true
       signed: false
 
   - id: source-failure
     sourceFailure: timeout
     expected:
-      publicProblem: dependency_unavailable
+      publicProblem: source.unavailable
       signed: false
 
   # An expired provider session answers a JSON request with an HTML sign-in page.
   - id: source-html-sign-in-page
     sourceFailure: invalid-media-type
     expected:
-      publicProblem: dependency_unavailable
+      publicProblem: source.unavailable
       signed: false
 
   - id: hostile-reference

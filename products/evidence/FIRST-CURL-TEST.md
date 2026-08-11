@@ -118,12 +118,12 @@ fallback when signing fails.
 
 Unsigned output is governed, not a client choice. It succeeds only when the
 immutable bundle and the one complete matched grant both permit it; otherwise
-the request is refused with the ordinary `not_authorized` problem before
+the request is refused with the ordinary `evidence.denied` problem before
 credentials or source access, without revealing which layer refused. The
 production reference bundles declare `responseFormats: [signed-jws]`, so the
 same header there returns that refusal. A duplicate, combined, parameterized,
 weighted, or unknown `Accept` returns the
-`response_format_not_acceptable` problem with HTTP 406 before source access.
+`format.unsupported` problem with HTTP 406 before source access.
 
 ### Signed request
 

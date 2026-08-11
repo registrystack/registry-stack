@@ -78,6 +78,7 @@ const SUBJECT_BINDING_KEY: &[u8] = b"synthetic-interoperability-subject-binding-
 const ADOPTER_ORIGIN: &str = "http://127.0.0.1:18440";
 const ADOPTER_METRICS_ORIGIN: &str = "http://127.0.0.1:18441";
 const SUPPORT_ORIGIN: &str = "http://127.0.0.1:18442";
+const SUPPORT_TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
 
 const DEFINITIONS: &str = r#"{
   "schema": "registry.evidence-definitions/v1",
@@ -605,6 +606,7 @@ async fn support_definitions(
     }
     (
         StatusCode::OK,
+        [("traceparent", SUPPORT_TRACEPARENT)],
         Json(serde_json::from_str::<Value>(DEFINITIONS).expect("definitions are JSON")),
     )
         .into_response()
@@ -640,7 +642,13 @@ async fn support_evidence(
     let credentials = support.issuer.credentials_for(&holder_keys).await;
     (
         StatusCode::OK,
-        [(CONTENT_TYPE, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE)],
+        [
+            (CONTENT_TYPE, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE),
+            (
+                axum::http::HeaderName::from_static("traceparent"),
+                SUPPORT_TRACEPARENT,
+            ),
+        ],
         Json(json!({
             "schema": SD_JWT_VC_BATCH_SCHEMA_V1,
             "type": "SdJwtVcBatchEnvelope",

@@ -16,6 +16,196 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Bearer access token is invalid",
+      "description": "bearer access token validation failed",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "auth.invalid_credential",
+        "httpStatuses": [
+          401
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence request is not permitted",
+      "description": "the Evidence request is not permitted",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "evidence.denied",
+        "httpStatuses": [
+          403
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/evidence/invalid_request",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence request is invalid",
+      "description": "the Evidence request is invalid",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "evidence.invalid_request",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/evidence/rate_limited",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence request rate is exhausted",
+      "description": "the Evidence request rate is exhausted",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "evidence.rate_limited",
+        "httpStatuses": [
+          429
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/evidence/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Evidence could not be produced",
+      "description": "evidence could not be produced for this request",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "evidence.unavailable",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/format/unsupported",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Requested format is not supported",
+      "description": "the requested format is not supported",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "format.unsupported",
+        "httpStatuses": [
+          406
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Selector is invalid",
+      "description": "selector does not match an available request profile",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "request.selector_invalid",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/resource/not_found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Requested resource was not found",
+      "description": "the requested resource was not found",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "resource.not_found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/service/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Service is unavailable",
+      "description": "the request could not be served",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "service.unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-evidence/source/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1",
+      "owner": "evidence",
+      "title": "Authoritative source is unavailable",
+      "description": "the authoritative source is unavailable",
+      "source": {
+        "path": "crates/registry-evidence/src/problem.rs",
+        "sha256": "46c3ce311600915b57c09bad2a45caaf67d63f84656f5e863795a8ef0372ba9c"
+      },
+      "problem": {
+        "code": "source.unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/problems/registry-relay/aggregate-data/denied",
       "kind": "problem",
       "status": "active",
@@ -25,7 +215,7 @@
       "description": "aggregate data access is not permitted",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "aggregate-data.denied",
@@ -44,7 +234,7 @@
       "description": "the aggregate data request is invalid",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "aggregate-data.invalid_request",
@@ -63,7 +253,7 @@
       "description": "the aggregate data quota is exhausted",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "aggregate-data.rate_limited",
@@ -82,7 +272,7 @@
       "description": "the aggregate data request exceeds its observation limit",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "aggregate-data.too_large",
@@ -101,7 +291,7 @@
       "description": "required audit is unavailable",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "audit.unavailable",
@@ -120,7 +310,7 @@
       "description": "bearer access token validation failed",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "auth.invalid_credential",
@@ -139,7 +329,7 @@
       "description": "a bearer access token is required",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "auth.missing_credential",
@@ -158,7 +348,7 @@
       "description": "the consultation is not permitted",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "consultation.denied",
@@ -177,7 +367,7 @@
       "description": "the consultation request is invalid",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "consultation.invalid_request",
@@ -196,7 +386,7 @@
       "description": "the consultation quota is exhausted",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "consultation.rate_limited",
@@ -215,7 +405,7 @@
       "description": "the consultation response exceeds the configured limit",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "consultation.response_too_large",
@@ -234,7 +424,7 @@
       "description": "the requested record was not resolved",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "consultation.unresolved",
@@ -253,7 +443,7 @@
       "description": "filter value is invalid",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "filter.invalid_value",
@@ -272,7 +462,7 @@
       "description": "filter is not declared for this operation",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "filter.unknown_field",
@@ -291,7 +481,7 @@
       "description": "the requested format is not supported",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "format.unsupported",
@@ -310,7 +500,7 @@
       "description": "request body exceeds the configured limit",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "internal.payload_too_large",
@@ -329,7 +519,7 @@
       "description": "request exceeded the configured timeout",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "internal.timeout",
@@ -348,7 +538,7 @@
       "description": "the request could not be served",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "internal.unhandled",
@@ -367,7 +557,7 @@
       "description": "request URI exceeds the configured limit",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "internal.uri_too_long",
@@ -386,7 +576,7 @@
       "description": "cursor is invalid for this query",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "query.cursor_invalid",
@@ -405,7 +595,7 @@
       "description": "access profile selection is invalid",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "request.access_profile_invalid",
@@ -424,7 +614,7 @@
       "description": "field selection is invalid",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "request.fields_invalid",
@@ -443,7 +633,7 @@
       "description": "request body must use application/json",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "request.media_type_unsupported",
@@ -462,7 +652,7 @@
       "description": "the requested resource was not found",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "resource.not_found",
@@ -481,7 +671,7 @@
       "description": "the service is not ready",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "service.not_ready",
@@ -500,7 +690,7 @@
       "description": "the authoritative source is unavailable",
       "source": {
         "path": "crates/registry-relay-v2/src/problem.rs",
-        "sha256": "033b915ebbabad355fd7987fa82e7821ea0e148925e6d05eb6d6f0aa9c7729a1"
+        "sha256": "6760c752a126f396245770c6a0e6f586dd23037e19bb28c2c9a3f1fa398a8600"
       },
       "problem": {
         "code": "source.unavailable",
@@ -537,7 +727,7 @@
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "7ed7c76aa09ff3ffc2ee9f7fea17f8378f1246fc5855a10cda50a7920e711a1a"
+        "sha256": "d157881623e63c7d02062e93e2e9709e597d292becde66938be364a9c3197b64"
       },
       "artifact": {
         "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha1.json",

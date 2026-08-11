@@ -236,7 +236,7 @@ struct EvidenceRequestBatchItemBody<'a> {
 #[derive(Clone)]
 pub struct RawEvidenceRequestBatchResponse {
     pub(crate) body: Vec<u8>,
-    pub(crate) operation: Option<String>,
+    pub(crate) trace_id: Option<String>,
 }
 
 impl RawEvidenceRequestBatchResponse {
@@ -246,10 +246,13 @@ impl RawEvidenceRequestBatchResponse {
         &self.body
     }
 
-    /// Deployment correlation identifier for the batch exchange.
+    /// The validated W3C trace identifier for the batch exchange.
+    ///
+    /// It is support correlation only, not an Evidence audit operation
+    /// identity.
     #[must_use]
-    pub fn operation(&self) -> Option<&str> {
-        self.operation.as_deref()
+    pub fn trace_id(&self) -> Option<&str> {
+        self.trace_id.as_deref()
     }
 }
 
@@ -258,7 +261,7 @@ impl std::fmt::Debug for RawEvidenceRequestBatchResponse {
         formatter
             .debug_struct("RawEvidenceRequestBatchResponse")
             .field("body_bytes", &self.body.len())
-            .field("operation", &self.operation)
+            .field("trace_id", &self.trace_id)
             .finish_non_exhaustive()
     }
 }
@@ -280,7 +283,7 @@ pub enum VerifiedEvidenceRequestBatchItem {
 #[derive(Debug, Clone)]
 pub struct VerifiedEvidenceRequestBatch {
     pub(crate) items: Vec<VerifiedEvidenceRequestBatchItem>,
-    pub(crate) operation: Option<String>,
+    pub(crate) trace_id: Option<String>,
 }
 
 impl VerifiedEvidenceRequestBatch {
@@ -308,10 +311,13 @@ impl VerifiedEvidenceRequestBatch {
         self.items
     }
 
-    /// Deployment correlation identifier for the batch exchange.
+    /// The validated W3C trace identifier for the batch exchange.
+    ///
+    /// It is support correlation only, not an Evidence audit operation
+    /// identity.
     #[must_use]
-    pub fn operation(&self) -> Option<&str> {
-        self.operation.as_deref()
+    pub fn trace_id(&self) -> Option<&str> {
+        self.trace_id.as_deref()
     }
 }
 

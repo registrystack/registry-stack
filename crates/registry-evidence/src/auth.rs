@@ -5,8 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::parse_json_strict;
+use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
     JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
@@ -18,9 +19,6 @@ use crate::config::{
     AccessTokenAlgorithm, AccessTokenType, AssuranceProfile, AuthenticationConfig,
 };
 
-const MAX_TOKEN_BYTES: usize = 128 * 1024;
-const MAX_HEADER_BYTES: usize = 8 * 1024;
-const MAX_CLAIMS_BYTES: usize = 64 * 1024;
 const MAX_PRINCIPAL_BYTES: usize = 512;
 const MAX_TAGS: usize = 32;
 
@@ -508,7 +506,7 @@ fn jwks_fetch_policy(
 /// Those default to the caller's side: a failure this code has never seen is
 /// one it cannot honestly describe as an unreachable key set, and an operator
 /// misdirected by a confident wrong message is worse off than one who reads
-/// the same `authentication_failed` twice.
+/// the same `auth.invalid_credential` twice.
 fn is_key_source_failure(error: &OidcError) -> bool {
     match error {
         OidcError::Transport(_)
@@ -565,42 +563,7 @@ fn describe_causes(error: &dyn std::error::Error) -> String {
 }
 
 pub fn strict_jwt_preflight(token: &str) -> Result<(), AuthenticationError> {
-    if token.is_empty()
-        || token.len() > MAX_TOKEN_BYTES
-        || token.bytes().any(|byte| byte.is_ascii_whitespace())
-    {
-        return Err(AuthenticationError::Malformed);
-    }
-    let mut segments = token.split('.');
-    let header = segments.next().ok_or(AuthenticationError::Malformed)?;
-    let claims = segments.next().ok_or(AuthenticationError::Malformed)?;
-    let signature = segments.next().ok_or(AuthenticationError::Malformed)?;
-    if segments.next().is_some() || header.is_empty() || claims.is_empty() || signature.is_empty() {
-        return Err(AuthenticationError::Malformed);
-    }
-    decode_strict_object(header, MAX_HEADER_BYTES)?;
-    decode_strict_object(claims, MAX_CLAIMS_BYTES)?;
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature)
-        .map_err(|_| AuthenticationError::Malformed)?;
-    if signature.is_empty() || signature.len() > MAX_HEADER_BYTES {
-        return Err(AuthenticationError::Malformed);
-    }
-    Ok(())
-}
-
-fn decode_strict_object(segment: &str, maximum: usize) -> Result<(), AuthenticationError> {
-    let decoded = URL_SAFE_NO_PAD
-        .decode(segment)
-        .map_err(|_| AuthenticationError::Malformed)?;
-    if decoded.is_empty() || decoded.len() > maximum {
-        return Err(AuthenticationError::Malformed);
-    }
-    let value = parse_json_strict(&decoded).map_err(|_| AuthenticationError::Malformed)?;
-    if !value.is_object() {
-        return Err(AuthenticationError::Malformed);
-    }
-    Ok(())
+    validate_compact_access_token(token).map_err(|_| AuthenticationError::Malformed)
 }
 
 fn required_direct_string(

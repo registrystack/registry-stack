@@ -679,29 +679,43 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
     }
 }
 
-/// One identifier is minted per request at the boundary and stays the same
-/// everywhere an operator can observe it. Without a response header the
-/// identifier the problem body reports is the only copy the caller ever sees,
-/// so a support report cannot be joined to a server-side record.
+/// The boundary carries W3C trace context on every response while retaining a
+/// separately minted operation for audit and operational logs.
 #[tokio::test]
-async fn every_response_carries_the_request_scoped_correlation_identifier() {
+async fn trace_transport_carries_safe_response_correlation_without_replacing_operation_identity() {
     let fixture = acceptance_runtime().await;
     let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
 
-    let health = http.get("/health").await;
+    let traceparent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+    let health = http
+        .get("/health")
+        .add_header("traceparent", traceparent)
+        .await;
     health.assert_status_ok();
     let first = correlation_id(&health);
+    assert!(first
+        .as_str()
+        .expect("traceparent is text")
+        .starts_with("00-0123456789abcdef0123456789abcdef-"));
 
     // A rejected request reports one identifier, not one per error site.
     let denied = http.get("/v1/evidence-definitions").await;
     assert_eq!(denied.status_code(), axum::http::StatusCode::UNAUTHORIZED);
-    assert_eq!(correlation_id(&denied), denied.json::<Value>()["operation"]);
+    assert_eq!(
+        &correlation_id(&denied)
+            .as_str()
+            .expect("traceparent is text")[3..35],
+        denied.json::<Value>()["traceId"]
+            .as_str()
+            .expect("trace ID is text")
+    );
 
     // An unrouted request correlates on the same terms.
     let unknown = http.get("/absent").await;
+    assert_eq!(unknown.status_code(), axum::http::StatusCode::NOT_FOUND);
     assert_eq!(
-        correlation_id(&unknown),
-        unknown.json::<Value>()["operation"]
+        unknown.json::<Value>()["code"],
+        ProblemCode::ResourceNotFound.code()
     );
 
     // Identifiers are request-scoped, never process-scoped.
@@ -763,6 +777,7 @@ fn operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value() {
                 "message",
                 "route",
                 "operation",
+                "trace_id",
                 "duration_ms",
                 "status",
                 "error",
@@ -786,7 +801,10 @@ fn operational_logs_carry_only_the_reviewed_fields_and_disclose_no_value() {
     assert_eq!(served[0]["fields"]["category"], json!("none"));
     assert_eq!(served[1]["fields"]["route"], json!("/v1/evidence"));
     assert_eq!(served[1]["fields"]["status"], json!("client_error"));
-    assert_eq!(served[1]["fields"]["error"], json!("authentication_failed"));
+    assert_eq!(
+        served[1]["fields"]["error"],
+        json!("auth.invalid_credential")
+    );
     // The runtime's internal classification for this rejection, distinct from
     // (and narrower than) the public problem code above.
     assert_eq!(served[1]["fields"]["category"], json!("authentication"));
@@ -848,7 +866,7 @@ fn operational_logs_carry_the_runtime_failure_category_and_still_collapse_unreso
         .collect();
     assert_eq!(served.len(), 2, "one operational record per served request");
     for record in &served {
-        assert_eq!(record["fields"]["error"], json!("evidence_not_available"));
+        assert_eq!(record["fields"]["error"], json!("evidence.unavailable"));
         assert_eq!(record["fields"]["category"], json!("evidence-unavailable"));
     }
     // A no-match failure and an ambiguous-match failure log the identical
@@ -884,7 +902,7 @@ async fn metrics_report_bounded_series_without_disclosing_request_content() {
         "evidence_http_requests_total{route=\"/health\",method=\"GET\",status=\"success\",error=\"none\"} 2\n"
     ));
     assert!(body.contains(
-        "evidence_http_requests_total{route=\"/v1/evidence-definitions\",method=\"GET\",status=\"client_error\",error=\"authentication_failed\"} 1\n"
+        "evidence_http_requests_total{route=\"/v1/evidence-definitions\",method=\"GET\",status=\"client_error\",error=\"auth.invalid_credential\"} 1\n"
     ));
     assert!(body.contains("evidence_http_request_duration_seconds_count{route=\"/health\""));
 
@@ -965,14 +983,14 @@ async fn a_configured_metrics_listener_serves_beside_the_evidence_listener() {
         .expect("the evidence listener answers");
     assert_eq!(
         on_evidence_listener.status(),
-        reqwest::StatusCode::BAD_REQUEST
+        reqwest::StatusCode::NOT_FOUND
     );
     assert_eq!(
         on_evidence_listener
             .json::<Value>()
             .await
             .expect("problem body")["code"],
-        json!("malformed_request")
+        json!("resource.not_found")
     );
 
     let _ = stop.send(());
@@ -1122,7 +1140,7 @@ async fn openapi_route_serves_the_generated_contract_without_authentication_or_s
 
     let document = http.get("/openapi.json").await;
     document.assert_status_ok();
-    assert_eq!(document.header("content-type"), "application/openapi+json");
+    assert_eq!(document.header("content-type"), "application/json");
     assert_eq!(document.header("cache-control"), "no-store");
 
     // The served bytes are the committed release artifact, not a second
@@ -1150,11 +1168,11 @@ async fn openapi_route_serves_the_generated_contract_without_authentication_or_s
     let rejected = http.post("/openapi.json").await;
     assert_eq!(
         rejected.status_code(),
-        ProblemCode::MalformedRequest.status()
+        ProblemCode::ResourceNotFound.status()
     );
     assert_eq!(
         rejected.json::<Value>()["code"],
-        json!(ProblemCode::MalformedRequest.code())
+        json!(ProblemCode::ResourceNotFound.code())
     );
 
     let audit = fs::read_to_string(&fixture.audit_path).expect("durable audit is readable");
@@ -1170,7 +1188,7 @@ async fn discovery_requires_authentication_and_returns_no_unentitled_definitions
     assert_eq!(missing.status_code(), axum::http::StatusCode::UNAUTHORIZED);
     assert_eq!(
         missing.json::<Value>()["code"],
-        json!("authentication_failed")
+        json!("auth.invalid_credential")
     );
 
     let filtered = http
@@ -1178,7 +1196,10 @@ async fn discovery_requires_authentication_and_returns_no_unentitled_definitions
         .add_header("authorization", format!("Bearer {}", access_token(None)))
         .await;
     assert_eq!(filtered.status_code(), axum::http::StatusCode::BAD_REQUEST);
-    assert_eq!(filtered.json::<Value>()["code"], json!("malformed_request"));
+    assert_eq!(
+        filtered.json::<Value>()["code"],
+        json!("evidence.invalid_request")
+    );
 
     let body_response = build_app(Arc::clone(&fixture.runtime))
         .oneshot(
@@ -1284,7 +1305,7 @@ async fn discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambig
         .json(&serde_json::to_value(adult_request()).expect("request serializes"))
         .await;
     assert_eq!(refused.status_code(), axum::http::StatusCode::FORBIDDEN);
-    assert_eq!(refused.json::<Value>()["code"], json!("not_authorized"));
+    assert_eq!(refused.json::<Value>()["code"], json!("evidence.denied"));
     assert!(prepared
         .server
         .received_requests()
@@ -1336,7 +1357,10 @@ async fn discovery_uses_the_bounded_per_principal_request_budget() {
         limited.status_code(),
         axum::http::StatusCode::TOO_MANY_REQUESTS
     );
-    assert_eq!(limited.json::<Value>()["code"], json!("rate_limited"));
+    assert_eq!(
+        limited.json::<Value>()["code"],
+        json!("evidence.rate_limited")
+    );
     assert_eq!(limited.header("retry-after"), "1");
     assert!(prepared
         .server
@@ -2100,7 +2124,7 @@ async fn authorization_refusal_is_minimally_audited() {
         .await;
 
     assert_eq!(response.status_code(), axum::http::StatusCode::FORBIDDEN);
-    assert_eq!(response.json::<Value>()["code"], json!("not_authorized"));
+    assert_eq!(response.json::<Value>()["code"], json!("evidence.denied"));
     assert!(prepared
         .server
         .received_requests()
@@ -2228,7 +2252,7 @@ async fn authorization_refusal_audit_failure_returns_service_unavailable() {
     );
     assert_eq!(
         response.json::<Value>()["code"],
-        json!("service_unavailable")
+        json!("service.unavailable")
     );
     assert!(fixture
         .server
@@ -2489,10 +2513,11 @@ async fn declared_existence_disclosure_mode_governs_the_public_collapse() {
     // A uniquely found record with inconsistent derivation inputs is publicly
     // indistinguishable from no record at all.
     assert_eq!(mismatch.problem(), unknown.problem());
-    let operation = "operation-existence-problem-shape-check-000001";
+    let trace = registry_platform_httpsec::TraceId::parse("0123456789abcdef0123456789abcdef")
+        .expect("trace parses");
     assert_eq!(
-        serde_json::to_value(mismatch.problem().body(operation)).expect("problem serializes"),
-        serde_json::to_value(unknown.problem().body(operation)).expect("problem serializes"),
+        serde_json::to_value(mismatch.problem().body(trace.clone())).expect("problem serializes"),
+        serde_json::to_value(unknown.problem().body(trace)).expect("problem serializes"),
     );
 }
 
@@ -2533,7 +2558,10 @@ async fn request_nonce_is_strict_and_never_reaches_source_or_audit() {
             .json(&variant)
             .await;
         assert_eq!(response.status_code(), axum::http::StatusCode::BAD_REQUEST);
-        assert_eq!(response.json::<Value>()["code"], json!("malformed_request"));
+        assert_eq!(
+            response.json::<Value>()["code"],
+            json!("evidence.invalid_request")
+        );
     }
     // A duplicate requestNonce member fails strict JSON parsing.
     let duplicate = build_app(Arc::clone(&fixture.runtime))
@@ -2630,10 +2658,10 @@ async fn request_batch_bounds_unique_nonces_and_every_item_before_source_access(
         );
 
     for (request, expected_code) in [
-        (adult_request_batch(0), "malformed_request"),
-        (adult_request_batch(17), "malformed_request"),
-        (duplicate, "malformed_request"),
-        (invalid_later_item, "invalid_selector"),
+        (adult_request_batch(0), "evidence.invalid_request"),
+        (adult_request_batch(17), "evidence.invalid_request"),
+        (duplicate, "evidence.invalid_request"),
+        (invalid_later_item, "request.selector_invalid"),
     ] {
         let response = http
             .post("/v1/evidence/batch")
@@ -2693,7 +2721,7 @@ async fn request_batch_later_authorization_refusal_precedes_missing_source_crede
         .await;
 
     assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
-    assert_eq!(response.json::<Value>()["code"], json!("not_authorized"));
+    assert_eq!(response.json::<Value>()["code"], json!("evidence.denied"));
     assert!(server
         .received_requests()
         .await
@@ -2730,10 +2758,7 @@ async fn request_batch_accept_negotiation_is_exact_and_precedes_source_access() 
         .json(&adult_request_batch(1))
         .await;
     assert_eq!(missing.status_code(), StatusCode::NOT_ACCEPTABLE);
-    assert_eq!(
-        missing.json::<Value>()["code"],
-        "response_format_not_acceptable"
-    );
+    assert_eq!(missing.json::<Value>()["code"], "format.unsupported");
     assert_eq!(missing.header("vary"), "Accept");
 
     for invalid in [
@@ -2756,10 +2781,7 @@ async fn request_batch_accept_negotiation_is_exact_and_precedes_source_access() 
             StatusCode::NOT_ACCEPTABLE,
             "{invalid}"
         );
-        assert_eq!(
-            response.json::<Value>()["code"],
-            "response_format_not_acceptable"
-        );
+        assert_eq!(response.json::<Value>()["code"], "format.unsupported");
         assert_eq!(response.header("vary"), "Accept");
     }
 
@@ -3080,7 +3102,7 @@ async fn request_batch_optimized_source_failure_aborts_after_one_call_without_se
     assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(response.header("content-type"), "application/problem+json");
     let problem = response.json::<Value>();
-    assert_eq!(problem["code"], json!("dependency_unavailable"));
+    assert_eq!(problem["code"], json!("source.unavailable"));
     assert!(problem.get("items").is_none());
 
     let journal = server
@@ -3411,7 +3433,7 @@ async fn request_batch_later_dependency_failure_has_one_value_free_abort_and_no_
         response.status_code(),
         ProblemCode::DependencyUnavailable.status()
     );
-    assert_eq!(response.json::<Value>()["code"], "dependency_unavailable");
+    assert_eq!(response.json::<Value>()["code"], "source.unavailable");
     assert_eq!(
         fixture
             .server
@@ -3498,7 +3520,7 @@ async fn accept_negotiation_is_closed_and_fails_before_source_access() {
         );
         assert_eq!(
             response.json::<Value>()["code"],
-            json!("response_format_not_acceptable")
+            json!("format.unsupported")
         );
         assert_eq!(response.header("vary"), "Accept");
     }
@@ -3562,7 +3584,7 @@ async fn unsigned_output_requires_both_bundle_and_grant_permission() {
         axum::http::StatusCode::FORBIDDEN
     );
     let bundle_denied_body = bundle_denied.json::<Value>();
-    assert_eq!(bundle_denied_body["code"], json!("not_authorized"));
+    assert_eq!(bundle_denied_body["code"], json!("evidence.denied"));
     assert!(prepared
         .server
         .received_requests()
@@ -3610,7 +3632,7 @@ async fn unsigned_output_requires_both_bundle_and_grant_permission() {
         axum::http::StatusCode::FORBIDDEN
     );
     let grant_denied_body = grant_denied.json::<Value>();
-    assert_eq!(grant_denied_body["code"], json!("not_authorized"));
+    assert_eq!(grant_denied_body["code"], json!("evidence.denied"));
     // The two denials must not reveal which layer withheld permission.
     assert_eq!(bundle_denied_body["code"], grant_denied_body["code"]);
     assert_eq!(bundle_denied_body["title"], grant_denied_body["title"]);
@@ -3971,7 +3993,7 @@ async fn a_missing_holder_key_is_answered_after_authorization_not_before_it() {
         .json(&body)
         .await;
     assert_eq!(unmatched.status_code(), axum::http::StatusCode::FORBIDDEN);
-    assert_eq!(unmatched.json::<Value>()["code"], json!("not_authorized"));
+    assert_eq!(unmatched.json::<Value>()["code"], json!("evidence.denied"));
 
     // An authorized requester asking for a serialization the mode does not
     // permit gets the same single denial. It never says which of the bundle
@@ -3987,13 +4009,13 @@ async fn a_missing_holder_key_is_answered_after_authorization_not_before_it() {
     );
     assert_eq!(
         wrong_format.json::<Value>()["code"],
-        json!("not_authorized")
+        json!("evidence.denied")
     );
 
     // The two denials came from different layers, and the caller cannot tell
     // them apart. The bodies are compared whole, not just the code, because a
     // title or a type that differed by layer would be the same oracle. The
-    // per-request operation is the one member expected to vary, so it is
+    // per-request trace ID is the one member expected to vary, so it is
     // removed rather than assumed equal.
     let mut authorization_denial = unmatched.json::<Value>();
     let mut format_denial = wrong_format.json::<Value>();
@@ -4001,7 +4023,7 @@ async fn a_missing_holder_key_is_answered_after_authorization_not_before_it() {
         denial
             .as_object_mut()
             .expect("a problem body is an object")
-            .remove("operation");
+            .remove("traceId");
     }
     assert_eq!(
         authorization_denial, format_denial,
@@ -4025,7 +4047,7 @@ async fn a_missing_holder_key_is_answered_after_authorization_not_before_it() {
     assert_eq!(malformed.status_code(), axum::http::StatusCode::BAD_REQUEST);
     assert_eq!(
         malformed.json::<Value>()["code"],
-        json!("malformed_request")
+        json!("evidence.invalid_request")
     );
 
     assert!(
@@ -4759,7 +4781,7 @@ async fn the_holder_bound_acceptance_bundle_serves_no_unconfirmed_serialization(
             );
             assert_eq!(
                 refused.json::<Value>()["code"],
-                json!("not_authorized"),
+                json!("evidence.denied"),
                 "{requirement} explained which gate withheld {accept}"
             );
         }
@@ -4823,7 +4845,10 @@ async fn the_holder_bound_acceptance_bundle_batches_every_definition_under_its_c
             axum::http::StatusCode::BAD_REQUEST,
             "{requirement} released a batch above the declared ceiling"
         );
-        assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+        assert_eq!(
+            refused.json::<Value>()["code"],
+            json!("evidence.invalid_request")
+        );
     }
     assert!(
         prepared
@@ -5068,7 +5093,10 @@ async fn a_batch_above_the_declared_ceiling_is_refused_before_source_access() {
         .json(&body)
         .await;
     assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
-    assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+    assert_eq!(
+        refused.json::<Value>()["code"],
+        json!("evidence.invalid_request")
+    );
     assert!(
         prepared
             .server
@@ -5096,7 +5124,10 @@ async fn a_batch_above_the_declared_ceiling_is_refused_before_source_access() {
         .json(&oversized)
         .await;
     assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
-    assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+    assert_eq!(
+        refused.json::<Value>()["code"],
+        json!("evidence.invalid_request")
+    );
 }
 
 /// Two keys that are distinct JSON but one key by RFC 7638 thumbprint would
@@ -5131,7 +5162,10 @@ async fn a_repeated_holder_key_thumbprint_is_refused_before_source_access() {
             .json(&body)
             .await;
         assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
-        assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+        assert_eq!(
+            refused.json::<Value>()["code"],
+            json!("evidence.invalid_request")
+        );
     }
 
     assert!(
@@ -5163,7 +5197,10 @@ async fn the_singular_media_type_requires_exactly_one_holder_key() {
         .json(&body)
         .await;
     assert_eq!(refused.status_code(), axum::http::StatusCode::BAD_REQUEST);
-    assert_eq!(refused.json::<Value>()["code"], json!("malformed_request"));
+    assert_eq!(
+        refused.json::<Value>()["code"],
+        json!("evidence.invalid_request")
+    );
 
     // One key is a batch of one, so the batch media type still serves it.
     let mut single = serde_json::to_value(adult_request()).expect("request serializes");
@@ -5245,7 +5282,7 @@ async fn audience_scoped_credential_issuance_answers_at_most_one_holder_key() {
         .json(&body)
         .await;
     assert_eq!(batch.status_code(), axum::http::StatusCode::FORBIDDEN);
-    assert_eq!(batch.json::<Value>()["code"], json!("not_authorized"));
+    assert_eq!(batch.json::<Value>()["code"], json!("evidence.denied"));
 
     // Two keys under a singular media type asks for two credentials over a
     // serialization that carries one. It is refused rather than answered for
@@ -5260,7 +5297,10 @@ async fn audience_scoped_credential_issuance_answers_at_most_one_holder_key() {
         .json(&crowded)
         .await;
     assert_eq!(crowded.status_code(), axum::http::StatusCode::BAD_REQUEST);
-    assert_eq!(crowded.json::<Value>()["code"], json!("malformed_request"));
+    assert_eq!(
+        crowded.json::<Value>()["code"],
+        json!("evidence.invalid_request")
+    );
 }
 
 /// There is no partial batch. A failure on any member releases nothing, and
@@ -5334,7 +5374,7 @@ async fn sd_jwt_format_not_permitted_by_bundle() {
         .await;
 
     assert_eq!(response.status_code(), axum::http::StatusCode::FORBIDDEN);
-    assert_eq!(response.json::<Value>()["code"], json!("not_authorized"));
+    assert_eq!(response.json::<Value>()["code"], json!("evidence.denied"));
     assert!(
         fixture
             .server
@@ -5367,7 +5407,7 @@ async fn sd_jwt_format_not_permitted_by_grant() {
         .json(&serde_json::to_value(adult_request()).expect("request serializes"))
         .await;
     assert_eq!(denied.status_code(), axum::http::StatusCode::FORBIDDEN);
-    assert_eq!(denied.json::<Value>()["code"], json!("not_authorized"));
+    assert_eq!(denied.json::<Value>()["code"], json!("evidence.denied"));
     assert!(prepared
         .server
         .received_requests()
@@ -5500,7 +5540,7 @@ async fn sd_jwt_holder_key_with_private_member_rejected() {
             "a holder key carrying private material is not a request"
         );
         let problem = response.json::<Value>();
-        assert_eq!(problem["code"], json!("malformed_request"));
+        assert_eq!(problem["code"], json!("evidence.invalid_request"));
         let text = response.text();
         assert!(
             !text.contains("nWGxne") && !text.contains("c2VjcmV0"),
@@ -5549,7 +5589,10 @@ async fn sd_jwt_holder_key_wrong_algorithm_rejected() {
             axum::http::StatusCode::BAD_REQUEST,
             "{holder_key} is outside the closed holder-key profile"
         );
-        assert_eq!(response.json::<Value>()["code"], json!("malformed_request"));
+        assert_eq!(
+            response.json::<Value>()["code"],
+            json!("evidence.invalid_request")
+        );
     }
 
     // The same request without a holder key still succeeds, so the rejection
@@ -6747,9 +6790,9 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
                     .and_then(Value::as_str)
                     .expect("failed case names its public problem")
                 {
-                    "evidence_not_available" => ProblemCode::EvidenceNotAvailable,
-                    "dependency_unavailable" => ProblemCode::DependencyUnavailable,
-                    "service_unavailable" => ProblemCode::ServiceUnavailable,
+                    "evidence.unavailable" => ProblemCode::EvidenceNotAvailable,
+                    "source.unavailable" => ProblemCode::DependencyUnavailable,
+                    "service.unavailable" => ProblemCode::ServiceUnavailable,
                     _ => panic!("unknown public problem"),
                 };
                 response.assert_status(expected.status());
@@ -10348,7 +10391,7 @@ const CONSTANT_SOURCE_BODY: &str = r#"{"total":1,"date_of_birth":"2000-01-01"}"#
 ///
 /// - `requestsPerPrincipalPerMinute: 60` with `burstPerPrincipal: 10` is one
 ///   request per second per principal, so an unlifted run measures the rate
-///   limiter returning `rate_limited`.
+///   limiter returning `evidence.rate_limited`.
 /// - `maximumConcurrentRequests: 64` admits fewer requests than this driver
 ///   offers, so an unlifted run measures admission queueing.
 /// - `concurrencyLimit: 8` per source caps outbound calls in flight, so an

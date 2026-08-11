@@ -2,6 +2,8 @@
 
 const http = require('node:http');
 
+const TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+
 /**
  * Start a loopback-only HTTP server for one test's stub Evidence deployment.
  *
@@ -25,10 +27,13 @@ function startStubServer(routes) {
       requests.push({ method: req.method, url: req.url, headers: req.headers, body });
       const handler = table.get(`${req.method} ${req.url}`);
       if (typeof handler !== 'function') {
-        res.writeHead(404, { 'content-type': 'text/plain' });
+        res.writeHead(404, { 'content-type': 'text/plain', traceparent: TRACEPARENT });
         res.end('no stub route for this request');
         return;
       }
+      // Every protocol response carries one trace context. A route can replace
+      // this default to exercise malformed or duplicate-header handling.
+      res.setHeader('traceparent', TRACEPARENT);
       handler(req, res, body);
     });
   });

@@ -319,7 +319,7 @@ through a governed read, and privacy regressions that expose raw subject identif
   inconsistent-derivation outcomes collapse by default to one public problem shape, with the
   granular category kept in audit without counts, so response shape, message, or timing cannot
   be used to probe registry membership (`V1-I16`). Every authorization refusal likewise
-  collapses to one generic `not_authorized` problem that does not reveal which check failed.
+  collapses to one generic `evidence.denied` problem that does not reveal which check failed.
 - Cross-purpose or cross-relying-party tracking: Subject bindings are derived with a keyed,
   domain-separated function over audience, purpose, role, profile, key version, and the
   complete canonical selector bundle, so the same person is not linkable across purposes or

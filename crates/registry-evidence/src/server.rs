@@ -32,6 +32,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_httpsec::CspBuilder;
 use serde::Serialize;
@@ -46,7 +47,7 @@ use crate::{
         request_nonce_is_canonical, EvidenceRequest, EvidenceRequestBatch,
         EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
-    observability::{self, operation_id, Metrics},
+    observability::{self, operation_id, Metrics, OperationId},
     problem::ProblemCode,
     runtime::{EvidenceRuntime, RuntimeFailure},
     EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
@@ -81,8 +82,8 @@ pub(crate) const ROUTE_TEMPLATES: [&str; 8] = [
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
-const OPENAPI_MEDIA_TYPE: &str = "application/openapi+json";
 const RETRY_AFTER_SECONDS: &str = "1";
+pub(crate) const BEARER_AUTH_CHALLENGE: &str = "Bearer realm=\"registry-evidence\"";
 
 #[derive(Clone)]
 struct ServerState {
@@ -761,7 +762,7 @@ async fn openapi(request: Request<Body>) -> Response {
     match served_openapi_document() {
         Some(document) => bytes_response(
             StatusCode::OK,
-            OPENAPI_MEDIA_TYPE,
+            JSON_MEDIA_TYPE,
             document.as_bytes().to_vec(),
         ),
         None => problem_response(
@@ -829,7 +830,7 @@ struct JwtVcIssuerMetadata<'a> {
 
 async fn unknown_route(request: Request<Body>) -> Response {
     problem_response(
-        ProblemCode::MalformedRequest,
+        ProblemCode::ResourceNotFound,
         "unknown-route",
         &operation_id(request.extensions()),
     )
@@ -888,23 +889,12 @@ fn bearer_token(headers: &HeaderMap) -> Result<&str, ProblemCode> {
     if values.next().is_some() {
         return Err(ProblemCode::AuthenticationFailed);
     }
-    let value = value
-        .to_str()
-        .map_err(|_| ProblemCode::AuthenticationFailed)?;
-    // The HTTP authentication grammar matches the scheme case-insensitively.
-    // The single-header, single-space, and token-value rules stay exact.
-    let (scheme, token) = value
-        .split_once(' ')
-        .ok_or(ProblemCode::AuthenticationFailed)?;
-    if !scheme.eq_ignore_ascii_case("Bearer")
-        || token.is_empty()
-        || token
-            .bytes()
-            .any(|byte| byte.is_ascii_whitespace() || byte == b',')
-    {
-        return Err(ProblemCode::AuthenticationFailed);
-    }
-    Ok(token)
+    parse_bearer_token(
+        value
+            .to_str()
+            .map_err(|_| ProblemCode::AuthenticationFailed)?,
+    )
+    .map_err(|_| ProblemCode::AuthenticationFailed)
 }
 
 fn has_exact_content_type(headers: &HeaderMap, expected: &str) -> bool {
@@ -934,7 +924,7 @@ fn remaining(limit: Duration, started: Instant) -> Option<Duration> {
     limit.checked_sub(started.elapsed())
 }
 
-fn runtime_failure_response(failure: RuntimeFailure, operation: &str) -> Response {
+fn runtime_failure_response(failure: RuntimeFailure, operation: &OperationId) -> Response {
     problem_response(failure.problem(), failure.category(), operation)
 }
 
@@ -944,10 +934,14 @@ fn runtime_failure_response(failure: RuntimeFailure, operation: &str) -> Respons
 /// afterwards so that the compiler, not reviewer discipline, keeps the
 /// operational log's placeholder meaning exactly one thing: a request that
 /// raised no failure. It matters most under the coarse public codes, where
-/// several unrelated internal steps share `service_unavailable` and the
+/// several unrelated internal steps share `service.unavailable` and the
 /// category is the only field that separates them.
-fn problem_response(code: ProblemCode, category: &'static str, operation: &str) -> Response {
-    let body = code.body(operation);
+fn problem_response(
+    code: ProblemCode,
+    category: &'static str,
+    operation: &OperationId,
+) -> Response {
+    let body = code.body(operation.trace_id());
     let mut response = serialize_response(code.status(), PROBLEM_MEDIA_TYPE, &body)
         .unwrap_or_else(|| empty_response(StatusCode::INTERNAL_SERVER_ERROR));
     // The observation layer reads the code and the category from here rather
@@ -961,7 +955,7 @@ fn problem_response(code: ProblemCode, category: &'static str, operation: &str) 
     if code == ProblemCode::AuthenticationFailed {
         response.headers_mut().insert(
             axum::http::header::WWW_AUTHENTICATE,
-            HeaderValue::from_static("Bearer"),
+            HeaderValue::from_static(BEARER_AUTH_CHALLENGE),
         );
     }
     if code == ProblemCode::RateLimited {
@@ -1214,10 +1208,11 @@ mod tests {
 
     #[tokio::test]
     async fn problem_responses_have_closed_media_and_challenge_headers() {
+        let operation = operation_id(&axum::http::Extensions::new());
         let authentication = problem_response(
             ProblemCode::AuthenticationFailed,
             "authentication",
-            "01K1EVIDENCEOPERATION0000000",
+            &operation,
         );
         assert_eq!(authentication.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(
@@ -1228,14 +1223,12 @@ mod tests {
             authentication
                 .headers()
                 .get(axum::http::header::WWW_AUTHENTICATE),
-            Some(&HeaderValue::from_static("Bearer"))
+            Some(&HeaderValue::from_static(
+                "Bearer realm=\"registry-evidence\""
+            ))
         );
 
-        let rate = problem_response(
-            ProblemCode::RateLimited,
-            "rate-limit",
-            "01K1EVIDENCEOPERATION0000000",
-        );
+        let rate = problem_response(ProblemCode::RateLimited, "rate-limit", &operation);
         assert_eq!(rate.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(
             rate.headers().get(RETRY_AFTER),
@@ -1252,11 +1245,8 @@ mod tests {
     /// exactly where the category is the only signal that separates causes.
     #[tokio::test]
     async fn every_refusal_carries_an_internal_category() {
-        let boundary = problem_response(
-            ProblemCode::ServiceUnavailable,
-            "time-budget",
-            "01K1EVIDENCEOPERATION0000000",
-        );
+        let operation = operation_id(&axum::http::Extensions::new());
+        let boundary = problem_response(ProblemCode::ServiceUnavailable, "time-budget", &operation);
         assert_eq!(
             boundary
                 .extensions()
@@ -1268,11 +1258,9 @@ mod tests {
 
     #[test]
     fn operation_ids_meet_the_audit_contract() {
-        // The public `operation` field is frozen to a 26-character Crockford
-        // Base32 ULID by the generated problem schema (^[0-9A-HJKMNP-TV-Z]{26}$).
-        // Pin the producer to that exact shape so a future change (for example
-        // swapping ULID for a hyphenated UUID) fails loudly here instead of
-        // silently breaking the frozen contract.
+        // Operation remains a server-minted 26-character Crockford Base32 ULID
+        // for audit correlation even though the public boundary exposes W3C
+        // trace context instead.
         let operation = operation_id(&axum::http::Extensions::new());
         assert_operation_contract(&operation);
     }
@@ -1322,16 +1310,108 @@ mod tests {
             .headers()
             .get("strict-transport-security")
             .is_none());
-        // The identifier the caller can quote back is produced by the boundary
-        // itself, so it must meet the same frozen shape as the audit field.
-        assert_operation_contract(
-            response
+        let traceparent = response
+            .headers()
+            .get(crate::observability::CORRELATION_HEADER)
+            .expect("every response carries W3C trace context")
+            .to_str()
+            .expect("the traceparent header is ASCII");
+        assert_eq!(traceparent.len(), 55);
+        assert!(traceparent.starts_with("00-"));
+    }
+
+    #[tokio::test]
+    async fn response_layers_preserve_only_valid_trace_context_and_keep_operation_internal() {
+        async fn problem_probe(request: Request<Body>) -> Response {
+            let operation = operation_id(request.extensions());
+            problem_response(ProblemCode::MalformedRequest, "trace-probe", &operation)
+        }
+
+        async fn assert_problem_trace(
+            app: Router,
+            request: Request<Body>,
+            expected: Option<&str>,
+            replaced: Option<&str>,
+        ) {
+            let response = app
+                .oneshot(request)
+                .await
+                .expect("infallible router responds");
+            assert!(response.headers().get("x-request-id").is_none());
+            assert!(response.headers().get("tracestate").is_none());
+            let traceparent = response
                 .headers()
-                .get(crate::observability::CORRELATION_HEADER)
-                .expect("every response carries a correlation identifier")
+                .get("traceparent")
+                .expect("response carries traceparent")
                 .to_str()
-                .expect("the correlation header is ASCII"),
-        );
+                .expect("traceparent is ASCII")
+                .to_owned();
+            if let Some(expected) = expected {
+                assert_eq!(&traceparent[3..35], expected);
+            }
+            if let Some(replaced) = replaced {
+                assert_ne!(&traceparent[3..35], replaced);
+            }
+            let body = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .expect("problem body reads");
+            let body: serde_json::Value = serde_json::from_slice(&body).expect("problem is JSON");
+            assert_eq!(
+                &traceparent[3..35],
+                body["traceId"].as_str().expect("trace ID is text")
+            );
+            assert!(body.get("operation").is_none());
+        }
+
+        let valid = "0123456789abcdef0123456789abcdef";
+        let base = || {
+            response_layers(
+                Router::new().route("/", get(problem_probe)),
+                Arc::new(Metrics::default()),
+            )
+        };
+        assert_problem_trace(
+            base(),
+            Request::builder()
+                .uri("/")
+                .header("traceparent", format!("00-{valid}-0123456789abcdef-01"))
+                .header("tracestate", "vendor=caller-controlled")
+                .body(Body::empty())
+                .expect("request builds"),
+            Some(valid),
+            None,
+        )
+        .await;
+        assert_problem_trace(
+            base(),
+            Request::builder()
+                .uri("/")
+                .header(
+                    "traceparent",
+                    "00-0123456789abcdef0123456789abcdeF-0123456789abcdef-01",
+                )
+                .body(Body::empty())
+                .expect("request builds"),
+            None,
+            Some(valid),
+        )
+        .await;
+        assert_problem_trace(
+            base(),
+            Request::builder()
+                .uri("/")
+                .header("traceparent", format!("00-{valid}-0123456789abcdef-01"))
+                .header("traceparent", format!("00-{valid}-fedcba9876543210-01"))
+                .body(Body::empty())
+                .expect("request builds"),
+            None,
+            Some(valid),
+        )
+        .await;
+
+        let first = operation_id(&axum::http::Extensions::new());
+        let second = operation_id(&axum::http::Extensions::new());
+        assert_ne!(first.as_str(), second.as_str());
     }
 
     #[tokio::test]

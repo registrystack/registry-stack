@@ -136,7 +136,7 @@ request_requirements:
       matching and after the format gate, and before selector resolution, so
       the endpoint never becomes an unauthenticated requirement-existence
       oracle.
-    code: malformed_request
+    code: evidence.invalid_request
   processing_reach: >-
     Under holder-bound the holder key is no longer inert. Its thumbprint
     reaches subject-binding derivation. It still never reaches authorization,
@@ -174,7 +174,7 @@ format_restriction:
     before selector resolution, credentials, or source access: the bundle
     permits the requested serialization, the one complete matched grant permits
     it, that grant permits the requested binding mode, and the mode permits the
-    serialization. Any of them failing produces one not_authorized problem. The
+    serialization. Any of them failing produces one evidence.denied problem. The
     response body is built from the problem code alone, so it is identical to
     the denial an unmatched grant produces; the internal category that
     distinguishes the four is recorded in server-side response extensions for

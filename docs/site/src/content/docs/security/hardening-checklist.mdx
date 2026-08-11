@@ -331,7 +331,7 @@ serve, and a startup that fails rather than degrades.
   request timeline from (REQ-SEC-G-008, REQ-SEC-G-009). For Registry Mint, preserve the chain and
   matching HMAC key, then run `mint verify-audit` before and after moving it.
 - Expect a `403` from Evidence Gateway to tell you nothing. Every authorization refusal collapses to one
-  generic `not_authorized` problem, deliberately, so it is not an oracle for which check failed.
+  generic `evidence.denied` problem, deliberately, so it is not an oracle for which check failed.
   Debug it from trusted local state in this order: the bearer principal is in the deployed
   bundle's audience; a grant matches the requested requirement, purpose, and subject roles; the
   grant carries the claimed authority; and, only for an unsigned or credential-format request,
@@ -383,7 +383,7 @@ serve, and a startup that fails rather than degrades.
 | A second Evidence Gateway process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
 | A second Registry Mint process fails to start, or `mint verify-audit` rejects its chain | Another writer holds `audit.path`, or retained records were changed, reordered, or written with another key | Run one writer per path and restore the matching retained chain and HMAC key; do not delete audit records to make startup pass |
 | Registry Mint returns `500 server_error` and then fails readiness | The process could not durably append a token decision and poisoned its audit writer | Stop traffic, preserve and verify the chain, restore writable durable storage, and restart Mint; the failed request did not receive a token |
-| Evidence Gateway returns `403 not_authorized` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit chain |
+| Evidence Gateway returns `403 evidence.denied` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit chain |
 
 ## Next
 

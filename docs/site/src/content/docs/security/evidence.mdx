@@ -148,6 +148,13 @@ operator-private listener, and every series label is drawn from a closed set
 (route template, method, status category, problem code) rather than from
 request content (`V1-I33`).
 
+### Public trace correlation
+
+Evidence Gateway returns a bounded W3C trace identifier for public correlation,
+including in a problem's `traceId`, but keeps the server-minted audit operation
+identifier internal. It does not echo `tracestate`, so caller tracing metadata
+cannot become a response or audit channel.
+
 ### Cross-cutting controls
 
 The matrix also pins 23 cross-cutting controls, keyed by name rather than a

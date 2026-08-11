@@ -1114,7 +1114,7 @@ const REPORTED_SHAPE_VIOLATIONS: usize = 5;
 ///
 /// The two pointers are the whole diagnosis and neither is a value. Without
 /// them a stale response schema and a source that changed its protocol are the
-/// same `dependency_unavailable`, which sends an operator to the provider for a
+/// same `source.unavailable`, which sends an operator to the provider for a
 /// defect that lives in the bundle.
 ///
 /// Nothing from the response body is recorded: the paths are members the
@@ -2156,7 +2156,7 @@ fn extract_batch(response, context) {
         );
     }
 
-    /// A shape rejection reaches the requester as `dependency_unavailable`,
+    /// A shape rejection reaches the requester as `source.unavailable`,
     /// which names the provider. When the real defect is a bundle schema that
     /// no longer describes the source, the operator log is the only place that
     /// can say so, and it can only say it by naming the member and the rule.

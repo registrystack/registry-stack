@@ -45,13 +45,13 @@ cases:
     signed_success: true
   - id: missing-fact
     source: {total: 1, records: [{licence_state: CURRENT, valid_from: '2025-01-01', historical_states: []}]}
-    expected_public_problem: evidence_not_available
+    expected_public_problem: evidence.unavailable
     derivation_runs: false
     signed_success: false
-  - {id: missing-record, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
-  - {id: no-match, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
-  - {id: ambiguous, source: {total: 2, records: [{}, {}]}, expected_lookup: ambiguous, expected_public_problem: evidence_not_available, derivation_runs: false, signed_success: false}
-  - {id: source-failure, source_failure: wrong-media-type, expected_public_problem: dependency_unavailable, signed_success: false}
+  - {id: missing-record, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
+  - {id: no-match, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
+  - {id: ambiguous, source: {total: 2, records: [{}, {}]}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
+  - {id: source-failure, source_failure: wrong-media-type, expected_public_problem: source.unavailable, signed_success: false}
   - id: negative-exact-date-leak
     injected_derivation:
       - {concept_id: urn:example:fixture:concept:licence-active, value: true}

@@ -96,7 +96,7 @@ cases:
       results: []
     expected:
       lookup: no_match
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
   - id: ambiguous-child
@@ -114,7 +114,7 @@ cases:
         - declaration: {}
     expected:
       lookup: ambiguous
-      publicProblem: evidence_not_available
+      publicProblem: evidence.unavailable
       derivationRuns: false
       signed: false
   - id: matched-record-without-tracking-id
@@ -202,7 +202,7 @@ cases:
   - id: source-failure
     sourceFailure: timeout
     expected:
-      publicProblem: dependency_unavailable
+      publicProblem: source.unavailable
       signed: false
   - id: anti-reconstruction
     bundleMutation: duplicate-disclosure-family

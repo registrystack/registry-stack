@@ -1,8 +1,8 @@
 //! Version 1 operational telemetry for the Evidence HTTP boundary.
 //!
 //! Operational records describe service health and performance only. The
-//! reviewed field set is route template, operation identifier, duration,
-//! status category, the public problem code, and the runtime's internal
+//! reviewed field set is route template, operation identifier, trace ID,
+//! duration, status category, the public problem code, and the runtime's internal
 //! failure category; request bodies, selector profiles or values, source
 //! responses, Supported Values, credentials, tokens, authority grants, and
 //! script inputs are outside it. The internal failure category is safe to log
@@ -19,6 +19,7 @@
 
 use std::{
     collections::BTreeMap,
+    ops::Deref,
     sync::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
@@ -29,12 +30,13 @@ use std::{
 use axum::{
     body::Body,
     extract::{MatchedPath, State},
-    http::{header::CONTENT_TYPE, HeaderName, HeaderValue, Method, Request, StatusCode},
+    http::{header::CONTENT_TYPE, HeaderValue, Method, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
+use registry_platform_httpsec::{TraceContext, TraceId};
 use ulid::Ulid;
 
 use crate::{
@@ -43,12 +45,12 @@ use crate::{
     rate_limit::EvidenceRateLimiter,
 };
 
-/// Correlation identifier returned to the caller on every response.
+/// Public correlation header returned on every response.
 ///
-/// Requests carry no inbound correlation value: the listener contract fixes
-/// `trustProxyIdentityHeaders` to false, so a client-supplied identifier would
-/// let a caller choose the key its own records are filed under.
-pub(crate) const CORRELATION_HEADER: &str = "x-request-id";
+/// Evidence uses the shared W3C trace transport at this boundary. The
+/// server-minted operation remains internal and never becomes caller-chosen.
+#[cfg(test)]
+pub(crate) const CORRELATION_HEADER: &str = "traceparent";
 
 /// Target of the per-request operational record.
 pub(crate) const REQUEST_LOG_TARGET: &str = "registry_evidence::request";
@@ -67,21 +69,43 @@ const METRICS_MEDIA_TYPE: &str = "text/plain; version=0.0.4";
 /// Upper bounds, in seconds, of the request duration histogram.
 const DURATION_BUCKETS: [f64; 9] = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0];
 
-/// The request-scoped correlation identifier, minted once at the boundary.
+/// The request-scoped internal audit identifier, minted once at the boundary.
 ///
 /// Handlers read it from the request extensions rather than minting their own,
-/// so the problem body, the audit record, the operational log record, and the
-/// response header all name the same operation.
+/// so the audit record and operational log name the same server-minted
+/// operation. The W3C trace is carried alongside it for public correlation.
 #[derive(Clone)]
-pub(crate) struct OperationId(Arc<str>);
+pub(crate) struct OperationId {
+    value: Arc<str>,
+    trace: TraceContext,
+}
 
 impl OperationId {
-    fn new() -> Self {
-        Self(Ulid::new().to_string().into())
+    fn new(trace: TraceContext) -> Self {
+        Self {
+            value: Ulid::new().to_string().into(),
+            trace,
+        }
     }
 
     pub(crate) fn as_str(&self) -> &str {
-        &self.0
+        &self.value
+    }
+
+    pub(crate) fn trace_id(&self) -> TraceId {
+        self.trace.trace_id.clone()
+    }
+
+    fn apply_trace(&self, headers: &mut axum::http::HeaderMap) {
+        self.trace.apply(headers);
+    }
+}
+
+impl Deref for OperationId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
     }
 }
 
@@ -98,10 +122,10 @@ pub(crate) struct FailureCategory(pub(crate) &'static str);
 /// extension is always present. A handler reached without one would otherwise
 /// report an operation that correlates with nothing, so the missing case mints
 /// a fresh identifier rather than reporting an empty one.
-pub(crate) fn operation_id(extensions: &axum::http::Extensions) -> String {
+pub(crate) fn operation_id(extensions: &axum::http::Extensions) -> OperationId {
     extensions.get::<OperationId>().map_or_else(
-        || OperationId::new().as_str().to_owned(),
-        |id| id.0.to_string(),
+        || OperationId::new(TraceContext::server_created()),
+        Clone::clone,
     )
 }
 
@@ -142,7 +166,7 @@ pub(crate) async fn observe(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let operation = OperationId::new();
+    let operation = OperationId::new(TraceContext::from_headers(request.headers()));
     let route = route_template(&request);
     let method = normalized_method(request.method());
     request.extensions_mut().insert(operation.clone());
@@ -163,17 +187,14 @@ pub(crate) async fn observe(
         .extensions()
         .get::<FailureCategory>()
         .map_or(NO_CATEGORY, |category| category.0);
-    response.headers_mut().insert(
-        HeaderName::from_static(CORRELATION_HEADER),
-        HeaderValue::from_str(operation.as_str())
-            .expect("a Crockford base32 identifier is a valid header value"),
-    );
+    operation.apply_trace(response.headers_mut());
 
     metrics.record(route, method, status, error, elapsed);
     tracing::info!(
         target: REQUEST_LOG_TARGET,
         route,
         operation = operation.as_str(),
+        trace_id = operation.trace_id().as_str(),
         duration_ms = duration_milliseconds(elapsed),
         status = status.as_str(),
         error,
@@ -486,7 +507,27 @@ mod tests {
             1,
             "unrecognized methods collapse onto one series"
         );
-        assert!(rendered.contains("status=\"client_error\",error=\"malformed_request\"} 2\n"));
+        assert!(
+            rendered.contains("status=\"client_error\",error=\"evidence.invalid_request\"} 2\n")
+        );
+    }
+
+    #[test]
+    fn repeated_inbound_trace_ids_keep_distinct_server_minted_operations() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            HeaderValue::from_static("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"),
+        );
+        let first = OperationId::new(TraceContext::from_headers(&headers));
+        let second = OperationId::new(TraceContext::from_headers(&headers));
+
+        assert_eq!(
+            first.trace_id().as_str(),
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(first.trace_id(), second.trace_id());
+        assert_ne!(first.as_str(), second.as_str());
     }
 
     #[test]

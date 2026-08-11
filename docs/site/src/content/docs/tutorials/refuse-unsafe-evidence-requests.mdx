@@ -110,7 +110,7 @@ Inspect the public problem:
 python3 -m json.tool unauthorized-response.json
 ```
 
-The response identifies only the closed `not_authorized` problem and an opaque operation ID. It
+The response identifies only the closed `evidence.denied` problem and public trace ID. It
 does not reveal source facts, selector values, grants, or credentials. The registry terminal shows
 no new `GET /people/person-123` because authorization failed before source access.
 

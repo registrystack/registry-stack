@@ -11,15 +11,143 @@ use std::task::{Context, Poll};
 
 use axum::body::Body;
 use axum::http::header::{HeaderName, HeaderValue, CONTENT_TYPE};
-use axum::http::{Method, Request, Response, StatusCode};
+use axum::http::{HeaderMap, Method, Request, Response, StatusCode};
 use axum::response::IntoResponse;
 use serde::Serialize;
 use serde_json::Value;
 use tower::{Layer, Service};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
+use ulid::Ulid;
 
 pub const DEFAULT_REQUEST_BODY_LIMIT_BYTES: usize = 1024 * 1024;
+
+/// A validated W3C Trace Context trace identifier.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct TraceId(String);
+
+impl TraceId {
+    /// Parse the 32 lower-case hexadecimal trace-id representation.
+    pub fn parse(value: &str) -> Result<Self, TraceIdError> {
+        if !lower_hex(value, 32) || value.bytes().all(|byte| byte == b'0') {
+            return Err(TraceIdError);
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Effective request trace. Invalid inbound `traceparent` values are replaced
+/// with a server-created trace. One valid inbound `traceparent` is retained.
+/// Caller-supplied `tracestate` never enters a response.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TraceContext {
+    pub trace_id: TraceId,
+    span_id: String,
+    trace_flags: String,
+}
+
+impl TraceContext {
+    #[must_use]
+    pub fn from_headers(headers: &HeaderMap) -> Self {
+        let mut values = headers.get_all("traceparent").iter();
+        let parsed = values
+            .next()
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_traceparent);
+        if values.next().is_some() {
+            Self::server_created()
+        } else {
+            parsed.unwrap_or_else(Self::server_created)
+        }
+    }
+
+    #[must_use]
+    pub fn server_created() -> Self {
+        let value = u128::from(Ulid::new());
+        Self {
+            trace_id: TraceId(format!("{value:032x}")),
+            span_id: fresh_span_id(),
+            trace_flags: "01".into(),
+        }
+    }
+
+    /// Attach the safe response trace context, dropping any caller-controlled
+    /// vendor state that a prior middleware might otherwise reflect.
+    pub fn apply(&self, headers: &mut HeaderMap) {
+        headers.remove("tracestate");
+        let traceparent = format!(
+            "00-{}-{}-{}",
+            self.trace_id.as_str(),
+            self.span_id,
+            self.trace_flags
+        );
+        if let Ok(value) = HeaderValue::from_str(&traceparent) {
+            headers.insert(HeaderName::from_static("traceparent"), value);
+        }
+    }
+}
+
+fn parse_traceparent(value: &str) -> Option<TraceContext> {
+    if !value.is_ascii() || value.len() != 55 {
+        return None;
+    }
+    let parts = value.split('-').collect::<Vec<_>>();
+    if parts.len() != 4 || parts[0] != "00" {
+        return None;
+    }
+    let trace = parts[1];
+    let parent = parts[2];
+    let flags = parts[3];
+    if !lower_hex(trace, 32)
+        || trace.bytes().all(|byte| byte == b'0')
+        || !lower_hex(parent, 16)
+        || parent.bytes().all(|byte| byte == b'0')
+        || !lower_hex(flags, 2)
+    {
+        return None;
+    }
+    Some(TraceContext {
+        trace_id: TraceId(trace.to_owned()),
+        span_id: parent.to_owned(),
+        trace_flags: flags.to_owned(),
+    })
+}
+
+fn fresh_span_id() -> String {
+    let value = u128::from(Ulid::new());
+    let span = u64::try_from(value & u128::from(u64::MAX)).unwrap_or(1);
+    format!("{:016x}", span.max(1))
+}
+
+fn lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("trace identifier is invalid")]
+pub struct TraceIdError;
+
+/// The fixed, value-free Registry Stack problem envelope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemBody {
+    #[serde(rename = "type")]
+    pub type_uri: String,
+    pub title: &'static str,
+    pub status: u16,
+    pub detail: &'static str,
+    pub code: &'static str,
+    pub trace_id: TraceId,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct CorsPolicy {
@@ -486,6 +614,92 @@ fn is_loopback_origin(url: &url::Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trace_identifier_has_one_canonical_wire_shape() {
+        assert!(TraceId::parse("0123456789abcdef0123456789abcdef").is_ok());
+        assert!(TraceId::parse("00000000000000000000000000000000").is_err());
+        assert!(TraceId::parse("not-a-trace").is_err());
+    }
+
+    #[test]
+    fn version_zero_traceparent_rejects_non_lowercase_hex() {
+        for value in [
+            "00-0123456789abcdeF0123456789abcdef-0123456789abcdef-01",
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdeF-01",
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-0A",
+        ] {
+            assert!(
+                parse_traceparent(value).is_none(),
+                "accepted non-lowercase traceparent {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_traceparent_is_preserved_without_vendor_state() {
+        let inbound = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-00";
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert("traceparent", HeaderValue::from_static(inbound));
+
+        let trace = TraceContext::from_headers(&request_headers);
+        assert_eq!(trace.trace_id.as_str(), "0123456789abcdef0123456789abcdef");
+
+        let mut response_headers = HeaderMap::new();
+        trace.apply(&mut response_headers);
+        let traceparent = response_headers
+            .get("traceparent")
+            .expect("server trace context is applied")
+            .to_str()
+            .expect("traceparent is ASCII");
+        assert_eq!(traceparent, inbound);
+    }
+
+    #[test]
+    fn invalid_traceparent_is_replaced_and_tracestate_is_never_echoed() {
+        const CANARY: &str = "7tenant@vendor-system=caller-controlled-canary";
+        let supplied_trace_id = "0123456789abcdef0123456789abcdeF";
+        let mut request_headers = HeaderMap::new();
+        request_headers.insert(
+            "traceparent",
+            HeaderValue::from_str(&format!("00-{supplied_trace_id}-0123456789abcdef-00"))
+                .expect("test traceparent is an HTTP header value"),
+        );
+        request_headers.insert("tracestate", HeaderValue::from_static(CANARY));
+
+        let trace = TraceContext::from_headers(&request_headers);
+        assert_ne!(
+            trace.trace_id.as_str(),
+            supplied_trace_id.to_ascii_lowercase()
+        );
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert("tracestate", HeaderValue::from_static(CANARY));
+        trace.apply(&mut response_headers);
+        assert!(!response_headers.contains_key("tracestate"));
+        assert!(response_headers.values().all(|value| {
+            !value
+                .to_str()
+                .expect("response headers are ASCII")
+                .contains("caller-controlled-canary")
+        }));
+    }
+
+    #[test]
+    fn duplicate_traceparent_is_replaced_with_server_context() {
+        let supplied_trace_id = "0123456789abcdef0123456789abcdef";
+        let mut request_headers = HeaderMap::new();
+        request_headers.append(
+            "traceparent",
+            HeaderValue::from_static("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"),
+        );
+        request_headers.append(
+            "traceparent",
+            HeaderValue::from_static("00-0123456789abcdef0123456789abcdef-fedcba9876543210-01"),
+        );
+
+        let trace = TraceContext::from_headers(&request_headers);
+        assert_ne!(trace.trace_id.as_str(), supplied_trace_id);
+    }
 
     #[test]
     fn cors_validation_rejects_localhost_prefix_attack() {

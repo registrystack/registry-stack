@@ -29,7 +29,7 @@ from stub_server import StubRoute, StubServer  # noqa: E402
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
 EVIDENCE_JWS_MEDIA_TYPE = "application/jose+json"
-OPERATION = "01JQ0QZ8YHZ0000000000000AB"
+TRACE_ID = fixtures.TRACE_ID
 
 
 class ErrorMappingTest(unittest.TestCase):
@@ -50,34 +50,34 @@ class ErrorMappingTest(unittest.TestCase):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=401,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE},
-            body=fixtures.problem_body(401, "authentication_failed"),
+            body=fixtures.problem_body(401, "auth.invalid_credential"),
         )
         with self.assertRaises(revc.DeniedError) as raised:
             self._send(self._client())
         error = raised.exception
         self.assertEqual(error.kind, "denied")
         self.assertEqual(error.status, 401)
-        self.assertEqual(error.code, "authentication_failed")
+        self.assertEqual(error.code, "auth.invalid_credential")
         self.assertIsNone(error.retry_after_seconds)
-        self.assertEqual(error.operation, OPERATION)
+        self.assertEqual(error.trace_id, TRACE_ID)
 
     def test_403_maps_to_denied(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=403,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE},
-            body=fixtures.problem_body(403, "not_authorized"),
+            body=fixtures.problem_body(403, "evidence.denied"),
         )
         with self.assertRaises(revc.DeniedError) as raised:
             self._send(self._client())
         error = raised.exception
         self.assertEqual(error.status, 403)
-        self.assertEqual(error.code, "not_authorized")
+        self.assertEqual(error.code, "evidence.denied")
 
     def test_429_maps_to_denied_with_retry_after(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=429,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE, "Retry-After": "30"},
-            body=fixtures.problem_body(429, "rate_limited"),
+            body=fixtures.problem_body(429, "evidence.rate_limited"),
         )
         with self.assertRaises(revc.DeniedError) as raised:
             self._send(self._client())
@@ -89,26 +89,26 @@ class ErrorMappingTest(unittest.TestCase):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=422,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE},
-            body=fixtures.problem_body(422, "evidence_not_available"),
+            body=fixtures.problem_body(422, "evidence.unavailable"),
         )
         with self.assertRaises(revc.NotAvailableError) as raised:
             self._send(self._client())
         error = raised.exception
         self.assertEqual(error.kind, "not_available")
-        self.assertEqual(error.operation, OPERATION)
+        self.assertEqual(error.trace_id, TRACE_ID)
 
     def test_400_with_an_ordinary_code_maps_to_protocol(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(
             status=400,
             headers={"Content-Type": PROBLEM_MEDIA_TYPE},
-            body=fixtures.problem_body(400, "malformed_request"),
+            body=fixtures.problem_body(400, "evidence.invalid_request"),
         )
         with self.assertRaises(revc.ProtocolError) as raised:
             self._send(self._client())
         error = raised.exception
         self.assertEqual(error.kind, "protocol")
         self.assertEqual(error.status, 400)
-        self.assertEqual(error.code, "malformed_request")
+        self.assertEqual(error.code, "evidence.invalid_request")
 
     def test_a_success_with_the_wrong_media_type_maps_to_protocol(self):
         self.server.routes["POST /v1/evidence"] = StubRoute(

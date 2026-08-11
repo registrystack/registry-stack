@@ -149,6 +149,10 @@ entries:
     tests: [{file: crates/registry-evidence/src/config.rs, name: yaml_names_and_secret_references_are_strict}]
   - id: sec-proxy-identity-header-rejected
     tests: [{file: crates/registry-evidence/src/config.rs, name: one_trust_domain_and_native_token_identity_are_closed_configuration}]
+  - id: sec-trace-context-bounded-and-audit-distinct
+    tests:
+      - {file: crates/registry-evidence/src/server.rs, name: response_layers_preserve_only_valid_trace_context_and_keep_operation_internal}
+      - {file: crates/registry-evidence/src/observability.rs, name: repeated_inbound_trace_ids_keep_distinct_server_minted_operations}
   - id: sec-decimal-no-float-coercion
     tests: [{file: crates/registry-evidence/src/kernel.rs, name: scalar_decimal_and_collection_forms_are_exact}]
   - id: sec-entity-reference-seed-protected

@@ -671,7 +671,7 @@ pub fn map_config_error(error: &ConfigError) -> Value {
 
 /// Map any [`EvidenceClientError`] to the stable JSON envelope described in
 /// the crate's `AGENTS.md`-linked design: `kind` and `message` always, plus
-/// whichever of `status`, `code`, `operation`, `retryAfterSeconds`,
+/// whichever of `status`, `code`, `traceId`, `retryAfterSeconds`,
 /// `transportKind`, and `tokenKind` the variant carries. `code` is
 /// deliberately overloaded: a `Denied`/`Protocol` wire code, a
 /// `Token::Refused` OAuth code, and a `Verification` failure's own kind string
@@ -705,28 +705,28 @@ pub fn map_client_error(error: &EvidenceClientError) -> Value {
         EvidenceClientError::Denied {
             status,
             code,
-            operation,
+            trace_id,
             retry_after_seconds,
         } => {
             fields.insert("status".to_owned(), Value::from(*status));
             fields.insert("code".to_owned(), Value::String(code.clone()));
-            insert_operation(&mut fields, operation);
+            insert_trace_id(&mut fields, trace_id);
             insert_retry_after(&mut fields, *retry_after_seconds);
         }
-        EvidenceClientError::NotAvailable { operation } => {
-            insert_operation(&mut fields, operation);
+        EvidenceClientError::NotAvailable { trace_id } => {
+            insert_trace_id(&mut fields, trace_id);
         }
         EvidenceClientError::Protocol {
             status,
             code,
-            operation,
+            trace_id,
             retry_after_seconds,
         } => {
             fields.insert("status".to_owned(), Value::from(*status));
             if let Some(code) = code {
                 fields.insert("code".to_owned(), Value::String(code.clone()));
             }
-            insert_operation(&mut fields, operation);
+            insert_trace_id(&mut fields, trace_id);
             insert_retry_after(&mut fields, *retry_after_seconds);
         }
         EvidenceClientError::Verification(verification_error) => {
@@ -768,9 +768,9 @@ fn insert_token_fields(fields: &mut Map<String, Value>, error: &TokenError) {
     }
 }
 
-fn insert_operation(fields: &mut Map<String, Value>, operation: &Option<String>) {
-    if let Some(operation) = operation {
-        fields.insert("operation".to_owned(), Value::String(operation.clone()));
+fn insert_trace_id(fields: &mut Map<String, Value>, trace_id: &Option<String>) {
+    if let Some(trace_id) = trace_id {
+        fields.insert("traceId".to_owned(), Value::String(trace_id.clone()));
     }
 }
 
@@ -1600,42 +1600,42 @@ mod tests {
     }
 
     #[test]
-    fn a_denied_failure_carries_status_code_operation_and_retry_after() {
+    fn a_denied_failure_carries_status_code_trace_id_and_retry_after() {
         let error = EvidenceClientError::Denied {
             status: 403,
-            code: "not_authorized".to_owned(),
-            operation: Some("01JZZZOPERATION".to_owned()),
+            code: "evidence.denied".to_owned(),
+            trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
             retry_after_seconds: Some(30),
         };
         let mapped = map_client_error(&error);
         assert_eq!(mapped["kind"], "denied");
         assert_eq!(mapped["status"], 403);
-        assert_eq!(mapped["code"], "not_authorized");
-        assert_eq!(mapped["operation"], "01JZZZOPERATION");
+        assert_eq!(mapped["code"], "evidence.denied");
+        assert_eq!(mapped["traceId"], "4bf92f3577b34da6a3ce929d0e0e4736");
         assert_eq!(mapped["retryAfterSeconds"], 30);
     }
 
     #[test]
-    fn a_denied_failure_with_no_operation_or_retry_after_omits_them() {
+    fn a_denied_failure_with_no_trace_id_or_retry_after_omits_them() {
         let error = EvidenceClientError::Denied {
             status: 403,
-            code: "not_authorized".to_owned(),
-            operation: None,
+            code: "evidence.denied".to_owned(),
+            trace_id: None,
             retry_after_seconds: None,
         };
         let mapped = map_client_error(&error);
-        assert!(mapped.get("operation").is_none());
+        assert!(mapped.get("traceId").is_none());
         assert!(mapped.get("retryAfterSeconds").is_none());
     }
 
     #[test]
-    fn a_not_available_failure_carries_only_its_operation() {
+    fn a_not_available_failure_carries_only_its_trace_id() {
         let error = EvidenceClientError::NotAvailable {
-            operation: Some("01JZZZOPERATION".to_owned()),
+            trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
         };
         let mapped = map_client_error(&error);
         assert_eq!(mapped["kind"], "not_available");
-        assert_eq!(mapped["operation"], "01JZZZOPERATION");
+        assert_eq!(mapped["traceId"], "4bf92f3577b34da6a3ce929d0e0e4736");
         assert_eq!(mapped.as_object().unwrap().len(), 3);
     }
 
@@ -1644,14 +1644,14 @@ mod tests {
         let error = EvidenceClientError::Protocol {
             status: 503,
             code: Some("temporarily_unavailable".to_owned()),
-            operation: Some("01JZZZOPERATION".to_owned()),
+            trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
             retry_after_seconds: Some(5),
         };
         let mapped = map_client_error(&error);
         assert_eq!(mapped["kind"], "protocol");
         assert_eq!(mapped["status"], 503);
         assert_eq!(mapped["code"], "temporarily_unavailable");
-        assert_eq!(mapped["operation"], "01JZZZOPERATION");
+        assert_eq!(mapped["traceId"], "4bf92f3577b34da6a3ce929d0e0e4736");
         assert_eq!(mapped["retryAfterSeconds"], 5);
     }
 
@@ -1660,7 +1660,7 @@ mod tests {
         let error = EvidenceClientError::Protocol {
             status: 200,
             code: None,
-            operation: None,
+            trace_id: None,
             retry_after_seconds: None,
         };
         let mapped = map_client_error(&error);
@@ -1733,15 +1733,15 @@ mod tests {
             },
             EvidenceClientError::Denied {
                 status: 403,
-                code: "not_authorized".to_owned(),
-                operation: None,
+                code: "evidence.denied".to_owned(),
+                trace_id: None,
                 retry_after_seconds: None,
             },
-            EvidenceClientError::NotAvailable { operation: None },
+            EvidenceClientError::NotAvailable { trace_id: None },
             EvidenceClientError::Protocol {
                 status: 200,
                 code: None,
-                operation: None,
+                trace_id: None,
                 retry_after_seconds: None,
             },
             EvidenceClientError::Verification(VerificationError::Signature),

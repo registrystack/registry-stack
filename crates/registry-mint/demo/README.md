@@ -67,7 +67,7 @@ sequenceDiagram
 
     Note over Client,Evidence: The containment, with the same valid token.
     Client->>Evidence: POST /v1/evidence carrying selector values for someone else
-    Evidence--xClient: 400 invalid_selector
+    Evidence--xClient: 400 request.selector_invalid
 ```
 
 Two properties are visible in the shape of that diagram. Nothing the client
@@ -226,8 +226,11 @@ curl -sS http://127.0.0.1:8080/v1/evidence \
 ```
 
 ```json
-{"type": "https://registrystack.org/problems/evidence/invalid_selector",
- "title": "Request is not valid", "status": 400, "code": "invalid_selector"}
+{"type": "https://id.registrystack.org/problems/registry-evidence/request/selector_invalid",
+ "title": "Selector is invalid", "status": 400,
+ "detail": "selector does not match an available request profile",
+ "code": "request.selector_invalid",
+ "traceId": "0123456789abcdef0123456789abcdef"}
 ```
 
 There is no request this token can make about Kofi Mensah. The refusal is for

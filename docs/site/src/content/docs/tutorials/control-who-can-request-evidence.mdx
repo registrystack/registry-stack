@@ -323,11 +323,12 @@ python3 -m json.tool age-checker-refused.json
 
 ```json
 {
-  "type": "https://registrystack.org/problems/evidence/not_authorized",
-  "title": "Request is not authorized",
+  "type": "https://id.registrystack.org/problems/registry-evidence/evidence/denied",
+  "title": "Evidence request is not permitted",
   "status": 403,
-  "code": "not_authorized",
-  "operation": "<opaque-operation-id>"
+  "detail": "the Evidence request is not permitted",
+  "code": "evidence.denied",
+  "traceId": "<32-lowercase-hex-trace-id>"
 }
 ```
 
@@ -390,7 +391,7 @@ Local Evidence stopped
 ACCESS REFUSED requester=<pseudonym> reason=not_authorized
 ```
 
-The privacy-safe refusal event contains a requester pseudonym and the closed `not_authorized`
+The privacy-safe refusal event contains a requester pseudonym and the closed `not-authorized`
 reason. The event does not contain the rejected requirement, purpose, selector, authority, or
 response format. It also does not contain a client identifier or access token. The revoked-client
 preparation remains local and creates no Evidence Gateway audit event because no HTTP request was

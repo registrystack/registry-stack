@@ -111,7 +111,7 @@ The demo runs the acceptance bundle with one deliberate change: both the
 immutable bundle and the one complete matched grant list `sd-jwt-vc` alongside
 `signed-jws` and `unsigned-json`. Both gates are required and are never unioned.
 Enabling the format in the bundle alone leaves the request refused with the
-ordinary `not_authorized` problem, before any credential or source access, and
+ordinary `evidence.denied` problem, before any credential or source access, and
 without revealing which layer refused.
 
 ```yaml
