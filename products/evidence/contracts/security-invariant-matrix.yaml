@@ -78,9 +78,9 @@ invariants:
     enforcement: Field allowlists and at most one scoped keyed pseudonym over each complete canonical role/selector bundle.
     negative_test: sec-protected-canaries-redacted
   - id: V1-I16
-    rule: No-match, ambiguous, required-fact-missing, and derivation-input-inconsistent behavior cannot accidentally disclose registry membership.
-    threat: Existence oracle through status, message, diagnostics, count, avoidable timing, or a distinguishable failure class for a uniquely found record with inconsistent derivation inputs.
-    enforcement: Default public collapse of every unresolved class, including derivation-input inconsistency, to one problem shape plus a closed value-free protected audit category without counts.
+    rule: No-match, ambiguous, required-fact-missing, derivation-input-inconsistent, and exact source-declared unresolved behavior cannot accidentally disclose registry membership or be confused with a dependency failure.
+    threat: Existence oracle through status, message, diagnostics, count, avoidable timing, a distinguishable failure class, or overly broad treatment of attacker-controlled Problem Details as authoritative absence.
+    enforcement: Default public collapse of every unresolved class to one problem shape. A source-declared outcome is admitted only by an optional exact source-neutral 404, HTTPS type, and bounded code tuple plus exact media type and duplicate-free six-member wire shape; Rust carries it data-free, records the neutral unresolved decision only for singular or search termination, and keeps fetch/member outcomes dependency failures. Complete-project fixtures can state only the boolean declaredUnresolved marker against a source carrying that declaration, with no upstream body or invented no-match/ambiguous label.
     negative_test: sec-unresolved-public-collapse
   - id: V1-I17
     rule: Subject bindings are audience-scoped and not globally linkable.
@@ -336,8 +336,8 @@ cross_cutting:
     enforcement: Bundle validation pins the one Version 1 discovery path and the served route returns the runtime key set at exactly that configured path.
     negative_test: sec-jwks-route-config-parity
   source_response_shape:
-    threat: A source response outside the shape its adapter was reviewed against reaches the extraction script, so a defect or omission in hand-written protocol checking becomes the only thing standing between a malformed response and fact construction.
-    enforcement: Every source declares a required responseSchema in the closed Version 1 subset. Rust validates the projected response against it after projection and before conversion to Rhai; a response outside its declared shape is a source-protocol failure and no script runs.
+    threat: A source response outside the shape its adapter was reviewed against reaches the extraction script, or a malformed or mismatched Problem Details response is treated as an authoritative unresolved outcome.
+    enforcement: Every data response is projected and validated against its required responseSchema before conversion to Rhai. An optional declared unresolved tuple is instead matched in Rust only against the exact bounded 404 problem media type and strict six-member shape, producing a data-free outcome; any mismatch is a source-protocol or transport failure and no script runs.
     negative_test: sec-source-response-shape-enforced
   script_resource_exhaustion:
     threat: A hostile or defective reviewed script consumes unbounded execution inside the shared process.

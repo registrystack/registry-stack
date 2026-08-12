@@ -155,7 +155,9 @@ impl PreparedService {
                 observed_at,
             )
             .await
-            .expect("fixed source executor succeeds");
+            .expect("fixed source executor succeeds")
+            .into_data()
+            .expect("conformance source response carries data");
         let derivation_selectors =
             selector_value(&resolved, &requirement.derivation.selector_inputs);
         let values = match self

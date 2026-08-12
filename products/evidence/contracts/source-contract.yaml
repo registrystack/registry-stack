@@ -4,7 +4,7 @@ ownership:
   governed_bundle:
     - requirement acquisition kind, every source that kind fixes, each fetch stage's declared prior-fact allowlist, and any whole-acquisition ceiling the kind declares
     - the gated acquisition kinds and source-call optimizations the bundle declares it uses
-    - each source's fixed origin, acquisition posture, authentication kind, and logical secret references
+    - each source's fixed origin, acquisition posture, authentication kind, logical secret references, and optional exact unresolved Problem Details tuple
     - fixed method and fixed path, or complete-segment pathTemplate and pathBindings
     - fixed non-secret headers, closed selectorInputs, prepareScript, extractScript, adapter parameters, and the adapter-parameter, response, and fact schemas
     - preparation channel policy and bounds, response projection, redirect denial, timeout, response byte limit, and concurrency limit
@@ -46,6 +46,35 @@ evidence_data_request:
   method_allowlist: [GET, POST]
   request_media_types: [application/json]
   response_media_types: [application/json, application/graphql-response+json]
+  declared_unresolved_problem:
+    configuration: >-
+      Optional on one http-json source and source-neutral. The exact closed tuple is
+      `{status: 404, type: absolute HTTPS URI, code: bounded problem identifier}`.
+      Omission preserves the ordinary dependency-failure behavior for every 404. A
+      source carrying `batch` cannot carry this declaration.
+    wire_gate: >-
+      Only HTTP 404 with exactly one Content-Type whose complete value is
+      `application/problem+json`, and a strict duplicate-free JSON object with exactly
+      `type`, `title`, `status`, `detail`, `code`, and `traceId`, is eligible. `type`,
+      `status`, and `code` must exactly equal the configured tuple; title, detail, and
+      traceId must be strings. The ordinary maximumResponseBytes bound applies before
+      parsing.
+    transport_outcome: >-
+      Rust emits a data-free explicit DeclaredUnresolved outcome rather than a
+      SourceError. No problem member or body reaches response projection,
+      response-schema validation, Rhai, assertions, audit, or logs.
+    acquisition_mapping: >-
+      A singular acquisition or search stage maps the explicit outcome to public
+      evidence.unavailable and the neutral audit denial decision unresolved. A fetch or
+      member reached after a unique search maps it to dependency failure under
+      fetch-result. Sequential request-batch evaluation may map the singular or search
+      outcome to that logical item's unavailable result; an optimized physical source
+      batch cannot declare or map it.
+    fail_closed_cases: >-
+      An undeclared 404, any other status, wrong or repeated media type, redirect,
+      malformed or duplicate-member JSON, wrong or missing or extra member, wrong member
+      type, tuple mismatch, or oversized body remains a dependency failure. OAuth token
+      response parsing is unchanged.
   redirects: deny
   maximum_response_bytes: {required: true, upper_bound: 1048576, applied: before parsing and projection}
   timeout_milliseconds: {required: true, range: [1, 30000], applies_to: [source-concurrency-admission, OAuth-single-flight-admission, HTTP-exchange]}
@@ -210,11 +239,12 @@ acquisition_postures:
     claim: Disclosure minimization only.
   chained_rule: A multi-stage requirement has the weakest of every declared source posture it may call, whether that is two sources or five; chaining never upgrades a minimization claim, and adding a stage can only weaken one.
 failure_classes:
-  transport: [401, 403, 429, 5xx, timeout, redirect, invalid-json, duplicate-json-member, wrong-media-type, oversized-response]
+  transport: [401, 403, 413, 429, 5xx, timeout, redirect, invalid-json, duplicate-json-member, wrong-media-type, oversized-response, undeclared-or-mismatched-problem]
   projection: [invalid-pointer, missing-intermediate, mistyped-intermediate, projected-input-oversized]
   response_shape: [missing-required-member, unexpected-member, wrong-member-type, out-of-bounds-value, oversized-array, duplicate-array-member]
   semantic: [no-match, ambiguous, required-fact-missing, wrong-fact-type, unknown-controlled-code]
-  request_batch_mapping: Every condition the singular collapse contract exposes as evidence_not_available affects only that logical item and becomes the closed unavailable outcome, exactly no_match, ambiguous, required_fact_missing, and derivation_input_unresolved in Version 1. Every transport, projection, response-shape, preparation, extraction-protocol, other derivation-protocol, signing, audit, size, or time-budget failure aborts the outer request without partial release.
+  request_batch_mapping: Every condition the singular collapse contract exposes as evidence_not_available affects only that logical item and becomes the closed unavailable outcome, exactly no_match, ambiguous, required_fact_missing, derivation_input_unresolved, and a declared unresolved source outcome at a singular or search stage in Version 1. A declared unresolved fetch or member, and every transport, projection, response-shape, preparation, extraction-protocol, other derivation-protocol, signing, audit, size, or time-budget failure aborts the outer request without partial release.
+  fixture_mapping: 'A complete project represents the initial HTTP source''s configured outcome only as the data-free `declaredUnresolved: true` case form, with no Problem Details or lookup label. The form is refused unless that source declares unresolvedProblem. Because the provider has collapsed its hidden no-match and ambiguous states before Evidence observes them, this one neutral case satisfies both fixture coverage categories without manufacturing extraction responses; exact and negative wire composition remains in the transport contract suite.'
   graphql_envelope_rule: Any top-level errors member, including partial data with errors, fails closed.
 persistence:
   source_request_or_response: prohibited

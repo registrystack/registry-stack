@@ -244,7 +244,8 @@ The multi-subject request-batch path wraps this pipeline without weakening it:
    retries through sequential fanout.
 6. Map every condition the singular collapse contract exposes as
    `evidence_not_available` to that per-item outcome, including no-match,
-   ambiguous, required-fact-missing, and derivation-input-unresolved. Construct
+   ambiguous, required-fact-missing, derivation-input-unresolved, and an exact
+   declared unresolved outcome from a singular or search source stage. Construct
    and sign every available item as an ordinary flattened JWS at the common
    evaluation instant. Any other failure aborts without releasing completed
    items.

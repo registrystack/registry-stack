@@ -2072,6 +2072,7 @@ async fn evaluate_reference_fixture(
                 "responses",
                 "selectors",
                 "sourceFailure",
+                "declaredUnresolved",
                 "bundleMutation",
                 "statementMutation",
                 "requestMutation",
@@ -2122,6 +2123,7 @@ async fn evaluate_reference_fixture(
             "responses",
             "selectors",
             "sourceFailure",
+            "declaredUnresolved",
             "bundleMutation",
             "statementMutation",
             "requestMutation",
@@ -2143,7 +2145,7 @@ async fn evaluate_reference_fixture(
         // remaining forms describe the bundle or the authorized request and
         // read the same on either transport.
         let refused_here = match selected_forms[0] {
-            "response" | "responses" => statement_source.is_some(),
+            "response" | "responses" | "declaredUnresolved" => statement_source.is_some(),
             "selectors" | "statementMutation" => statement_source.is_none(),
             _ => false,
         };
@@ -2316,6 +2318,17 @@ async fn evaluate_reference_fixture(
             trace.pass_case();
             continue;
         }
+        if let Some(declared) = case.get("declaredUnresolved") {
+            validate_reference_declared_unresolved(source, declared, expected)?;
+            trace.record(
+                Stage::Acquire,
+                StageStatus::Unresolved,
+                "the source returned its exact declared unresolved outcome",
+            );
+            summary.evaluated_cases += 1;
+            trace.pass_case();
+            continue;
+        }
 
         let observed_at = fixture_observed_at(
             case,
@@ -2382,7 +2395,7 @@ async fn evaluate_reference_fixture(
                         {
                             Ok(response) => record_projection(
                                 trace,
-                                Ok(response),
+                                response.into_data().ok_or(SourceError::ProblemMismatch),
                                 &acquired,
                                 CliError("reference fixture source projection failed"),
                             )?,
@@ -2941,6 +2954,12 @@ fn validate_reference_expectation_keys(
             "sourceRequestCount",
         ],
         "sourceFailure" => &["publicProblem", "signed", "sourceRequestCount"],
+        "declaredUnresolved" => &[
+            "publicProblem",
+            "signed",
+            "derivationRuns",
+            "sourceRequestCount",
+        ],
         "bundleMutation" | "statementMutation" => &["bundle"],
         "requestMutation" => &["rejectedBefore", "signed", "sourceRequestCount"],
         "derivationMutation" => &["outputGate", "signed"],
@@ -3265,6 +3284,36 @@ fn validate_reference_source_failure(
 ) -> Result<(), CliError> {
     let error = reference_source_failure_error(source, failure)?;
     validate_reference_source_error(expected, &error)?;
+    require_reference_request_count(expected, 1)
+}
+
+/// Validate the data-free fixture representation of the exact configured
+/// non-2xx outcome. The tuple and Problem Details members remain owned by the
+/// source configuration and HTTP contract tests; a fixture cannot restate or
+/// leak them into extraction, diagnostics, or an assertion.
+fn validate_reference_declared_unresolved(
+    source: &registry_evidence::config::SourceConfig,
+    declared: &Value,
+    expected: &JsonMap<String, Value>,
+) -> Result<(), CliError> {
+    if declared.as_bool() != Some(true) {
+        return Err(CliError(
+            "reference declared-unresolved marker must be true",
+        ));
+    }
+    if source.unresolved_problem().is_none() {
+        return Err(CliError(
+            "reference declared unresolved without a source declaration",
+        ));
+    }
+    if expected.get("publicProblem").and_then(Value::as_str) != Some("evidence.unavailable")
+        || expected.get("derivationRuns").and_then(Value::as_bool) != Some(false)
+        || expected.get("signed").and_then(Value::as_bool) != Some(false)
+    {
+        return Err(CliError(
+            "reference declared-unresolved outcome did not match",
+        ));
+    }
     require_reference_request_count(expected, 1)
 }
 
@@ -4612,6 +4661,178 @@ mod tests {
             false,
         )
         .is_err());
+    }
+
+    /// The fixture can name only the transport outcome, not copy Problem
+    /// Details members into a recorded body or mislabel the provider's hidden
+    /// state as no-match or ambiguity.
+    #[test]
+    fn reference_declared_unresolved_form_is_data_free_and_source_bound() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle/evidence.yaml"
+        ))
+        .expect("reference configuration parses");
+        let source = config
+            .sources
+            .get("registered-birth-date")
+            .expect("HTTP source exists");
+        let expected = serde_json::json!({
+            "publicProblem": "evidence.unavailable",
+            "derivationRuns": false,
+            "signed": false,
+            "sourceRequestCount": 1
+        });
+        let expected = expected.as_object().expect("expectation is an object");
+
+        assert_eq!(
+            validate_reference_declared_unresolved(source, &Value::Bool(true), expected),
+            Err(CliError(
+                "reference declared unresolved without a source declaration"
+            ))
+        );
+
+        let mut declared = serde_json::to_value(source).expect("source is representable");
+        declared["unresolvedProblem"] = serde_json::json!({
+            "status": 404,
+            "type": "https://id.example.invalid/problems/unresolved",
+            "code": "lookup.unresolved"
+        });
+        let declared: registry_evidence::config::SourceConfig =
+            serde_json::from_value(declared).expect("declared source parses");
+        assert_eq!(
+            validate_reference_declared_unresolved(&declared, &Value::Bool(true), expected),
+            Ok(())
+        );
+        assert_eq!(
+            validate_reference_declared_unresolved(&declared, &Value::Bool(false), expected),
+            Err(CliError(
+                "reference declared-unresolved marker must be true"
+            ))
+        );
+
+        let leaking = serde_json::json!({
+            "lookup": "no_match",
+            "publicProblem": "evidence.unavailable",
+            "derivationRuns": false,
+            "signed": false,
+            "sourceRequestCount": 1
+        });
+        assert!(validate_reference_expectation_keys(
+            "declaredUnresolved",
+            leaking.as_object().expect("expectation is an object")
+        )
+        .is_err());
+    }
+
+    /// The complete reference evaluator reaches the neutral case without
+    /// projection or extraction, and its explain trace contains neither an
+    /// invented lookup class nor any configured Problem Details member.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reference_fixture_evaluates_declared_unresolved_without_problem_data() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../products/evidence/reference/request-adapter/deployment-projects/opencrvs-family-evidence/bundle",
+        );
+        copy_tree(&source, directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+        let mut bundle = Bundle::load(directory.path()).expect("reference bundle loads");
+
+        let requirement_id = "urn:gov:example:requirement:adult-status-from-birth:v1";
+        let requirement = bundle
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == requirement_id)
+            .expect("adult-status requirement exists");
+        let fixture_path = requirement
+            .fixtures
+            .as_ref()
+            .expect("fixture is declared")
+            .as_str()
+            .to_owned();
+        let mut fixture = serde_json::to_value(
+            bundle
+                .fixtures
+                .get(&fixture_path)
+                .expect("fixture is captured"),
+        )
+        .expect("fixture is representable");
+        let unresolved = fixture["cases"]
+            .as_array_mut()
+            .expect("cases are an array")
+            .iter_mut()
+            .find(|case| case["id"] == "no-match")
+            .and_then(Value::as_object_mut)
+            .expect("no-match case exists");
+        unresolved.insert("id".to_owned(), Value::String("unresolved".to_owned()));
+        unresolved
+            .remove("response")
+            .expect("recorded response exists");
+        unresolved.insert("declaredUnresolved".to_owned(), Value::Bool(true));
+        let expected = unresolved["expected"]
+            .as_object_mut()
+            .expect("expectation is an object");
+        expected.remove("lookup").expect("lookup label exists");
+        expected.insert("sourceRequestCount".to_owned(), Value::from(1));
+
+        let mut config = serde_json::to_value(&bundle.config).expect("config is representable");
+        config["sources"]["registered-birth-date"]["unresolvedProblem"] = serde_json::json!({
+            "status": 404,
+            "type": "https://id.example.invalid/problems/fixture-canary",
+            "code": "fixture.canary"
+        });
+        bundle.config = serde_json::from_value(config).expect("declared config parses");
+        bundle.config.validate().expect("declared config validates");
+
+        let bundle = Arc::new(bundle);
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let source_plans = compile_source_plans_with_runtime(
+            &bundle.config,
+            &source_statements(&bundle, None).expect("source statements bind"),
+            "/run/secrets/evidence",
+            &OutboundTlsConfig {
+                system_roots: true,
+                trust_profiles: Default::default(),
+            },
+            &Default::default(),
+        )
+        .expect("source plans compile");
+        let signer = offline_fixture_signer().await.expect("fixture signer");
+        let requirement = bundle
+            .config
+            .requirements
+            .iter()
+            .find(|requirement| requirement.id == requirement_id)
+            .expect("adult-status requirement remains");
+        let mut trace = FixtureTrace::default();
+        let expected_cases = fixture["cases"].as_array().expect("cases").len();
+        assert_eq!(
+            evaluate_reference_fixture(
+                &bundle,
+                &kernel,
+                &source_plans,
+                Some(&signer),
+                requirement,
+                fixture.as_object().expect("fixture is an object"),
+                &mut trace,
+            )
+            .await,
+            Ok(FixtureSummary {
+                evaluated_cases: expected_cases,
+            })
+        );
+
+        let rendered = serde_json::to_string(&trace).expect("trace is representable");
+        assert!(rendered.contains("unresolved"));
+        for prohibited in ["fixture-canary", "fixture.canary", "no-match case"] {
+            assert!(
+                !rendered.contains(prohibited),
+                "trace leaked {prohibited:?}: {rendered}"
+            );
+        }
+
+        set_tree_mode(directory.path(), 0o755, 0o444);
     }
 
     #[cfg(unix)]

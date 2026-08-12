@@ -401,7 +401,9 @@ async fn a_relay_shaped_protected_read_backs_a_full_signed_minimum_disclosure_as
             Utc::now(),
         )
         .await
-        .expect("Relay-shaped source read succeeds");
+        .expect("Relay-shaped source read succeeds")
+        .into_data()
+        .expect("Relay-shaped source response carries data");
     assert_eq!(
         projected,
         json!({

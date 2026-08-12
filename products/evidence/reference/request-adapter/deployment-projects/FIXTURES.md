@@ -193,7 +193,7 @@ exist, compile, and pass the bundle startup contract.
 
 ## Case input vocabulary
 
-Every case has a required `id` and exactly one of these ten tagged forms:
+Every case has a required `id` and exactly one of these eleven tagged forms:
 
 - `response`: raw provider JSON returned by the local mock. Rust applies the
   configured projection before extraction. The fixture never pre-projects or
@@ -206,6 +206,10 @@ Every case has a required `id` and exactly one of these ten tagged forms:
   the case states which record it is about rather than what the source returned.
 - `sourceFailure`: one closed source failure from the table below, naming a way
   the source did not complete.
+- `declaredUnresolved: true`: the data-free outcome of the requirement's
+  initial HTTP source returning its exact configured `unresolvedProblem`. It
+  carries no response body and is refused for an undeclared or statement
+  source.
 - `bundleMutation`: one named startup mutation below.
 - `statementMutation`: one named mutation of a disposable copy of the reviewed
   statement, checked while the source compiles.
@@ -220,8 +224,22 @@ A form belongs to the transport its source has. `response` and `responses`
 state what a network returned and are refused for a statement source;
 `selectors` and `statementMutation` describe an extract and the statement that
 reads it, and are refused for a source that answers over a network. The
-remaining forms describe the bundle or the authorized request and read the same
-on either transport.
+`declaredUnresolved` belongs only to an HTTP source that declares the tuple.
+The remaining forms describe the bundle or the authorized request and read the
+same on either transport.
+
+An HTTP source that declares `unresolvedProblem` uses one
+`declaredUnresolved: true` project case for the configured data-free outcome.
+That case requires exactly `publicProblem: evidence.unavailable`,
+`derivationRuns: false`, `signed: false`, and `sourceRequestCount: 1`, with no
+`lookup` expectation. It truthfully covers both mandatory no-match and
+ambiguous categories because the provider collapsed those hidden states before
+Evidence could observe either one. The source contract suite separately sends
+the exact 404 `application/problem+json` six-member tuple through the HTTP
+transport and tests undeclared, mismatched, malformed, duplicate, extra,
+mistyped, wrong-media, wrong-status, and oversized responses as dependency
+failures. No fixture may restate the Problem Details body or pass it to
+extraction.
 
 A fixture currently executes a SQLite statement only when that source is the
 initial acquisition stage. The evaluator refuses a later SQLite stage and
@@ -323,6 +341,11 @@ never read from deployment secrets, written to disk, or included in output.
 Unresolved and failing cases require `signed: false` and the exact
 `derivationRuns` value.
 
+A `declaredUnresolved` case is intentionally not a `sourceFailure`: it is a
+configured source outcome and maps to `evidence.unavailable`, not
+`source.unavailable`. Its explain trace records neutral `unresolved`, never
+`no-match`, `ambiguous`, or upstream problem members.
+
 Every `facts` expectation is exact. If a test cares about only two of four
 facts, it must still list all four. This prevents fixtures from silently
 accepting a new or leaked fact.
@@ -341,6 +364,7 @@ noticed.
 |---|---|---|
 | `no_match` | `evidence.unavailable`, HTTP 422 | Authoritative lookup found no unique record. |
 | `ambiguous` | `evidence.unavailable`, HTTP 422 | Authoritative lookup found multiple records; no candidate is selected. |
+| Exact configured source-declared unresolved | `evidence.unavailable`, HTTP 422 | Provider returned its governed data-free unresolved outcome at the initial singular or search stage; Evidence does not claim whether it was no-match or ambiguous. |
 | Host-private `required_fact_missing` | `evidence.unavailable`, HTTP 422 | A uniquely matched record legitimately lacks a requirement fact that the derivation marks required. |
 | `adapter_input_error` | `service.unavailable`, HTTP 503 | Trusted preparation or its closed inputs violate the adapter contract. Credential acquisition and source access must not occur. |
 | `source_protocol_error` | `source.unavailable`, HTTP 503 | The projected provider response violates its protocol, type, count, completeness, or fact-shape contract. |

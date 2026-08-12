@@ -27,10 +27,10 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::bundle::{ArtifactFault, Bundle, SourceExtract};
 use crate::config::{
     is_http_token_byte, is_uri_byte, validate_local_unauthenticated_source_origin,
-    AcquisitionPosture, CredentialPlacement, FixedRequest, HttpMethod, OutboundTlsConfig,
-    PathBindingConfig, PreparationChannelPolicy, SchemaFault, SecretRef, SelectorInput,
-    SourceAuthentication, SourceConfig, SourceSelectorSet, SqliteParameterBinding, SqliteRequest,
-    RESERVED_SQL_PARAMETER,
+    AcquisitionPosture, CredentialPlacement, DeclaredUnresolvedProblem, FixedRequest, HttpMethod,
+    OutboundTlsConfig, PathBindingConfig, PreparationChannelPolicy, SchemaFault, SecretRef,
+    SelectorInput, SourceAuthentication, SourceConfig, SourceSelectorSet, SqliteParameterBinding,
+    SqliteRequest, RESERVED_SQL_PARAMETER,
 };
 use crate::model::SelectorValue;
 use crate::rhai_runtime::{RequestParts, StatementParameters};
@@ -44,6 +44,7 @@ const PRIVATE_CA_MAXIMUM_BYTES: u64 = 1024 * 1024;
 const PROJECTED_RESPONSE_MAXIMUM_BYTES: usize = 65_536;
 const JSON_MEDIA_TYPE: &str = "application/json";
 const GRAPHQL_JSON_MEDIA_TYPE: &str = "application/graphql-response+json";
+const PROBLEM_JSON_MEDIA_TYPE: &str = "application/problem+json";
 /// Scheme used when a source states no other, and the only scheme RFC 6750
 /// admits for an access token the runtime acquired itself.
 const DEFAULT_AUTHORIZATION_SCHEME: &str = "Bearer";
@@ -117,6 +118,8 @@ pub enum SourceError {
     ResponseTooLarge,
     #[error("the source returned invalid JSON")]
     InvalidJson,
+    #[error("the source returned a problem outside its declared unresolved tuple")]
+    ProblemMismatch,
     #[error("the source returned an error envelope")]
     ErrorEnvelope,
     #[error("the source response did not satisfy its acquisition projection")]
@@ -163,9 +166,30 @@ impl SourceError {
             | Self::WrongMediaType
             | Self::ResponseTooLarge
             | Self::InvalidJson
+            | Self::ProblemMismatch
             | Self::ErrorEnvelope
             | Self::ProjectionViolation
             | Self::StatementUnavailable => None,
+        }
+    }
+}
+
+/// A completed transport operation, kept distinct from transport failure.
+///
+/// `DeclaredUnresolved` carries no upstream body, code, type, or trace. The
+/// acquisition that invoked the source decides whether this neutral outcome
+/// means public unavailability or a dependency inconsistency.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum SourceResponse {
+    Data(JsonValue),
+    DeclaredUnresolved,
+}
+
+impl SourceResponse {
+    pub fn into_data(self) -> Option<JsonValue> {
+        match self {
+            Self::Data(value) => Some(value),
+            Self::DeclaredUnresolved => None,
         }
     }
 }
@@ -239,6 +263,7 @@ struct HttpTransport {
     concurrency: Semaphore,
     concurrency_admission_timeout: Duration,
     batch_projection: Option<ProjectionNode>,
+    unresolved_problem: Option<DeclaredUnresolvedProblem>,
 }
 
 /// One reviewed statement, and the extract it reads.
@@ -695,7 +720,7 @@ impl SourceExecutor {
         selectors: &[ResolvedSourceSelector],
         request: &PreparedSourceRequest,
         evaluation_instant: DateTime<Utc>,
-    ) -> Result<JsonValue, SourceError> {
+    ) -> Result<SourceResponse, SourceError> {
         self.execute_with_prior_facts(selectors, &BTreeMap::new(), request, evaluation_instant)
             .await
     }
@@ -709,7 +734,7 @@ impl SourceExecutor {
     pub async fn execute_batch(
         &self,
         request: &PreparedSourceBatchRequest,
-    ) -> Result<JsonValue, SourceError> {
+    ) -> Result<SourceResponse, SourceError> {
         let SourceTransport::Http(http) = &self.transport else {
             return Err(SourceError::InvalidPlan);
         };
@@ -723,14 +748,15 @@ impl SourceExecutor {
         prior_facts: &BTreeMap<String, JsonValue>,
         request: &PreparedSourceRequest,
         evaluation_instant: DateTime<Utc>,
-    ) -> Result<JsonValue, SourceError> {
+    ) -> Result<SourceResponse, SourceError> {
         let materialized =
             self.materialize_request_with_prior_facts(selectors, prior_facts, request)?;
         match &self.transport {
             SourceTransport::Http(http) => http.execute(&materialized).await,
-            SourceTransport::Statement(statement) => {
-                statement.execute(&materialized, evaluation_instant).await
-            }
+            SourceTransport::Statement(statement) => statement
+                .execute(&materialized, evaluation_instant)
+                .await
+                .map(SourceResponse::Data),
         }
     }
 
@@ -835,6 +861,7 @@ impl HttpTransport {
             authentication: configured_authentication,
             request: configured_request,
             batch,
+            unresolved_problem,
             ..
         } = source
         else {
@@ -883,13 +910,14 @@ impl HttpTransport {
             concurrency: Semaphore::new(usize::from(configured_request.concurrency_limit)),
             concurrency_admission_timeout: timeout,
             batch_projection,
+            unresolved_problem: unresolved_problem.clone(),
         })
     }
 
     async fn execute(
         &self,
         materialized: &MaterializedSourceRequest,
-    ) -> Result<JsonValue, SourceError> {
+    ) -> Result<SourceResponse, SourceError> {
         self.execute_with_projection(materialized, &self.request.projection)
             .await
     }
@@ -897,7 +925,7 @@ impl HttpTransport {
     async fn execute_batch(
         &self,
         materialized: &MaterializedSourceRequest,
-    ) -> Result<JsonValue, SourceError> {
+    ) -> Result<SourceResponse, SourceError> {
         let projection = self
             .batch_projection
             .as_ref()
@@ -909,7 +937,7 @@ impl HttpTransport {
         &self,
         materialized: &MaterializedSourceRequest,
         projection: &ProjectionNode,
-    ) -> Result<JsonValue, SourceError> {
+    ) -> Result<SourceResponse, SourceError> {
         let MaterializedSourceRequest::Http { url, .. } = materialized else {
             return Err(SourceError::InvalidPlan);
         };
@@ -940,6 +968,7 @@ impl HttpTransport {
             self.request.maximum_response_bytes,
             self.request.posture,
             projection,
+            self.unresolved_problem.as_ref(),
         )
         .await
     }
@@ -2255,7 +2284,27 @@ async fn parse_data_response(
     maximum_bytes: u64,
     _posture: AcquisitionPosture,
     projection: &ProjectionNode,
-) -> Result<JsonValue, SourceError> {
+    unresolved_problem: Option<&DeclaredUnresolvedProblem>,
+) -> Result<SourceResponse, SourceError> {
+    if response.status().as_u16() == 404 {
+        let Some(declared) = unresolved_problem else {
+            return Err(SourceError::Status(SourceStatus::Other));
+        };
+        if !has_exact_media_type(&response, PROBLEM_JSON_MEDIA_TYPE) {
+            return Err(SourceError::WrongMediaType);
+        }
+        let bytes = Zeroizing::new(
+            read_bounded(response, maximum_bytes)
+                .await
+                .map_err(map_bounded_read_error)?,
+        );
+        let value = parse_strict_json(&bytes)?;
+        drop(bytes);
+        if exact_declared_unresolved_problem(&value, declared) {
+            return Ok(SourceResponse::DeclaredUnresolved);
+        }
+        return Err(SourceError::ProblemMismatch);
+    }
     reject_response_status(&response)?;
     let media_type = response_media_type(&response)?;
     if media_type != JSON_MEDIA_TYPE && media_type != GRAPHQL_JSON_MEDIA_TYPE {
@@ -2282,7 +2331,38 @@ async fn parse_data_response(
     {
         return Err(SourceError::ResponseTooLarge);
     }
-    Ok(projected)
+    Ok(SourceResponse::Data(projected))
+}
+
+fn has_exact_media_type(response: &reqwest::Response, expected: &str) -> bool {
+    let mut values = response.headers().get_all(CONTENT_TYPE).iter();
+    matches!(values.next().and_then(|value| value.to_str().ok()), Some(value) if value == expected)
+        && values.next().is_none()
+}
+
+fn exact_declared_unresolved_problem(
+    value: &JsonValue,
+    declared: &DeclaredUnresolvedProblem,
+) -> bool {
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.len() == 6
+        && object
+            .get("type")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|value| value == declared.type_uri)
+        && object.get("title").is_some_and(JsonValue::is_string)
+        && object
+            .get("status")
+            .and_then(JsonValue::as_u64)
+            .is_some_and(|value| value == u64::from(declared.status))
+        && object.get("detail").is_some_and(JsonValue::is_string)
+        && object
+            .get("code")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|value| value == declared.code)
+        && object.get("traceId").is_some_and(JsonValue::is_string)
 }
 
 async fn parse_token_response(
@@ -2713,7 +2793,9 @@ mod tests {
             executor
                 .execute_batch(&prepared_batch_request())
                 .await
-                .expect("one optimized call succeeds"),
+                .expect("one optimized call succeeds")
+                .into_data()
+                .expect("optimized response carries data"),
             json!({"results": [{"slot": 0, "value": "A"}]})
         );
         assert_eq!(

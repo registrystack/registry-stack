@@ -63,7 +63,7 @@ properties:
     maxItems: 5
     items: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   decision:
-    enum: [authorized, released, not-authorized, no-match, ambiguous, fact-missing, dependency-failure, evaluation-failure, signing-failure]
+    enum: [authorized, released, not-authorized, no-match, ambiguous, unresolved, fact-missing, dependency-failure, evaluation-failure, signing-failure]
   disclosedConcepts:
     type: array
     maxItems: 16
@@ -89,7 +89,7 @@ oneOf:
     properties:
       schema: {const: registry.evidence.audit/v1}
       decision:
-        enum: [authorized, released, no-match, ambiguous, fact-missing, dependency-failure, evaluation-failure, signing-failure]
+        enum: [authorized, released, no-match, ambiguous, unresolved, fact-missing, dependency-failure, evaluation-failure, signing-failure]
   - title: Authenticated authorization-refusal event
     required: [safeErrorCategory]
     properties:
@@ -159,6 +159,7 @@ audit_rules:
   authorization_refusal_gate: After successful authentication, an authorization refusal is durably accepted before the generic HTTP 403 is returned. Audit failure changes the outward result to service.unavailable with HTTP 503.
   authorization_refusal_minimization: The refusal event contains only its chain and event identifiers, server-minted operation, timestamp and duration, assurance profile, bundle revision, scoped requester pseudonym, optional actor pseudonym, and the closed denial category and decision. The public trace identifier never becomes this operation identity. Requester and actor pseudonym scope binds the operator trust domain, requested purpose, and authenticated audience, while those scope inputs remain omitted from the event. It omits the untrusted requested requirement, purpose, subjects, unmatched authority, selector information, response protection, and source or evaluation material.
   access_gate: One access-attempt is durably accepted after authorization and before credential acquisition or source access for every actual source stage; search-then-fetch therefore records search access and, only after a unique validated match, fetch access, and search-then-fetch-set records search access followed by one access per declared fetch member in declared order, each reached only after every earlier stage resolved. A stage that is never reached records nothing.
+  unresolved_decision: A configured exact source-level unresolved Problem Details outcome records the neutral denial decision unresolved only when it terminates a singular acquisition or search stage. It does not assert no-match or ambiguity, and the event records none of the upstream problem body, type, code, detail, or trace. The same outcome after a unique search is a dependency failure because the acquisition has already committed to a fetch or member reference.
   release_gate: disclosure-release is durably accepted after the final immutable response bytes are serialized and before those exact bytes are released. One operation has exactly one terminal release event, whatever it released; a release carrying more than one assertion names the complete released set in evidenceIds, in release order, instead of naming a single assertion in evidenceId. Splitting a batch into one event per member is not available, because that would make one request either several operations or one operation with several terminal events, and the chain accepts neither.
   request_batch_noninteraction: POST /v1/evidence/batch uses the distinct registry.evidence.audit.request-batch/v1 schema because one physical call may cover several independently authorized subject sets and its terminal release includes unavailable outcomes. This native union remains the singular operation and holder-bound issuance-batch audit contract; it never accepts itemIndices, itemGroups, outcomes, or terminal-failure.
   source_identity: Each access or failure event names the source and adapter for that stage; disclosure release names the final source and adapter that produced the derivation FactSet. A release closing an acquisition of three to five stages additionally lists every executed source in sourceIds and its adapter in adapterIds, in execution order and positionally aligned, with the last entry of each equal to the corresponding scalar; sourceIds is distinct while adapterIds is not, because two stages may read through one adapter. A release closing a one or two stage acquisition omits both arrays, so its shape is unchanged; an earlier stage of such an acquisition is read from its own access-attempt event, as it always has been. Stage identities are configuration, never a value obtained from a source.

@@ -48,6 +48,7 @@ pub enum AuditDecision {
     Released,
     NoMatch,
     Ambiguous,
+    Unresolved,
     FactMissing,
     DependencyFailure,
     EvaluationFailure,
@@ -610,7 +611,10 @@ impl EvidenceAuditEvent {
                 | (AuditPhase::DisclosureRelease, AuditDecision::Released)
                 | (
                     AuditPhase::Denial,
-                    AuditDecision::NoMatch | AuditDecision::Ambiguous | AuditDecision::FactMissing
+                    AuditDecision::NoMatch
+                        | AuditDecision::Ambiguous
+                        | AuditDecision::Unresolved
+                        | AuditDecision::FactMissing
                 )
                 | (
                     AuditPhase::TransientFailure,
@@ -1874,6 +1878,15 @@ mod tests {
                 "schema rejects positive fixture {name}"
             );
         }
+
+        let mut unresolved = fixture["access_attempt"].clone();
+        unresolved["phase"] = serde_json::json!("denial");
+        unresolved["decision"] = serde_json::json!("unresolved");
+        unresolved["safeErrorCategory"] = serde_json::json!("unresolved");
+        assert!(
+            validator.is_valid(&unresolved),
+            "schema rejects the neutral declared-unresolved denial"
+        );
 
         let mut refusal_with_full_schema = fixture["authorization_refusal"].clone();
         refusal_with_full_schema["schema"] = serde_json::json!(AUDIT_SCHEMA);

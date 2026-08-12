@@ -2127,13 +2127,22 @@ fn load_fixtures(
         if fixtures.contains_key(path) {
             continue;
         }
-        let fixture = load_fixture(path, files).map_err(|error| error.in_artifact(path))?;
+        let declared_unresolved = config
+            .sources
+            .get(requirement.initial_source())
+            .is_some_and(|source| source.unresolved_problem().is_some());
+        let fixture = load_fixture(path, files, declared_unresolved)
+            .map_err(|error| error.in_artifact(path))?;
         fixtures.insert(path.to_owned(), fixture);
     }
     Ok(fixtures)
 }
 
-fn load_fixture(path: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<YamlValue, BundleError> {
+fn load_fixture(
+    path: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    declared_unresolved: bool,
+) -> Result<YamlValue, BundleError> {
     let bytes = files
         .get(path)
         .ok_or(invalid_artifact("fixture file is missing"))?;
@@ -2141,11 +2150,14 @@ fn load_fixture(path: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<YamlVal
         std::str::from_utf8(bytes).map_err(|_| invalid_artifact("fixture file is not UTF-8"))?;
     let fixture: YamlValue =
         serde_norway::from_str(text).map_err(|_| invalid_artifact("fixture YAML is invalid"))?;
-    validate_fixture_coverage(&fixture)?;
+    validate_fixture_coverage(&fixture, declared_unresolved)?;
     Ok(fixture)
 }
 
-fn validate_fixture_coverage(fixture: &YamlValue) -> Result<(), BundleError> {
+fn validate_fixture_coverage(
+    fixture: &YamlValue,
+    declared_unresolved: bool,
+) -> Result<(), BundleError> {
     let root = fixture
         .as_mapping()
         .ok_or(invalid_artifact("fixture root must be a mapping"))?;
@@ -2170,7 +2182,24 @@ fn validate_fixture_coverage(fixture: &YamlValue) -> Result<(), BundleError> {
         if id.is_empty() || id.len() > 128 || !ids.insert(id) {
             return Err(invalid_artifact("fixture case id is invalid or duplicated"));
         }
-        categories.observe(id);
+        let mapping = case
+            .as_mapping()
+            .ok_or(invalid_artifact("fixture case must be a mapping"))?;
+        let fixture_declares_unresolved = match mapping.get("declaredUnresolved") {
+            Some(YamlValue::Bool(true)) if declared_unresolved => true,
+            Some(YamlValue::Bool(true)) => {
+                return Err(invalid_artifact(
+                    "fixture declared unresolved without a source declaration",
+                ));
+            }
+            Some(_) => {
+                return Err(invalid_artifact(
+                    "fixture declared-unresolved marker must be true",
+                ));
+            }
+            None => false,
+        };
+        categories.observe(id, fixture_declares_unresolved);
     }
     if !categories.complete() {
         return Err(invalid_artifact("fixture category coverage is incomplete"));
@@ -2191,13 +2220,19 @@ struct FixtureCategories {
 }
 
 impl FixtureCategories {
-    fn observe(&mut self, id: &str) {
+    fn observe(&mut self, id: &str, declared_unresolved: bool) {
         self.positive |= id == "positive";
         self.negative |= id.starts_with("negative");
         self.boundary |= id.starts_with("boundary");
         self.missing |= id.starts_with("missing");
         self.no_match |= id == "no-match";
         self.ambiguous |= id.starts_with("ambiguous");
+        // The configured source has already collapsed its hidden no-match and
+        // ambiguous states into one exact transport outcome. Evidence cannot
+        // truthfully label the fixture as either branch, so the neutral case
+        // proves the public behavior shared by both completeness categories.
+        self.no_match |= declared_unresolved;
+        self.ambiguous |= declared_unresolved;
         self.source_failure |= id == "source-failure";
         self.anti_reconstruction |= id == "anti-reconstruction";
     }
@@ -3317,7 +3352,28 @@ mod tests {
             "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: no-match}\n  - {id: ambiguous}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
         )
         .expect("fixture parses");
-        assert!(validate_fixture_coverage(&fixture).is_ok());
+        assert!(validate_fixture_coverage(&fixture, false).is_ok());
+    }
+
+    /// A provider that deliberately collapses hidden no-match and ambiguity
+    /// into one configured wire outcome leaves Evidence no truthful basis for
+    /// inventing two extraction responses. The one neutral, data-free case is
+    /// therefore sufficient for both public-collapse coverage categories.
+    #[test]
+    fn declared_unresolved_fixture_neutrally_covers_hidden_lookup_categories() {
+        let fixture: YamlValue = serde_norway::from_str(
+            "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: unresolved, declaredUnresolved: true}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
+        )
+        .expect("fixture parses");
+
+        assert!(validate_fixture_coverage(&fixture, true).is_ok());
+        assert!(validate_fixture_coverage(&fixture, false).is_err());
+
+        let false_marker: YamlValue = serde_norway::from_str(
+            "synthetic_only: true\ncases:\n  - {id: positive}\n  - {id: negative-a}\n  - {id: boundary-a}\n  - {id: missing-a}\n  - {id: unresolved, declaredUnresolved: false}\n  - {id: source-failure}\n  - {id: anti-reconstruction}\n",
+        )
+        .expect("fixture parses");
+        assert!(validate_fixture_coverage(&false_marker, true).is_err());
     }
 
     #[cfg(unix)]

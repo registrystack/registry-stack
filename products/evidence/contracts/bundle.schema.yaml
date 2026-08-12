@@ -788,6 +788,30 @@ $defs:
           - source-derived
           - field-projected
           - record-transformed
+      unresolvedProblem:
+        description: >-
+          Optional exact source-neutral Problem Details tuple which declares one HTTP 404
+          response as an explicit unresolved lookup outcome. The runtime accepts it only with
+          exactly one application/problem+json Content-Type and an exact duplicate-free
+          six-member Problem Details object whose status, type, and code equal this tuple.
+          Omission preserves the ordinary rule that every HTTP 404 is a dependency failure.
+          This outcome is unavailable for an optimized physical source batch because one
+          response cannot identify the unresolved logical item.
+        type: object
+        additionalProperties: false
+        required: [status, type, code]
+        properties:
+          status: {const: 404}
+          type:
+            type: string
+            format: uri
+            maxLength: 512
+            pattern: ^https://
+          code:
+            type: string
+            minLength: 1
+            maxLength: 64
+            pattern: ^[a-z][a-z0-9._-]{0,63}$
       tlsTrustProfile:
         description: >-
           Logical name resolved to an exact private certificate authority file bound in `runtime.yaml`.
@@ -863,6 +887,9 @@ $defs:
           required:
             - batch
         then:
+          not:
+            required:
+              - unresolvedProblem
           properties:
             request:
               required:
@@ -2857,7 +2884,10 @@ startup_checks:
     artifact; missing, duplicate, or unreferenced schemes fail startup.
   - >-
     Fixtures cover positive, negative, boundary, missing, no-match, ambiguous, source failure,
-    and anti-reconstruction cases.
+    and anti-reconstruction cases. When an initial HTTP source declares unresolvedProblem, one
+    data-free declaredUnresolved case may satisfy both no-match and ambiguous coverage because
+    the upstream contract has already collapsed those states; the fixture carries no lookup
+    label or Problem Details members.
   - >-
     The complete simultaneously enabled requirement set passes disclosure-combination review.
   - >-

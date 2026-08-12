@@ -15,8 +15,9 @@ use chrono::Utc;
 use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 use registry_evidence::bundle::{Bundle, BundleError, RuntimeDocument};
 use registry_evidence::config::{
-    AcquisitionPosture, FixedRequest, HttpMethod, OutboundTlsConfig, PreparationChannelPolicy,
-    PreparationLimits, SourceConfig, StageInputs, RESERVED_HEADER_CONTRACT_CASES,
+    AcquisitionPosture, DeclaredUnresolvedProblem, FixedRequest, HttpMethod, OutboundTlsConfig,
+    PreparationChannelPolicy, PreparationLimits, SourceConfig, StageInputs,
+    RESERVED_HEADER_CONTRACT_CASES,
 };
 use registry_evidence::kernel::{
     EvidenceConstruction, EvidenceScope, OfflineKernel, ValueProjection,
@@ -33,7 +34,7 @@ use registry_evidence::secrets::{SecretProvider, SecretResolver};
 use registry_evidence::signing::{jwks_document, EvidenceSigner};
 use registry_evidence::source::{
     project_fixture_response, PreparedSourceRequest, ResolvedSourceSelector, SourceError,
-    SourceExecutor, SourceStatus,
+    SourceExecutor, SourceResponse, SourceStatus,
 };
 use registry_evidence::verifier::{verify_flattened_jws, EvidenceVerificationPolicy};
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, SigningProvider};
@@ -158,6 +159,16 @@ fn tls_trust_profile_mut(source: &mut SourceConfig) -> &mut Option<String> {
         panic!("{NOT_HTTP_JSON}");
     };
     tls_trust_profile
+}
+
+fn unresolved_problem_mut(source: &mut SourceConfig) -> &mut Option<DeclaredUnresolvedProblem> {
+    let SourceConfig::HttpJson {
+        unresolved_problem, ..
+    } = source
+    else {
+        panic!("{NOT_HTTP_JSON}");
+    };
+    unresolved_problem
 }
 
 fn fixed_source(base_url: &str, authentication: Value) -> SourceConfig {
@@ -795,7 +806,9 @@ async fn exact_request_applies_path_query_body_headers_auth_and_projection_once(
             Utc::now(),
         )
         .await
-        .expect("source succeeds");
+        .expect("source succeeds")
+        .into_data()
+        .expect("source response carries data");
     assert_eq!(
         response,
         json!({
@@ -867,6 +880,157 @@ fn materialized_request_reuses_path_template_query_and_body_without_auth_materia
     }
 }
 
+/// Threat: an upstream error, policy refusal, or attacker-controlled problem
+/// body must not be collapsed into Evidence unavailability. Enforcement: only
+/// the configured exact 404 Problem Details tuple and exact closed wire shape
+/// becomes the data-free transport outcome. Negative cases remain dependency
+/// failures before projection or Rhai extraction.
+#[tokio::test]
+async fn sec_declared_unresolved_problem_is_exact_and_source_neutral() {
+    const TYPE_URI: &str = "https://id.example.invalid/problems/consultation/unresolved";
+    let cases = [
+        (
+            "declared exact tuple",
+            404,
+            "application/problem+json",
+            r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"secret-upstream-trace"}"#,
+            Ok(SourceResponse::DeclaredUnresolved),
+        ),
+        (
+            "wrong media type",
+            404,
+            "application/problem+json; charset=utf-8",
+            r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"trace"}"#,
+            Err(SourceError::WrongMediaType),
+        ),
+        (
+            "wrong type",
+            404,
+            "application/problem+json",
+            r#"{"type":"https://id.example.invalid/problems/consultation/denied","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"trace"}"#,
+            Err(SourceError::ProblemMismatch),
+        ),
+        (
+            "missing member",
+            404,
+            "application/problem+json",
+            r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved"}"#,
+            Err(SourceError::ProblemMismatch),
+        ),
+        (
+            "mistyped member",
+            404,
+            "application/problem+json",
+            r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":7}"#,
+            Err(SourceError::ProblemMismatch),
+        ),
+        (
+            "wrong code",
+            404,
+            "application/problem+json",
+            r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.denied","traceId":"trace"}"#,
+            Err(SourceError::ProblemMismatch),
+        ),
+        (
+            "extra member",
+            404,
+            "application/problem+json",
+            r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"trace","candidateCount":0}"#,
+            Err(SourceError::ProblemMismatch),
+        ),
+        (
+            "duplicate member",
+            404,
+            "application/problem+json",
+            r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"trace"}"#,
+            Err(SourceError::InvalidJson),
+        ),
+        (
+            "other status",
+            503,
+            "application/problem+json",
+            r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"trace"}"#,
+            Err(SourceError::Status(SourceStatus::ServerError)),
+        ),
+    ];
+
+    for (label, status, media_type, body, expected) in cases {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/data"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("Content-Type", media_type)
+                    .set_body_raw(body, media_type),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (_root, secrets) = resolver(&[]);
+        let mut source = fixed_source(&server.uri(), json!({"kind": "none"}));
+        *unresolved_problem_mut(&mut source) = Some(DeclaredUnresolvedProblem {
+            status: 404,
+            type_uri: TYPE_URI.into(),
+            code: "consultation.unresolved".into(),
+        });
+        let executor = SourceExecutor::new(&source, secrets).expect("executor builds");
+        let actual = executor
+            .execute(
+                &[selector("synthetic")],
+                &prepared_http_request(&parts()),
+                Utc::now(),
+            )
+            .await;
+        assert_eq!(actual, expected, "{label}");
+    }
+}
+
+#[tokio::test]
+async fn undeclared_and_oversized_unresolved_problems_remain_dependency_failures() {
+    const BODY: &str = r#"{"type":"https://id.example.invalid/problems/consultation/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"trace"}"#;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/data"))
+        .respond_with(ResponseTemplate::new(404).set_body_raw(BODY, "application/problem+json"))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let (_root, secrets) = resolver(&[]);
+    let source = fixed_source(&server.uri(), json!({"kind": "none"}));
+    let executor = SourceExecutor::new(&source, Arc::clone(&secrets)).expect("executor builds");
+    assert_eq!(
+        executor
+            .execute(
+                &[selector("synthetic")],
+                &prepared_http_request(&parts()),
+                Utc::now(),
+            )
+            .await,
+        Err(SourceError::Status(SourceStatus::Other)),
+        "omission preserves ordinary 404 dependency failure"
+    );
+
+    let mut source = fixed_source(&server.uri(), json!({"kind": "none"}));
+    *unresolved_problem_mut(&mut source) = Some(DeclaredUnresolvedProblem {
+        status: 404,
+        type_uri: "https://id.example.invalid/problems/consultation/unresolved".into(),
+        code: "consultation.unresolved".into(),
+    });
+    http_request_mut(&mut source).maximum_response_bytes = 32;
+    let executor = SourceExecutor::new(&source, secrets).expect("bounded executor builds");
+    assert_eq!(
+        executor
+            .execute(
+                &[selector("synthetic")],
+                &prepared_http_request(&parts()),
+                Utc::now(),
+            )
+            .await,
+        Err(SourceError::ResponseTooLarge),
+        "the ordinary maximumResponseBytes bound applies before problem parsing"
+    );
+}
+
 #[tokio::test]
 async fn local_unauthenticated_loopback_source_sends_no_authentication_header() {
     let server = MockServer::start().await;
@@ -900,7 +1064,9 @@ async fn local_unauthenticated_loopback_source_sends_no_authentication_header() 
             Utc::now(),
         )
         .await
-        .expect("local source request succeeds");
+        .expect("local source request succeeds")
+        .into_data()
+        .expect("local source response carries data");
     assert_eq!(response, json!({"ok": true}));
 
     let requests = server.received_requests().await.expect("request journal");
@@ -1379,7 +1545,9 @@ async fn every_frozen_source_shape_executes_through_production_materialization_a
                     Utc::now(),
                 )
                 .await
-                .expect("frozen shape executes through the production transport");
+                .expect("frozen shape executes through the production transport")
+                .into_data()
+                .expect("frozen response carries data");
             let response_files = response_fixture_paths(&stage.responses);
             // Every committed response of the stage other than the error
             // envelope has to sit inside the declared response schema, because
@@ -1930,7 +2098,9 @@ async fn every_acquisition_posture_fixture_executes_with_one_bounded_request() {
                 Utc::now(),
             )
             .await
-            .expect("posture source request succeeds");
+            .expect("posture source request succeeds")
+            .into_data()
+            .expect("posture source response carries data");
         assert!(!serde_json::to_string(&projected)
             .expect("projected response serializes")
             .contains("never-project-this-value"));
@@ -2532,7 +2702,8 @@ async fn projection_missing_leaf_is_omitted_but_bad_intermediate_stops_before_ex
                     }),
                     Utc::now()
                 )
-                .await,
+                .await
+                .map(|response| response.into_data().expect("expected data response")),
             expected
         );
     }
@@ -2815,7 +2986,8 @@ async fn private_ca_tls_handshake_succeeds_and_hostname_mismatch_fails() {
                 }),
                 Utc::now()
             )
-            .await,
+            .await
+            .map(|response| response.into_data().expect("expected data response")),
         Ok(json!({"ok": true}))
     );
     server.await.expect("trusted TLS server task completes");
