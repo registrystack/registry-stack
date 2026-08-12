@@ -1166,6 +1166,50 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("validated", result.stdout)
 
+    def test_validate_current_selects_highest_semver_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_dir = Path(tmp) / "manifests"
+            manifest_dir.mkdir()
+            source_ref = git(ROOT, "rev-parse", "HEAD")
+            for version, release_id in (
+                ("0.19.0", "beta-29"),
+                ("0.20.0", "beta-30"),
+            ):
+                manifest = write_manifest(
+                    manifest_dir,
+                    version=version,
+                    source_ref=source_ref,
+                )
+                data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+                data["stack"]["release"] = release_id
+                data["stack"].pop("source_ref")
+                data["stack"].pop("status")
+                manifest.write_text(
+                    yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+                )
+                manifest.rename(manifest_dir / f"registry-stack-{release_id}.yaml")
+
+            result = run_tool(
+                "validate-current",
+                "--manifest-dir",
+                str(manifest_dir),
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("beta-30 0.20.0", result.stdout)
+        self.assertNotIn("beta-29", result.stdout)
+
+    def test_validate_current_requires_a_release_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_tool(
+                "validate-current",
+                "--manifest-dir",
+                tmp,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("no Registry Stack release manifests found", result.stderr)
+
     def test_validate_rejects_partially_removed_legacy_source_state(self) -> None:
         for removed in ("source_ref", "status"):
             with self.subTest(removed=removed), tempfile.TemporaryDirectory() as tmp:

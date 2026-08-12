@@ -635,7 +635,7 @@ jobs:
         run: python3 -m unittest release/scripts/test_check_gates_inventory.py
 
       - name: Validate release manifest
-        run: release/scripts/registry-release validate release/manifests/registry-stack-beta-29.yaml
+        run: release/scripts/registry-release validate-current
 
       - name: Validate release docsets
         run: release/scripts/registry-release validate-docsets

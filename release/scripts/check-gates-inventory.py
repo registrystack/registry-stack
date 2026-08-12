@@ -196,7 +196,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Release manifest validation",
-        "release/scripts/registry-release validate release/manifests/registry-stack-beta-29.yaml",
+        "release/scripts/registry-release validate-current",
     ),
     ("Release docset validation", "release/scripts/registry-release validate-docsets"),
     ("Release import audit", "release/scripts/registry-release audit"),
