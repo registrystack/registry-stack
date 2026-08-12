@@ -50,7 +50,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             "npm run build:dev",
             "npm run check:production:built",
             "npm run check:archives",
-            "git diff --exit-code",
+            'final_status="$(git status --short)"',
         )
         positions = [text.index(marker) for marker in ordered]
         self.assertEqual(sorted(positions), positions)

@@ -103,5 +103,10 @@ npm run check:production:built
 npm run check:archives
 
 cd "${ROOT}"
-git diff --exit-code
+final_status="$(git status --short)"
+if [[ -n "${final_status}" ]]; then
+  echo "release rehearsal produced uncommitted or untracked files:" >&2
+  printf '%s\n' "${final_status}" >&2
+  exit 1
+fi
 echo "Release rehearsal passed for ${RELEASE_ID} ${tag}."

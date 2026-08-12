@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
-import json
 import os
 import tempfile
-import unittest
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 
 SCRIPT = Path(__file__).with_name("verify_public_release.py")
@@ -27,7 +25,7 @@ def digest(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
-class PublicReleaseVerifierTest(unittest.TestCase):
+class PublicReleaseVerifierTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
 
@@ -259,4 +257,4 @@ class PublicReleaseVerifierTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()
