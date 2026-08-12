@@ -1,0 +1,15 @@
+openapi: 3.1.0
+info: {title: Unsupported synthetic API, version: 1.0.0}
+paths:
+  /secrets:
+    get:
+      responses:
+        "200":
+          description: Password format is deliberately unsupported
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [secret]
+                properties:
+                  secret: {type: string, format: password}

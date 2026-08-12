@@ -1,6 +1,6 @@
 ---
 title: Get your first Evidence Gateway assertion
-description: Run a local registry and verify one adult-status answer as signed JWS and SD-JWT VC without copying the source record.
+description: Run a local source mock and verify one adult-status answer as signed JWS and SD-JWT VC without copying the source record.
 status: current
 owner: registry-docs
 source_repos:
@@ -59,7 +59,7 @@ evidencectl --version
 The installer provides `evidencectl` and the local Evidence Gateway and Registry Mint runtimes used later
 in the tutorial.
 
-## Start a small registry
+## Preview a synthetic source
 
 Create a working directory:
 
@@ -68,123 +68,100 @@ mkdir first-evidence-assertion
 cd first-evidence-assertion
 ```
 
-Open `registry.py` in your editor and add this server:
+Open `tutorial-source.openapi.yaml` in your editor and add this OpenAPI description:
 
-```python
-import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlsplit
-
-PEOPLE = {
-    "person-123": {
-        "person_id": "person-123",
-        "name": "Amina Example",
-        "date_of_birth": "2000-01-01",
-    },
-    "person-456": {
-        "person_id": "person-456",
-        "name": "Mateo Example",
-        "date_of_birth": "2012-05-20",
-    },
-    "person-789": {
-        "person_id": "person-789",
-        "name": "Noor Example",
-        "date_of_birth": "1988-11-03",
-    },
-}
-OPENAPI = {
-    "openapi": "3.1.0",
-    "info": {"title": "Tutorial registry", "version": "1.0.0"},
-    "servers": [{"url": "http://127.0.0.1:8000"}],
-    "paths": {"/people/{person_id}": {"get": {
-        "operationId": "getPerson",
-        "parameters": [{"name": "person_id", "in": "path", "required": True,
-                        "schema": {"type": "string"}}],
-        "responses": {"200": {
-            "description": "A person record",
-            "content": {"application/json": {
-                "schema": {
-                    "type": "object",
-                    "required": ["person_id", "name", "date_of_birth"],
-                    "properties": {
-                        "person_id": {"type": "string", "minLength": 1, "maxLength": 64},
-                        "name": {"type": "string", "minLength": 1, "maxLength": 100},
-                        "date_of_birth": {
-                            "type": "string", "format": "date",
-                            "minLength": 10, "maxLength": 10,
-                        },
-                    },
-                },
-            }},
-        }},
-    }}},
-}
-
-class Registry(BaseHTTPRequestHandler):
-    def do_GET(self):
-        path = unquote(urlsplit(self.path).path)
-        if path == "/openapi.json":
-            return self.send_json(OPENAPI)
-        people_prefix = "/people/"
-        if path.startswith(people_prefix):
-            person = PEOPLE.get(path[len(people_prefix):])
-            if person is not None:
-                return self.send_json(person)
-        self.send_error(404)
-
-    def send_json(self, value):
-        body = json.dumps(value).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-print("Registry listening on http://127.0.0.1:8000", flush=True)
-ThreadingHTTPServer(("127.0.0.1", 8000), Registry).serve_forever()
+```yaml
+openapi: 3.1.0
+info:
+  title: Tutorial registry
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:4010
+paths:
+  /people/{person_id}:
+    get:
+      operationId: getPerson
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A synthetic person record
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [person_id, name, date_of_birth]
+                properties:
+                  person_id:
+                    type: string
+                    minLength: 1
+                    maxLength: 64
+                    x-evidencectl-mock:
+                      fromRequest:
+                        pathParameter: person_id
+                  name:
+                    type: string
+                    minLength: 1
+                    maxLength: 100
+                    x-evidencectl-mock:
+                      faker:
+                        kind: person.fullName
+                  date_of_birth:
+                    type: string
+                    format: date
+                    x-evidencectl-mock:
+                      distribution:
+                        kind: age
+                        min: 18
+                        max: 90
 ```
 
-You do not need to understand every line of the server. Three details connect it to Evidence Gateway:
+Three details connect this contract to Evidence Gateway:
 
 - `/people/{person_id}` returns a complete person record.
-- `/openapi.json` describes that endpoint and its response.
 - `getPerson` is the OpenAPI operation that the Evidence Gateway question will select.
+- The mock hints echo the requested ID, create a plausible name, and keep generated ages between 18 and 90.
 
-In one terminal, start the registry and leave it running:
-
-```sh
-python3 registry.py
-```
-
-The server publishes its OpenAPI description at `/openapi.json` and three synthetic records:
-`person-123`, `person-456`, and `person-789`.
-The records include both adults and a child, but this tutorial will request an assertion only for
-`person-123`.
-
-In another terminal, return to `first-evidence-assertion` and inspect the source record:
+Start a write-free preview directly from the OpenAPI description:
 
 ```sh
-curl -s http://127.0.0.1:8000/people/person-123 | python3 -m json.tool
+evidencectl source mock serve --openapi tutorial-source.openapi.yaml
 ```
 
-```json
-{
-  "person_id": "person-123",
-  "name": "Amina Example",
-  "date_of_birth": "2000-01-01"
-}
+```text
+Source mock ready: mode=ephemeral origin=http://127.0.0.1:4010 contract=evidencectl-source-mock-v1 seed=0 asOf=2025-01-01 digest=sha256:<digest> served=1 skipped=0
+Next: evidencectl source mock generate --openapi <file>
 ```
 
-The registry returns an identifier, a name, and a date of birth. The verified assertion will contain
-none of those source values.
+This mode writes nothing. It checks the compatible `GET` operation, generates schema-valid synthetic
+responses deterministically, and binds only to numeric loopback.
+
+In another terminal, return to `first-evidence-assertion` and inspect the source shape:
+
+```sh
+curl -s http://127.0.0.1:4010/people/person-123 | python3 -c \
+  'import json,sys; print(sorted(json.load(sys.stdin)))'
+```
+
+```text
+['date_of_birth', 'name', 'person_id']
+```
+
+The preview generated one complete record with the documented fields. The verified assertion will contain
+none of those source values. Return to the first terminal and press `Ctrl+C` to stop the ephemeral preview.
 
 ## Create the Evidence Gateway project
 
-Create a local project from the registry's OpenAPI description:
+Create a local project from the source's OpenAPI description:
 
 ```sh
 evidencectl new adult-status \
-  --openapi http://127.0.0.1:8000/openapi.json \
+  --openapi tutorial-source.openapi.yaml \
   --profile local
 cd adult-status
 ```
@@ -208,8 +185,8 @@ adult-status/
 ```
 
 This first question uses the compact OpenAPI form, so you will add only a question and its
-derivation. Later institution integrations use the reusable source, selector, adapter, and schema
-directories.
+derivation. Evidence Gateway keeps the source-mock hints out of the narrowed authoring schema.
+Later institution integrations use the reusable source, selector, adapter, and schema directories.
 
 ### `questions/adult-status.yaml`
 
@@ -276,6 +253,102 @@ The derivation performs four operations:
 
 Evidence Gateway validates the returned name and boolean form before signing.
 
+## Keep exact cases for the tutorial
+
+The ephemeral preview is the shortest route from OpenAPI to a running source. The remaining tutorials
+need three exact records that stay unchanged between runs, so materialize a small reviewed plan instead.
+
+Create its directory:
+
+```sh
+mkdir -p mocks/cases
+```
+
+Open `mocks/source.yaml` and add the three request cases:
+
+```yaml
+version: 1
+openapi: ../source.openapi.yaml
+operations:
+  - method: GET
+    path: /people/{person_id}
+    operationId: getPerson
+    response:
+      status: 200
+      mediaType: application/json
+    cases:
+      - name: person-123
+        request:
+          pathParameters: {person_id: person-123}
+        body: cases/person-123.json
+      - name: person-456
+        request:
+          pathParameters: {person_id: person-456}
+        body: cases/person-456.json
+      - name: person-789
+        request:
+          pathParameters: {person_id: person-789}
+        body: cases/person-789.json
+```
+
+Add the exact synthetic bodies.
+
+### `mocks/cases/person-123.json`
+
+```json
+{
+  "person_id": "person-123",
+  "name": "Amina Example",
+  "date_of_birth": "2000-01-01"
+}
+```
+
+### `mocks/cases/person-456.json`
+
+```json
+{
+  "person_id": "person-456",
+  "name": "Mateo Example",
+  "date_of_birth": "2012-05-20"
+}
+```
+
+### `mocks/cases/person-789.json`
+
+```json
+{
+  "person_id": "person-789",
+  "name": "Noor Example",
+  "date_of_birth": "1988-11-03"
+}
+```
+
+Check the plan and every authored body offline:
+
+```sh
+evidencectl source mock check --config mocks/source.yaml
+```
+
+```text
+Mock plan valid: operations=1 cases=3
+```
+
+The check does not bind a port or rewrite a file. For another API, start an editable case with
+`evidencectl source mock generate --project . --operation "GET /path/{id}" --case adult-positive` and add one
+`--path-parameter id=<value>` for each path parameter. Generation creates an initial plan and response
+body without overwriting an existing mock directory. Edit the body, run `check`, and serve those exact
+checked bytes.
+
+Start the materialized source and leave it running:
+
+```sh
+evidencectl source mock serve --config mocks/source.yaml
+```
+
+```text
+Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipped=0
+```
+
 Start Evidence Gateway and Registry Mint:
 
 ```sh
@@ -287,7 +360,7 @@ Evidence ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-This command starts Evidence Gateway and Mint only. The Python registry remains the process you started in
+This command starts Evidence Gateway and Mint only. The source mock remains the process you started in
 the first terminal.
 
 ## Request an assertion
@@ -506,7 +579,7 @@ This preserves your editable questions, derivations, keys, and request artifacts
 `dev stop` and then `dev clean` instead of changing those permissions by hand. The command refuses
 to remove a running or unrecognized generation.
 
-Return to the first terminal and press `Ctrl+C` to stop the registry.
+Return to the first terminal and press `Ctrl+C` to stop the source mock.
 
 Keep the tutorial directory to continue with the governed-value tutorial. If you do not plan to
 continue, you can remove the complete directory with ordinary file commands.
@@ -522,6 +595,10 @@ evidencectl dev --detach --evidence-port 8180 --mint-port 8181
 Evidence Gateway uses the selected ports consistently in its runtime, Mint authorization, readiness
 checks, and generated request artifacts. Send the assertion request to the selected Evidence Gateway port,
 such as `http://127.0.0.1:8180/v1/evidence`.
+
+The source mock separately uses `127.0.0.1:4010`, the origin retained in `source.openapi.yaml`. If that
+port is unavailable, change the OpenAPI server URL before creating the project and pass the same origin
+with `source mock serve --http-addr`.
 
 The development profile binds both services to loopback in the environment where the command
 runs. If that environment is a Docker container, run the tutorial's `curl` commands in the same

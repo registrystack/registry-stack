@@ -21,7 +21,7 @@ pub use registry_evidence_authoring::openapi::{flatten, narrow, openapi, types};
 
 use std::{collections::BTreeMap, path::Path, process::ExitCode};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgGroup, Args, Subcommand};
 
 use emit::EmitInputs;
@@ -35,6 +35,9 @@ use types::{
 pub enum SourceCommand {
     /// Suggest source configuration from an OpenAPI document.
     Suggest(SuggestArgs),
+    /// Generate, inspect, and serve a local synthetic source API.
+    #[command(subcommand)]
+    Mock(crate::source_mock::MockCommand),
 }
 
 #[derive(Debug, Args)]
@@ -76,6 +79,10 @@ pub struct SuggestArgs {
     #[arg(long)]
     pub source_id: Option<String>,
 
+    /// Reviewed source origin to write into a newly created source draft.
+    #[arg(long)]
+    pub base_url: Option<String>,
+
     /// Deployment project to write the draft into; print-only if absent.
     #[arg(long)]
     pub project: Option<std::path::PathBuf>,
@@ -84,6 +91,7 @@ pub struct SuggestArgs {
 pub fn run(command: SourceCommand) -> Result<ExitCode> {
     match command {
         SourceCommand::Suggest(args) => suggest(args),
+        SourceCommand::Mock(command) => crate::source_mock::run(command),
     }
 }
 
@@ -254,6 +262,11 @@ pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
             .into_iter()
             .next()
             .and_then(|url| emit::split_server_url(&url)),
+        base_url: args
+            .base_url
+            .as_deref()
+            .map(validate_base_url)
+            .transpose()?,
         selection: decisions.selection.clone(),
         narrowed,
         needs,
@@ -267,6 +280,47 @@ pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
         artifacts,
         flag_driven,
     })
+}
+
+/// Validate one explicit source origin without resolving or contacting it.
+///
+/// Evidence source policy admits HTTPS origins and canonical numeric-loopback
+/// HTTP for local authoring. Paths, credentials, queries, and fragments are
+/// never part of the origin.
+fn validate_base_url(raw: &str) -> Result<String> {
+    let parsed = url::Url::parse(raw).context("parsing --base-url as an absolute URL")?;
+    if parsed.username() != ""
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
+    {
+        bail!("--base-url must be an origin with no credentials, path, query, or fragment");
+    }
+    let host = parsed
+        .host()
+        .ok_or_else(|| anyhow!("--base-url must name one host"))?;
+    match parsed.scheme() {
+        "https" => {}
+        "http" => {
+            let ip = match host {
+                url::Host::Ipv4(ip) => std::net::IpAddr::V4(ip),
+                url::Host::Ipv6(ip) => std::net::IpAddr::V6(ip),
+                url::Host::Domain(_) => {
+                    bail!("an HTTP --base-url must use a numeric loopback address")
+                }
+            };
+            if !ip.is_loopback() || parsed.port().is_none_or(|port| port == 0) {
+                bail!("an HTTP --base-url must use a numeric loopback address and non-zero port");
+            }
+        }
+        _ => bail!("--base-url must use HTTPS or numeric-loopback HTTP"),
+    }
+    let canonical = parsed.origin().ascii_serialization();
+    if raw != canonical {
+        bail!("--base-url must use canonical origin spelling `{canonical}`");
+    }
+    Ok(canonical)
 }
 
 fn suggestion_openapi(args: &SuggestArgs) -> Result<types::SpecSource> {
@@ -641,4 +695,40 @@ fn missing_flags_message(args: &SuggestArgs) -> String {
          (an interactive run prints the equivalent fully-flagged command)",
         missing.join(" and ")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_base_url;
+
+    #[test]
+    fn explicit_source_origins_accept_https_and_numeric_loopback_http() {
+        assert_eq!(
+            validate_base_url("https://registry.example.invalid").expect("HTTPS origin"),
+            "https://registry.example.invalid"
+        );
+        assert_eq!(
+            validate_base_url("http://127.0.0.1:4010").expect("loopback origin"),
+            "http://127.0.0.1:4010"
+        );
+        assert_eq!(
+            validate_base_url("http://[::1]:4010").expect("IPv6 loopback origin"),
+            "http://[::1]:4010"
+        );
+    }
+
+    #[test]
+    fn explicit_source_origins_refuse_ambiguous_or_non_loopback_http() {
+        for raw in [
+            "http://localhost:4010",
+            "http://192.0.2.1:4010",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:4010/path",
+            "http://user@127.0.0.1:4010",
+            "https://registry.example.invalid/extra",
+            "https://registry.example.invalid?mode=mock",
+        ] {
+            assert!(validate_base_url(raw).is_err(), "accepted {raw}");
+        }
+    }
 }

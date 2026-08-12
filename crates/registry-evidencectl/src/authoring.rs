@@ -2026,6 +2026,9 @@ fn validate_selected_schema_node(
         "writeOnly",
         "example",
         "examples",
+        // Local synthetic generation metadata is intentionally ignored by
+        // the production narrowing step and never reaches compiled contracts.
+        "x-evidencectl-mock",
     ];
     allowed.extend(match primary_type {
         "object" => &["properties", "required", "additionalProperties"][..],
@@ -3518,6 +3521,26 @@ properties:
             .contains("let governed_answers = answer(facts, selectors, evaluation_context)"));
         assert!(derivation.contains("value: governed_answers[\"is_adult\"]"));
         assert!(!derivation.contains("concept_id: \"is_adult\""));
+    }
+
+    #[test]
+    fn mock_generation_hints_do_not_change_the_compiled_source_schema() {
+        let baseline = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        compile_local_project(&baseline.project, &baseline.staging, &baseline.evidence)
+            .expect("baseline compilation succeeds");
+        let hinted_openapi = OPENAPI.replace(
+            "date_of_birth: {type: string, format: date}",
+            "date_of_birth:\n                    type: string\n                    format: date\n                    x-evidencectl-mock:\n                      distribution: {kind: age, min: 18, max: 90}",
+        );
+        let hinted = Fixture::new(&hinted_openapi, QUESTION, ANSWER, true);
+        compile_local_project(&hinted.project, &hinted.staging, &hinted.evidence)
+            .expect("hinted compilation succeeds");
+
+        let relative = "bundle/schemas/adult-status-source-response.schema.yaml";
+        assert_eq!(
+            fs::read(baseline.staging.join(relative)).expect("baseline schema"),
+            fs::read(hinted.staging.join(relative)).expect("hinted schema"),
+        );
     }
 
     #[test]

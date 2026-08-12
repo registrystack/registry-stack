@@ -26,7 +26,7 @@ question.
   level="Local development with synthetic data"
   prerequisites={[
     'The completed governed-value tutorial',
-    'Its adult-status project and registry.py',
+    'Its adult-status project and materialized source mock',
     'Python 3',
     'A shell with curl',
   ]}
@@ -61,16 +61,16 @@ part of Registry Mint's reloadable registry:
 A client change affects tokens issued after Registry Mint reloads. A token issued before a client
 is revoked remains valid for up to 300 seconds.
 
-## Restart the registry
+## Restart the source mock
 
-In one terminal, return to the working directory from the first tutorial and start the synthetic
-registry:
+In one terminal, return to the working directory from the first tutorial and serve the checked
+synthetic cases:
 
 ```sh
-python3 registry.py
+evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
-Leave the registry running. In another terminal, enter the project containing both questions:
+Leave the source mock running. In another terminal, enter the project containing both questions:
 
 ```sh
 cd adult-status

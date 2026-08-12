@@ -39,7 +39,7 @@ async function runShell(script) {
 test('the dry-run gate registers the shared Evidence start tutorials', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /first-evidence-assertion: 18 sh fences, 16 executed/u);
+  assert.match(output, /first-evidence-assertion: 21 sh fences, 19 executed/u);
   assert.match(output, /request-evidence-as-sd-jwt-vc: 16 sh fences, 16 executed/u);
   assert.match(
     output,
@@ -68,6 +68,12 @@ test('--only accepts the current first Evidence tutorial', async () => {
   ]);
   assert.equal(code, 0, output);
   assert.match(output, /Checked 1 tutorial\./u);
+  const source = await readFile(gate, 'utf8');
+  const branch = source.match(/\n\tfirst-evidence-assertion\)[\s\S]*?\n\t\t;;/u)?.[0];
+  assert.ok(branch, 'the first Evidence replay spec must exist');
+  assert.match(branch, /stop-background/u);
+  assert.match(branch, /run:5-6/u);
+  assert.match(branch, /source mock check --config mocks\/source\.yaml/u);
 });
 
 test('--only accepts the role-bound relationship follow-up', async () => {

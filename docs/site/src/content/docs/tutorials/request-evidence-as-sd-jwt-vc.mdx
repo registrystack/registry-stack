@@ -18,7 +18,7 @@ standards_referenced:
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Complete [Get your first Evidence Gateway assertion](../first-evidence-assertion/) before starting.
-You will reuse its local registry and `adult-status` project to explore the SD-JWT VC serialization
+You will reuse its local source mock and `adult-status` project to explore the SD-JWT VC serialization
 without adding a wallet or a credential lifecycle.
 
 <QuickstartMeta
@@ -27,7 +27,7 @@ without adding a wallet or a credential lifecycle.
   level="Local development with synthetic data"
   prerequisites={[
     'The completed first Evidence Gateway assertion tutorial',
-    'Its adult-status project and registry.py',
+    'Its adult-status project and materialized source mock',
     'Python 3',
     'A shell with curl',
   ]}
@@ -49,13 +49,12 @@ Two separate authoring choices matter:
 A scalar answer needs only the first choice. It becomes one root disclosure named by the governed
 concept URI. Omitting `responseFormats` keeps the project at signed JWS only.
 
-## Restart the registry
+## Restart the source mock
 
-In the terminal that owns the Python registry, return to the `first-evidence-assertion` directory
-and start it again:
+In one terminal, return to the `first-evidence-assertion` directory and serve the checked cases again:
 
 ```sh
-python3 registry.py
+evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
 Leave it running. In another terminal, enter the existing Evidence Gateway project:

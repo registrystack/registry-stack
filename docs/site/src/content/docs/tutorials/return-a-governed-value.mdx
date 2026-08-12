@@ -26,7 +26,7 @@ date or exact age.
   level="Local development with synthetic data"
   prerequisites={[
     'The completed first Evidence Gateway assertion tutorial',
-    'Its adult-status project and registry.py',
+    'Its adult-status project and materialized source mock',
     'Python 3',
     'A shell with curl',
   ]}
@@ -48,16 +48,15 @@ This tutorial permits four answers:
 The provider reviews this closed list. The caller cannot request a narrower bracket or an exact
 age.
 
-## Restart the registry
+## Restart the source mock
 
-In the terminal that owns the Python registry, return to the `first-evidence-assertion` directory
-and start the same source again:
+In one terminal, return to the `first-evidence-assertion` directory and serve the same checked cases again:
 
 ```sh
-python3 registry.py
+evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
-Leave the registry running. The source still returns each synthetic person's identifier, name, and
+Leave the source mock running. It still returns each synthetic person's identifier, name, and
 date of birth. This tutorial will use the child record, `person-456`, to exercise a different
 registry lookup from the first tutorial.
 

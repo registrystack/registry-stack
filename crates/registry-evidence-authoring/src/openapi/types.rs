@@ -9,6 +9,18 @@
 
 use std::{collections::BTreeMap, path::PathBuf};
 
+/// The JSON Schema dialect carried by an OpenAPI document.
+///
+/// OpenAPI 3.0 uses its own Schema Object dialect, while OpenAPI 3.1 aligns its
+/// Schema Object with JSON Schema 2020-12. Keeping that distinction explicit
+/// prevents a consumer from applying 3.0 compatibility rewrites to a 3.1
+/// document where the same spelling has different semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenApiDialect {
+    OpenApi30,
+    OpenApi31,
+}
+
 /// Where the OpenAPI document is read from.
 ///
 /// The two cases stay distinguishable all the way to the reproduce line, so
@@ -48,6 +60,44 @@ pub struct OperationSummary {
     pub summary: Option<String>,
     /// (status code, media type) pairs carrying a JSON response schema.
     pub json_responses: Vec<(String, String)>,
+}
+
+/// Where an OpenAPI operation parameter is carried on the request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ParameterLocation {
+    Query,
+    Header,
+    Path,
+    Cookie,
+}
+
+impl ParameterLocation {
+    /// The OpenAPI wire spelling used in a Parameter Object's `in` field.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Header => "header",
+            Self::Path => "path",
+            Self::Cookie => "cookie",
+        }
+    }
+}
+
+/// One path-item or operation parameter after local references are resolved.
+///
+/// [`crate::openapi::openapi::Spec::operation_parameters`] merges these by
+/// `(name, location)`, with an operation-level declaration replacing the
+/// path-item declaration of the same parameter.
+#[derive(Debug, Clone)]
+pub struct OperationParameter {
+    pub name: String,
+    pub location: ParameterLocation,
+    pub required: bool,
+    pub schema: ResolvedSchema,
+    /// The Parameter Object's own example, when present.
+    pub example: Option<serde_json::Value>,
+    /// The resolved parameter schema's default, when present.
+    pub default: Option<serde_json::Value>,
 }
 
 /// A response schema with every local `$ref` inlined and the dialect

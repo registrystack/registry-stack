@@ -1,0 +1,44 @@
+openapi: 3.0.3
+info:
+  title: Awkward serialization API
+  version: 1.0.0
+paths:
+  /records/{record-id}:
+    get:
+      parameters:
+        - name: record-id
+          in: path
+          required: true
+          example: rec-1
+          schema: {type: string, minLength: 1, maxLength: 32}
+      responses:
+        "200":
+          description: Nested primitives and awkward property spellings
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [record-id, odd/key~.value, nullableNote, active, score, ratio, state, events]
+                properties:
+                  record-id:
+                    type: string
+                    x-evidencectl-mock:
+                      fromRequest: {pathParameter: record-id}
+                  odd/key~.value: {type: string, minLength: 1, maxLength: 24}
+                  nullableNote: {type: string, nullable: true, minLength: 0, maxLength: 24}
+                  active: {type: boolean}
+                  score: {type: integer, minimum: -5, maximum: 5}
+                  ratio: {type: number, minimum: 0.25, maximum: 0.75}
+                  state: {type: string, enum: [odd, ready, archived]}
+                  events:
+                    type: array
+                    minItems: 2
+                    maxItems: 3
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [eventId, occurredAt]
+                      properties:
+                        eventId: {type: string, format: uuid}
+                        occurredAt: {type: string, format: date-time}

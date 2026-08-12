@@ -32,6 +32,9 @@
 #                                        the file the reader is told to create
 #                     background:N       run a one-line sh fence the tutorial
 #                                        leaves running in a second terminal
+#                     stop-background    stop the most recently started
+#                                        background fence where the page says
+#                                        to press Ctrl+C
 #                     wait-http:URL      block until that URL answers
 #                     python-client      install the Python client from this
 #                                        checkout, standing in for the
@@ -156,19 +159,31 @@ load_spec() {
 
 	case "$1" in
 	first-evidence-assertion)
-		SPEC_FENCES=18
+		SPEC_FENCES=21
 		SPEC_STEPS=(
 			"run:2"
-			"save:Start a small registry|python|1|registry.py"
+			"save:Preview a synthetic source|yaml|1|tutorial-source.openapi.yaml"
 			"background:3"
-			"wait-http:http://127.0.0.1:8000/openapi.json"
-			"run:4-5"
+			"wait-http:http://127.0.0.1:4010/people/person-123"
+			"run:4"
+			"stop-background"
+			"run:5-6"
 			"save:Create the Evidence Gateway project|yaml|1|questions/adult-status.yaml"
 			"save:Create the Evidence Gateway project|rhai|1|derivations/adult-status.rhai"
-			"run:6-17"
+			"save:Keep exact cases for the tutorial|yaml|1|mocks/source.yaml"
+			"save:Keep exact cases for the tutorial|json|1|mocks/cases/person-123.json"
+			"save:Keep exact cases for the tutorial|json|2|mocks/cases/person-456.json"
+			"save:Keep exact cases for the tutorial|json|3|mocks/cases/person-789.json"
+			"run:7"
+			"background:8"
+			"wait-http:http://127.0.0.1:4010/people/person-123"
+			"run:9-20"
 		)
 		SPEC_LITERALS=(
 			"releases/latest/download/evidencectl-install.sh | bash"
+			"evidencectl source mock serve --openapi tutorial-source.openapi.yaml"
+			"evidencectl source mock check --config mocks/source.yaml"
+			"evidencectl source mock serve --config mocks/source.yaml"
 			"evidencectl new adult-status"
 			"evidencectl request prepare adult-status"
 			"--config .evidence/requests/first-assertion/authorization.curl"
@@ -180,6 +195,9 @@ load_spec() {
 			"evidencectl dev clean"
 		)
 		SPEC_OUTPUTS=(
+			"Source mock ready: mode=ephemeral origin=http://127.0.0.1:4010"
+			"Mock plan valid: operations=1 cases=3"
+			"Source mock ready: mode=materialized origin=http://127.0.0.1:4010"
 			"Created an editable OpenAPI authoring project in adult-status"
 			"Evidence ready at http://127.0.0.1:8080"
 			"Prepared request: .evidence/requests/first-assertion/request.json"
@@ -195,7 +213,7 @@ load_spec() {
 		SPEC_FENCES=16
 		SPEC_STEPS=(
 			"background:1"
-			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"wait-http:http://127.0.0.1:4010/people/person-123"
 			"run:2-10"
 			"save:Model independently disclosed fields|yaml|1|schemas/adult-assessment.yaml"
 			"save:Model independently disclosed fields|yaml|2|questions/adult-assessment.yaml"
@@ -269,7 +287,7 @@ load_spec() {
 		SPEC_FENCES=10
 		SPEC_STEPS=(
 			"background:1"
-			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"wait-http:http://127.0.0.1:4010/people/person-123"
 			"run:2"
 			"save:Add the age-bracket question|yaml|1|questions/age-bracket.yaml"
 			"save:Add the age-bracket question|rhai|1|derivations/age-bracket.rhai"
@@ -298,7 +316,7 @@ load_spec() {
 		SPEC_FENCES=20
 		SPEC_STEPS=(
 			"background:1"
-			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"wait-http:http://127.0.0.1:4010/people/person-123"
 			"run:2-20"
 		)
 		SPEC_LITERALS=(
@@ -362,7 +380,7 @@ load_spec() {
 		SPEC_FENCES=11
 		SPEC_STEPS=(
 			"background:1"
-			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"wait-http:http://127.0.0.1:4010/people/person-123"
 			"run:2-11"
 		)
 		SPEC_LITERALS=(
@@ -407,7 +425,7 @@ load_spec() {
 			# the first tutorial's directory, so it starts before fence 1's
 			# `cd` rather than where the page prints it.
 			"background:7"
-			"wait-http:http://127.0.0.1:8000/openapi.json"
+			"wait-http:http://127.0.0.1:4010/people/person-123"
 			"run:1-4"
 			# Stands in for fences 5 and 6, the documented clone and build.
 			"python-client"
@@ -434,7 +452,7 @@ load_spec() {
 			"subject_expectations=expectations_for(person_id)"
 		)
 		SPEC_OUTPUTS=(
-			"Registry listening on http://127.0.0.1:8000"
+			"Source mock ready: mode=materialized origin=http://127.0.0.1:4010"
 			"Added access policy app-age-checks for adult-status."
 			"Added client age-check-app with policy app-age-checks."
 			"evidenceAudience: urn:registrystack:evidence:local:client:age-check-app"
@@ -796,6 +814,20 @@ emit_background_step() {
 	printf 'BACKGROUND_PIDS+=("$!")\n'
 }
 
+# Stop the foreground command the page told the reader to leave running in
+# another terminal. This models Ctrl+C without adding a shell fence that a
+# reader would never type.
+emit_stop_background_step() {
+	local slug="$1"
+	printf '\nprintf "==> %s stop the previous background fence\\n"\n' "$slug"
+	printf 'if ((${#BACKGROUND_PIDS[@]} == 0)); then printf "tutorial spec error in %s: no background fence to stop\\n" >&2; exit 2; fi\n' "$slug"
+	printf 'background_index=$((${#BACKGROUND_PIDS[@]} - 1))\n'
+	printf 'background_pid="${BACKGROUND_PIDS[$background_index]}"\n'
+	printf 'kill "$background_pid" >/dev/null 2>&1 || true\n'
+	printf 'wait "$background_pid" >/dev/null 2>&1 || true\n'
+	printf 'unset "BACKGROUND_PIDS[$background_index]"\n'
+}
+
 emit_wait_http_step() {
 	local url="$1"
 	printf '\nfor attempt in {1..50}; do\n'
@@ -851,6 +883,7 @@ emit_journey() {
 		edit:*) emit_edit_step "$slug" "${step#edit:}" "$tutorial_file" "$edit_dir" ;;
 		save:*) emit_save_step "$slug" "${step#save:}" ;;
 		background:*) emit_background_step "$slug" "${step#background:}" "$fence_dir" ;;
+		stop-background) emit_stop_background_step "$slug" ;;
 		wait-http:*) emit_wait_http_step "${step#wait-http:}" ;;
 		*)
 			printf 'tutorial spec error in %s: unknown step: %s\n' "$slug" "$step" >&2

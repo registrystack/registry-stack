@@ -1,0 +1,175 @@
+openapi: 3.1.0
+info:
+  title: Synthetic awkward API
+  version: 1.0.0
+servers:
+  - url: https://source.example.invalid/v1
+paths:
+  /people/special:
+    get:
+      operationId: duplicate-id
+      responses:
+        "200":
+          description: Synthetic special record
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [kind]
+                properties:
+                  kind: {const: special}
+  /people/{person_id}:
+    get:
+      operationId: duplicate-id
+      parameters:
+        - name: person_id
+          in: path
+          required: true
+          example: person-123
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+      responses:
+        "200":
+          description: Synthetic person record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Person"
+        "404":
+          description: Not found
+  /optional-controls:
+    get:
+      parameters:
+        - name: Prefer
+          in: header
+          required: false
+          schema: {type: string}
+        - name: session
+          in: cookie
+          required: false
+          schema: {type: string}
+      responses:
+        "200":
+          description: Optional controls do not select data
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [campaign, hostname]
+                properties:
+                  campaign: {type: string, minLength: 1, maxLength: 20}
+                  hostname: {type: string, format: hostname}
+  /search:
+    get:
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Required query input is intentionally unsupported
+          content:
+            application/json:
+              schema: {type: object, properties: {ok: {type: boolean}}}
+  /required-header:
+    get:
+      parameters:
+        - name: X-Required
+          in: header
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Required headers are intentionally unsupported
+          content:
+            application/json:
+              schema: {type: object, properties: {ok: {type: boolean}}}
+  /required-cookie:
+    get:
+      parameters:
+        - name: required-session
+          in: cookie
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: Required cookies are intentionally unsupported
+          content:
+            application/json:
+              schema: {type: object, properties: {ok: {type: boolean}}}
+  /wrong-status:
+    get:
+      responses:
+        "201":
+          description: No exact success response
+          content:
+            application/json:
+              schema: {type: object, properties: {ok: {type: boolean}}}
+  /vendor-json:
+    get:
+      responses:
+        "200":
+          description: Structured suffix is observe-only in V1
+          content:
+            application/vnd.example+json:
+              schema: {type: object, properties: {ok: {type: boolean}}}
+  /unsupported-password:
+    get:
+      responses:
+        "200":
+          description: Unsupported formats are skipped without blocking good routes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: {type: string, format: password}
+  /unsupported-dataset:
+    get:
+      responses:
+        "200":
+          description: Undeclared datasets are isolated from usable routes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    x-evidencectl-mock:
+                      reference: {dataset: absent-codes, field: code}
+components:
+  schemas:
+    Person:
+      type: object
+      additionalProperties: false
+      required: [person_id, firstName, dateOfBirth, home, work]
+      properties:
+        person_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+          x-evidencectl-mock:
+            fromRequest: {pathParameter: person_id}
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        dateOfBirth:
+          type: string
+          format: date
+          x-evidencectl-mock:
+            distribution: {kind: age, min: 18, max: 90}
+        home: {$ref: "#/components/schemas/Contact"}
+        work: {$ref: "#/components/schemas/Contact"}
+    Contact:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: {type: string, format: email}

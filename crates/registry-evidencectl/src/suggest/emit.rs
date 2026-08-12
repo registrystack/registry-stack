@@ -43,6 +43,9 @@ pub struct EmitInputs {
     /// one could be. The origin is emitted only as a commented review
     /// suggestion. See [`split_server_url`].
     pub base_url_suggestion: Option<ServerSuggestion>,
+    /// Explicit reviewed source origin supplied by the author. Unlike the
+    /// OpenAPI-derived suggestion, this is rendered as active source policy.
+    pub base_url: Option<String>,
     /// Selected projection pointers (extended form), in presentation order.
     pub selection: Vec<String>,
     pub narrowed: NarrowOutcome,
@@ -1100,24 +1103,32 @@ fn render_source_block(inputs: &EmitInputs, method: &str) -> String {
     push_line(&mut out, 0, "sources:");
     push_line(&mut out, 1, &format!("{}:", render_key(&inputs.source_id)));
     push_line(&mut out, 2, "transport: http-json");
-    match &inputs.base_url_suggestion {
-        Some(server) => {
-            push_line(
-                &mut out,
-                2,
-                "# Review the OpenAPI server origin before adding it to source policy:",
-            );
-            push_line(
-                &mut out,
-                2,
-                &format!("# baseUrl: {}", yaml_scalar_string(&server.base_url)),
-            );
-        }
-        None => push_line(
+    if let Some(base_url) = &inputs.base_url {
+        push_line(
             &mut out,
             2,
-            "# Add a reviewed fixed baseUrl; the OpenAPI document gives no fixed origin.",
-        ),
+            &format!("baseUrl: {}", yaml_scalar_string(base_url)),
+        );
+    } else {
+        match &inputs.base_url_suggestion {
+            Some(server) => {
+                push_line(
+                    &mut out,
+                    2,
+                    "# Review the OpenAPI server origin before adding it to source policy:",
+                );
+                push_line(
+                    &mut out,
+                    2,
+                    &format!("# baseUrl: {}", yaml_scalar_string(&server.base_url)),
+                );
+            }
+            None => push_line(
+                &mut out,
+                2,
+                "# Add a reviewed fixed baseUrl; the OpenAPI document gives no fixed origin.",
+            ),
+        }
     }
     push_line(&mut out, 2, "request:");
     push_line(&mut out, 3, &format!("method: {method}"));
@@ -1301,7 +1312,12 @@ fn render_report(inputs: &EmitInputs) -> String {
             need.kind.label()
         ));
     }
-    out.push_str("  - source origin, posture, authentication, selector bindings, preparation,\n");
+    if inputs.base_url.is_none() {
+        out.push_str("  - source origin, ");
+    } else {
+        out.push_str("  - ");
+    }
+    out.push_str("posture, authentication, selector bindings, preparation,\n");
     out.push_str("    and request limits are intentionally absent from the mechanical draft.\n\n");
 
     out.push_str("Next steps:\n");
@@ -1369,6 +1385,10 @@ fn render_equivalent_command(inputs: &EmitInputs) -> String {
     }
     parts.push("--source-id".to_owned());
     parts.push(inputs.source_id.clone());
+    if let Some(base_url) = &inputs.base_url {
+        parts.push("--base-url".to_owned());
+        parts.push(shell_quote(base_url));
+    }
     if let Some(project) = &inputs.project {
         parts.push("--project".to_owned());
         parts.push(shell_quote(&path_display(project)));

@@ -26,18 +26,17 @@ not authorize, and the verifier rejects a response changed after signing.
   level="Local development with synthetic data"
   prerequisites={[
     'The adult-status project after completing the governed-value tutorial',
-    'The registry.py source from the first Evidence Gateway tutorial',
+    'The materialized source mock from the first Evidence Gateway tutorial',
     'Python 3 and curl',
   ]}
 />
 
 ## Restart the local boundary
 
-In the terminal that owns the Python registry, return to the `first-evidence-assertion` directory
-and start the source:
+In one terminal, return to the `first-evidence-assertion` directory and serve the checked cases:
 
 ```sh
-python3 registry.py
+evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
 In another terminal, enter the existing project and start a fresh local generation:

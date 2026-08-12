@@ -27,7 +27,7 @@ program itself retained.
   level="Local development with synthetic data"
   prerequisites={[
     'The completed first Evidence assertion tutorial',
-    'Its adult-status project and its registry.py, which you restart here',
+    'Its adult-status project and materialized source mock, which you restart here',
     'Python 3.10 or later',
     'A Rust toolchain and git, to build the client from source',
   ]}
@@ -160,17 +160,16 @@ configures itself against the interpreter it will be imported by.
 
 ## Start the local services
 
-Evidence reads the source record through the `registry.py` server from the first tutorial, whose
-cleanup told you to stop it. In the terminal that owns the Python registry, return to the
-`first-evidence-assertion` directory, which holds `registry.py` one level above the project, and
-start the same source again. Leave it running:
+Evidence reads the source record through the materialized source mock from the first tutorial, whose
+cleanup told you to stop it. In another terminal, return to the `first-evidence-assertion` directory
+and serve the same checked cases again. Leave it running:
 
 ```sh
-python3 registry.py
+evidencectl source mock serve --config adult-status/mocks/source.yaml
 ```
 
 ```text
-Registry listening on http://127.0.0.1:8000
+Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipped=0
 ```
 
 Back in the first terminal, compile the question and the access policy into a fresh generation, and
@@ -185,7 +184,7 @@ Evidence ready at http://127.0.0.1:8080
 Mint ready at http://127.0.0.1:8081
 ```
 
-`evidencectl dev` reports ready without reaching the source, so a stopped registry surfaces only
+`evidencectl dev` reports ready without reaching the source, so a stopped source mock surfaces only
 later, as a failed evidence request.
 
 The access policy is now part of the running generation, so a terminal request names a client too.
@@ -708,7 +707,7 @@ Removed stopped local Evidence state
 
 This keeps `age_check.py`, `discovery.json`, `procedure.json`, the pinned JWKS, the recorded
 bindings, and the client's private key.
-Return to the first terminal and press `Ctrl+C` to stop `registry.py`.
+Return to the source-mock terminal and press `Ctrl+C` to stop it.
 
 ## Next
 

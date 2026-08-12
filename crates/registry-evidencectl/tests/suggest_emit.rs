@@ -118,6 +118,7 @@ fn base_inputs() -> EmitInputs {
         status: "200".to_owned(),
         media_type: "application/json".to_owned(),
         base_url_suggestion: emit::split_server_url("https://api.example.invalid"),
+        base_url: None,
         selection: vec![
             "/total".to_owned(),
             "/event_date".to_owned(),
@@ -642,6 +643,25 @@ fn source_block_leaves_base_url_absent_without_a_suggestion() {
         .source_block
         .contains("OpenAPI document gives no fixed origin"));
     assert!(!artifacts.source_block.contains("baseUrl:"));
+}
+
+#[test]
+fn an_explicit_base_url_is_active_and_overrides_the_openapi_suggestion() {
+    let mut inputs = base_inputs();
+    inputs.base_url = Some("http://127.0.0.1:4010".to_owned());
+    let artifacts = emit::draft(&inputs).expect("draft");
+    let parsed: serde_norway::Value =
+        serde_norway::from_str(&artifacts.source_block).expect("source block parses as YAML");
+
+    assert_eq!(
+        parsed["sources"]["search-a"]["baseUrl"].as_str(),
+        Some("http://127.0.0.1:4010")
+    );
+    assert!(!artifacts.source_block.contains("api.example.invalid"));
+    assert!(artifacts
+        .equivalent_command
+        .contains("--base-url http://127.0.0.1:4010"));
+    assert!(!artifacts.report.contains("source origin, posture"));
 }
 
 #[test]
