@@ -38,7 +38,10 @@
 #                     wait-http:URL      block until that URL answers
 #                     python-client      install the Python client from this
 #                                        checkout, standing in for the
-#                                        documented clone and build
+#                                        documented release package
+#                     node-client        install the Node.js client from this
+#                                        checkout and expose the supplied Node
+#                                        runtime
 #   SPEC_LITERALS   commands and outputs the tutorial must keep documenting
 #   SPEC_OUTPUTS    lines the replay transcript must contain
 #
@@ -48,6 +51,9 @@
 #   EVIDENCE_OID4VCI_INTEROP_TEST_BIN     run this prebuilt sanitized flow test
 #   EVIDENCE_CLIENT_PY_LIB                import this prebuilt Python client
 #                                         module instead of building one
+#   EVIDENCE_CLIENT_NODE_DIR              import this prebuilt Node.js client
+#                                         package instead of building one
+#   EVIDENCE_CLIENT_NODE_BIN              use this exact Node.js executable
 #   EVIDENCE_TUTORIAL_CARGO_PROFILE       ci (default) or release
 #   EVIDENCE_TUTORIAL_DOCS_ROOT           tutorial directory override (tests)
 
@@ -160,7 +166,7 @@ load_spec() {
 
 	case "$1" in
 	first-evidence-assertion)
-		SPEC_FENCES=21
+		SPEC_FENCES=26
 		SPEC_STEPS=(
 			"run:2"
 			"save:Preview a synthetic source|yaml|1|tutorial-source.openapi.yaml"
@@ -176,19 +182,39 @@ load_spec() {
 			"save:Keep exact cases for the tutorial|json|2|mocks/cases/person-456.json"
 			"save:Keep exact cases for the tutorial|json|3|mocks/cases/person-789.json"
 			"run:7"
-			"background:8"
+			"run:8"
+			"background:9"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:9-20"
+			"run:10-11"
+			# Stand in for the documented authenticated v0.19.1 SDK installs.
+			"python-client"
+			"node-client"
+			"run:14-16"
+			"save:Request an assertion|python|1|first-assertion.py"
+			"run:17"
+			"save:Request an assertion|js|1|node-client/first-assertion.js"
+			"run:18-25"
 		)
 		SPEC_LITERALS=(
 			"releases/latest/download/evidencectl-install.sh | bash"
 			"evidencectl source mock serve --openapi tutorial-source.openapi.yaml"
 			"evidencectl source mock check --config mocks/source.yaml"
+			"evidencectl access policy add first-assertion-policy --question adult-status"
+			"evidencectl access client add first-assertion-client"
+			"evidencectl jwks --out trusted-issuer-keys.json"
 			"evidencectl source mock serve --config mocks/source.yaml"
 			"evidencectl new adult-status"
+			"VERSION=0.19.1"
+			'registry_evidence_client-${VERSION}-cp310-abi3-${PLATFORM}.whl'
+			'evidence-client-node-v${VERSION}-${PLATFORM}.tgz'
+			"cosign verify-blob SHA256SUMS"
 			"evidencectl request prepare adult-status"
+			"--client first-assertion-client"
 			"--config .evidence/requests/first-assertion/authorization.curl"
 			"evidencectl verify assertion.jws.json"
+			"from registry_evidence_client import EvidenceClient"
+			"require('@registrystack/evidence-client')"
+			"client.verify(prepared, response)"
 			"--format sd-jwt-vc"
 			"--config .evidence/requests/first-vc/authorization.curl"
 			"evidencectl verify assertion.sd-jwt"
@@ -198,11 +224,14 @@ load_spec() {
 		SPEC_OUTPUTS=(
 			"Source mock ready: mode=ephemeral origin=http://127.0.0.1:4010"
 			"Mock plan valid: operations=1 cases=3"
+			"Added access policy first-assertion-policy for adult-status."
+			"Added client first-assertion-client with policy first-assertion-policy."
 			"Source mock ready: mode=materialized origin=http://127.0.0.1:4010"
 			"Created an editable OpenAPI authoring project in adult-status"
 			"Evidence ready at http://127.0.0.1:8080"
 			"Prepared request: .evidence/requests/first-assertion/request.json"
 			"Prepared request: .evidence/requests/first-vc/request.json"
+			"person-123 is_adult=true"
 			"VERIFIED"
 			"Local Evidence stopped"
 			"ACCESS AUTHORIZED adult-status age-check requester="
@@ -650,6 +679,8 @@ prepare_toolset() {
 # imports under any CPython the replay userland carries, exactly as
 # EVIDENCE_CLIENT_PY_LIB's siblings let CI mount prebuilt binaries.
 PYTHON_CLIENT_LIB="${EVIDENCE_CLIENT_PY_LIB:-}"
+NODE_CLIENT_DIR="${EVIDENCE_CLIENT_NODE_DIR:-}"
+NODE_CLIENT_BIN="${EVIDENCE_CLIENT_NODE_BIN:-}"
 
 prepare_python_client() {
 	if [[ -n "$PYTHON_CLIENT_LIB" ]]; then
@@ -680,6 +711,31 @@ prepare_python_client() {
 		printf 'Python client module not built: %s\n' "$PYTHON_CLIENT_LIB" >&2
 		exit 1
 	fi
+}
+
+prepare_node_client() {
+	if [[ -z "$NODE_CLIENT_DIR" ]]; then
+		printf 'EVIDENCE_CLIENT_NODE_DIR must name a prebuilt Node.js client package\n' >&2
+		exit 1
+	fi
+	if [[ "$NODE_CLIENT_DIR" != /* ]]; then
+		printf 'Node.js client directory must be absolute: %s\n' "$NODE_CLIENT_DIR" >&2
+		exit 1
+	fi
+	if [[ ! -f "$NODE_CLIENT_DIR/package.json" || ! -f "$NODE_CLIENT_DIR/client.js" ]] ||
+		! compgen -G "$NODE_CLIENT_DIR/*.node" >/dev/null; then
+		printf 'Node.js client package not built: %s\n' "$NODE_CLIENT_DIR" >&2
+		exit 1
+	fi
+	if [[ -z "$NODE_CLIENT_BIN" ]]; then
+		NODE_CLIENT_BIN="$(command -v node || true)"
+	fi
+	if [[ "$NODE_CLIENT_BIN" != /* || ! -x "$NODE_CLIENT_BIN" ]]; then
+		printf 'Node.js client executable must be an absolute executable path: %s\n' \
+			"${NODE_CLIENT_BIN:-<unset>}" >&2
+		exit 1
+	fi
+	ln -sf "$NODE_CLIENT_BIN" "$SHIM_DIR/node"
 }
 
 # ---------------------------------------------------------------------------
@@ -744,6 +800,20 @@ emit_python_client_step() {
 	printf '\nprintf "==> %s install the Python client from this checkout\\n"\n' "$slug"
 	printf 'mkdir -p python-module\n'
 	printf 'cp %q python-module/registry_evidence_client.so\n' "$PYTHON_CLIENT_LIB"
+}
+
+emit_node_client_step() {
+	local slug="$1"
+	printf '\nprintf "==> %s install the Node.js client from this checkout\\n"\n' "$slug"
+	printf 'node_package=node-client/node_modules/@registrystack/evidence-client\n'
+	printf 'mkdir -p "$node_package"\n'
+	local file
+	for file in package.json client.js index.js client.d.ts index.d.ts; do
+		printf 'cp %q "$node_package/%s"\n' "$NODE_CLIENT_DIR/$file" "$file"
+	done
+	for file in "$NODE_CLIENT_DIR"/*.node; do
+		printf 'cp %q "$node_package/%s"\n' "$file" "$(basename "$file")"
+	done
 }
 
 # Emit a documented before/after fence pair applied to a file the reader edits.
@@ -879,6 +949,7 @@ emit_journey() {
 		run:*) emit_run_step "$slug" "${step#run:}" "$fence_dir" ;;
 		run-fails:*) emit_run_fails_step "$slug" "${step#run-fails:}" "$fence_dir" ;;
 		python-client) emit_python_client_step "$slug" ;;
+		node-client) emit_node_client_step "$slug" ;;
 		fhir-mock) emit_fhir_mock_step ;;
 		track-pid:*) emit_track_pid_step "${step#track-pid:}" ;;
 		edit:*) emit_edit_step "$slug" "${step#edit:}" "$tutorial_file" "$edit_dir" ;;
@@ -924,6 +995,22 @@ run_journey_script() {
 			cd "$reader_dir"
 			PATH="$SHIM_DIR:$PATH" \
 				FHIR_TUTORIAL_TEST_BASE_URL="http://127.0.0.1:8003" \
+				bash "$run_script"
+		)
+	elif [[ "$slug" == "first-evidence-assertion" ]]; then
+		(
+			unset CARGO_TARGET_DIR
+			cd "$reader_dir"
+			PATH="$SHIM_DIR:$PATH" \
+				PYTHONPATH="$reader_dir/first-evidence-assertion/adult-status/python-module" \
+				bash "$run_script"
+		)
+	elif [[ "$slug" == "request-evidence-from-an-application" ]]; then
+		(
+			unset CARGO_TARGET_DIR
+			cd "$reader_dir"
+			PATH="$SHIM_DIR:$PATH" \
+				PYTHONPATH="$reader_dir/adult-status/python-module" \
 				bash "$run_script"
 		)
 	else
@@ -1034,9 +1121,10 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 		ln -s "$REPO_ROOT/Cargo.lock" "$reader_dir/Cargo.lock"
 	fi
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
-		if [[ "$step" == "python-client" ]]; then
-			prepare_python_client
-		fi
+		case "$step" in
+		python-client) prepare_python_client ;;
+		node-client) prepare_node_client ;;
+		esac
 	done
 	run_script="$WORK_ROOT/run-$slug.sh"
 	emit_journey "$slug" "$fence_dir" "$tutorial_file" >"$run_script"

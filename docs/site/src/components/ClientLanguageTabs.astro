@@ -1,0 +1,46 @@
+---
+import { TabItem, Tabs } from '@astrojs/starlight/components';
+
+const requiredSlots = ['curl', 'python', 'node'] as const;
+
+for (const slot of requiredSlots) {
+  if (!Astro.slots.has(slot)) {
+    throw new Error(`ClientLanguageTabs requires a \`${slot}\` slot.`);
+  }
+}
+
+---
+
+<!--
+  This inline script runs before Starlight restores a synchronized selection.
+  Starlight owns the accessible tab behavior and localStorage persistence.
+-->
+<script is:inline>
+  (() => {
+    const clients = {
+      curl: 'curl',
+      python: 'Python',
+      node: 'Node.js',
+    };
+    const client = new URL(window.location.href).searchParams.get('client');
+    if (!client || !Object.hasOwn(clients, client)) return;
+
+    try {
+      localStorage.setItem('starlight-synced-tabs__client-language', clients[client]);
+    } catch {
+      // The first tab remains usable when storage is disabled or unavailable.
+    }
+  })();
+</script>
+
+<Tabs syncKey="client-language">
+  <TabItem label="curl">
+    <slot name="curl" />
+  </TabItem>
+  <TabItem label="Python">
+    <slot name="python" />
+  </TabItem>
+  <TabItem label="Node.js">
+    <slot name="node" />
+  </TabItem>
+</Tabs>

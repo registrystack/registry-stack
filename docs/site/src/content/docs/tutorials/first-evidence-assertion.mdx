@@ -14,6 +14,7 @@ standards_referenced: []
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+import ClientLanguageTabs from '../../../components/ClientLanguageTabs.astro';
 
 Evidence Gateway reads an authorized source record, answers a preconfigured question, and signs only the
 governed answer. In this tutorial, you will ask "Is this person an adult?" without returning the
@@ -339,6 +340,28 @@ The check does not bind a port or rewrite a file. For another API, start an edit
 body without overwriting an existing mock directory. Edit the body, run `check`, and serve those exact
 checked bytes.
 
+Register one local client that may ask this question, then pin the project's public signing key for
+response verification:
+
+```sh
+evidencectl access policy add first-assertion-policy --question adult-status
+evidencectl access client add first-assertion-client \
+  --policy first-assertion-policy \
+  --generate-local-key
+evidencectl jwks --out trusted-issuer-keys.json secrets/signing-p256-public.jwk.json
+```
+
+```text
+Added access policy first-assertion-policy for adult-status.
+Added client first-assertion-client with policy first-assertion-policy.
+wrote trusted-issuer-keys.json
+```
+
+The private client key remains owner-only under `.evidence/clients/`. The JWKS contains only the
+public key that each client path will trust. This local setup keeps both files in one project; a
+deployed relying application receives its trust material and client key through separate governed
+channels.
+
 Start the materialized source and leave it running:
 
 ```sh
@@ -365,19 +388,117 @@ the first terminal.
 
 ## Request an assertion
 
-Prepare the request, local access, and verification expectations:
+Choose one client path. The curl path uses the `evidencectl` installation from the start of this
+tutorial. The Python and Node.js clients are release assets rather than packages published to PyPI
+or npm. They require Cosign and download the client from Registry Stack v0.19.1, the first release
+that carries these examples.
+
+<ClientLanguageTabs>
+<Fragment slot="curl">
+
+The curl path needs no additional download:
+
+```sh
+command -v curl >/dev/null
+command -v evidencectl >/dev/null
+echo ready
+```
+
+</Fragment>
+<Fragment slot="python">
+
+Python requires Python 3.10 or later. Create a virtual environment, download the wheel for this
+machine, and authenticate the release checksum before installing it:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+
+VERSION=0.19.1
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) PLATFORM="linux_x86_64" ;;
+  Linux-aarch64|Linux-arm64) PLATFORM="linux_aarch64" ;;
+  Darwin-arm64) PLATFORM="macosx_11_0_arm64" ;;
+  *) echo "No prebuilt Evidence Python client for this platform" >&2; exit 1 ;;
+esac
+ASSET="registry_evidence_client-${VERSION}-cp310-abi3-${PLATFORM}.whl"
+RELEASE="https://github.com/registrystack/registry-stack/releases/download/v${VERSION}"
+BUNDLE="registry-stack-v${VERSION}-SHA256SUMS.sigstore.json"
+curl -fLO "${RELEASE}/${ASSET}"
+curl -fLO "${RELEASE}/SHA256SUMS"
+curl -fLO "${RELEASE}/${BUNDLE}"
+cosign verify-blob SHA256SUMS \
+  --bundle "${BUNDLE}" \
+  --certificate-identity \
+    'https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/heads/main' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+awk -v asset="${ASSET}" '$2 == asset {print}' SHA256SUMS > client-SHA256SUMS
+test "$(wc -l < client-SHA256SUMS)" -eq 1
+case "$(uname -s)" in
+  Darwin) shasum -a 256 --check client-SHA256SUMS ;;
+  Linux) sha256sum --check --strict client-SHA256SUMS ;;
+esac
+python -m pip install "./${ASSET}"
+echo ready
+```
+
+</Fragment>
+<Fragment slot="node">
+
+Node.js requires version 22.12 or later. Create an application directory, download the package for
+this machine, and authenticate the release checksum before installing it:
+
+```sh
+mkdir -p node-client
+cd node-client
+npm init -y >/dev/null
+
+VERSION=0.19.1
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) PLATFORM="linux-amd64-glibc" ;;
+  Linux-aarch64|Linux-arm64) PLATFORM="linux-arm64-glibc" ;;
+  Darwin-arm64) PLATFORM="macos-arm64" ;;
+  *) echo "No prebuilt Evidence Node.js client for this platform" >&2; exit 1 ;;
+esac
+ASSET="evidence-client-node-v${VERSION}-${PLATFORM}.tgz"
+RELEASE="https://github.com/registrystack/registry-stack/releases/download/v${VERSION}"
+BUNDLE="registry-stack-v${VERSION}-SHA256SUMS.sigstore.json"
+curl -fLO "${RELEASE}/${ASSET}"
+curl -fLO "${RELEASE}/SHA256SUMS"
+curl -fLO "${RELEASE}/${BUNDLE}"
+cosign verify-blob SHA256SUMS \
+  --bundle "${BUNDLE}" \
+  --certificate-identity \
+    'https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/heads/main' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+awk -v asset="${ASSET}" '$2 == asset {print}' SHA256SUMS > client-SHA256SUMS
+test "$(wc -l < client-SHA256SUMS)" -eq 1
+case "$(uname -s)" in
+  Darwin) shasum -a 256 --check client-SHA256SUMS ;;
+  Linux) sha256sum --check --strict client-SHA256SUMS ;;
+esac
+npm install "./${ASSET}"
+cd ..
+echo ready
+```
+
+</Fragment>
+</ClientLanguageTabs>
+
+The final line in each path is `ready`.
+
+<ClientLanguageTabs>
+<Fragment slot="curl">
+
+Prepare the request, short-lived authorization, and closed verification context before sending:
 
 ```sh
 evidencectl request prepare adult-status \
+  --client first-assertion-client \
   --purpose age-check \
   --subject person_id=person-123 \
   --name first-assertion
 ```
-
-The Evidence client prepares the request and closes its pinned verification expectations locally,
-before a response exists. `evidencectl` separately asks the local Mint for short-lived
-authorization. It sends no HTTP request to Evidence Gateway and does not contact the registry. The
-command creates exactly these owner-only artifacts:
 
 ```text
 Prepared request: .evidence/requests/first-assertion/request.json
@@ -385,13 +506,7 @@ Prepared verification context: .evidence/requests/first-assertion/verification.j
 Prepared authorization: .evidence/requests/first-assertion/authorization.curl
 ```
 
-The artifacts have separate responsibilities:
-
-- `request.json` contains the question, purpose, fresh request nonce, and `person-123` selector.
-- `verification.json` records what a valid response must satisfy before the response exists.
-- `authorization.curl` contains only the short-lived local authorization header.
-
-Send the request yourself:
+Send one assertion request and keep the response opaque:
 
 ```sh
 curl --silent --show-error --fail-with-body \
@@ -401,40 +516,194 @@ curl --silent --show-error --fail-with-body \
   --header 'Content-Type: application/json' \
   --header 'Accept: application/jose+json' \
   --data-binary @.evidence/requests/first-assertion/request.json \
-  --output assertion.jws.json \
-  --write-out 'HTTP %{http_code}\n'
+  --output assertion.jws.json
 ```
 
-```text
-HTTP 200
-```
-
-`curl` made the one `POST /v1/evidence` assertion request, Evidence Gateway called the registry, and
-the HTTP response is a signed flattened JSON Web Signature (JWS). A successful HTTP response is not
-yet a trusted assertion. Preparation made zero Evidence Gateway HTTP requests, and the verification
-step below is offline, so one assertion requires one request to Evidence Gateway rather than two.
-
-## Verify before reading
-
-Verify the response against the expectations recorded before the request. Verification checks the
-signature and exact issuer, question, purpose, audience, request nonce, subject binding, answer
-shape, and validity period:
+Verify offline, then read only the verified output:
 
 ```sh
 evidencectl verify assertion.jws.json \
   --context .evidence/requests/first-assertion/verification.json \
   --output verified.json
+python3 - <<'PY'
+import json
+
+evidence = json.load(open("verified.json"))
+answer = evidence["supportedValues"][0]["value"]
+print(f"person-123 is_adult={str(answer).lower()}")
+PY
 ```
 
-```text
-VERIFIED
+</Fragment>
+<Fragment slot="python">
+
+Create `first-assertion.py`. The client authenticates to Registry Mint, closes the expected response
+before the assertion request, stores the signed response as untrusted bytes, and verifies before
+reading the answer:
+
+```python
+import json
+import os
+from pathlib import Path
+
+from registry_evidence_client import EvidenceClient
+
+
+os.umask(0o077)
+
+
+def load(path):
+    return json.loads(Path(path).read_text())
+
+
+client = EvidenceClient(
+    base_url="http://127.0.0.1:8080",
+    trusted_jwks=load("trusted-issuer-keys.json"),
+    revoked_key_ids=[],
+    token={"private_key_jwt": {
+        "token_endpoint": "http://127.0.0.1:8081/token",
+        "client_id": "first-assertion-client",
+        "client_key": load(".evidence/clients/first-assertion-client/private.jwk"),
+    }},
+)
+published = client.discover()
+requirement = "urn:registrystack:evidence:local:requirement:adult-status"
+matches = [item for item in published["definitions"] if item["requirement"] == requirement]
+if len(matches) != 1:
+    raise SystemExit("expected one adult-status definition")
+definition = matches[0]
+concept = "urn:registrystack:evidence:local:concept:adult-status:is_adult"
+if definition["concepts"] != [{"id": concept, "form": "boolean"}]:
+    raise SystemExit("the published concept set moved")
+subject = definition["subjects"][0]
+prepared = client.prepare({
+    "response_format": "signed-jws",
+    "requirement": requirement,
+    "purpose": "age-check",
+    "audience": "urn:registrystack:evidence:local:client:first-assertion-client",
+    "evidence_type": definition["evidenceType"],
+    "issued_by": published["issuedBy"],
+    "provided_by": published["providedBy"],
+    "configuration_revision": definition["configurationRevision"],
+    "expected_assurance_profile": published["assuranceProfile"],
+    "expected_outputs": [{"concept": concept, "form": "boolean"}],
+    "maximum_assertion_lifetime_seconds": 300,
+    "clock_skew_seconds": 30,
+    "subjects": [{
+        "role": subject["role"],
+        "selector_profile": subject["selector"]["profile"],
+        "selector_values": {"person_id": "person-123"},
+    }],
+    "subject_expectations": "accept_first_use",
+})
+response = client.send(prepared)
+Path("assertion.jws.json").write_bytes(response.body)
+verified = client.verify(prepared, response)
+Path("verified.json").write_text(json.dumps(verified.evidence, indent=2) + "\n")
+answer = verified.evidence["supportedValues"][0]["value"]
+print(f"person-123 is_adult={str(answer).lower()}")
 ```
 
-Only after the command prints `VERIFIED`, inspect the verified payload:
+Run it:
 
 ```sh
-python3 -m json.tool verified.json
+python first-assertion.py
 ```
+
+</Fragment>
+<Fragment slot="node">
+
+Create `node-client/first-assertion.js`. It applies the same prepare, send, retain, verify, then read
+boundary:
+
+```js
+const fs = require('node:fs');
+const { EvidenceClient } = require('@registrystack/evidence-client');
+
+process.umask(0o077);
+const load = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+const client = new EvidenceClient({
+  baseUrl: 'http://127.0.0.1:8080',
+  trustedJwks: load('trusted-issuer-keys.json'),
+  revokedKeyIds: [],
+  token: { privateKeyJwt: {
+    tokenEndpoint: 'http://127.0.0.1:8081/token',
+    clientId: 'first-assertion-client',
+    clientKey: load('.evidence/clients/first-assertion-client/private.jwk'),
+  }},
+});
+
+async function main() {
+  const published = await client.discover();
+  const requirement = 'urn:registrystack:evidence:local:requirement:adult-status';
+  const matches = published.definitions.filter((item) => item.requirement === requirement);
+  if (matches.length !== 1) throw new Error('expected one adult-status definition');
+  const definition = matches[0];
+  const concept = 'urn:registrystack:evidence:local:concept:adult-status:is_adult';
+  if (
+    definition.concepts.length !== 1 ||
+    definition.concepts[0].id !== concept ||
+    definition.concepts[0].form !== 'boolean'
+  ) {
+    throw new Error('the published concept set moved');
+  }
+  const subject = definition.subjects[0];
+  const prepared = client.prepare({
+    responseFormat: 'signed-jws',
+    requirement,
+    purpose: 'age-check',
+    audience: 'urn:registrystack:evidence:local:client:first-assertion-client',
+    evidenceType: definition.evidenceType,
+    issuedBy: published.issuedBy,
+    providedBy: published.providedBy,
+    configurationRevision: definition.configurationRevision,
+    expectedAssuranceProfile: published.assuranceProfile,
+    expectedOutputs: [{ concept, form: 'boolean' }],
+    maximumAssertionLifetimeSeconds: 300,
+    clockSkewSeconds: 30,
+    subjects: [{
+      role: subject.role,
+      selectorProfile: subject.selector.profile,
+      selectorValues: { person_id: 'person-123' },
+    }],
+    subjectExpectations: 'acceptFirstUse',
+  });
+  const response = await client.send(prepared);
+  fs.writeFileSync('assertion.jws.json', response.body, { mode: 0o600 });
+  const verified = client.verify(prepared, response);
+  fs.writeFileSync('verified.json', `${JSON.stringify(verified.evidence, null, 2)}\n`, { mode: 0o600 });
+  const answer = verified.evidence.supportedValues[0].value;
+  console.log(`person-123 is_adult=${answer}`);
+}
+
+main().catch((error) => { console.error(error); process.exitCode = 1; });
+```
+
+Run it:
+
+```sh
+node node-client/first-assertion.js
+```
+
+</Fragment>
+</ClientLanguageTabs>
+
+Each path prints:
+
+```text
+person-123 is_adult=true
+```
+
+The assertion request carries a fresh nonce and produces a signed flattened JSON Web Signature
+(JWS). A successful HTTP response is not yet a trusted assertion. The curl path exposes the payload
+only after `evidencectl verify` succeeds. The SDK paths keep the response in a distinct untrusted
+type until `verify` returns a verified result.
+
+For this one-shot local tutorial, the SDK paths use authenticated discovery and accept the first
+verified subject binding. A relying application instead reviews and retains the procedure and pins
+the returned binding for later requests. Continue with
+[Request Evidence Gateway from an application](../request-evidence-from-an-application/) for that
+durable pattern.
 
 The verified document contains generated identifiers, timestamps, and a pseudonymous subject
 binding. The fields relevant to this question look like this excerpt:
@@ -465,11 +734,15 @@ compiles to, which is the unit the deployed configuration and the audit record.
 The verified payload does not include `person_id`, `name`, or `date_of_birth`. The assertion
 answers the authored question without becoming another copy of the registry record.
 
-The owner-only `request.json` still records that this transaction concerned `person-123`, while
+The curl path's owner-only `request.json` records that this transaction concerned `person-123`, while
 `verification.json` records the expected opaque subject binding and request nonce. Retain those
-files with the signed response when you need to [verify Evidence Gateway later as a
+files with the signed response to continue with [Verify Evidence Gateway as a
 consumer](../verify-an-assertion-as-a-consumer/). The identifier cannot be recovered from the
-assertion alone.
+assertion alone. The Python and Node.js paths retain the signed response and verified payload, but
+their closed verification policy remains in the prepared client object rather than an
+`evidencectl` context file.
+
+{/* The v0.19.1 Python and Node.js assets are intentionally unavailable until that release is published. */}
 
 ## Try the SD-JWT VC serialization
 
@@ -478,6 +751,7 @@ expected response format:
 
 ```sh
 evidencectl request prepare adult-status \
+  --client first-assertion-client \
   --purpose age-check \
   --subject person_id=person-123 \
   --format sd-jwt-vc \

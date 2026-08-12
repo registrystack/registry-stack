@@ -173,6 +173,40 @@ Preferred terms.
 - MDX comments (`{/* ... */}`) for author-facing notes. Do not hide content in comments; delete it instead.
 - Do not use blockquotes for prose. Use a sub-section or a `note` admonition.
 
+## Client language tabs
+
+Client-facing tutorials can present equivalent `curl`, Python, and Node.js paths in synchronized
+tabs. Keep explanations, expected outcomes, and security boundaries outside the tabs. Use tabs for
+the instructions and code that differ by client.
+
+Import the shared component and provide all three named slots in this order:
+
+```mdx
+import ClientLanguageTabs from '../../../components/ClientLanguageTabs.astro';
+
+<ClientLanguageTabs>
+  <Fragment slot="curl">
+    The curl instructions and code.
+  </Fragment>
+  <Fragment slot="python">
+    The Python instructions and code.
+  </Fragment>
+  <Fragment slot="node">
+    The Node.js instructions and code.
+  </Fragment>
+</ClientLanguageTabs>
+```
+
+The rendered labels are exactly `curl`, `Python`, and `Node.js`. The component uses the
+`client-language` synchronization key, so a selection applies to later groups and persists across
+pages. A URL can select the initial client with `?client=curl`, `?client=python`, or `?client=node`.
+Do not import Starlight's `Tabs` or `TabItem` components for client-language examples, pass a sync
+key to `ClientLanguageTabs`, omit a client, or change the slot order.
+
+All three panels remain in the server-rendered HTML, and Starlight supplies the tab roles and
+keyboard interaction. Write each panel as complete instructions for its client so every path is
+available without client-only rendering and retained in machine-readable output.
+
 ## Status and review
 
 - A page's `status` is an editorial state: `current` is the default, `historical` is visibly marked, `deprecated` is linked from the index of replacements only. `status: draft` does not hide a page by itself.
@@ -226,7 +260,9 @@ This applies to every page that touches a standard or a contract.
 - **Version macros.** GitLab supports `**Tier:** Free, Premium, Ultimate` annotations on every feature mention. Registry Docs has no commercial tiers. Use a simple `status:` field in frontmatter and explicit `since v0.4` in body text when a feature is version-gated.
 - **Issue links.** GitLab writes `[issue 12345](url)`. We write `[GH#123](url)` for GitHub and link to the actual issue title in text.
 - **Screenshot rules.** GitLab requires PNG, 1000×500, ≤100 KB, with red `#EE2604` callout arrows. We use SVG for diagrams and use screenshots rarely.
-- **Tabs and collapsible panels.** GitLab uses Hugo shortcodes. We do not use tabs in v0. If a page needs tabs, it is probably two pages.
+- Tabs and collapsible panels: GitLab uses Hugo shortcodes. Registry Docs uses the shared
+  `ClientLanguageTabs` component only for equivalent client-language paths. Split unrelated content
+  into separate pages.
 
 ## Rules from GitLab we skip
 

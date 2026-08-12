@@ -632,15 +632,14 @@ class CiChangesTest(unittest.TestCase):
             {"developer-tools", "evidence"},
         )
 
-    def test_binding_only_change_runs_contracts_but_not_the_tutorial_job(self) -> None:
-        # A Node-binding-only change has no bearing on any tutorial's shell
-        # commands or fixtures, so it must not replay them; but the binding's
-        # own source neutrality still needs the contracts gate to run.
+    def test_node_binding_change_runs_contracts_and_the_tutorial_job(self) -> None:
+        # The application tutorial executes the Node.js lane, so a binding-only
+        # change must replay it as well as the binding and source-neutrality gates.
         outputs = classify(
             self.workspace,
             ("crates/registry-evidence-client-node/src/lib.rs",),
         )
-        self.assertFalse(outputs["evidence_tutorial"])
+        self.assertTrue(outputs["evidence_tutorial"])
         self.assertTrue(outputs["evidence_contracts"])
         self.assertTrue(outputs["client_bindings"])
         self.assertEqual(

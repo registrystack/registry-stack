@@ -821,7 +821,9 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: docs/site/package-lock.json
+          cache-dependency-path: |
+            docs/site/package-lock.json
+            crates/registry-evidence-client-node/package-lock.json
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
@@ -855,13 +857,18 @@ jobs:
           [[ -n "$test_binary" ]]
           cp "$test_binary" \
             target/evidence-tutorial-source/ci/inji-oid4vci-interop-test
-          # The application tutorial imports the Python client. It is built for
-          # the stable ABI, so the container step below imports this same file
-          # rather than building inside a read-only mount.
+          # The application tutorial imports both bindings. Build them before
+          # the checkout becomes a read-only container mount.
           CARGO_TARGET_DIR="target/evidence-tutorial-source" \
             cargo build --locked --profile ci \
             -p registry-evidence-client-py --lib \
             --features registry-evidence-client-py/extension-module
+          (
+            cd crates/registry-evidence-client-node
+            npm ci
+            CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target/evidence-tutorial-source" \
+              npm run build:debug
+          )
 
       - name: Test the exact local Evidence lifecycle
         shell: bash
@@ -879,17 +886,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          node_binary="$(readlink -f "$(command -v node)")"
+          node_root="$(dirname "$(dirname "${node_binary}")")"
+          test -x "${node_root}/bin/node"
           # The image is the repository's pinned release-builder digest, used
-          # here only as a clean Debian userland: the gate exercises a shell
-          # and coreutils, and the toolset binaries are mounted in prebuilt.
+          # here only as a clean Debian userland. The toolset and both native
+          # client bindings are mounted prebuilt; the exact configured Node
+          # runtime is mounted separately for the Node.js tutorial lane.
           docker run --rm \
             --mount "type=bind,src=${PWD},dst=/work,readonly" \
+            --mount "type=bind,src=${node_root},dst=/node,readonly" \
             --env EVIDENCE_BIN=/work/target/evidence-tutorial-source/ci/evidence \
             --env EVIDENCECTL_BIN=/work/target/evidence-tutorial-source/ci/evidencectl \
             --env EVIDENCE_OID4VCI_BIN=/work/target/evidence-tutorial-source/ci/evidence-oid4vci \
             --env EVIDENCE_OID4VCI_INTEROP_TEST_BIN=/work/target/evidence-tutorial-source/ci/inji-oid4vci-interop-test \
             --env MINT_BIN=/work/target/evidence-tutorial-source/ci/mint \
             --env EVIDENCE_CLIENT_PY_LIB=/work/target/evidence-tutorial-source/ci/libregistry_evidence_client.so \
+            --env EVIDENCE_CLIENT_NODE_DIR=/work/crates/registry-evidence-client-node \
+            --env EVIDENCE_CLIENT_NODE_BIN=/node/bin/node \
             rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
             bash /work/docs/site/scripts/check-evidence-tutorials.sh
 

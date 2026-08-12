@@ -39,7 +39,7 @@ async function runShell(script) {
 test('the dry-run gate registers the shared Evidence start tutorials', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /first-evidence-assertion: 21 sh fences, 19 executed/u);
+  assert.match(output, /first-evidence-assertion: 26 sh fences, 22 executed/u);
   assert.match(output, /request-evidence-as-sd-jwt-vc: 16 sh fences, 16 executed/u);
   assert.match(
     output,
@@ -73,6 +73,10 @@ test('--only accepts the current first Evidence tutorial', async () => {
   assert.ok(branch, 'the first Evidence replay spec must exist');
   assert.match(branch, /stop-background/u);
   assert.match(branch, /run:5-6/u);
+  assert.match(branch, /releases\/latest\/download\/evidencectl-install\.sh/u);
+  assert.match(branch, /VERSION=0\.19\.1/u);
+  assert.match(branch, /registry_evidence_client-\$\{VERSION\}/u);
+  assert.match(branch, /evidence-client-node-v\$\{VERSION\}/u);
   assert.match(branch, /source mock check --config mocks\/source\.yaml/u);
 });
 
@@ -250,7 +254,7 @@ test('--only refuses an unpublished legacy tutorial', async () => {
 // and the toolset under test. An interpreter the container does not carry
 // fails mid-journey, where the transcript makes it look like a tutorial
 // defect, so the gate and everything it emits stay on that floor.
-test('the gate depends on no interpreter beyond the replay userland', async () => {
+test('the gate depends on no interpreter beyond the replay userland and supplied Node', async () => {
   const source = await readFile(gate, 'utf8');
   const offenders = source
     .split('\n')
@@ -260,10 +264,12 @@ test('the gate depends on no interpreter beyond the replay userland', async () =
     // matches, never an interpreter it runs, so they are removed before the
     // line is judged rather than exempting whole lines that carry them.
     .map(([number, line]) => [number, line.replaceAll(/python-(?:client|module)/gu, '')])
-    .filter(([, line]) => /\b(?:node|npm|npx|python3?|ruby|perl)\b/u.test(line))
+    .filter(([, line]) => /\b(?:npm|npx|python3?|ruby|perl)\b/u.test(line))
     // A save step names the Markdown fence language as data. It extracts that
     // fence with the shell helper and does not execute the named interpreter.
-    .filter(([, line]) => !/^\s*"save:[^"]+\|[^|]+\|\d+\|[^"]+",?$/u.test(line));
+    .filter(([, line]) => !/^\s*"save:[^"]+\|[^|]+\|\d+\|[^"]+",?$/u.test(line))
+    // This is another required Markdown literal, not a gate command.
+    .filter(([, line]) => !/^\s*"TUTORIAL_MISMATCH_BINDING=1 python age-check\.py"/u.test(line));
   assert.deepEqual(offenders, [], 'the gate must not reach for an interpreter');
 });
 

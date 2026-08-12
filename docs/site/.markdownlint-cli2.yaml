@@ -29,6 +29,8 @@ config:
       - LegendList
       - HomeLanding
       - QuickstartMeta
+      - ClientLanguageTabs
+      - Fragment
       - ProjectStarterSequence
       - ProjectWorkspaceJourneys
       - AuthoringConfigurationReference
