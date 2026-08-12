@@ -1,8 +1,10 @@
 ---
 import standards from '../data/generated/standards.json';
+import { baseAwareHref } from '../lib/base-aware-href.mjs';
 
 // evidence_gap is an optional flag; absent from the JSON unless a row sets it.
 const rows = standards as ((typeof standards)[number] & { evidence_gap?: boolean })[];
+const base = import.meta.env.BASE_URL;
 ---
 
 <div class="standards-list">
@@ -56,7 +58,7 @@ const rows = standards as ((typeof standards)[number] & { evidence_gap?: boolean
           <span class="footer-label">Evidence</span>
           <ul class="link-list">
             {standard.evidence_docs.map((doc: { url: string; label: string }) => (
-              <li><a href={doc.url}>{doc.label}</a></li>
+              <li><a href={baseAwareHref(doc.url, base)}>{doc.label}</a></li>
             ))}
           </ul>
         </footer>
