@@ -836,6 +836,40 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn(".validity.expires_at", expiry_run)
         self.assertNotIn("verify-candidate", expiry_run)
 
+    def test_downloads_the_exact_promotion_artifact_to_its_consumed_path(self) -> None:
+        _, document = workflow("release.yml")
+        for job_name, step_name in (
+            ("promote-images", "Download verified candidate and draft contract"),
+            ("finalize-assets", "Download exact candidate and staged draft contract"),
+        ):
+            download = next(
+                step
+                for step in document["jobs"][job_name]["steps"]
+                if step.get("name") == step_name
+            )
+            self.assertEqual(
+                download["with"]["name"],
+                "release-promotion-input-${{ github.run_id }}",
+            )
+            self.assertEqual(download["with"]["path"], "promotion")
+            self.assertNotIn("pattern", download["with"])
+        expiry = step_run(
+            document,
+            "promote-images",
+            "Recheck candidate expiry immediately before registry login",
+        )
+        promote = step_run(
+            document,
+            "promote-images",
+            "Reconcile exact image digests",
+        )
+        for run in (expiry, promote):
+            self.assertIn(
+                "manifest=promotion/release-candidate-manifest.json",
+                run,
+            )
+            self.assertNotIn("inputs/release-promotion-input", run)
+
     def test_signs_one_checksum_closure_without_beta_only_ceremony(self) -> None:
         text, _ = workflow("release.yml")
         self.assertIn("SHA256SUMS.sigstore.json", text)
