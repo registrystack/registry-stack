@@ -14,8 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import {
-  candidateTagFromValidationOutput,
   checkEvidenceLinks,
+  currentReleaseCandidateTag,
   extractEvidenceUrlsFromYaml,
 } from './check-evidence-links.mjs';
 
@@ -102,14 +102,31 @@ test('accepts semver tags, full commits, and root-relative current docs', (t) =>
   });
 });
 
-test('reads the candidate tag only from validated current-manifest output', () => {
-  assert.equal(
-    candidateTagFromValidationOutput(
-      'validated /tmp/registry-stack-beta-30.yaml: beta-30 0.20.0\n',
-    ),
-    'v0.20.0',
+test('selects the exact tag from the highest valid release manifest', (t) => {
+  const manifestDir = mkdtempSync(join(tmpdir(), 'registry-release-manifests-'));
+  t.after(() => rmSync(manifestDir, { recursive: true, force: true }));
+  for (const [releaseId, version] of [
+    ['beta-29', '0.19.0'],
+    ['beta-30', '0.20.0'],
+  ]) {
+    writeFileSync(
+      resolve(manifestDir, `registry-stack-${releaseId}.yaml`),
+      `stack:\n  release: ${releaseId}\n  version: ${version}\n  source_repo: registrystack/registry-stack\n  source_tag: v${version}\n`,
+    );
+  }
+
+  assert.equal(currentReleaseCandidateTag(manifestDir), 'v0.20.0');
+});
+
+test('rejects release manifests whose filename and identity differ', (t) => {
+  const manifestDir = mkdtempSync(join(tmpdir(), 'registry-release-manifests-'));
+  t.after(() => rmSync(manifestDir, { recursive: true, force: true }));
+  writeFileSync(
+    resolve(manifestDir, 'registry-stack-beta-30.yaml'),
+    'stack:\n  release: beta-29\n  version: 0.20.0\n  source_repo: registrystack/registry-stack\n  source_tag: v0.20.0\n',
   );
-  assert.equal(candidateTagFromValidationOutput('error: validation failed\n'), undefined);
+
+  assert.throws(() => currentReleaseCandidateTag(manifestDir), /does not match stack\.release/);
 });
 
 test('checks the exact unpublished release tag against the selected source', (t) => {
