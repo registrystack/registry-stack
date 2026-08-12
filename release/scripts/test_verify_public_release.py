@@ -161,6 +161,14 @@ class PublicReleaseVerifierTest(TestCase):
             "images": [
                 {
                     "digest": f"sha256:{'c' * 64}",
+                    "final_ref": "ghcr.io/registrystack/evidence:v1.2.3",
+                },
+                {
+                    "digest": f"sha256:{'d' * 64}",
+                    "final_ref": "ghcr.io/registrystack/mint:v1.2.3",
+                },
+                {
+                    "digest": f"sha256:{'e' * 64}",
                     "final_ref": "ghcr.io/registrystack/relay:v1.2.3",
                 }
             ],
@@ -183,7 +191,14 @@ class PublicReleaseVerifierTest(TestCase):
                 checksums=checksums,
                 assets=assets,
             )
-        self.assertEqual("ghcr.io/registrystack/relay:v1.2.3", images[0]["final_ref"])
+        self.assertEqual(
+            {
+                "ghcr.io/registrystack/evidence:v1.2.3",
+                "ghcr.io/registrystack/mint:v1.2.3",
+                "ghcr.io/registrystack/relay:v1.2.3",
+            },
+            {image["final_ref"] for image in images},
+        )
         self.assertEqual(source, validate.call_args.kwargs["expected_source_sha"])
 
         with (

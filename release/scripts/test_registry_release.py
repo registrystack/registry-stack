@@ -580,6 +580,8 @@ class RegistryReleaseTest(TestCase):
             encoding="utf-8"
         )
         release_dockerfiles = [
+            "release/docker/Dockerfile.evidence",
+            "release/docker/Dockerfile.mint",
             "release/docker/Dockerfile.relay",
         ]
 
@@ -692,7 +694,7 @@ class RegistryReleaseTest(TestCase):
             scan_body,
         )
         self.assertIn("now_epoch - db_built_epoch > 259200", scan_body)
-        self.assertIn("for name in relay; do", scan_body)
+        self.assertIn("for name in ${RELEASE_IMAGE_NAMES}; do", scan_body)
         self.assertIn(
             "candidate/security/image-sbom/${name}.spdx.json",
             scan_body,
@@ -704,15 +706,26 @@ class RegistryReleaseTest(TestCase):
             scan_body,
         )
         self.assertIn(
-            "--baseline products/relay-v2/security/advisory-baseline.json",
+            "baseline=products/relay-v2/security/advisory-baseline.json",
             scan_body,
         )
         self.assertIn(
-            "--syft-report candidate/security/syft/relay.syft.json",
+            '--syft-report "candidate/security/syft/${name}.syft.json"',
             scan_body,
         )
-        self.assertIn("--subject relay-image", scan_body)
-        self.assertIn('"relay-image"', scan_body)
+        self.assertIn(
+            'baseline="release/security/${name}-advisory-baseline.json"',
+            scan_body,
+        )
+        self.assertIn('--subject "${name}-image"', scan_body)
+        self.assertIn("for name in ${RELEASE_IMAGE_NAMES}; do", scan_body)
+        self.assertIn("printf '%s-image\\n' \"${name}\"", scan_body)
+        self.assertIn('--argjson subjects "${advisory_subjects}"', scan_body)
+        self.assertIn("docker run --rm", scan_body)
+        self.assertIn("--network none", scan_body)
+        self.assertIn("--read-only", scan_body)
+        self.assertIn("--cap-drop ALL", scan_body)
+        self.assertIn("--security-opt no-new-privileges", scan_body)
         self.assertNotIn("postgresql", scan_body.lower())
         self.assertNotIn("registry-relay", scan_body)
         package_body = assemble[package_step:]
@@ -739,7 +752,9 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "relay-${{ needs.validate.outputs.tag }}-linux-amd64",
             "relayctl-${{ needs.validate.outputs.tag }}-linux-amd64",
-            "for name in relay; do",
+            "release_candidate.py image-names",
+            "RELEASE_IMAGE_NAMES: ${{ needs.validate.outputs.image_names }}",
+            "echo \"image_names=${release_image_names}\"",
             "-p registry-relayctl",
         ):
             self.assertIn(current, workflow)
@@ -765,7 +780,7 @@ class RegistryReleaseTest(TestCase):
             "GHCR package ${package} must be provisioned before release",
             workflow,
         )
-        self.assertIn("--package relay-candidate", workflow)
+        self.assertIn('candidate_package="${package}-candidate"', workflow)
         self.assertIn('elif [[ "${candidate_package_status}" != 404 ]]', workflow)
         self.assertIn('elif [[ "${package_status}" != 404 ]]', workflow)
         self.assertLess(
@@ -800,8 +815,11 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "ghcr.io/registrystack/relay-candidate@sha256:",
-            'name: "relay"',
+            "image_names=(relay evidence mint)",
+            "images: $images[0]",
+            "scans: $scans[0]",
+            '"evidence-image"',
+            '"mint-image"',
             '"relay-image"',
         ):
             self.assertIn(current, workflow)
@@ -825,9 +843,10 @@ class RegistryReleaseTest(TestCase):
                 'grype "${image_ref}" -o json > "${report}"',
                 "Grype did not emit a complete scan report",
                 "now_epoch - db_built_epoch > 259200",
-                "python3 release/scripts/check-advisory-baselines.py",
                 "products/relay-v2/security/advisory-baseline.json",
-                '"relay-image"',
+                'release/security/${name}-advisory-baseline.json',
+                "printf '%s-image\\n' \"${name}\"",
+                '--argjson subjects "${advisory_subjects}"',
                 "image-sbom syft grype advisory-verdict.json",
             ):
                 self.assertIn(fragment, text)
@@ -837,9 +856,10 @@ class RegistryReleaseTest(TestCase):
             'grype "${image_ref}" -o json > "${report}"',
             "Grype did not emit a complete scan report",
             "now_epoch - db_built_epoch > 259200",
-            "python3 release/scripts/check-advisory-baselines.py",
             "products/relay-v2/security/advisory-baseline.json",
-            '"relay-image"',
+            'release/security/${name}-advisory-baseline.json',
+            "printf '%s-image\\n' \"${name}\"",
+            '--argjson subjects "${advisory_subjects}"',
             "image-sbom syft grype advisory-verdict.json",
         ):
             with self.subTest(fragment=fragment):
@@ -855,9 +875,12 @@ class RegistryReleaseTest(TestCase):
         image_recipe = (ROOT / "release/scripts/build-release-image.sh").read_text(
             encoding="utf-8"
         )
-        release_dockerfile = (ROOT / "release/docker/Dockerfile.relay").read_text(
-            encoding="utf-8"
-        )
+        release_dockerfiles = {
+            name: (ROOT / f"release/docker/Dockerfile.{name}").read_text(
+                encoding="utf-8"
+            )
+            for name in ("evidence", "mint", "relay")
+        }
 
         self.assertIn("-p registry-manifest-cli", binary_recipe)
         self.assertIn("-p registry-relay-v2", binary_recipe)
@@ -872,14 +895,18 @@ class RegistryReleaseTest(TestCase):
         self.assertNotIn("-p registryctl ", binary_recipe)
         self.assertNotIn("-p registry-relay ", binary_recipe)
         self.assertNotIn("registry-relay-rhai-worker", binary_recipe)
-        self.assertIn("cp target/release/relay dist/image-bin/relay", binary_recipe)
-        self.assertIn("relay)", image_recipe)
+        for name in ("evidence", "mint", "relay"):
+            self.assertIn(
+                f"cp target/release/{name} dist/image-bin/{name}",
+                binary_recipe,
+            )
+            self.assertIn(
+                f"install -m 0755 /workspace/image-bin/{name} "
+                f"/workspace/runtime-root/usr/local/bin/{name}",
+                release_dockerfiles[name],
+            )
+        self.assertIn("evidence|mint|relay)", image_recipe)
         self.assertNotIn("registry-relay)", image_recipe)
-        self.assertIn(
-            "install -m 0755 /workspace/image-bin/relay "
-            "/workspace/runtime-root/usr/local/bin/relay",
-            release_dockerfile,
-        )
 
     def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
@@ -897,16 +924,29 @@ class RegistryReleaseTest(TestCase):
     def test_release_product_images_preown_managed_audit_and_state_directories(
         self,
     ) -> None:
-        dockerfile = (ROOT / "release/docker/Dockerfile.relay").read_text(
+        contracts = {
+            "evidence": "/workspace/runtime-root/var/lib/registry-evidence/audit",
+            "mint": "/workspace/runtime-root/var/lib/registry-mint/audit",
+            "relay": "/workspace/runtime-root/var/lib/relay/audit",
+        }
+        for name, audit_path in contracts.items():
+            with self.subTest(name=name):
+                dockerfile = (
+                    ROOT / f"release/docker/Dockerfile.{name}"
+                ).read_text(encoding="utf-8")
+                self.assertIn(audit_path, dockerfile)
+                self.assertIn(f"chmod 0700 {audit_path}", dockerfile)
+
+    def test_nightly_security_scans_the_exact_release_dockerfile_roster(self) -> None:
+        workflow = (ROOT / ".github/workflows/nightly-security.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("/workspace/runtime-root/var/lib/relay/audit", dockerfile)
-        self.assertIn("/workspace/runtime-root/var/lib/relay/data", dockerfile)
-        self.assertIn("/workspace/runtime-root/var/lib/relay \\", dockerfile)
-        self.assertIn(
-            "chmod 0700 /workspace/runtime-root/var/lib/relay/audit",
-            dockerfile,
-        )
+        for name in ("evidence", "mint", "relay"):
+            self.assertIn(
+                f'Path("release/docker/Dockerfile.{name}")',
+                workflow,
+            )
+        self.assertNotIn('glob("Dockerfile.registry-*")', workflow)
 
 
 

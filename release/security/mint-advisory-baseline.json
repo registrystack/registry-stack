@@ -1,0 +1,70 @@
+{
+  "version": 3,
+  "service": "mint",
+  "policies": [
+    {
+      "tool": "zizmor",
+      "minimum_severity": "high",
+      "action": "block_unreviewed"
+    },
+    {
+      "tool": "grype",
+      "minimum_severity": "high",
+      "action": "block_unreviewed",
+      "block_fixable": true
+    }
+  ],
+  "exceptions": [
+    {
+      "vulnerability_id": "CVE-2026-5450",
+      "package": "libc6",
+      "installed_version": "2.41-12+deb13u3",
+      "severity": "Critical",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.20.1 Linux AMD64 Mint binary imports sscanf, contains AWS-LC markers, and contains no %mc-style format marker. Mint does not construct libc scanf format strings, and the product and dependency source are unchanged on this release-tooling branch. The exact candidate image scan remains mandatory.",
+      "reviewed_at": "2026-08-13",
+      "expires_at": "2026-08-28",
+      "invalidation_triggers": [
+        "expired",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed"
+      ]
+    },
+    {
+      "vulnerability_id": "CVE-2026-5928",
+      "package": "libc6",
+      "installed_version": "2.41-12+deb13u3",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.20.1 Linux AMD64 Mint binary does not import ungetwc, Mint has no wide-character input path, and the product and dependency source are unchanged on this release-tooling branch. The exact candidate image scan remains mandatory.",
+      "reviewed_at": "2026-08-13",
+      "expires_at": "2026-08-28",
+      "invalidation_triggers": [
+        "expired",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed"
+      ]
+    },
+    {
+      "vulnerability_id": "CVE-2026-5435",
+      "package": "libc6",
+      "installed_version": "2.41-12+deb13u3",
+      "severity": "High",
+      "status": "accepted_risk",
+      "owner": "@jeremi",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The reviewed v0.20.1 Linux AMD64 Mint binary does not import ns_printrrf, ns_printrr, or fp_nquery, Mint has no DNS-printing path, and the product and dependency source are unchanged on this release-tooling branch. The exact candidate image scan remains mandatory.",
+      "reviewed_at": "2026-08-13",
+      "expires_at": "2026-08-28",
+      "invalidation_triggers": [
+        "expired",
+        "fix_available",
+        "material_finding_changed",
+        "package_version_changed"
+      ]
+    }
+  ]
+}

@@ -474,7 +474,11 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Candidate cleanup exact package allowlist",
         "release/scripts/cleanup-release-candidates.py",
         (
-            'CANDIDATE_PACKAGES = (\n    "relay-candidate",\n)',
+            'CANDIDATE_PACKAGES = (\n    "evidence-candidate",\n    "mint-candidate",\n    "relay-candidate",\n)',
+            'PUBLIC_PACKAGES = (\n    # Retired public names stay denylisted so cleanup can never delete history.',
+            '    "evidence",\n',
+            '    "mint",\n',
+            '    "relay",\n',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",
         ),

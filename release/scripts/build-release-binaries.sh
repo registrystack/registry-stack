@@ -81,6 +81,8 @@ docker run --rm \
     cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
     cp target/release/mint "dist/bin/mint-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
+    cp target/release/evidence dist/image-bin/evidence
+    cp target/release/mint dist/image-bin/mint
   '
 
 printf '%s\n' "${release_builder_image}" > "${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
@@ -92,6 +94,8 @@ chmod 0755 \
   "${repo_root}/dist/bin/evidencectl-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/mint-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/evidence-oid4vci-${tag}-linux-amd64" \
+  "${repo_root}/dist/image-bin/evidence" \
+  "${repo_root}/dist/image-bin/mint" \
   "${repo_root}/dist/image-bin/relay"
 
 (
@@ -110,6 +114,8 @@ chmod 0755 \
   cd -- "${repo_root}/dist/image-bin"
   sha256sum -- \
     RELEASE_BUILDER_IMAGE \
+    evidence \
+    mint \
     relay \
     > SHA256SUMS
 )

@@ -86,17 +86,31 @@ class ReleaseRepeatabilityWorkflowTest(unittest.TestCase):
             {
                 "images": [
                     {
+                        "name": "evidence",
+                        "final_ref": "ghcr.io/registrystack/evidence:v0.21.0",
+                        "digest": digest,
+                    },
+                    {
+                        "name": "mint",
+                        "final_ref": "ghcr.io/registrystack/mint:v0.21.0",
+                        "digest": digest,
+                    },
+                    {
                         "name": "relay",
-                        "final_ref": "ghcr.io/registrystack/relay:v0.19.0",
+                        "final_ref": "ghcr.io/registrystack/relay:v0.21.0",
                         "digest": digest,
                     }
                 ],
-                "release": {"tag": "v0.19.0"},
+                "release": {"tag": "v0.21.0"},
             },
         )
         self.assertEqual(
             rows,
-            [["relay", "ghcr.io/registrystack/relay:v0.19.0", digest]],
+            [
+                ["evidence", "ghcr.io/registrystack/evidence:v0.21.0", digest],
+                ["mint", "ghcr.io/registrystack/mint:v0.21.0", digest],
+                ["relay", "ghcr.io/registrystack/relay:v0.21.0", digest],
+            ],
         )
 
 

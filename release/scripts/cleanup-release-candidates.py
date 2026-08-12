@@ -19,12 +19,16 @@ from typing import Any
 OWNER = "registrystack"
 RETENTION_DAYS = 8
 CANDIDATE_PACKAGES = (
+    "evidence-candidate",
+    "mint-candidate",
     "relay-candidate",
 )
 PUBLIC_PACKAGES = (
     # Retired public names stay denylisted so cleanup can never delete history.
     "registry-notary",
     "registry-relay",
+    "evidence",
+    "mint",
     "relay",
 )
 

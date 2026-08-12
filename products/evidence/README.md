@@ -174,12 +174,21 @@ performs only a read-only mechanical comparison of issuer, JWKS URI, audience,
 algorithm, token type, and configured claim names. It does not register a
 client, decide authority, copy Mint files, or mint a token.
 
-The initial deployment proof uses released bare binaries. Docker Compose is a
-documented adapter, not build output: it mounts the reviewed bundle unchanged,
-uses a separate container runtime file and secret mounts, preserves audit
-storage, and keeps Evidence private behind operator TLS. Container, Helm,
-Kubernetes, Terraform, cloud packaging, approval, promotion, and deployment
-commands remain outside this build command.
+Starting with `v0.21.0`, Registry Stack releases official
+`ghcr.io/registrystack/evidence:v0.21.0` and
+`ghcr.io/registrystack/mint:v0.21.0` images. Both use a distroless nonroot
+runtime as UID and GID 65532. Pin the digest from the release manifest. Mount
+the Evidence runtime, reviewed bundle, secrets, and trust files at the absolute
+paths named by the runtime, with only the audit directory writable under
+`/var/lib/registry-evidence/audit`. Mount Mint configuration and its referenced
+files read-only under `/etc/registry-mint`, with persistent audit storage under
+`/var/lib/registry-mint/audit`.
+
+Docker Compose is a documented adapter, not build output: it mounts the
+reviewed bundle unchanged, uses a separate container runtime file and secret
+mounts, preserves audit storage, and keeps Evidence private behind operator
+TLS. Helm, Kubernetes, Terraform, cloud packaging, approval, promotion, and
+deployment commands remain outside this build command.
 
 ### Relying-party client library
 

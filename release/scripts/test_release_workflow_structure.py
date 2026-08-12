@@ -322,7 +322,13 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        self.assertEqual({"relay"}, module.RELAY_V2_IMAGE_NAMES)
+        self.assertEqual(
+            {"relay"}, module._candidate_image_names("0.20.1")
+        )
+        self.assertEqual(
+            {"evidence", "mint", "relay"},
+            module._candidate_image_names("0.21.0"),
+        )
         self.assertFalse(
             any("registry-notary" in name for name in module.SECURITY_EVIDENCE_REQUIRED_FILES)
         )

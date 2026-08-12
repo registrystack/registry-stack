@@ -33,6 +33,8 @@ DOCKERFILE_FRONTEND = (
 DISTROLESS_REPOSITORY = DISTROLESS_RUNTIME.split("@", 1)[0]
 
 DOCKERFILES = (
+    Path("release/docker/Dockerfile.evidence"),
+    Path("release/docker/Dockerfile.mint"),
     Path("release/docker/Dockerfile.relay"),
 )
 
@@ -56,6 +58,20 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + ADOPTER_DOCKERFILES + (
 RUST_BUILDER_DOCKERFILES = ()
 PREPARATION_DOCKERFILES = DOCKERFILES
 RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
+HTTP_PROBE_DOCKERFILES = {
+    Path("release/docker/Dockerfile.evidence"): {
+        "binary": "evidence",
+        "environment": "ENV REGISTRY_EVIDENCE_RUNTIME=/etc/registry-evidence/runtime.yaml",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/evidence"]',
+        "command": 'CMD ["serve"]',
+    },
+    Path("release/docker/Dockerfile.mint"): {
+        "binary": "mint",
+        "environment": "ENV MINT_CONFIG=/etc/registry-mint/config.yaml",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/mint"]',
+        "command": 'CMD ["serve"]',
+    },
+}
 
 FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
 STAGE_NAME_RE = re.compile(r"^FROM\s+\S+\s+AS\s+(\S+)", re.MULTILINE | re.IGNORECASE)
@@ -144,13 +160,14 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 failures.append(
                     f"{relative}: final Distroless runtime contains {forbidden.strip()!r}"
                 )
-        require(
-            runtime,
-            "HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3",
-            relative,
-            "binary healthcheck",
-            failures,
-        )
+        if relative not in HTTP_PROBE_DOCKERFILES:
+            require(
+                runtime,
+                "HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3",
+                relative,
+                "binary healthcheck",
+                failures,
+            )
 
     for relative in RUST_BUILDER_DOCKERFILES:
         require(
@@ -281,6 +298,29 @@ def check_repository(root: Path = ROOT) -> list[str]:
             "environment-aware Relay V2 healthcheck",
             failures,
         )
+
+    for relative, contract in HTTP_PROBE_DOCKERFILES.items():
+        runtime = runtime_stage(texts[relative])
+        binary = contract["binary"]
+        require(
+            texts[relative],
+            f"/usr/local/bin/{binary}",
+            relative,
+            f"{binary} binary",
+            failures,
+        )
+        for key in ("environment", "entrypoint", "command"):
+            require(
+                runtime,
+                contract[key],
+                relative,
+                f"fixed {binary} {key}",
+                failures,
+            )
+        if "HEALTHCHECK" in runtime:
+            failures.append(
+                f"{relative}: HTTP-probed runtime must not carry a binary HEALTHCHECK"
+            )
 
     candidate_workflow = texts[Path(".github/workflows/release-candidate.yml")]
     release_workflow = texts[Path(".github/workflows/release.yml")]

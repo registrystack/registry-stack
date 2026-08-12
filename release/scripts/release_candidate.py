@@ -40,7 +40,9 @@ RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
 DOCS_RELEASE_RESUMPTION_VERSION = (0, 19, 1)
 RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
-RELAY_V2_IMAGE_NAMES = {"relay"}
+OFFICIAL_RUNTIME_IMAGE_MINIMUM_VERSION = (0, 21, 0)
+HISTORICAL_RUNTIME_IMAGE_NAMES = {"relay"}
+OFFICIAL_RUNTIME_IMAGE_NAMES = {"evidence", "mint", "relay"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -78,7 +80,8 @@ SECURITY_EVIDENCE_COMMON_REQUIRED_FILES = {
     "advisory-verdict.json",
 }
 SECURITY_EVIDENCE_REQUIRED_FILES = SECURITY_EVIDENCE_COMMON_REQUIRED_FILES | {
-    f"{directory}/relay.{suffix}.json"
+    f"{directory}/{image}.{suffix}.json"
+    for image in OFFICIAL_RUNTIME_IMAGE_NAMES
     for directory, suffix in (
         ("image-sbom", "spdx"),
         ("syft", "syft"),
@@ -98,7 +101,9 @@ def _candidate_image_names(version: str) -> set[str]:
             "pre-v0.19 candidates are immutable historical evidence; verify them "
             "with the corresponding release tag"
         )
-    return RELAY_V2_IMAGE_NAMES
+    if parsed < OFFICIAL_RUNTIME_IMAGE_MINIMUM_VERSION:
+        return HISTORICAL_RUNTIME_IMAGE_NAMES
+    return OFFICIAL_RUNTIME_IMAGE_NAMES
 
 
 def _version_uses_release_docs(version: tuple[int, int, int]) -> bool:
@@ -1445,6 +1450,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     seal_candidate.add_argument("--draft", type=Path, required=True)
     seal_candidate.add_argument("--output", type=Path, required=True)
 
+    image_names = subparsers.add_parser("image-names")
+    image_names.add_argument("--version", required=True)
+
     verify_candidate = subparsers.add_parser("verify-candidate")
     verify_candidate.add_argument("--manifest", type=Path, required=True)
     verify_candidate.add_argument("--bundle", type=Path)
@@ -1516,6 +1524,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
+        if args.command == "image-names":
+            print(" ".join(sorted(_candidate_image_names(args.version))))
+            return 0
         if args.command == "seal-candidate":
             write_candidate_manifest(args.draft, args.output)
             print(f"sealed candidate manifest {args.output}")
