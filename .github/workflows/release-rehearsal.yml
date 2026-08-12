@@ -1,5 +1,5 @@
 name: Rehearse RegistryStack Release
-run-name: Rehearse ${{ inputs.release_id }} v${{ inputs.version }}
+run-name: Rehearse ${{ inputs.release_id }} v${{ inputs.version }} (${{ inputs.request_id }})
 
 on:
   workflow_dispatch:
@@ -10,6 +10,10 @@ on:
         type: string
       release_id:
         description: Prepared release train identity
+        required: true
+        type: string
+      request_id:
+        description: Unique operator-generated identity used to correlate this rehearsal
         required: true
         type: string
 

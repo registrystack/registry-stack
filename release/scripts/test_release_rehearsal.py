@@ -22,6 +22,9 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertNotIn("push:", trigger)
         self.assertNotIn("pull_request:", trigger)
         self.assertNotIn("schedule:", trigger)
+        self.assertIn("${{ inputs.request_id }}", document["run-name"])
+        self.assertIn("request_id:", trigger)
+        self.assertIn("required: true", trigger)
         self.assertEqual({"contents": "read"}, document["permissions"])
         self.assertEqual(["rehearse"], list(document["jobs"]))
         job = document["jobs"]["rehearse"]
