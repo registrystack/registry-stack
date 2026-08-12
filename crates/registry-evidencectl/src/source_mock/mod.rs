@@ -977,21 +977,9 @@ fn project_source_binding(
         let Some((method, source_path)) = method.zip(path) else {
             continue;
         };
-        let mut matching = operation_keys
-            .iter()
-            .filter(|(candidate_method, candidate_path)| {
-                *candidate_method == method
-                    && (source_path == *candidate_path
-                        || source_path
-                            .strip_suffix(*candidate_path)
-                            .is_some_and(|prefix| prefix.starts_with('/') && prefix.len() > 1))
-            });
-        let Some(operation) = matching.next() else {
+        let Some(operation) = select_project_operation(&operation_keys, method, source_path) else {
             continue;
         };
-        if matching.next().is_some() {
-            bail!("an applicable project source path matches more than one OpenAPI operation");
-        }
         let base_url = value
             .get("baseUrl")
             .and_then(serde_norway::Value::as_str)
@@ -1013,6 +1001,30 @@ fn project_source_binding(
         .next()
         .context("project has no applicable compiled source; run source suggest --base-url")?;
     Ok(ProjectSourceBinding { address, routes })
+}
+
+fn select_project_operation<'a>(
+    operation_keys: &BTreeSet<(&'a str, &'a str)>,
+    method: &str,
+    source_path: &str,
+) -> Option<(&'a str, &'a str)> {
+    if let Some(exact) = operation_keys
+        .iter()
+        .copied()
+        .find(|candidate| candidate.0 == method && candidate.1 == source_path)
+    {
+        return Some(exact);
+    }
+    operation_keys
+        .iter()
+        .copied()
+        .filter(|candidate| {
+            candidate.0 == method
+                && source_path
+                    .strip_suffix(candidate.1)
+                    .is_some_and(|prefix| prefix.starts_with('/') && prefix.len() > 1)
+        })
+        .max_by_key(|candidate| candidate.1.len())
 }
 
 fn loopback_origin_address(origin: &str) -> Result<SocketAddr> {
@@ -1069,5 +1081,28 @@ fn print_explanations(explanations: &[generator::ExplainedInference]) {
                 fallback.label()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_sources_prefer_exact_then_longest_operation_suffix() {
+        let operations = BTreeSet::from([
+            ("GET", "/people/{id}"),
+            ("GET", "/v1/people/{id}"),
+            ("POST", "/v1/people/{id}"),
+        ]);
+
+        assert_eq!(
+            select_project_operation(&operations, "GET", "/v1/people/{id}"),
+            Some(("GET", "/v1/people/{id}"))
+        );
+        assert_eq!(
+            select_project_operation(&operations, "GET", "/v1/v1/people/{id}"),
+            Some(("GET", "/v1/people/{id}"))
+        );
     }
 }

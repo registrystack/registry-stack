@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Deterministic, bounded generation for the source-mock authoring surface.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::{
     io,
@@ -438,9 +438,65 @@ impl State<'_, '_> {
                 "the object exceeds the property ceiling",
             ));
         }
+        let required = schema
+            .get("required")
+            .map(|required| {
+                required
+                    .as_array()
+                    .ok_or_else(|| {
+                        GenerationError::at(
+                            pointer,
+                            GenerationErrorKind::InvalidSchema,
+                            "required is not an array",
+                        )
+                    })?
+                    .iter()
+                    .map(|name| {
+                        name.as_str().map(str::to_owned).ok_or_else(|| {
+                            GenerationError::at(
+                                pointer,
+                                GenerationErrorKind::InvalidSchema,
+                                "required contains a non-string property name",
+                            )
+                        })
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        if required.iter().any(|name| !properties.contains_key(name)) {
+            return Err(GenerationError::at(
+                pointer,
+                GenerationErrorKind::UnsupportedSchema,
+                "required names a property without a declared schema",
+            ));
+        }
+        let minimum = usize_keyword(schema, "minProperties", pointer)?.unwrap_or(0);
+        let maximum = usize_keyword(schema, "maxProperties", pointer)?
+            .unwrap_or(properties.len())
+            .min(properties.len());
+        if minimum > maximum || required.len() > maximum {
+            return Err(GenerationError::at(
+                pointer,
+                GenerationErrorKind::UnsatisfiedBounds,
+                "the object property bounds are contradictory",
+            ));
+        }
+        let target = properties.len().min(maximum).max(minimum);
+        let mut selected = required;
+        for key in properties.keys() {
+            if selected.len() == target {
+                break;
+            }
+            selected.insert(key.clone());
+        }
         self.charge_bytes(2, pointer)?;
         let mut output = Map::new();
-        for (index, (key, child_schema)) in properties.iter().enumerate() {
+        for (index, (key, child_schema)) in properties
+            .iter()
+            .filter(|(key, _)| selected.contains(*key))
+            .enumerate()
+        {
             if index > 0 {
                 self.charge_bytes(1, pointer)?;
             }
@@ -858,7 +914,8 @@ impl State<'_, '_> {
         identifier: &str,
     ) -> Result<String, GenerationError> {
         let minimum = usize_keyword(schema, "minLength", pointer)?.unwrap_or(1);
-        let maximum = usize_keyword(schema, "maxLength", pointer)?.unwrap_or(DEFAULT_STRING_MAX);
+        let maximum = usize_keyword(schema, "maxLength", pointer)?
+            .unwrap_or_else(|| minimum.max(DEFAULT_STRING_MAX));
         if minimum > maximum || maximum > MAX_STRING_CHARS {
             return Err(GenerationError::at(
                 pointer,
@@ -1719,22 +1776,24 @@ fn integer_bounds(schema: &Value, pointer: &str) -> Result<(i64, i64), Generatio
     let mut minimum = integer_limit(schema, "minimum", pointer, f64::ceil)?.unwrap_or(0);
     let mut maximum = integer_limit(schema, "maximum", pointer, f64::floor)?.unwrap_or(1000);
     if let Some(bound) = integer_limit(schema, "exclusiveMinimum", pointer, f64::floor)? {
-        minimum = bound.checked_add(1).ok_or_else(|| {
+        let exclusive = bound.checked_add(1).ok_or_else(|| {
             GenerationError::at(
                 pointer,
                 GenerationErrorKind::UnsatisfiedBounds,
                 "the integer minimum overflows",
             )
         })?;
+        minimum = minimum.max(exclusive);
     }
     if let Some(bound) = integer_limit(schema, "exclusiveMaximum", pointer, f64::ceil)? {
-        maximum = bound.checked_sub(1).ok_or_else(|| {
+        let exclusive = bound.checked_sub(1).ok_or_else(|| {
             GenerationError::at(
                 pointer,
                 GenerationErrorKind::UnsatisfiedBounds,
                 "the integer maximum underflows",
             )
         })?;
+        maximum = maximum.min(exclusive);
     }
     if minimum > maximum {
         return Err(GenerationError::at(
@@ -1924,6 +1983,60 @@ mod tests {
         assert_eq!(
             generate(&left, &context(&paths, &datasets)).unwrap().value,
             generate(&right, &context(&paths, &datasets)).unwrap().value
+        );
+    }
+
+    #[test]
+    fn object_generation_respects_required_and_property_cardinality() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["z-required"],
+            "minProperties": 2,
+            "maxProperties": 2,
+            "properties": {
+                "a-optional": {"type": "boolean"},
+                "b-optional": {"type": "boolean"},
+                "z-required": {"type": "boolean"}
+            }
+        });
+        let paths = BTreeMap::new();
+        let datasets = BTreeMap::new();
+        let generated = generate(&schema, &context(&paths, &datasets)).unwrap();
+        let object = generated.value.as_object().unwrap();
+
+        assert_eq!(object.len(), 2);
+        assert!(object.contains_key("z-required"));
+        assert!(value_satisfies(&schema, &generated.value));
+    }
+
+    #[test]
+    fn lower_bound_only_strings_use_a_compatible_default_maximum() {
+        let schema = json!({"type": "string", "minLength": 32});
+        let paths = BTreeMap::new();
+        let datasets = BTreeMap::new();
+        let generated = generate(&schema, &context(&paths, &datasets)).unwrap();
+
+        assert_eq!(generated.value.as_str().unwrap().chars().count(), 32);
+    }
+
+    #[test]
+    fn inclusive_and_exclusive_integer_bounds_are_combined() {
+        assert_eq!(
+            integer_bounds(
+                &json!({"minimum": 100, "exclusiveMinimum": 0, "maximum": 100}),
+                ""
+            )
+            .unwrap(),
+            (100, 100)
+        );
+        assert_eq!(
+            integer_bounds(
+                &json!({"minimum": 0, "maximum": 0, "exclusiveMaximum": 100}),
+                ""
+            )
+            .unwrap(),
+            (0, 0)
         );
     }
 

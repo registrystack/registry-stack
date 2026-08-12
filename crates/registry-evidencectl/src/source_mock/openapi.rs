@@ -678,6 +678,9 @@ fn template_parameter_names(path: &str) -> Result<BTreeSet<&str>> {
     if !path.starts_with('/') || path.contains(['?', '#', '\\']) {
         bail!("invalid route template");
     }
+    if path == "/" {
+        return Ok(BTreeSet::new());
+    }
     let mut names = BTreeSet::new();
     for segment in path.split('/').skip(1) {
         if segment.is_empty() {
@@ -832,6 +835,45 @@ paths:
         let error = discover(SPEC.as_bytes(), "test", Some(&selected)).unwrap_err();
         let message = format!("{error:#}");
         assert!(!message.contains("secret"), "{message}");
+    }
+
+    #[test]
+    fn root_operations_are_discoverable_and_selectable() {
+        let spec = r#"
+openapi: 3.1.0
+info: {title: Root mock, version: 1.0.0}
+paths:
+  /:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: {type: boolean}
+"#;
+        let selected = parse_operation("GET /").unwrap();
+        let prepared = discover(spec.as_bytes(), "root test", Some(&selected)).unwrap();
+
+        assert_eq!(prepared.operations.len(), 1);
+        assert_eq!(prepared.operations[0].key.path, "/");
+        assert!(prepared.operations[0]
+            .witness_parameters()
+            .unwrap()
+            .is_empty());
+        let (_, body) = prepared
+            .generate(
+                &prepared.operations[0],
+                &BTreeMap::new(),
+                0,
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            )
+            .unwrap();
+        assert!(serde_json::from_slice::<Value>(&body).unwrap()["ok"].is_boolean());
     }
 
     #[test]

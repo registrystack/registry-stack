@@ -513,6 +513,7 @@ mod tests {
     fn app() -> Router {
         router(
             RouteSnapshot::new(vec![
+                RouteSpec::json("/", br#"{"kind":"root"}"#.to_vec()),
                 RouteSpec::json("/pets/{pet_id}", br#"{"kind":"template"}"#.to_vec()),
                 RouteSpec::json("/pets/special", br#"{"kind":"literal"}"#.to_vec()),
                 RouteSpec::generated("/numbers/{id}", |parameters| {
@@ -555,6 +556,23 @@ mod tests {
             Some(&APPLICATION_JSON)
         );
         assert_eq!(body_text(response).await, r#"{"kind":"literal"}"#);
+    }
+
+    #[tokio::test]
+    async fn root_routes_serve_exact_bytes() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_text(response).await, r#"{"kind":"root"}"#);
     }
 
     #[tokio::test]

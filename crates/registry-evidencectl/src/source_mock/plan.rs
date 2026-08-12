@@ -285,6 +285,9 @@ fn validate_route_template(path: &str) -> Result<()> {
     {
         bail!("operation path is outside the closed route-template grammar");
     }
+    if path == "/" {
+        return Ok(());
+    }
     for segment in path.split('/').skip(1) {
         if segment.is_empty() || matches!(segment, "." | "..") {
             bail!("operation path is outside the closed route-template grammar");
@@ -316,6 +319,9 @@ fn path_parameter_names(path: &str) -> Result<BTreeSet<&str>> {
 }
 
 pub(super) fn expand_path(path: &str, parameters: &BTreeMap<String, Value>) -> Result<String> {
+    if path == "/" {
+        return Ok(path.to_owned());
+    }
     let mut expanded = String::new();
     for segment in path.split('/').skip(1) {
         expanded.push('/');
@@ -527,6 +533,16 @@ mod tests {
             .path_parameters
             .insert("person_id".to_owned(), json!("one/two"));
         assert!(validate_plan(&slash).is_err());
+    }
+
+    #[test]
+    fn root_operation_paths_validate_and_expand_to_slash() {
+        let mut root = plan();
+        root.operations[0].path = "/".to_owned();
+        root.operations[0].cases[0].request.path_parameters.clear();
+
+        assert!(validate_plan(&root).is_ok());
+        assert_eq!(expand_path("/", &BTreeMap::new()).unwrap(), "/");
     }
 
     #[test]

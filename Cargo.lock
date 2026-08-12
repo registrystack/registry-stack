@@ -1149,7 +1149,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2b0902eb36fbab51c14eda1c186bda119fcff91e5e4e7fc2dd2077298197ce8"
 dependencies = [
  "deunicode",
- "rand 0.9.4",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -3214,9 +3214,9 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "inquire",
- "jsonschema 0.18.3",
+ "jsonschema",
  "p256",
- "rand 0.9.4",
+ "rand 0.9.5",
  "rand_chacha",
  "registry-evidence-authoring",
  "registry-evidence-client",
