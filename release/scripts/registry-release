@@ -2130,6 +2130,21 @@ def request_release_candidate(
                 f"protected-main CI passed for {resolved_source}: "
                 f"run {ci_run_id} {ci_url}"
             )
+            remote_default = refresh_protected_main(context["repo"], repository)
+            resolved_default = resolve_commit(
+                context["repo"], default_branch, "protected default branch"
+            )
+            if resolved_default != remote_default:
+                raise ReleasePlanError(
+                    f"trusted {default_branch} does not match protected default "
+                    f"branch {remote_default} after waiting for CI"
+                )
+            if resolved_source != remote_default:
+                raise ReleasePlanError(
+                    f"protected default branch advanced to {remote_default} while "
+                    f"waiting for candidate source {resolved_source} CI; request a "
+                    "candidate from the new protected-main revision"
+                )
         request_id = secrets.token_hex(16)
         display_title = (
             f"Release candidate {release_id} v{version} ({request_id})"
