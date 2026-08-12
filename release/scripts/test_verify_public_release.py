@@ -29,6 +29,11 @@ class PublicReleaseVerifierTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
 
+    def test_client_registry_verification_begins_with_v0_21_1(self) -> None:
+        self.assertFalse(self.module.version_uses_client_registries("0.21.0"))
+        self.assertTrue(self.module.version_uses_client_registries("0.21.1"))
+        self.assertTrue(self.module.version_uses_client_registries("1.0.0"))
+
     def test_checksum_parser_requires_one_local_unique_asset_per_line(self) -> None:
         parsed = self.module.parse_sha256sums(
             f"{'a' * 64}  payload.tar.gz\n{'b' * 64}  relay-v1.2.3-linux-amd64\n"

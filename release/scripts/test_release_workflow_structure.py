@@ -688,6 +688,22 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn("--trusted-run-metadata promotion/trusted-run.json", text)
         self.assertNotIn("select-canary", text)
 
+    def test_client_registry_publication_begins_with_v0_21_1(self) -> None:
+        _, document = workflow("release.yml")
+        verify = step_run(
+            document,
+            "verify",
+            "Verify binding, candidate, and attestations",
+        )
+        self.assertIn(
+            "from release_candidate import CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION",
+            verify,
+        )
+        self.assertIn(
+            "version >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION",
+            verify,
+        )
+
     def test_checks_out_the_protected_workflow_before_running_repo_scripts(self) -> None:
         _, document = workflow("release.yml")
         for job_name, job in document["jobs"].items():
