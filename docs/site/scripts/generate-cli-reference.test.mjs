@@ -136,8 +136,12 @@ test('the docs check detects CLI drift before generation', async () => {
   const packageJson = JSON.parse(
     await readFile(new URL('../package.json', import.meta.url), 'utf8'),
   );
-  const steps = packageJson.scripts.check.split(' && ');
+  const checkSteps = packageJson.scripts.check.split(' && ');
+  const sourceSteps = packageJson.scripts['check:source'].split(' && ');
 
-  assert.equal(steps[0], 'npm run check:cli-reference');
-  assert.ok(steps.indexOf('npm run check:cli-reference') < steps.indexOf('npm run generate'));
+  assert.equal(checkSteps[0], 'npm run check:source');
+  assert.equal(sourceSteps[0], 'npm run check:cli-reference');
+  assert.ok(
+    sourceSteps.indexOf('npm run check:cli-reference') < sourceSteps.indexOf('npm run generate'),
+  );
 });

@@ -1,4 +1,5 @@
 name: RegistryStack Release Candidate
+run-name: Release candidate ${{ github.event.client_payload.release_id }} v${{ github.event.client_payload.version }} (${{ github.event.client_payload.request_id }})
 
 on:
   repository_dispatch:
@@ -60,6 +61,7 @@ jobs:
           REQUEST_VERSION: ${{ github.event.client_payload.version }}
           REQUEST_RELEASE_ID: ${{ github.event.client_payload.release_id }}
           REQUEST_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+          REQUEST_ID: ${{ github.event.client_payload.request_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -79,6 +81,10 @@ jobs:
           fi
           if [[ ! "${REQUEST_RELEASE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
             echo "release_id is invalid" >&2
+            exit 1
+          fi
+          if [[ ! "${REQUEST_ID}" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "request_id is invalid" >&2
             exit 1
           fi
           if [[ ! "${REQUEST_SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -331,7 +337,7 @@ jobs:
             candidate-canonical/
 
       - name: Upload canonical build products
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-canonical-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-canonical
@@ -392,7 +398,7 @@ jobs:
           mv platform candidate-platform/platform
 
       - name: Upload native platform payload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-platform
@@ -558,7 +564,7 @@ jobs:
           done
 
       - name: Upload native client packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-clients-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-client-package
@@ -588,7 +594,7 @@ jobs:
           submodules: false
 
       - name: Download exact build products
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: candidate-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: inputs
@@ -1073,7 +1079,7 @@ jobs:
             --output candidate/release-candidate-manifest.json
 
       - name: Upload one candidate manifest and bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1104,7 +1110,7 @@ jobs:
           submodules: false
 
       - name: Download compact candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate

@@ -7,16 +7,19 @@ import argparse
 import hashlib
 import json
 import re
+import secrets
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import release_candidate
+import verify_public_release
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,6 +73,37 @@ DOCSET_STATUSES_BY_MANIFEST_STATUS = {
 }
 RELAY_V2_OPENAPI_RELEASE_SURFACE_PATHS = (
     "products/evidence/generated/registry-evidence.openapi.json",
+)
+NODE_CLIENT_RELEASE_SURFACES = (
+    (
+        "crates/registry-evidence-client-node",
+        "@registrystack/evidence-client",
+    ),
+    (
+        "crates/registry-relay-client-node",
+        "@registrystack/relay-client",
+    ),
+)
+PYTHON_CLIENT_RELEASE_SURFACES = (
+    (
+        "crates/registry-evidence-client-py",
+        "registry-evidence-client",
+        "evidence-client-sdk",
+    ),
+    (
+        "crates/registry-relay-client-py",
+        "registry-relay-client",
+        "relay-client-sdk",
+    ),
+)
+FUZZ_LOCK_RELEASE_SURFACE_PATHS = (
+    "products/manifest/fuzz/Cargo.lock",
+    "products/platform/fuzz/Cargo.lock",
+)
+DOCS_RELEASE_IDENTITY_ROOTS = (
+    "docs/site/scripts",
+    "docs/site/src/content/docs",
+    "docs/site/src/data",
 )
 RELEASE_CANDIDATE_WORKFLOW = ".github/workflows/release-candidate.yml"
 RELEASE_BUILDER_IMAGE = (
@@ -1206,6 +1240,173 @@ def validate_workspace_versions(repo: Path, version: str) -> dict[str, Any]:
     }
 
 
+def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
+    surfaces: list[Path] = []
+    for relative_root, expected_name in NODE_CLIENT_RELEASE_SURFACES:
+        root = repo / relative_root
+        package_path = root / "package.json"
+        lock_path = root / "package-lock.json"
+        loader_path = root / "index.js"
+        package = required_json(package_path)
+        lock = required_json(lock_path)
+        if (
+            not isinstance(package, dict)
+            or package.get("name") != expected_name
+            or package.get("version") != version
+        ):
+            raise ReleasePlanError(
+                f"{relative_path(repo, package_path)} must identify "
+                f"{expected_name} at version {version}"
+            )
+        lock_root = lock.get("packages") if isinstance(lock, dict) else None
+        lock_package = lock_root.get("") if isinstance(lock_root, dict) else None
+        if (
+            not isinstance(lock, dict)
+            or lock.get("name") != expected_name
+            or lock.get("version") != version
+            or not isinstance(lock_package, dict)
+            or lock_package.get("name") != expected_name
+            or lock_package.get("version") != version
+        ):
+            raise ReleasePlanError(
+                f"{relative_path(repo, lock_path)} must bind {expected_name} "
+                f"at version {version} in both root identities"
+            )
+        try:
+            loader = loader_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ReleasePlanError(
+                f"required release surface is missing: {loader_path}"
+            ) from exc
+        loader_versions = set(
+            re.findall(r"bindingPackageVersion !== '([^']+)'", loader)
+        )
+        if loader_versions != {version}:
+            raise ReleasePlanError(
+                f"{relative_path(repo, loader_path)} generated binding loader "
+                f"must use only version {version}, found {sorted(loader_versions)!r}"
+            )
+        surfaces.extend((package_path, lock_path, loader_path))
+
+    for relative_root, expected_name, dependency_name in PYTHON_CLIENT_RELEASE_SURFACES:
+        root = repo / relative_root
+        project_path = root / "pyproject.toml"
+        cargo_path = root / "Cargo.toml"
+        project = required_toml(project_path)
+        cargo = required_toml(cargo_path)
+        project_identity = project.get("project")
+        dependency = cargo.get("dependencies", {}).get(dependency_name)
+        if (
+            not isinstance(project_identity, dict)
+            or project_identity.get("name") != expected_name
+            or project_identity.get("version") != version
+        ):
+            raise ReleasePlanError(
+                f"{relative_path(repo, project_path)} must identify "
+                f"{expected_name} at version {version}"
+            )
+        if not isinstance(dependency, dict) or dependency.get("version") != version:
+            raise ReleasePlanError(
+                f"{relative_path(repo, cargo_path)} dependency {dependency_name} "
+                f"must use version {version}"
+            )
+        surfaces.extend((project_path, cargo_path))
+    return surfaces
+
+
+def validate_fuzz_lock_versions(
+    repo: Path,
+    version: str,
+    workspace_lock: dict[str, Any],
+) -> list[Path]:
+    workspace_packages = workspace_lock.get("package")
+    if not isinstance(workspace_packages, list):
+        raise ReleasePlanError("Cargo.lock must contain a package list")
+    workspace_names = {
+        package.get("name")
+        for package in workspace_packages
+        if isinstance(package, dict)
+        and isinstance(package.get("name"), str)
+        and package["name"].startswith("registry-")
+        and "source" not in package
+    }
+    surfaces = []
+    for relative in FUZZ_LOCK_RELEASE_SURFACE_PATHS:
+        path = repo / relative
+        lock = required_toml(path)
+        packages = lock.get("package")
+        if not isinstance(packages, list):
+            raise ReleasePlanError(f"{relative} must contain a package list")
+        selected = [
+            package
+            for package in packages
+            if isinstance(package, dict)
+            and package.get("name") in workspace_names
+            and "source" not in package
+        ]
+        if not selected:
+            raise ReleasePlanError(f"{relative} has no Registry Stack path packages")
+        stale = sorted(
+            str(package.get("name"))
+            for package in selected
+            if package.get("version") != version
+        )
+        if stale:
+            raise ReleasePlanError(
+                f"{relative} path packages must use version {version}: "
+                + ", ".join(stale)
+            )
+        surfaces.append(path)
+    return surfaces
+
+
+def validate_release_archive_lock(repo: Path, version: str) -> Path:
+    path = repo / "docs/site/src/data/archive-lock.yaml"
+    document = required_yaml(path)
+    archives = document.get("archives") if isinstance(document, dict) else None
+    entry = archives.get(f"v{version}") if isinstance(archives, dict) else None
+    required_fields = {
+        "bundle_sha256",
+        "root_tree_sha256",
+        "version_tree_sha256",
+    }
+    if not isinstance(entry, dict) or set(entry) != required_fields:
+        raise ReleasePlanError(
+            f"archive-lock.yaml v{version} must contain exactly "
+            + ", ".join(sorted(required_fields))
+        )
+    for field in sorted(required_fields):
+        value = entry.get(field)
+        if not isinstance(value, str) or SHA256_HEX.fullmatch(value) is None:
+            raise ReleasePlanError(
+                f"archive-lock.yaml v{version}.{field} must be a lowercase SHA-256 digest"
+            )
+    return path
+
+
+def release_identity_surfaces(
+    repo: Path,
+    version: str,
+    release_id: str,
+) -> list[Path]:
+    tokens = (version, f"v{version}", release_id)
+    selected: set[Path] = set()
+    for relative_root in DOCS_RELEASE_IDENTITY_ROOTS:
+        root = repo / relative_root
+        if not root.is_dir():
+            raise ReleasePlanError(f"required release surface is missing: {root}")
+        for path in root.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                body = path.read_text(encoding="utf-8")
+            except UnicodeError:
+                continue
+            if any(token in body for token in tokens):
+                selected.add(path)
+    return sorted(selected, key=lambda path: relative_path(repo, path))
+
+
 def selected_docsets(
     repo: Path,
     record: dict[str, Any],
@@ -1433,11 +1634,33 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
             f"{workspace['workspace_package_count']} lock packages use {version}",
         )
     )
+    client_surfaces = validate_client_package_versions(repo, version)
+    checks.append(
+        passed_check(
+            "client-package-versions",
+            f"{len(client_surfaces)} native client package and generated loader "
+            f"surfaces use {version}",
+        )
+    )
+    fuzz_lock_surfaces = validate_fuzz_lock_versions(
+        repo,
+        version,
+        workspace["cargo_lock"],
+    )
+    checks.append(
+        passed_check(
+            "excluded-fuzz-locks",
+            f"{len(fuzz_lock_surfaces)} excluded fuzz lockfiles use the "
+            f"{version} path-package graph",
+        )
+    )
     parsed_version = release_version_tuple(version)
     uses_release_docs = parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION
     docsets_data = None
     selected_docset = None
     selected_docset_index = None
+    archive_lock_path = None
+    identity_surfaces: list[Path] = []
     if uses_release_docs:
         docsets_data, selected_docset, selected_docset_index = selected_docsets(
             repo, selected
@@ -1446,6 +1669,21 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
             passed_check(
                 "docsets",
                 f"current unreleased docs and versioned v{version} agree with their sources",
+            )
+        )
+        archive_lock_path = validate_release_archive_lock(repo, version)
+        checks.append(
+            passed_check(
+                "docs-archive-lock",
+                f"v{version} has exact bundle, canonical-root, and version-tree locks",
+            )
+        )
+        identity_surfaces = release_identity_surfaces(repo, version, release_id)
+        checks.append(
+            passed_check(
+                "active-release-identity-surfaces",
+                f"{len(identity_surfaces)} active docs, generated overlay, content "
+                "digest, and inventory surfaces name the release identity",
             )
         )
         repo_docs_count = validate_repo_docs(repo)
@@ -1484,9 +1722,13 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
         "previous": previous,
         "advisory": advisory,
         "workspace": workspace,
+        "client_surfaces": client_surfaces,
+        "fuzz_lock_surfaces": fuzz_lock_surfaces,
         "docsets_data": docsets_data,
         "selected_docset": selected_docset,
         "selected_docset_index": selected_docset_index,
+        "archive_lock_path": archive_lock_path,
+        "identity_surfaces": identity_surfaces,
         "documents": documents,
         "openapi_paths": openapi_paths,
         "uses_release_docs": uses_release_docs,
@@ -1513,6 +1755,16 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
         (repo / "Cargo.lock", "workspace-lock"),
         (context["documents"]["release_note"], "release-note"),
     ]
+    for path in context["client_surfaces"]:
+        kind = (
+            "generated-binding-loader"
+            if path.name == "index.js"
+            else "client-package-version"
+        )
+        surfaces.append((path, kind))
+    surfaces.extend(
+        (path, "excluded-fuzz-lock") for path in context["fuzz_lock_surfaces"]
+    )
     identifier_catalog = context["selected"]["data"].get("identifier_catalog")
     if isinstance(identifier_catalog, dict) and isinstance(
         identifier_catalog.get("path"), str
@@ -1528,13 +1780,23 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
                     repo / "docs/site/src/data/generated/docsets.json",
                     "generated-mirror",
                 ),
+                (repo / "docs/site/src/data/repo-docs.yaml", "active-docs-mirror"),
             )
+        )
+        surfaces.append((context["archive_lock_path"], "docs-archive-lock"))
+        surfaces.extend(
+            (path, "active-release-identity")
+            for path in context["identity_surfaces"]
         )
     surfaces.extend((path, "changelog") for path in context["documents"]["changelogs"])
     surfaces.extend(
         (path, "product-release-note") for path in context["documents"]["product_notes"]
     )
     surfaces.extend((path, "openapi-version") for path in context["openapi_paths"])
+    unique_surfaces: dict[str, tuple[Path, str]] = {}
+    for path, kind in surfaces:
+        key = relative_path(repo, path)
+        unique_surfaces.setdefault(key, (path, kind))
     return [
         {
             "path": relative_path(repo, path),
@@ -1542,7 +1804,7 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
             "from": previous_version,
             "to": version,
         }
-        for path, kind in surfaces
+        for path, kind in unique_surfaces.values()
     ]
 
 
@@ -1655,6 +1917,150 @@ def refresh_protected_main(repo: Path, repository: str) -> str:
     return resolve_commit(repo, "refs/remotes/origin/main", "protected main")
 
 
+def workflow_runs(
+    repository: str,
+    workflow: str,
+    *,
+    event: str,
+    head_sha: str,
+) -> list[dict[str, Any]]:
+    document = json.loads(
+        run_checked(
+            [
+                "gh",
+                "api",
+                f"repos/{repository}/actions/workflows/{workflow}/runs"
+                f"?event={event}&head_sha={head_sha}&per_page=100",
+            ]
+        )
+    )
+    runs = document.get("workflow_runs") if isinstance(document, dict) else None
+    if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
+        raise ReleasePlanError(f"GitHub returned malformed runs for {workflow}")
+    return [
+        run
+        for run in runs
+        if run.get("event") == event and run.get("head_sha") == head_sha
+    ]
+
+
+def workflow_run_identity(run: dict[str, Any], label: str) -> tuple[int, str]:
+    run_id = run.get("id")
+    url = run.get("html_url")
+    if (
+        not isinstance(run_id, int)
+        or isinstance(run_id, bool)
+        or run_id < 1
+        or not isinstance(url, str)
+        or not url.startswith("https://github.com/")
+    ):
+        raise ReleasePlanError(f"{label} has no valid run ID and URL")
+    return run_id, url
+
+
+def wait_for_exact_protected_ci(repository: str, source_sha: str) -> dict[str, Any]:
+    deadline = time.monotonic() + 120
+    while True:
+        runs = workflow_runs(
+            repository,
+            "ci.yml",
+            event="push",
+            head_sha=source_sha,
+        )
+        successful = [run for run in runs if run.get("conclusion") == "success"]
+        if successful:
+            return max(successful, key=lambda run: int(run.get("id", 0)))
+        active = [
+            run
+            for run in runs
+            if run.get("status") in {"queued", "in_progress", "pending", "waiting"}
+        ]
+        if active:
+            run = max(active, key=lambda item: int(item.get("id", 0)))
+            run_id, _ = workflow_run_identity(run, "protected-main CI")
+            watch_workflow_run(repository, run_id, "protected-main CI")
+            repeated = workflow_runs(
+                repository,
+                "ci.yml",
+                event="push",
+                head_sha=source_sha,
+            )
+            successful = [
+                item for item in repeated if item.get("conclusion") == "success"
+            ]
+            if successful:
+                return max(successful, key=lambda item: int(item.get("id", 0)))
+            raise ReleasePlanError(
+                f"protected-main CI did not succeed for exact source {source_sha}"
+            )
+        concluded = [run for run in runs if run.get("status") == "completed"]
+        if concluded:
+            latest = max(concluded, key=lambda run: int(run.get("id", 0)))
+            conclusion = latest.get("conclusion")
+            raise ReleasePlanError(
+                f"protected-main CI concluded {conclusion!r} for exact source {source_sha}"
+            )
+        if time.monotonic() >= deadline:
+            raise ReleasePlanError(
+                f"no protected-main CI run appeared for exact source {source_sha}"
+            )
+        time.sleep(2)
+
+
+def wait_for_dispatched_run(
+    repository: str,
+    *,
+    source_sha: str,
+    display_title: str,
+    request_id: str,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + 60
+    while True:
+        matches = [
+            run
+            for run in workflow_runs(
+                repository,
+                "release-candidate.yml",
+                event="repository_dispatch",
+                head_sha=source_sha,
+            )
+            if run.get("display_title") == display_title
+        ]
+        if len(matches) == 1:
+            workflow_run_identity(matches[0], "release candidate")
+            return matches[0]
+        if len(matches) > 1:
+            raise ReleasePlanError(
+                f"candidate request {request_id} resolved to multiple workflow runs"
+            )
+        if time.monotonic() >= deadline:
+            raise ReleasePlanError(
+                "candidate dispatch may have been accepted, but its exact run could not "
+                f"be resolved for request {request_id}; do not dispatch it again"
+            )
+        time.sleep(1)
+
+
+def watch_workflow_run(repository: str, run_id: int, label: str) -> None:
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "run",
+                "watch",
+                str(run_id),
+                "--repo",
+                repository,
+                "--exit-status",
+            ],
+            check=False,
+        )
+    except OSError as exc:
+        raise ReleasePlanError(f"cannot watch {label} run {run_id}: {exc}") from exc
+    if result.returncode != 0:
+        raise ReleasePlanError(f"{label} run {run_id} did not succeed")
+
+
 def download_gh_api_bytes(
     endpoint: str,
     destination: Path,
@@ -1688,6 +2094,8 @@ def request_release_candidate(
     repository: str,
     *,
     print_request: bool,
+    wait_for_ci: bool = False,
+    wait_for_candidate: bool = False,
 ) -> int:
     try:
         context = prepare_release_context(repo, version, release_id)
@@ -1715,6 +2123,32 @@ def request_release_candidate(
                 "active candidate preparation must omit legacy stack.source_ref "
                 "and stack.status"
             )
+        if wait_for_ci:
+            ci_run = wait_for_exact_protected_ci(repository, resolved_source)
+            ci_run_id, ci_url = workflow_run_identity(ci_run, "protected-main CI")
+            print(
+                f"protected-main CI passed for {resolved_source}: "
+                f"run {ci_run_id} {ci_url}"
+            )
+            remote_default = refresh_protected_main(context["repo"], repository)
+            resolved_default = resolve_commit(
+                context["repo"], default_branch, "protected default branch"
+            )
+            if resolved_default != remote_default:
+                raise ReleasePlanError(
+                    f"trusted {default_branch} does not match protected default "
+                    f"branch {remote_default} after waiting for CI"
+                )
+            if resolved_source != remote_default:
+                raise ReleasePlanError(
+                    f"protected default branch advanced to {remote_default} while "
+                    f"waiting for candidate source {resolved_source} CI; request a "
+                    "candidate from the new protected-main revision"
+                )
+        request_id = secrets.token_hex(16)
+        display_title = (
+            f"Release candidate {release_id} v{version} ({request_id})"
+        )
         command = [
             "gh",
             "api",
@@ -1729,15 +2163,34 @@ def request_release_candidate(
             f"client_payload[release_id]={release_id}",
             "-F",
             f"client_payload[source_sha]={resolved_source}",
+            "-F",
+            f"client_payload[request_id]={request_id}",
         ]
         if print_request:
             print(" ".join(shlex.quote(part) for part in command))
         else:
             run_checked(command, cwd=context["repo"])
+            candidate_run = wait_for_dispatched_run(
+                repository,
+                source_sha=resolved_source,
+                display_title=display_title,
+                request_id=request_id,
+            )
+            candidate_run_id, candidate_url = workflow_run_identity(
+                candidate_run, "release candidate"
+            )
             print(
                 f"requested release candidate {release_id} "
-                f"v{version} at {resolved_source}"
+                f"v{version} at {resolved_source}: run {candidate_run_id} "
+                f"{candidate_url}"
             )
+            if wait_for_candidate:
+                watch_workflow_run(
+                    repository,
+                    candidate_run_id,
+                    "release candidate",
+                )
+                print(f"release candidate run {candidate_run_id} passed")
     except (OSError, UnicodeError, ReleasePlanError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -2115,6 +2568,16 @@ def main() -> int:
     )
     candidate_parser.add_argument("--repo", type=Path, default=ROOT)
     candidate_parser.add_argument("--print-request", action="store_true")
+    candidate_parser.add_argument(
+        "--wait-for-ci",
+        action="store_true",
+        help="wait for successful protected-main CI at the exact source before dispatch",
+    )
+    candidate_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="wait for the exact dispatched candidate run to complete",
+    )
     verify_candidate_parser = subparsers.add_parser("verify-candidate")
     verify_candidate_parser.add_argument("--version", required=True)
     verify_candidate_parser.add_argument("--release-id", required=True)
@@ -2123,6 +2586,12 @@ def main() -> int:
     verify_candidate_parser.add_argument("--repo", type=Path, default=ROOT)
     verify_candidate_parser.add_argument("--plan-output", type=Path)
     verify_candidate_parser.add_argument(
+        "--repository", default="registrystack/registry-stack"
+    )
+    verify_public_parser = subparsers.add_parser("verify-public")
+    verify_public_parser.add_argument("--tag", required=True)
+    verify_public_parser.add_argument("--repo", type=Path, default=ROOT)
+    verify_public_parser.add_argument(
         "--repository", default="registrystack/registry-stack"
     )
     args = parser.parse_args()
@@ -2157,6 +2626,8 @@ def main() -> int:
             args.default_branch,
             args.repository,
             print_request=args.print_request,
+            wait_for_ci=args.wait_for_ci,
+            wait_for_candidate=args.wait,
         )
     if args.command == "verify-candidate":
         return verify_candidate_for_tag(
@@ -2168,6 +2639,25 @@ def main() -> int:
             repository=args.repository,
             plan_output=args.plan_output,
         )
+    if args.command == "verify-public":
+        try:
+            verify_origin_repository(args.repo.resolve(), args.repository)
+            result = verify_public_release.verify(
+                repo=args.repo.resolve(),
+                repository=args.repository,
+                tag=args.tag,
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+        except (
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            ReleasePlanError,
+            verify_public_release.PublicReleaseError,
+        ) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        return 0
     raise AssertionError(args.command)
 
 

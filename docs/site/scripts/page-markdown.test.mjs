@@ -24,7 +24,12 @@ const jsSource = readFileSync(srcPath, 'utf8')
   .replace(/:\s*string/g, '');                 // ": string" annotations
 
 const dataUrl = 'data:text/javascript,' + encodeURIComponent(jsSource);
-const { DISCOVERY_HEADER, entrySlugToOutputPath, buildPageMarkdown } = await import(dataUrl);
+const {
+  DISCOVERY_HEADER,
+  discoveryHeaderForBase,
+  entrySlugToOutputPath,
+  buildPageMarkdown,
+} = await import(dataUrl);
 
 test('per-page Markdown route excludes Starlight draft entries', () => {
   const routeSource = readFileSync(routePath, 'utf8');
@@ -49,6 +54,15 @@ test('discovery header contains llms.txt and llms-full.txt URLs', () => {
   const out = buildPageMarkdown('Title', undefined, 'Body.');
   assert.ok(out.includes('https://docs.registrystack.org/llms.txt'), 'missing llms.txt URL');
   assert.ok(out.includes('https://docs.registrystack.org/llms-full.txt'), 'missing llms-full.txt URL');
+});
+
+test('discovery header follows the production public base', () => {
+  const expected = discoveryHeaderForBase('/dev/');
+  const out = buildPageMarkdown('Title', undefined, 'Body.', '/dev/');
+  assert.ok(out.startsWith(expected));
+  assert.ok(out.includes('https://docs.registrystack.org/dev/llms.txt'));
+  assert.ok(out.includes('https://docs.registrystack.org/dev/llms-full.txt'));
+  assert.ok(!out.includes('https://docs.registrystack.org/llms.txt'));
 });
 
 test('title is rendered as an H1 heading', () => {

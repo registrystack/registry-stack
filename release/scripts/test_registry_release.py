@@ -77,6 +77,15 @@ class RegistryReleaseTest(TestCase):
                 return_value=source,
             ),
             mock.patch.object(registry_release, "run_checked") as dispatch,
+            mock.patch.object(
+                registry_release,
+                "wait_for_dispatched_run",
+                return_value={
+                    "id": 42,
+                    "html_url": "https://github.com/registrystack/registry-stack/actions/runs/42",
+                },
+            ),
+            redirect_stdout(io.StringIO()) as output,
         ):
             accepted = registry_release.request_release_candidate(
                 ROOT,
@@ -90,6 +99,11 @@ class RegistryReleaseTest(TestCase):
 
         self.assertEqual(0, accepted)
         dispatch.assert_called_once()
+        self.assertIn("run 42", output.getvalue())
+        request = dispatch.call_args.args[0]
+        self.assertTrue(
+            any(part.startswith("client_payload[request_id]=") for part in request)
+        )
 
         stale_source = "b" * 40
 
@@ -113,6 +127,10 @@ class RegistryReleaseTest(TestCase):
                 side_effect=resolve,
             ),
             mock.patch.object(registry_release, "run_checked") as no_dispatch,
+            mock.patch.object(
+                registry_release,
+                "wait_for_dispatched_run",
+            ) as no_run_lookup,
         ):
             rejected = registry_release.request_release_candidate(
                 ROOT,
@@ -126,6 +144,134 @@ class RegistryReleaseTest(TestCase):
 
         self.assertEqual(1, rejected)
         no_dispatch.assert_not_called()
+        no_run_lookup.assert_not_called()
+
+    def test_candidate_run_lookup_uses_unique_display_title(self) -> None:
+        registry_release = load_registry_release()
+        source = "a" * 40
+        expected = {
+            "id": 123,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/123",
+            "event": "repository_dispatch",
+            "head_sha": source,
+            "display_title": "Release candidate beta-20 v1.2.3 (request)",
+        }
+        with mock.patch.object(
+            registry_release,
+            "workflow_runs",
+            return_value=[
+                {
+                    **expected,
+                    "id": 122,
+                    "display_title": "Release candidate beta-19 v1.2.2 (other)",
+                },
+                expected,
+            ],
+        ):
+            observed = registry_release.wait_for_dispatched_run(
+                "registrystack/registry-stack",
+                source_sha=source,
+                display_title=expected["display_title"],
+                request_id="request",
+            )
+
+        self.assertEqual(expected, observed)
+
+    def test_candidate_request_aborts_if_main_advances_while_waiting_for_ci(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        source = "a" * 40
+        advanced = "b" * 40
+        context = {
+            "repo": ROOT,
+            "selected": {"data": {"stack": {}}},
+        }
+
+        def resolve(_repo: Path, revision: str, _description: str) -> str:
+            if revision == "origin/main" and refresh.call_count > 1:
+                return advanced
+            return source
+
+        with (
+            mock.patch.object(
+                registry_release,
+                "prepare_release_context",
+                return_value=context,
+            ),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                side_effect=[source, advanced],
+            ) as refresh,
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                side_effect=resolve,
+            ),
+            mock.patch.object(
+                registry_release,
+                "wait_for_exact_protected_ci",
+                return_value={
+                    "id": 77,
+                    "html_url": "https://github.com/registrystack/registry-stack/actions/runs/77",
+                },
+            ),
+            mock.patch.object(registry_release, "run_checked") as no_dispatch,
+            mock.patch.object(
+                registry_release,
+                "wait_for_dispatched_run",
+            ) as no_run_lookup,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.request_release_candidate(
+                ROOT,
+                "1.2.3",
+                "beta-20",
+                source,
+                "origin/main",
+                "registrystack/registry-stack",
+                print_request=False,
+                wait_for_ci=True,
+            )
+
+        self.assertEqual(1, result)
+        self.assertEqual(2, refresh.call_count)
+        no_dispatch.assert_not_called()
+        no_run_lookup.assert_not_called()
+        self.assertIn("protected default branch advanced", errors.getvalue())
+
+    def test_wait_for_ci_watches_only_the_exact_source_run(self) -> None:
+        registry_release = load_registry_release()
+        source = "a" * 40
+        active = {
+            "id": 77,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/77",
+            "event": "push",
+            "head_sha": source,
+            "status": "in_progress",
+            "conclusion": None,
+        }
+        passed = {**active, "status": "completed", "conclusion": "success"}
+        with (
+            mock.patch.object(
+                registry_release,
+                "workflow_runs",
+                side_effect=[[active], [passed]],
+            ),
+            mock.patch.object(registry_release, "watch_workflow_run") as watch,
+        ):
+            observed = registry_release.wait_for_exact_protected_ci(
+                "registrystack/registry-stack",
+                source,
+            )
+
+        self.assertEqual(passed, observed)
+        watch.assert_called_once_with(
+            "registrystack/registry-stack",
+            77,
+            "protected-main CI",
+        )
 
     def test_candidate_ancestry_accepts_main_advancement_and_rejects_unreachable_source(
         self,

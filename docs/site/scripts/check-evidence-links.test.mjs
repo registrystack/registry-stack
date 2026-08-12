@@ -334,7 +334,7 @@ test('Pages authenticates an exact release before build and smokes one assembled
   assert.match(workflow, /push:\n\s+branches:\n\s+- main/);
   assert.match(workflow, /Resolve latest published docs release/);
   assert.match(workflow, /registry-stack-\$\{RELEASED_TAG\}-SHA256SUMS\.sigstore\.json/);
-  assert.match(workflow, /DOCS_BASE=\/dev\//);
+  assert.match(workflow, /run: npm run build:dev/);
   assert.match(workflow, /--exclude-docset "\$\{RELEASED_TAG\}"/);
   assert.doesNotMatch(workflow, /--bootstrap|registry-docset-redirect/);
 });

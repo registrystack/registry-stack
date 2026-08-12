@@ -79,6 +79,23 @@ or release-tool implementation changes into this PR. Merge after the protected
 checks pass. The merge commit is both the candidate source and future tag
 target. There is no finalization or closeout PR.
 
+Before opening the release PR, push the prepared branch and run the read-only
+Ubuntu rehearsal from that branch:
+
+```sh
+gh workflow run release-rehearsal.yml \
+  --repo registrystack/registry-stack \
+  --ref "$(git branch --show-current)" \
+  -f version=<version> \
+  -f release_id=<release-id>
+```
+
+The rehearsal requires the future tag to remain absent. It validates the
+prepared plan, current manifest and source model, reproduces the exact archive
+lock on Ubuntu, exercises unpublished-tag archive bootstrap, and checks the
+production-shaped `/dev/` documentation links. It publishes nothing and stays
+outside the release clock.
+
 Starting with version `0.19.1`, the release manifest records the committed
 identifier catalog path, SHA-256 digest, and active entry count. The planner
 checks that binding against the source tree. Live resolver availability remains
@@ -98,8 +115,15 @@ source_sha="$(git rev-parse origin/main)"
 release/scripts/registry-release request-candidate \
   --version <version> \
   --release-id <release-id> \
-  --source-sha "${source_sha}"
+  --source-sha "${source_sha}" \
+  --wait-for-ci \
+  --wait
 ```
+
+The command prints the exact candidate run ID and URL immediately after the
+dispatch is correlated. `--wait-for-ci` waits only for protected-main `ci.yml`
+at the exact source SHA. `--wait` then follows only that candidate run. Omit
+either flag when another operator or monitor owns the corresponding wait.
 
 The request is accepted only when `source_sha` is the exact protected-main
 workflow revision and that revision has successful protected-main CI. The
@@ -174,6 +198,19 @@ The candidate attestation and signed checksum chain are the Beta provenance
 model. Ordinary Beta publication does not generate a second generic SLSA
 provenance asset. Pre-v0.19 release finalizers remain only in their immutable
 historical release tags.
+
+After publication, run the minimum public verifier from a checkout whose
+`origin` is the Registry Stack repository:
+
+```sh
+release/scripts/registry-release verify-public --tag v<version>
+```
+
+It verifies the annotated tag target, latest published non-prerelease state,
+every downloadable asset against GitHub's digest metadata, the exact
+`SHA256SUMS` closure and its protected-main Sigstore identity, the release-body
+manifest binding, every final OCI digest, and one maintained binary version
+smoke. It is read-only and can be rerun independently.
 
 ## Failure handling
 

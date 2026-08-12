@@ -168,12 +168,7 @@ jobs:
 
       - name: Build protected main at /dev/
         working-directory: docs/site
-        run: |
-          set -euo pipefail
-          npm run generate
-          DOCS_DOCSET=latest DOCS_BASE=/dev/ npx astro check
-          DOCS_DOCSET=latest DOCS_BASE=/dev/ npx astro build --outDir dist/dev
-          node scripts/apply-archive-seo.mjs dist/dev
+        run: npm run build:dev
         env:
           DOCS_RELEASED_TAG: ${{ steps.release.outputs.released_tag }}
           PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.PUBLIC_UMAMI_WEBSITE_ID }}

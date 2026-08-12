@@ -391,6 +391,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "Validate request, source, CI, and destinations",
         )
         self.assertIn('[[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]', validation)
+        self.assertIn("github.event.client_payload.request_id", text)
+        self.assertIn('[[ ! "${REQUEST_ID}" =~ ^[0-9a-f]{32}$ ]]', validation)
         self.assertIn("refs/remotes/origin/main", validation)
         self.assertIn("actions/workflows/ci.yml/runs", validation)
         self.assertIn("git ls-remote --exit-code --tags", validation)

@@ -24,7 +24,12 @@ export async function getStaticPaths(): Promise<GetStaticPathsResult> {
 
 export async function GET({ props }: { props: { entry: Awaited<ReturnType<typeof getCollection<'docs'>>>[number] } }) {
   const { entry } = props;
-  const body = buildPageMarkdown(entry.data.title, entry.data.description, entry.body ?? '');
+  const body = buildPageMarkdown(
+    entry.data.title,
+    entry.data.description,
+    entry.body ?? '',
+    import.meta.env.BASE_URL,
+  );
   return new Response(body, {
     headers: { 'content-type': 'text/markdown; charset=utf-8' },
   });

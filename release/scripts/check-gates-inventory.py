@@ -54,6 +54,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Release candidate cleanup workflow change classification",
         '".github/workflows/release-candidate-cleanup.yml",',
     ),
+    (
+        "Release rehearsal workflow change classification",
+        '".github/workflows/release-rehearsal.yml",',
+    ),
     ("actionlint version pin", 'ACTIONLINT_VERSION: "1.7.7"'),
     (
         "actionlint archive checksum",
@@ -167,6 +171,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_release_candidate.py",
     ),
     (
+        "Public release verifier tests",
+        "run: python3 -m unittest release/scripts/test_verify_public_release.py",
+    ),
+    (
         "Release storage preflight tests",
         "run: python3 -m unittest release/scripts/test_check_release_storage.py",
     ),
@@ -177,6 +185,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Release repeatability workflow tests",
         "run: python3 -m unittest release/scripts/test_release_repeatability_workflow.py",
+    ),
+    (
+        "Release rehearsal workflow tests",
+        "run: python3 -m unittest release/scripts/test_release_rehearsal.py",
     ),
     (
         "Release workflow structure tests",
@@ -226,7 +238,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     ("Docs dependency install", "run: npm ci"),
     ("Docs tests", "run: npm test"),
-    ("Docs build check", "run: npm run check"),
+    ("Production-shaped docs build check", "run: npm run check:production"),
 )
 
 RELEASE_SECURITY_POLICY_PATHS = (
@@ -237,9 +249,11 @@ RELEASE_SECURITY_POLICY_PATHS = (
     ".github/workflows/release-canary.yml",
     ".github/workflows/release-repeatability.yml",
     ".github/workflows/release-candidate-cleanup.yml",
+    ".github/workflows/release-rehearsal.yml",
     "release/scripts/release_candidate.py",
     "release/scripts/cleanup-release-candidates.py",
     "release/scripts/verify_latest_published_release.py",
+    "release/scripts/verify_public_release.py",
 )
 
 # The compact v2 release contract is the active release inventory.
@@ -362,6 +376,18 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
+        "Nonpublishing future-tag release rehearsal",
+        ".github/workflows/release-rehearsal.yml",
+        (
+            "workflow_dispatch:",
+            "name: Exercise future-tag release paths on Ubuntu",
+            "runs-on: ubuntu-24.04",
+            "name: Rehearse prepared release without publishing",
+            "release/scripts/rehearse-release",
+            "--base-ref origin/main",
+        ),
+    ),
+    (
         "Latest docs release metadata fails closed",
         "release/scripts/verify_latest_published_release.py",
         (
@@ -376,6 +402,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ".github/workflows/release-candidate.yml",
         (
             "repository_dispatch:\n    types: [release_candidate]",
+            "run-name: Release candidate ${{ github.event.client_payload.release_id }}",
+            "REQUEST_ID: ${{ github.event.client_payload.request_id }}",
             "name: Validate request, source, CI, and destinations",
             "git merge-base --is-ancestor",
             "tag_lookup_status=$?",
