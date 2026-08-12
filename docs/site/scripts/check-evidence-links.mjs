@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import YAML from 'yaml';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptDir = dirname(scriptPath);
@@ -12,6 +14,8 @@ const SAME_REPOSITORY = 'https://github.com/registrystack/registry-stack';
 const SEMVER_TAG =
   /^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const FULL_COMMIT = /^[0-9a-f]{40}$/;
+const RELEASE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const STRICT_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 function parseYamlScalar(value, location) {
   const trimmed = value.trim();
@@ -125,25 +129,57 @@ function gitObjectExists(repoRoot, object, gitCommand) {
   );
 }
 
-export function candidateTagFromValidationOutput(output) {
-  const match = /^validated .+: [A-Za-z0-9][A-Za-z0-9._-]{0,63} (\d+\.\d+\.\d+)\s*$/.exec(
-    output,
-  );
-  return match ? `v${match[1]}` : undefined;
+function compareVersions(left, right) {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return left[index] - right[index];
+    }
+  }
+  return 0;
 }
 
-function currentReleaseCandidateTag(repoRoot) {
-  const validator = resolve(repoRoot, 'release/scripts/registry-release');
-  const result = spawnSync(validator, ['validate-current'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    env: { ...process.env, GIT_NO_LAZY_FETCH: '1' },
-    stdio: 'pipe',
-  });
-  if (result.status !== 0) {
-    return undefined;
+export function currentReleaseCandidateTag(manifestDir) {
+  const candidates = readdirSync(manifestDir)
+    .filter((name) => /^registry-stack-.+[.]yaml$/.test(name))
+    .sort()
+    .map((name) => {
+      const manifest = YAML.parse(readFileSync(resolve(manifestDir, name), 'utf8'));
+      const stack = manifest?.stack;
+      if (!stack || typeof stack !== 'object') {
+        throw new Error(`${name} must contain a stack object`);
+      }
+      const releaseId = stack.release;
+      if (typeof releaseId !== 'string' || !RELEASE_ID.test(releaseId)) {
+        throw new Error(`${name} has an invalid stack.release`);
+      }
+      if (name !== `registry-stack-${releaseId}.yaml`) {
+        throw new Error(`${name} does not match stack.release ${releaseId}`);
+      }
+      const version = stack.version;
+      const match = typeof version === 'string' ? STRICT_VERSION.exec(version) : null;
+      if (!match) {
+        throw new Error(`${name} has an invalid stack.version`);
+      }
+      if (stack.source_repo !== 'registrystack/registry-stack') {
+        throw new Error(`${name} has an invalid stack.source_repo`);
+      }
+      if (stack.source_tag !== `v${version}`) {
+        throw new Error(`${name} stack.source_tag must be v${version}`);
+      }
+      return { name, version, parts: match.slice(1).map(Number) };
+    });
+  if (candidates.length === 0) {
+    throw new Error(`no Registry Stack release manifests found in ${manifestDir}`);
   }
-  return candidateTagFromValidationOutput(result.stdout);
+  candidates.sort((left, right) => compareVersions(left.parts, right.parts));
+  const current = candidates.at(-1);
+  const previous = candidates.at(-2);
+  if (previous && compareVersions(previous.parts, current.parts) === 0) {
+    throw new Error(
+      `version ${current.version} has multiple release manifests: ${previous.name}, ${current.name}`,
+    );
+  }
+  return `v${current.version}`;
 }
 
 function safePathParts(parts) {
@@ -308,7 +344,7 @@ if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   try {
     const repoRoot = resolve(scriptDir, '../../..');
     const sourceRef = sourceRefArgument(process.argv.slice(2));
-    const candidateTag = currentReleaseCandidateTag(repoRoot);
+    const candidateTag = currentReleaseCandidateTag(resolve(repoRoot, 'release/manifests'));
     const result = checkEvidenceLinks({ repoRoot, sourceRef, candidateTag });
     if (result.errors.length > 0) {
       console.error('Evidence link check failed:');
