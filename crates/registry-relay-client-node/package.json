@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/relay-client",
-  "version": "0.20.1",
+  "version": "0.21.0",
   "description": "Node.js binding for the Registry Relay V2 client, via napi-rs.",
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "https://github.com/registrystack/registry-stack" },

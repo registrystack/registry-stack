@@ -71,7 +71,7 @@ test('removes the current Notary docs sources and generated product plumbing', (
   const historicalNotaryDocsets = docsets.docsets.filter(
     (entry) =>
       entry.status === 'archived' &&
-      !['v0.17.0', 'v0.18.0', 'v0.20.0', 'v0.20.1'].includes(entry.id),
+      !['v0.17.0', 'v0.18.0', 'v0.20.0', 'v0.20.1', 'v0.21.0'].includes(entry.id),
   );
   for (const docset of historicalNotaryDocsets) {
     assert.ok(docset.products['registry-notary'], `${docset.id} lost its historical Notary pin`);
@@ -84,6 +84,8 @@ test('removes the current Notary docs sources and generated product plumbing', (
   assert.equal(v020.products['registry-notary'], undefined);
   const v0201 = docsets.docsets.find((entry) => entry.id === 'v0.20.1');
   assert.equal(v0201.products['registry-notary'], undefined);
+  const v021 = docsets.docsets.find((entry) => entry.id === 'v0.21.0');
+  assert.equal(v021.products['registry-notary'], undefined);
   assert.equal(openapiSources.some((source) => source.owner === 'registry-notary'), false);
   assert.equal(projects.some((project) => project.id === 'registry-notary'), false);
   assert.equal(contracts.some((contract) => contract.owner === 'registry-notary'), false);
