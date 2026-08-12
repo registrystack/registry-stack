@@ -166,7 +166,13 @@ plant_acceptance_vocabulary_in_production_code() {
 
 plant_generic_synthetic_vocabulary_in_source_mock() {
   mkdir -p "$1/crates/registry-evidencectl/src/source_mock"
-  printf 'pub const GENERATOR: &str = "birth_date";\n' \
+  printf 'pub const GENERATORS: &[&str] = &["given_name", "family_name", "birth_date"];\n' \
+    >"$1/crates/registry-evidencectl/src/source_mock/generator.rs"
+}
+
+plant_acceptance_vocabulary_in_source_mock() {
+  mkdir -p "$1/crates/registry-evidencectl/src/source_mock"
+  printf 'pub fn adult_status() -> bool {\n    true\n}\n' \
     >"$1/crates/registry-evidencectl/src/source_mock/generator.rs"
 }
 
@@ -238,6 +244,8 @@ run_case 'acceptance vocabulary in production code fails' \
   fail plant_acceptance_vocabulary_in_production_code
 run_case 'generic synthetic vocabulary in the authoring source mock passes' \
   pass plant_generic_synthetic_vocabulary_in_source_mock
+run_case 'acceptance behavior in the authoring source mock fails' \
+  fail plant_acceptance_vocabulary_in_source_mock
 run_case 'acceptance vocabulary in an evidencectl sibling fails' \
   fail plant_acceptance_vocabulary_in_evidencectl_sibling
 run_case 'a source-product name in the authoring source mock fails' \

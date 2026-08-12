@@ -237,12 +237,18 @@ for start, end in spans:
 sys.stdout.write(source[cursor:])
 PY
   cat "$filtered_source" >>"$production_text"
-  # The local source mock is an authoring-only synthetic-data surface. It may
-  # name generic faker and inference concepts, but it remains inside the
-  # source-product sweep above and cannot exempt runtime, adapters, or sibling
-  # evidencectl modules from the domain-neutral vocabulary rule.
+  # The local source mock is allowed only the three generic field phrases that
+  # overlap this acceptance vocabulary and belong to its closed inference
+  # registry. Mask those exact phrases, then sweep every other byte of the
+  # module so assertion-specific behavior cannot hide behind the exception.
   case "$source_file" in
-  "$repository_root/crates/registry-evidencectl/src/source_mock/"*.rs) ;;
+  "$repository_root/crates/registry-evidencectl/src/source_mock/"*.rs)
+    sed -E \
+      -e 's/given[_ -]name/source_mock_person_field/gI' \
+      -e 's/family[_ -]name/source_mock_person_field/gI' \
+      -e 's/birth[_ -]date/source_mock_calendar_field/gI' \
+      "$filtered_source" >>"$vocabulary_source_text"
+    ;;
   *) cat "$filtered_source" >>"$vocabulary_source_text" ;;
   esac
 done
@@ -302,7 +308,7 @@ sweep \
 
 sweep \
   'Evidence production Rust, adopter tooling, or the shipped binding surface contains acceptance-case or jurisdiction-specific vocabulary.' \
-  'adult|age[_ -]?at|residence|licen[cs]e|parentage|legal[_ -]?parent|given_name|family_name|birth_date|national[_ -]?identifier' \
+  'adult|(^|[^[:alnum:]])age[_ -]?at([^[:alnum:]]|$)|residence|licen[cs]e|parentage|legal[_ -]?parent|given_name|family_name|birth_date|national[_ -]?identifier' \
   "$vocabulary_text" \
   "${shipped_binding_surface[@]}"
 

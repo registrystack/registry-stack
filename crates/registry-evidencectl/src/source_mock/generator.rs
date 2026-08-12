@@ -38,7 +38,7 @@ const MAX_DEPTH: usize = 32;
 const MAX_PROPERTIES: usize = 256;
 const MAX_ARRAY_ITEMS: usize = 256;
 const DEFAULT_ARRAY_MAX: usize = 3;
-const MAX_STRING_CHARS: usize = 4096;
+pub(super) const MAX_STRING_CHARS: usize = 4096;
 const DEFAULT_STRING_MAX: usize = 16;
 const MAX_ATTEMPTS: u64 = 16;
 const MAX_GENERATED_NODES: usize = 16 * 1024;
@@ -196,6 +196,7 @@ pub(crate) fn generate(
         counts: GenerationCounts::default(),
         generated_nodes: 0,
         generated_compact_bytes: 0,
+        variation: 0,
     };
     let value = state.generate_node(schema, "", None, None, 0)?;
     if !schema_accepts(schema, &value) {
@@ -324,6 +325,7 @@ struct State<'a, 'context> {
     counts: GenerationCounts,
     generated_nodes: usize,
     generated_compact_bytes: usize,
+    variation: u64,
 }
 
 impl State<'_, '_> {
@@ -541,17 +543,53 @@ impl State<'_, '_> {
         }
         let mut rng = self.rng(pointer, "generic:array-length", 0, None, None);
         let length = rng.random_range(minimum..=maximum);
+        let unique = schema.get("uniqueItems").and_then(Value::as_bool) == Some(true);
         self.charge_bytes(2 + length.saturating_sub(1), pointer)?;
         let mut output = Vec::with_capacity(length);
         for index in 0..length {
             let child_pointer = push_pointer(pointer, &index.to_string());
-            output.push(self.generate_node(
-                items,
-                &child_pointer,
-                property_key,
-                parent_property,
-                depth + 1,
-            )?);
+            let checkpoint = (
+                self.inference.len(),
+                self.counts,
+                self.generated_nodes,
+                self.generated_compact_bytes,
+                self.variation,
+            );
+            let mut selected = None;
+            for attempt in 0..MAX_ATTEMPTS {
+                if attempt > 0 {
+                    self.inference.truncate(checkpoint.0);
+                    self.counts = checkpoint.1;
+                    self.generated_nodes = checkpoint.2;
+                    self.generated_compact_bytes = checkpoint.3;
+                }
+                self.variation = nested_variation(checkpoint.4, attempt);
+                let candidate = self.generate_node(
+                    items,
+                    &child_pointer,
+                    property_key,
+                    parent_property,
+                    depth + 1,
+                );
+                self.variation = checkpoint.4;
+                let candidate = candidate?;
+                if !unique || !output.contains(&candidate) {
+                    selected = Some(candidate);
+                    break;
+                }
+            }
+            let Some(selected) = selected else {
+                self.inference.truncate(checkpoint.0);
+                self.counts = checkpoint.1;
+                self.generated_nodes = checkpoint.2;
+                self.generated_compact_bytes = checkpoint.3;
+                return Err(GenerationError::at(
+                    &child_pointer,
+                    GenerationErrorKind::UnsatisfiedBounds,
+                    "unique array items could not be generated within the retry bound",
+                ));
+            };
+            output.push(selected);
         }
         self.counts.generic += 1;
         Ok(Value::Array(output))
@@ -994,6 +1032,9 @@ impl State<'_, '_> {
         payload.utf8("pointer", pointer);
         payload.utf8("generator", generator);
         payload.unsigned("retry", retry);
+        if self.variation != 0 {
+            payload.unsigned("variation", self.variation);
+        }
         if let Some(as_of) = as_of {
             payload.utf8("as-of", &as_of.format("%Y-%m-%d").to_string());
         }
@@ -1001,6 +1042,16 @@ impl State<'_, '_> {
             payload.digest("dataset", digest);
         }
         ChaCha20Rng::from_seed(domain_separated_sha256(SEED_DOMAIN, &payload.bytes))
+    }
+}
+
+fn nested_variation(parent: u64, attempt: u64) -> u64 {
+    if attempt == 0 {
+        parent
+    } else {
+        parent
+            .saturating_mul(MAX_ATTEMPTS + 1)
+            .saturating_add(attempt)
     }
 }
 
@@ -2008,6 +2059,28 @@ mod tests {
         assert_eq!(object.len(), 2);
         assert!(object.contains_key("z-required"));
         assert!(value_satisfies(&schema, &generated.value));
+    }
+
+    #[test]
+    fn unique_arrays_retry_duplicate_items_deterministically() {
+        let schema = json!({
+            "type": "array",
+            "items": {"type": "boolean"},
+            "minItems": 2,
+            "maxItems": 2,
+            "uniqueItems": true
+        });
+        let paths = BTreeMap::new();
+        let datasets = BTreeMap::new();
+
+        for seed in 0..64 {
+            let mut generation_context = context(&paths, &datasets);
+            generation_context.seed = seed;
+            let generated = generate(&schema, &generation_context).unwrap();
+            let values = generated.value.as_array().unwrap();
+            assert_ne!(values[0], values[1], "seed {seed}");
+            assert!(value_satisfies(&schema, &generated.value), "seed {seed}");
+        }
     }
 
     #[test]

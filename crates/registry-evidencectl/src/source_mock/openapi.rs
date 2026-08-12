@@ -14,7 +14,8 @@ use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
 use super::generator::{
-    self, GeneratedDocument, GenerationContext, PathParameter, ReferenceDataset, GENERATOR_CONTRACT,
+    self, GeneratedDocument, GenerationContext, PathParameter, ReferenceDataset,
+    GENERATOR_CONTRACT, MAX_STRING_CHARS,
 };
 
 pub(super) const DEFAULT_SEED: u64 = 0;
@@ -373,6 +374,26 @@ impl PathParameterSpec {
                 for candidate in candidates {
                     if schema_accepts(&self.schema, &Value::String((*candidate).to_owned()))? {
                         return Ok((*candidate).to_owned());
+                    }
+                }
+                let minimum = self
+                    .schema
+                    .get("minLength")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .unwrap_or(1)
+                    .max(1);
+                let maximum = self
+                    .schema
+                    .get("maxLength")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .unwrap_or(minimum);
+                if minimum <= maximum && minimum <= MAX_STRING_CHARS {
+                    let mut candidate = "mock-1".chars().take(minimum).collect::<String>();
+                    candidate.extend(std::iter::repeat_n('x', minimum - candidate.len()));
+                    if schema_accepts(&self.schema, &Value::String(candidate.clone()))? {
+                        return Ok(candidate);
                     }
                 }
             }
@@ -835,6 +856,61 @@ paths:
         let error = discover(SPEC.as_bytes(), "test", Some(&selected)).unwrap_err();
         let message = format!("{error:#}");
         assert!(!message.contains("secret"), "{message}");
+    }
+
+    #[test]
+    fn string_path_witness_respects_a_declared_minimum_length() {
+        let spec = SPEC
+            .replace(
+                "schema: {type: integer, minimum: 1, maximum: 99}",
+                "schema: {type: string, minLength: 20}",
+            )
+            .replace(
+                "pet_id:\n                    type: integer",
+                "pet_id:\n                    type: string",
+            );
+        let prepared = discover(spec.as_bytes(), "string path witness", None).unwrap();
+        let operation = prepared
+            .operations
+            .iter()
+            .find(|operation| operation.key.path == "/pets/{pet_id}")
+            .unwrap();
+        let witness = operation.witness_parameters().unwrap();
+
+        assert_eq!(witness["pet_id"].chars().count(), 20);
+        assert!(operation.accepts_parameters(&witness));
+    }
+
+    #[test]
+    fn openapi31_ref_annotation_siblings_remain_mockable() {
+        let spec = r#"
+openapi: 3.1.0
+info: {title: Annotated ref, version: 1.0.0}
+paths:
+  /record:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+                description: Local response description
+components:
+  schemas:
+    Record:
+      type: object
+      required: [id]
+      properties:
+        id: {type: integer}
+"#;
+
+        let prepared = discover(spec.as_bytes(), "annotated ref", None).unwrap();
+
+        assert_eq!(prepared.operations.len(), 1);
+        assert_eq!(prepared.operations[0].schema["type"], "object");
+        assert!(prepared.operations[0].schema.get("allOf").is_none());
     }
 
     #[test]

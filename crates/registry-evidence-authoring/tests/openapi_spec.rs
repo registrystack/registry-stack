@@ -250,7 +250,8 @@ fn openapi31_ref_annotations_are_retained_and_constraint_siblings_are_refused() 
         .schema
         .0;
     assert_eq!(schema["description"], "Identifier returned here");
-    assert_eq!(schema["allOf"][0]["type"], "string");
+    assert_eq!(schema["type"], "string");
+    assert!(schema.get("allOf").is_none());
 
     let constrained = Spec::from_value(
         json!({

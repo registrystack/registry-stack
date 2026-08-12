@@ -626,9 +626,10 @@ impl Spec {
     /// Recursively inlines every local `$ref` inside a Schema Object and
     /// normalizes the dialect. Per OpenAPI 3.0 semantics, a schema node
     /// carrying `$ref` has sibling keywords ignored. OpenAPI 3.1 annotation
-    /// siblings are retained around a single-member `allOf`; assertion and
-    /// applicator siblings are refused because flattening them into one object
-    /// could silently change their JSON Schema meaning.
+    /// siblings overlay the resolved Schema Object because they do not change
+    /// which instances it accepts; assertion and applicator siblings are
+    /// refused because flattening them into one object could silently change
+    /// their JSON Schema meaning.
     ///
     /// `pointer` locates `node` inside the response schema so a note can name
     /// where it applies; it is the same extended projection form the flattener
@@ -680,12 +681,22 @@ impl Spec {
             stack.pop();
             let inlined = inlined?;
             if self.dialect == OpenApiDialect::OpenApi31 && !ref_siblings.is_empty() {
-                let mut annotated = serde_json::Map::with_capacity(ref_siblings.len() + 1);
-                annotated.insert("allOf".to_owned(), Value::Array(vec![inlined]));
-                for (key, value) in ref_siblings {
-                    annotated.insert(key.clone(), value.clone());
+                match inlined {
+                    Value::Object(mut annotated) => {
+                        for (key, value) in ref_siblings {
+                            annotated.insert(key.clone(), value.clone());
+                        }
+                        return Ok(Value::Object(annotated));
+                    }
+                    other => {
+                        let mut annotated = serde_json::Map::with_capacity(ref_siblings.len() + 1);
+                        annotated.insert("allOf".to_owned(), Value::Array(vec![other]));
+                        for (key, value) in ref_siblings {
+                            annotated.insert(key.clone(), value.clone());
+                        }
+                        return Ok(Value::Object(annotated));
+                    }
                 }
-                return Ok(Value::Object(annotated));
             }
             return Ok(inlined);
         }
