@@ -145,6 +145,20 @@ class DriftTest(unittest.TestCase):
         self.assertTrue(issubclass(relay.RelayClientError, Exception))
 
     def test_required_and_optional_typed_dict_keys_are_pinned(self):
+        static_authorization = next(
+            node
+            for node in self.tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "StaticAuthorization"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(
+            ast.unparse(static_authorization.value),
+            "TypedDict('StaticAuthorization', {'static': str})",
+        )
+
         private_required = self.stub_classes["_PrivateKeyJwtRequired"]
         self.assertEqual(
             class_members(private_required),
@@ -196,6 +210,42 @@ class DriftTest(unittest.TestCase):
                 for keyword in continuation.keywords
             )
         )
+
+    def test_fixed_response_models_and_method_results_are_typed(self):
+        client = self.classes["RelayClient"]
+        returns = {
+            item.name: ast.unparse(item.returns)
+            for item in client.body
+            if isinstance(item, ast.FunctionDef) and item.returns is not None
+        }
+        self.assertEqual(returns["health"], "CompleteOutcome[ProbeStatus]")
+        self.assertEqual(returns["ready"], "CompleteOutcome[ProbeStatus]")
+        self.assertEqual(returns["service_metadata"], "Outcome[ServiceMetadata]")
+        self.assertEqual(returns["resource"], "Outcome[ResourceEnvelope]")
+        self.assertEqual(returns["read_record"], "Outcome[RecordResponse]")
+        self.assertEqual(returns["lookup"], "Outcome[RecordResponse]")
+
+        fixed_models = {
+            "ServiceMetadata",
+            "ResourceDocument",
+            "ResourceCollection",
+            "ResourceEnvelope",
+            "RegistryRecord",
+            "RecordMetadata",
+            "RecordEnvelope",
+            "RecordCollection",
+            "GeoJsonFeature",
+            "GeoJsonFeatureCollection",
+        }
+        for name in fixed_models:
+            with self.subTest(model=name):
+                model = self.stub_classes[name]
+                self.assertFalse(
+                    any(
+                        isinstance(node, ast.Name) and node.id == "Any"
+                        for node in ast.walk(model)
+                    )
+                )
 
     def test_stub_promises_only_plain_mapping_inputs(self):
         tree = ast.parse(STUB.read_text(encoding="utf-8"))

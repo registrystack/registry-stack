@@ -15,8 +15,16 @@ if result["kind"] == "complete":
     print(result["value"]["name"])
 ```
 
-An optional static bearer is supplied as a string. Private-key JWT uses an
-exactly-one-key wrapper:
+Authentication uses an exactly-one-key wrapper. Supply a static bearer as:
+
+```python
+client = RelayClient(
+    base_url="https://relay.example/prefix",
+    authorization={"static": short_lived_token},
+)
+```
+
+Private-key JWT uses the alternative wrapper member:
 
 ```python
 client = RelayClient(
@@ -40,7 +48,7 @@ The built-in private-key-JWT flow sends only `grant_type`,
 `client_assertion_type`, and `client_assertion`. It does not send `scope`,
 `resource`, a body `client_id`, or deployment-defined form members. When an
 issuer requires any of those fields, acquire a short-lived bearer separately
-and pass it as the static `authorization` string.
+and pass it through `authorization={"static": token}`.
 
 Every method is blocking and releases the Python GIL while the private
 current-thread Tokio runtime waits for I/O. Conditional methods return a plain
@@ -48,6 +56,9 @@ mapping discriminated by `kind`: either `complete` with `value`, `trace_id`,
 and optional `etag`, or `not_modified` with `trace_id` and `etag`. Page results
 also carry a plain `continuation`, which only the matching continuation method
 accepts. Raw OpenAPI, artifact, and SDMX bodies are returned as `bytes`.
+The PEP 561 stub types fixed service, capability, resource, Record envelope,
+page, and outcome structures while keeping deployment-defined `domainData`
+as JSON values.
 
 List and search requests follow their distinct Relay contracts. A list accepts
 optional equality `filters` and never accepts `bbox`. A named search requires a

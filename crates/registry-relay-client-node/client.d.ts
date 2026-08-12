@@ -37,7 +37,7 @@ export interface RelayClientConfig {
   trustedRootCertificates?: string | null
 }
 
-export type RecordFormat = 'json' | 'json-ld' | 'geojson' | 'geo-json-rfc7946' | 'json-fg'
+export type RecordFormat = 'json' | 'json-ld' | 'geojson' | 'json-fg'
 
 export interface ResourceListOptions {
   pageSize?: SafeInteger | null
@@ -99,7 +99,7 @@ export interface SdmxDataRequest {
 }
 
 export interface SdmxStructureRequest {
-  kind: 'dataflow' | 'datastructure' | 'data-structure'
+  kind: 'dataflow' | 'datastructure'
   agency: string
   resource: string
   /** A three-part `x.y.z` SDMX version. */
@@ -115,16 +115,105 @@ export interface Institution {
   name: string
 }
 
+export interface Product {
+  name: string
+  version: string
+}
+
+export interface ApiBinding {
+  name: string
+  version: string
+}
+
+export interface AlignmentTarget {
+  name: string
+  version: string
+  status: string
+  cfrTarget?: string
+}
+
+export interface FormatProfileCapability {
+  id: string
+  uri: string
+  crs: string
+  conformsTo: ReadonlyArray<string>
+}
+
+export interface WireFormatCapability {
+  id: string
+  mediaType: string
+  formatProfiles: ReadonlyArray<FormatProfileCapability>
+}
+
+export interface BboxCapability {
+  crs: string
+  predicate: string
+  maximumLongitudeSpanDegrees: number
+  maximumLatitudeSpanDegrees: number
+}
+
+export interface SpatialQueryCapability {
+  bbox: BboxCapability
+}
+
+export interface ConsultationCapability {
+  family: 'consultation'
+  pattern: string
+  resourceIdentifier: string
+  operationIdentifier: string
+  accessProfileIdentifier: string
+  isDefault: boolean
+  disclosureProfile: string
+  schemaReference: string
+  semanticModelReference: string
+  contextReference: string
+  href: string
+  wireFormats: ReadonlyArray<WireFormatCapability>
+  spatialQuery?: SpatialQueryCapability
+  classificationReference?: string
+  processingReference?: string
+}
+
+export interface SdmxProfile {
+  sdmxRestVersion: string
+  sdmxDataJsonVersion: string
+  sdmxDataCsvVersion: string
+  sdmxStructureJsonVersion: string
+}
+
+export interface SdmxWireFormat {
+  id: string
+  mediaType: string
+}
+
+export interface SdmxStructureLinks {
+  dataflow: string
+  datastructure: string
+}
+
+export interface AggregateDataCapability {
+  family: 'aggregate-data'
+  pattern: string
+  statisticalDatasetIdentifier: string
+  operationIdentifier: string
+  profile: SdmxProfile
+  wireFormats: ReadonlyArray<SdmxWireFormat>
+  href: string
+  structureLinks: SdmxStructureLinks
+}
+
+export type Capability = ConsultationCapability | AggregateDataCapability
+
 export interface ServiceMetadata {
   registryIdentifier: string
   name: string
   authority: Institution
   operator: Institution | null
   authoritativeScope: string
-  product: { name: string; version: string }
-  apiBinding: { name: string; version: string }
-  alignmentTargets: ReadonlyArray<JsonValue>
-  capabilities: ReadonlyArray<JsonValue>
+  product: Product
+  apiBinding: ApiBinding
+  alignmentTargets: ReadonlyArray<AlignmentTarget>
+  capabilities: ReadonlyArray<Capability>
   links: { self: string; resources: string; openapi: string }
 }
 
@@ -134,19 +223,27 @@ export interface ResourceDocument {
   description: string
   semanticClass: string
   enumerationPosture: string
-  capabilities: ReadonlyArray<JsonValue>
+  capabilities: ReadonlyArray<Capability>
   links: { self: string }
+}
+
+export interface CursorPageInfo {
+  nextCursor: string | null
+}
+
+export interface RegistryMetadata {
+  registryIdentifier: string
 }
 
 export interface ResourceCollection {
   items: ReadonlyArray<ResourceDocument>
-  pageInfo: { nextCursor: string | null }
-  meta: { registryIdentifier: string }
+  pageInfo: CursorPageInfo
+  meta: RegistryMetadata
 }
 
 export interface ResourceEnvelope {
   data: ResourceDocument
-  meta: { registryIdentifier: string }
+  meta: RegistryMetadata
 }
 
 export interface RegistryRecord {
@@ -163,8 +260,67 @@ export interface RegistryRecord {
   '@type'?: string
 }
 
-export type RecordResponse = JsonValue
-export type RecordCollectionResponse = JsonValue
+export interface SourceRevision {
+  profile: string
+  status: string
+  value: string | null
+}
+
+export interface RecordLinks {
+  self: string
+  context: string
+  schema: string
+  semanticModel: string
+}
+
+export interface RecordMetadata {
+  operationIdentifier: string
+  accessProfile: string
+  family: string
+  pattern: string
+  disclosureProfile: string
+  contractRevision: string
+  sourceRevision: SourceRevision
+  selectedFields: ReadonlyArray<string>
+  links: RecordLinks
+}
+
+export interface RecordEnvelope {
+  data: RegistryRecord
+  meta: RecordMetadata
+  '@context'?: string
+}
+
+export interface RecordCollection {
+  items: ReadonlyArray<RegistryRecord>
+  pageInfo: CursorPageInfo
+  meta: RecordMetadata
+  '@context'?: string
+}
+
+export interface GeoJsonFeature {
+  type: string
+  id: string
+  geometry: JsonValue
+  properties: RegistryRecord
+  meta?: RecordMetadata
+  conformsTo?: ReadonlyArray<string>
+  featureType?: string
+  coordRefSys?: string
+}
+
+export interface GeoJsonFeatureCollection {
+  type: string
+  features: ReadonlyArray<GeoJsonFeature>
+  pageInfo: CursorPageInfo
+  meta: RecordMetadata
+  conformsTo?: ReadonlyArray<string>
+  featureType?: string
+  coordRefSys?: string
+}
+
+export type RecordResponse = RecordEnvelope | GeoJsonFeature
+export type RecordCollectionResponse = RecordCollection | GeoJsonFeatureCollection
 
 export interface CompleteOutcome<T> {
   kind: 'complete'

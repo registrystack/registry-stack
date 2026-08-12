@@ -465,22 +465,28 @@ fn authorization_provider(
 ) -> Result<Option<Arc<dyn TokenProvider>>, ConfigError> {
     match authorization {
         Value::Null => Ok(None),
-        Value::String(value) => Ok(Some(Arc::new(
-            StaticToken::new(value).map_err(ConfigError::Token)?,
-        ))),
         Value::Object(value) if value.len() == 1 => {
-            let value = value.get("private_key_jwt").ok_or_else(|| {
-                ConversionError::new(
-                    "authorization must be a string or an object with exactly private_key_jwt",
-                )
-            })?;
-            Ok(Some(Arc::new(private_key_jwt(
-                value,
-                private_key_jwt_trusted_root_certificates,
-            )?)))
+            if let Some(value) = value.get("static") {
+                let value = value.as_str().ok_or_else(|| {
+                    ConversionError::new("authorization[\"static\"] must be a string")
+                })?;
+                return Ok(Some(Arc::new(
+                    StaticToken::new(value).map_err(ConfigError::Token)?,
+                )));
+            }
+            if let Some(value) = value.get("private_key_jwt") {
+                return Ok(Some(Arc::new(private_key_jwt(
+                    value,
+                    private_key_jwt_trusted_root_certificates,
+                )?)));
+            }
+            Err(ConversionError::new(
+                "authorization must contain exactly static or private_key_jwt",
+            )
+            .into())
         }
         _ => Err(ConversionError::new(
-            "authorization must be null, a static string, or an object with exactly private_key_jwt",
+            "authorization must be null or an object containing exactly static or private_key_jwt",
         )
         .into()),
     }
@@ -668,7 +674,7 @@ mod tests {
         let token = "canary-static-token";
         let config = config_from_parts(
             "http://127.0.0.1:8080/prefix",
-            &Value::String(token.to_owned()),
+            &serde_json::json!({"static": token}),
             None,
             None,
             None,
@@ -695,5 +701,38 @@ mod tests {
         .unwrap_err();
         assert!(matches!(error, ConfigError::Shape(_)));
         assert!(!format!("{error:?}").contains("canary"));
+    }
+
+    #[test]
+    fn static_authorization_uses_the_same_exactly_one_member_shape_as_node() {
+        config_from_parts(
+            "http://127.0.0.1:8080",
+            &serde_json::json!({"static": "placeholder-token"}),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("the closed static authorization shape is accepted");
+
+        for authorization in [
+            serde_json::json!("placeholder-token"),
+            serde_json::json!({"static": "placeholder-token", "private_key_jwt": {}}),
+            serde_json::json!({"bearer": "placeholder-token"}),
+        ] {
+            assert!(config_from_parts(
+                "http://127.0.0.1:8080",
+                &authorization,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .is_err());
+        }
     }
 }
