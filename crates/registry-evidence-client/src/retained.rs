@@ -312,7 +312,9 @@ mod tests {
             }],
             holder_keys: Vec::new(),
             expected_outputs: vec![ExpectedOutputDocument {
+                handle: "status-holds".to_owned(),
                 concept: CONCEPT.to_owned(),
+                required: true,
                 form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
             }],
             maximum_assertion_lifetime_seconds: MAXIMUM_LIFETIME_SECONDS,

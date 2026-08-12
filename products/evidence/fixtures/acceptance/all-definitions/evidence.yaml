@@ -2,6 +2,7 @@ version: 1
 assuranceProfile: evidence-grade
 service:
   providerId: urn:example:fixture:provider:evidence
+  publicOrigin: https://evidence.invalid
   trustDomain: urn:example:fixture:trust-domain:acceptance
 issuer: {id: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
@@ -205,7 +206,8 @@ authorityProfiles:
               person_reference: grant.candidate_parent.person_reference
 
 requirements:
-  - id: urn:example:fixture:requirement:adult-status:v1
+  - handle: adult-status
+    id: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
     acquisition:
       kind: single
@@ -221,12 +223,13 @@ requirements:
       script: derivations/adult-status.rhai
       parameters: {minimum_age_years: 18}
     concepts:
-      - {id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}
+      - {handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}
     fixtures: fixtures/adult-status-cases.yaml
     disclosureGuard:
       families: [urn:example:fixture:disclosure-family:adult-status]
     existenceDisclosure: collapse-unresolved
-  - id: urn:example:fixture:requirement:residence-region:v1
+  - handle: residence-region
+    id: urn:example:fixture:requirement:residence-region:v1
     kind: information-requirement
     acquisition:
       kind: single
@@ -241,7 +244,8 @@ requirements:
       script: derivations/residence-region.rhai
       parameters: {}
     concepts:
-      - id: urn:example:fixture:concept:residence-region
+      - handle: region
+        id: urn:example:fixture:concept:residence-region
         form: controlled-code
         required: true
         constraints: {codelist: codelists/residence-region-map.yaml, codelistVersion: '2026-01', maximumBytes: 32}
@@ -249,7 +253,8 @@ requirements:
     disclosureGuard:
       families: [urn:example:fixture:disclosure-family:residence-region]
     existenceDisclosure: collapse-unresolved
-  - id: urn:example:fixture:requirement:professional-licence-status:v1
+  - handle: professional-licence-status
+    id: urn:example:fixture:requirement:professional-licence-status:v1
     kind: criterion
     acquisition:
       kind: single
@@ -271,8 +276,9 @@ requirements:
           - {minimumInclusive: {type: decimal, value: '31'}, maximumExclusive: {type: decimal, value: '91'}, code: within-90-days}
           - {minimumInclusive: {type: decimal, value: '91'}, maximumExclusive: {type: decimal, value: '365001'}, code: later}
     concepts:
-      - {id: urn:example:fixture:concept:licence-active, form: boolean, required: true, constraints: {}}
-      - id: urn:example:fixture:concept:licence-expiry-category
+      - {handle: licence-active, id: urn:example:fixture:concept:licence-active, form: boolean, required: true, constraints: {}}
+      - handle: licence-expiry-category
+        id: urn:example:fixture:concept:licence-expiry-category
         form: controlled-category
         required: true
         constraints: {categoryScheme: urn:example:fixture:scheme:licence-expiry, schemeVersion: '1', maximumBytes: 32, codelist: codelists/professional-expiry-categories.yaml}
@@ -280,7 +286,8 @@ requirements:
     disclosureGuard:
       families: [urn:example:fixture:disclosure-family:professional-licence]
     existenceDisclosure: collapse-unresolved
-  - id: urn:example:fixture:requirement:legal-parent-relationship:v1
+  - handle: legal-parent-relationship
+    id: urn:example:fixture:requirement:legal-parent-relationship:v1
     kind: criterion
     acquisition:
       kind: single
@@ -305,7 +312,7 @@ requirements:
         relationship_set_contract: urn:example:fixture:legal-parent-set:v1
         legal_authority_attestation: urn:example:fixture:governance:legal-parent-register:v1
     concepts:
-      - {id: urn:example:fixture:concept:legal-parent-relationship-confirmed, form: boolean, required: true, constraints: {}}
+      - {handle: relationship-confirmed, id: urn:example:fixture:concept:legal-parent-relationship-confirmed, form: boolean, required: true, constraints: {}}
     fixtures: fixtures/legal-parent-relationship-cases.yaml
     disclosureGuard:
       families: [urn:example:fixture:disclosure-family:legal-parent-relationship]

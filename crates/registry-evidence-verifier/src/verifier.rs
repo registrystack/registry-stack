@@ -154,7 +154,8 @@ pub struct EvidenceVerificationPolicy {
     /// Expected role-bound opaque subject bindings as an unordered set of
     /// unique pairs. Subject order alone is never semantic.
     pub expected_subjects: Vec<ExpectedSubject>,
-    /// Expected concept identifiers, value forms, and cardinalities.
+    /// Stable concept handles, identifiers, requiredness, value forms,
+    /// cardinalities, and collection uniqueness.
     pub expected_outputs: Vec<ExpectedOutput>,
     /// Service key thumbprints that fail closed even if present in a stale or
     /// otherwise trusted JWKS document.
@@ -359,7 +360,9 @@ impl HolderBoundPresentationPolicyDocument {
                 .into_iter()
                 .map(|output| {
                     Ok(ExpectedOutput {
+                        handle: output.handle,
                         concept: output.concept,
+                        required: output.required,
                         form: expected_value_form_document(output.form)?,
                     })
                 })
@@ -436,11 +439,48 @@ impl std::fmt::Debug for ExpectedSubjectDocument {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExpectedOutputDocument {
+    /// Stable client-facing handle for this concept. It is not copied into
+    /// Evidence; relying-party results use it as their application-facing key.
+    pub handle: String,
     pub concept: String,
+    /// Whether a conforming assertion must disclose this output. Optional
+    /// outputs remain closed: when present they still have to match this exact
+    /// concept and form.
+    pub required: bool,
     pub form: ExpectedFormDocument,
+}
+
+impl<'de> Deserialize<'de> for ExpectedOutputDocument {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            #[serde(default)]
+            handle: Option<String>,
+            concept: String,
+            #[serde(default = "required_by_default")]
+            required: bool,
+            form: ExpectedFormDocument,
+        }
+        const fn required_by_default() -> bool {
+            true
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            handle: wire
+                .handle
+                .unwrap_or_else(|| stable_legacy_output_handle(&wire.concept)),
+            concept: wire.concept,
+            required: wire.required,
+            form: wire.form,
+        })
+    }
 }
 
 /// The closed expected value-form vocabulary as written in a policy document.
@@ -475,10 +515,22 @@ pub struct ExpectedListFormDocument {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExpectedListDocument {
+    pub items: ExpectedListItemFormDocument,
     #[serde(deserialize_with = "read_minimum_items")]
     pub minimum_items: usize,
     #[serde(deserialize_with = "read_maximum_items")]
     pub maximum_items: usize,
+    pub unique: bool,
+}
+
+/// The two item forms the Evidence payload contract permits inside a list.
+/// Carrying this in policy prevents one collection form from satisfying the
+/// other merely because both serialize as JSON arrays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExpectedListItemFormDocument {
+    String,
+    EntityReference,
 }
 
 fn read_minimum_items<'de, D>(deserializer: D) -> Result<usize, D::Error>
@@ -533,7 +585,9 @@ impl EvidenceVerificationPolicyDocument {
                 .into_iter()
                 .map(|output| {
                     Ok(ExpectedOutput {
+                        handle: output.handle,
                         concept: output.concept,
+                        required: output.required,
                         form: expected_value_form_document(output.form)?,
                     })
                 })
@@ -572,8 +626,15 @@ fn expected_value_form_document(
             ExpectedValueForm::Structured
         }
         ExpectedFormDocument::List(wrapper) => ExpectedValueForm::List {
+            item_form: match wrapper.list.items {
+                ExpectedListItemFormDocument::String => ExpectedListItemForm::String,
+                ExpectedListItemFormDocument::EntityReference => {
+                    ExpectedListItemForm::EntityReference
+                }
+            },
             minimum_items: checked_minimum_items(wrapper.list.minimum_items)?,
             maximum_items: checked_maximum_items(wrapper.list.maximum_items)?,
+            unique: wrapper.list.unique,
         },
     })
 }
@@ -663,7 +724,9 @@ impl EvidenceVerificationPolicy {
                 .supported_values
                 .iter()
                 .map(|value| ExpectedOutput {
+                    handle: stable_legacy_output_handle(&value.provides_value_for),
                     concept: value.provides_value_for.clone(),
+                    required: true,
                     form: expected_form_of(&value.value),
                 })
                 .collect(),
@@ -673,6 +736,19 @@ impl EvidenceVerificationPolicy {
             clock_skew,
         })
     }
+}
+
+/// A stored Version 1 assertion predates public concept handles. Give that
+/// legacy re-verification path a deterministic, syntax-valid handle derived
+/// only from the already-trusted concept identifier. Fresh procedures use the
+/// published handle instead.
+fn stable_legacy_output_handle(concept: &str) -> String {
+    let digest = Sha256::digest(concept.as_bytes());
+    let encoded = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("concept-{encoded}")
 }
 
 fn expected_form_of(value: &crate::model::PublicValue) -> ExpectedValueForm {
@@ -691,8 +767,19 @@ fn expected_form_of(value: &crate::model::PublicValue) -> ExpectedValueForm {
         PublicValue::EntityReference(_) => ExpectedValueForm::EntityReference,
         PublicValue::Structured(_) => ExpectedValueForm::Structured,
         PublicValue::List(items) => ExpectedValueForm::List {
+            item_form: items
+                .first()
+                .map_or(ExpectedListItemForm::String, |item| match item {
+                    crate::model::ScalarOrEntityReference::String(_) => {
+                        ExpectedListItemForm::String
+                    }
+                    crate::model::ScalarOrEntityReference::EntityReference(_) => {
+                        ExpectedListItemForm::EntityReference
+                    }
+                }),
             minimum_items: items.len(),
             maximum_items: items.len(),
+            unique: true,
         },
     }
 }
@@ -716,8 +803,16 @@ impl std::fmt::Debug for ExpectedSubject {
 
 #[derive(Debug, Clone)]
 pub struct ExpectedOutput {
+    pub handle: String,
     pub concept: String,
+    pub required: bool,
     pub form: ExpectedValueForm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectedListItemForm {
+    String,
+    EntityReference,
 }
 
 /// Closed expected form for one disclosed Supported Value.
@@ -731,8 +826,10 @@ pub enum ExpectedValueForm {
     EntityReference,
     Structured,
     List {
+        item_form: ExpectedListItemForm,
         minimum_items: usize,
         maximum_items: usize,
+        unique: bool,
     },
 }
 
@@ -1572,19 +1669,25 @@ fn validate_expected_subjects(
     Ok(())
 }
 
-/// Compare the expected concept identifiers, value forms, and cardinalities.
+const MAXIMUM_EXPECTED_OUTPUTS: usize = 16;
+const MAXIMUM_OUTPUT_HANDLE_BYTES: usize = 128;
+
+/// Compare the closed expected concept set, requiredness, value forms,
+/// cardinalities, and collection uniqueness.
 fn validate_expected_outputs(
     evidence: &Evidence,
     expected: &[ExpectedOutput],
 ) -> Result<(), VerificationError> {
-    if expected.is_empty() || evidence.supported_values.len() != expected.len() {
+    if expected.is_empty() || expected.len() > MAXIMUM_EXPECTED_OUTPUTS {
         return Err(VerificationError::Policy);
     }
     let mut concepts = BTreeMap::new();
+    let mut handles = BTreeSet::new();
     for output in expected {
-        if concepts
-            .insert(output.concept.as_str(), &output.form)
-            .is_some()
+        if !output_handle_is_valid(&output.handle)
+            || !handles.insert(output.handle.as_str())
+            || concepts.insert(output.concept.as_str(), output).is_some()
+            || !expected_form_is_valid(&output.form)
         {
             return Err(VerificationError::Policy);
         }
@@ -1592,14 +1695,49 @@ fn validate_expected_outputs(
     let mut seen = std::collections::BTreeSet::new();
     for value in &evidence.supported_values {
         let concept = value.provides_value_for.as_str();
-        let Some(form) = concepts.get(concept) else {
+        let Some(output) = concepts.get(concept) else {
             return Err(VerificationError::Policy);
         };
-        if !seen.insert(concept) || !value_matches_form(&value.value, form) {
+        if !seen.insert(concept) || !value_matches_form(&value.value, &output.form) {
             return Err(VerificationError::Policy);
         }
     }
+    if expected
+        .iter()
+        .any(|output| output.required && !seen.contains(output.concept.as_str()))
+    {
+        return Err(VerificationError::Policy);
+    }
     Ok(())
+}
+
+fn output_handle_is_valid(handle: &str) -> bool {
+    let bytes = handle.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= MAXIMUM_OUTPUT_HANDLE_BYTES
+        && bytes[0].is_ascii_lowercase()
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn expected_form_is_valid(form: &ExpectedValueForm) -> bool {
+    match form {
+        ExpectedValueForm::List {
+            minimum_items,
+            maximum_items,
+            unique,
+            ..
+        } => {
+            *unique
+                && (MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS)
+                    .contains(minimum_items)
+                && (MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS)
+                    .contains(maximum_items)
+                && minimum_items <= maximum_items
+        }
+        _ => true,
+    }
 }
 
 fn value_matches_form(value: &crate::model::PublicValue, form: &ExpectedValueForm) -> bool {
@@ -1619,10 +1757,32 @@ fn value_matches_form(value: &crate::model::PublicValue, form: &ExpectedValueFor
         (
             PublicValue::List(items),
             ExpectedValueForm::List {
+                item_form,
                 minimum_items,
                 maximum_items,
+                unique,
             },
-        ) => items.len() >= *minimum_items && items.len() <= *maximum_items,
+        ) => {
+            items.len() >= *minimum_items
+                && items.len() <= *maximum_items
+                && items.iter().all(|item| {
+                    matches!(
+                        (item, item_form),
+                        (
+                            crate::model::ScalarOrEntityReference::String(_),
+                            ExpectedListItemForm::String
+                        ) | (
+                            crate::model::ScalarOrEntityReference::EntityReference(_),
+                            ExpectedListItemForm::EntityReference
+                        )
+                    )
+                })
+                && (!*unique
+                    || !items
+                        .iter()
+                        .enumerate()
+                        .any(|(index, item)| items[..index].iter().any(|earlier| earlier == item)))
+        }
         _ => false,
     }
 }
@@ -2603,11 +2763,15 @@ mod tests {
     ) -> EvidenceVerificationPolicyDocument {
         let mut document = policy_document_with_time_bounds(48 * 60 * 60, 30);
         document.expected_outputs.push(ExpectedOutputDocument {
+            handle: "concept".to_string(),
             concept: "urn:example:concept".to_string(),
+            required: true,
             form: ExpectedFormDocument::List(ExpectedListFormDocument {
                 list: ExpectedListDocument {
+                    items: ExpectedListItemFormDocument::String,
                     minimum_items,
                     maximum_items,
+                    unique: true,
                 },
             }),
         });
@@ -2850,12 +3014,16 @@ mod tests {
         missing.expected_outputs.clear();
         let mut extra = policy.clone();
         extra.expected_outputs.push(ExpectedOutput {
+            handle: "other-concept".to_string(),
             concept: "urn:example:other-concept".to_string(),
+            required: true,
             form: ExpectedValueForm::Boolean,
         });
         let mut duplicated = policy.clone();
         duplicated.expected_outputs.push(ExpectedOutput {
+            handle: "duplicated-concept".to_string(),
             concept: policy.expected_outputs[0].concept.clone(),
+            required: true,
             form: ExpectedValueForm::Boolean,
         });
         let mut wrong_concept = policy.clone();
@@ -2864,8 +3032,10 @@ mod tests {
         wrong_form.expected_outputs[0].form = ExpectedValueForm::String;
         let mut wrong_cardinality = policy.clone();
         wrong_cardinality.expected_outputs[0].form = ExpectedValueForm::List {
+            item_form: ExpectedListItemForm::String,
             minimum_items: 2,
             maximum_items: 4,
+            unique: true,
         };
         for broken in [
             missing,
@@ -2880,6 +3050,233 @@ mod tests {
                 Err(VerificationError::Policy)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn optional_output_may_be_absent_but_a_required_output_must_appear() {
+        let (jws, jwks, policy) = signed_fixture().await;
+        let optional = ExpectedOutput {
+            handle: "optional-status".to_string(),
+            concept: "urn:example:optional-status".to_string(),
+            required: false,
+            form: ExpectedValueForm::String,
+        };
+
+        let mut with_optional = policy.clone();
+        with_optional.expected_outputs.push(optional.clone());
+        verify_flattened_jws(&jws, &jwks, &with_optional)
+            .expect("an absent optional output preserves policy conformance");
+
+        let mut with_missing_required = policy;
+        with_missing_required.expected_outputs.push(ExpectedOutput {
+            required: true,
+            ..optional
+        });
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &with_missing_required),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_optional_output_that_is_present_remains_closed() {
+        let mut evidence = fixture_evidence();
+        evidence.supported_values.push(SupportedValue {
+            provides_value_for: "urn:example:optional-status".to_string(),
+            value: PublicValue::String("available".to_string()),
+        });
+        let (jws, jwks, mut policy) = signed_evidence(
+            evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        )
+        .await;
+        policy.expected_outputs[1].handle = "optional-status".to_string();
+        policy.expected_outputs[1].required = false;
+        verify_flattened_jws(&jws, &jwks, &policy)
+            .expect("a present optional output with its declared form verifies");
+
+        policy.expected_outputs[1].form = ExpectedValueForm::Boolean;
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &policy),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_and_duplicate_actual_outputs_fail_closed() {
+        let mut unknown_evidence = fixture_evidence();
+        unknown_evidence.supported_values.push(SupportedValue {
+            provides_value_for: "urn:example:undeclared".to_string(),
+            value: PublicValue::String("not-in-policy".to_string()),
+        });
+        let (unknown_jws, unknown_jwks, mut unknown_policy) = signed_evidence(
+            unknown_evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        )
+        .await;
+        unknown_policy.expected_outputs.pop();
+        assert_eq!(
+            verify_flattened_jws(&unknown_jws, &unknown_jwks, &unknown_policy),
+            Err(VerificationError::Policy)
+        );
+
+        let mut duplicate_evidence = fixture_evidence();
+        duplicate_evidence
+            .supported_values
+            .push(duplicate_evidence.supported_values[0].clone());
+        let (duplicate_jws, duplicate_jwks, mut duplicate_policy) = signed_evidence(
+            duplicate_evidence,
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        )
+        .await;
+        duplicate_policy.expected_outputs.truncate(1);
+        assert_eq!(
+            verify_flattened_jws(&duplicate_jws, &duplicate_jwks, &duplicate_policy),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn list_outputs_close_item_form_bounds_and_uniqueness() {
+        use crate::model::ScalarOrEntityReference;
+
+        let list_evidence = |items: &[&str]| {
+            let mut evidence = fixture_evidence();
+            evidence.supported_values[0].value = PublicValue::List(
+                items
+                    .iter()
+                    .map(|item| ScalarOrEntityReference::String((*item).to_string()))
+                    .collect(),
+            );
+            evidence
+        };
+
+        let (jws, jwks, mut policy) = signed_evidence(
+            list_evidence(&["alpha", "beta"]),
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        )
+        .await;
+        policy.expected_outputs[0].form = ExpectedValueForm::List {
+            item_form: ExpectedListItemForm::String,
+            minimum_items: 1,
+            maximum_items: 3,
+            unique: true,
+        };
+        verify_flattened_jws(&jws, &jwks, &policy)
+            .expect("a unique string list inside the declared bounds verifies");
+
+        let mut below_minimum = policy.clone();
+        below_minimum.expected_outputs[0].form = ExpectedValueForm::List {
+            item_form: ExpectedListItemForm::String,
+            minimum_items: 3,
+            maximum_items: 4,
+            unique: true,
+        };
+        let mut above_maximum = policy.clone();
+        above_maximum.expected_outputs[0].form = ExpectedValueForm::List {
+            item_form: ExpectedListItemForm::String,
+            minimum_items: 1,
+            maximum_items: 1,
+            unique: true,
+        };
+        let mut wrong_item_form = policy.clone();
+        wrong_item_form.expected_outputs[0].form = ExpectedValueForm::List {
+            item_form: ExpectedListItemForm::EntityReference,
+            minimum_items: 1,
+            maximum_items: 3,
+            unique: true,
+        };
+        let mut uniqueness_disabled = policy.clone();
+        uniqueness_disabled.expected_outputs[0].form = ExpectedValueForm::List {
+            item_form: ExpectedListItemForm::String,
+            minimum_items: 1,
+            maximum_items: 3,
+            unique: false,
+        };
+        for broken in [
+            below_minimum,
+            above_maximum,
+            wrong_item_form,
+            uniqueness_disabled,
+        ] {
+            assert_eq!(
+                verify_flattened_jws(&jws, &jwks, &broken),
+                Err(VerificationError::Policy)
+            );
+        }
+
+        let (duplicate_jws, duplicate_jwks, duplicate_policy) = signed_evidence(
+            list_evidence(&["alpha", "alpha"]),
+            "2026-08-02T12:00:00Z".parse().expect("time parses"),
+        )
+        .await;
+        assert_eq!(
+            verify_flattened_jws(&duplicate_jws, &duplicate_jwks, &duplicate_policy),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn output_handles_are_closed_and_unique() {
+        let (jws, jwks, policy) = signed_fixture().await;
+
+        let mut invalid = policy.clone();
+        invalid.expected_outputs[0].handle = "Uppercase".to_string();
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &invalid),
+            Err(VerificationError::Policy)
+        );
+
+        let mut duplicate = policy;
+        duplicate.expected_outputs.push(ExpectedOutput {
+            handle: duplicate.expected_outputs[0].handle.clone(),
+            concept: "urn:example:optional-status".to_string(),
+            required: false,
+            form: ExpectedValueForm::String,
+        });
+        assert_eq!(
+            verify_flattened_jws(&jws, &jwks, &duplicate),
+            Err(VerificationError::Policy)
+        );
+    }
+
+    #[test]
+    fn output_policy_document_serializes_the_complete_closed_shape() {
+        let output = ExpectedOutputDocument {
+            handle: "status-codes".to_string(),
+            concept: "urn:example:status-codes".to_string(),
+            required: false,
+            form: ExpectedFormDocument::List(ExpectedListFormDocument {
+                list: ExpectedListDocument {
+                    items: ExpectedListItemFormDocument::String,
+                    minimum_items: 1,
+                    maximum_items: 3,
+                    unique: true,
+                },
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(&output).expect("output serializes"),
+            json!({
+                "handle": "status-codes",
+                "concept": "urn:example:status-codes",
+                "required": false,
+                "form": {"list": {
+                    "items": "string",
+                    "minimumItems": 1,
+                    "maximumItems": 3,
+                    "unique": true
+                }}
+            })
+        );
+
+        let mut widened = serde_json::to_value(output).expect("output serializes");
+        widened
+            .as_object_mut()
+            .expect("output is an object")
+            .insert("selector".to_string(), json!("must-not-be-published"));
+        serde_json::from_value::<ExpectedOutputDocument>(widened)
+            .expect_err("the output policy document accepted an unknown field");
     }
 
     #[tokio::test]
@@ -3660,7 +4057,9 @@ mod tests {
                 })
                 .collect(),
             expected_outputs: vec![ExpectedOutputDocument {
+                handle: "concept".to_owned(),
                 concept: "urn:example:concept".to_owned(),
+                required: true,
                 form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
             }],
             revoked_key_ids: Vec::new(),

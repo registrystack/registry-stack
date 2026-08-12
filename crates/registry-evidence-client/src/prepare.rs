@@ -747,11 +747,14 @@ fn validate_shared(spec: &SharedRequestFacts<'_>) -> Result<(), EvidenceClientEr
         ));
     }
     let mut concepts = BTreeSet::new();
+    let mut handles = BTreeSet::new();
     // Ties the message below to the constant, so the constant cannot drift
     // from the number the message states.
     const _: () = assert!(MAXIMUM_LIST_ITEMS == 64);
     for output in spec.expected_outputs {
-        if output.concept.is_empty()
+        if !is_output_handle(&output.handle)
+            || !handles.insert(output.handle.as_str())
+            || output.concept.is_empty()
             || output.concept.len() > MAXIMUM_IDENTIFIER_BYTES
             || !concepts.insert(output.concept.as_str())
         {
@@ -765,7 +768,8 @@ fn validate_shared(spec: &SharedRequestFacts<'_>) -> Result<(), EvidenceClientEr
             // A specification with a minimum above its maximum can never be
             // satisfied, so accepting it would only defer the failure to the
             // deployment, where the caller cannot diagnose it.
-            if !(1..=MAXIMUM_LIST_ITEMS).contains(&minimum_items)
+            if !list.list.unique
+                || !(1..=MAXIMUM_LIST_ITEMS).contains(&minimum_items)
                 || !(1..=MAXIMUM_LIST_ITEMS).contains(&maximum_items)
                 || minimum_items > maximum_items
             {
@@ -877,6 +881,11 @@ fn is_selector_profile(value: &str) -> bool {
     bounded_lowercase(value, 128, is_name_byte)
 }
 
+/// `^[a-z][a-z0-9._-]{0,127}$`
+fn is_output_handle(value: &str) -> bool {
+    bounded_lowercase(value, 128, is_name_byte)
+}
+
 fn is_name_byte(byte: u8) -> bool {
     byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
 }
@@ -898,18 +907,25 @@ mod tests {
 
     fn expected_output() -> ExpectedOutputDocument {
         ExpectedOutputDocument {
+            handle: "status-holds".to_owned(),
             concept: "urn:example:client:concept:status-holds".to_owned(),
+            required: true,
             form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
         }
     }
 
     fn list_expected_output(minimum_items: usize, maximum_items: usize) -> ExpectedOutputDocument {
         ExpectedOutputDocument {
+            handle: "list-output".to_owned(),
             concept: "urn:example:client:concept:list-output".to_owned(),
+            required: true,
             form: ExpectedFormDocument::List(ExpectedListFormDocument {
                 list: ExpectedListDocument {
+                    items:
+                        registry_evidence_verifier::verifier::ExpectedListItemFormDocument::String,
                     minimum_items,
                     maximum_items,
+                    unique: true,
                 },
             }),
         }
@@ -1065,7 +1081,9 @@ mod tests {
                 "requestNonce": prepared.request_nonce(),
                 "expectedSubjects": [{"role": "subject", "binding": "y0KMdWluZGluZw"}],
                 "expectedOutputs": [{
+                    "handle": "status-holds",
                     "concept": "urn:example:client:concept:status-holds",
+                    "required": true,
                     "form": "boolean",
                 }],
                 "revokedKeyIds": [],
@@ -1263,6 +1281,18 @@ mod tests {
                 Box::new(|spec| spec.expected_outputs.push(expected_output())),
             ),
             (
+                "an invalid expected output handle",
+                Box::new(|spec| spec.expected_outputs[0].handle = "Uppercase".to_owned()),
+            ),
+            (
+                "a repeated expected output handle",
+                Box::new(|spec| {
+                    let mut other = expected_output();
+                    other.concept = "urn:example:client:concept:other".to_owned();
+                    spec.expected_outputs.push(other);
+                }),
+            ),
+            (
                 "a lifetime of zero",
                 Box::new(|spec| spec.maximum_assertion_lifetime_seconds = 0),
             ),
@@ -1293,6 +1323,17 @@ mod tests {
             (
                 "a list minimum above its maximum",
                 Box::new(|spec| spec.expected_outputs.push(list_expected_output(2, 1))),
+            ),
+            (
+                "a list that does not require uniqueness",
+                Box::new(|spec| {
+                    let mut output = list_expected_output(1, 2);
+                    let ExpectedFormDocument::List(form) = &mut output.form else {
+                        unreachable!("the helper constructs a list")
+                    };
+                    form.list.unique = false;
+                    spec.expected_outputs.push(output);
+                }),
             ),
             (
                 "a pinned role the request does not ask for",

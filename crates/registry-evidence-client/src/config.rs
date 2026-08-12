@@ -62,6 +62,10 @@ enum VerificationStance {
     /// where verification happens later, at presentation, against a key-binding
     /// JWT that does not exist yet at issuance.
     Declined,
+    /// Construction is profile-driven and pins a fresh snapshot before each
+    /// high-level request. Low-level verification against this empty config
+    /// therefore always fails closed.
+    Progressive,
 }
 
 /// Everything the client needs, decided before the first request.
@@ -80,6 +84,23 @@ pub struct EvidenceClientConfig {
 }
 
 impl EvidenceClientConfig {
+    pub(crate) fn progressive(base_url: Url) -> Result<Self, EvidenceClientError> {
+        let token_provider = Arc::new(crate::StaticToken::new("profile-metadata-only")?);
+        Ok(Self {
+            base_url,
+            token_provider,
+            trusted_jwks: JwksDocument { keys: Vec::new() },
+            revoked_key_ids: Vec::new(),
+            verification: VerificationStance::Progressive,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            user_agent: None,
+            trusted_root_certificates: None,
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            max_metadata_bytes: DEFAULT_MAX_METADATA_BYTES,
+        })
+    }
+
     /// Configure a client against one deployment.
     ///
     /// `trusted_jwks` is the key set the relying party pinned out of band. It
@@ -281,6 +302,13 @@ impl EvidenceClientConfig {
                 if !self.trusted_jwks.keys.is_empty() || !self.revoked_key_ids.is_empty() {
                     return Err(EvidenceClientError::configuration(
                         "a client that declined to verify must carry no key material",
+                    ));
+                }
+            }
+            VerificationStance::Progressive => {
+                if !self.trusted_jwks.keys.is_empty() || !self.revoked_key_ids.is_empty() {
+                    return Err(EvidenceClientError::configuration(
+                        "a profile client pins no key before its metadata snapshot",
                     ));
                 }
             }

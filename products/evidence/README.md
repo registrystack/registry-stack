@@ -296,10 +296,12 @@ An authenticated caller lists the complete Evidence request shapes it can
 currently invoke with `GET /v1/evidence-definitions`. The response is computed
 from the immutable deployed bundle and the caller's verified token. It contains
 only combinations that match exactly one authority path, including requirement,
-Evidence Type, purpose, output concepts, subject roles, selector profiles,
-value origins, and safe selector field validation metadata. An unentitled
-caller receives an empty list. An ambiguous authority shape is omitted because
-the corresponding evidence request would be denied.
+Evidence Type, purpose, effective audience and response formats, stable
+definition and concept handles, required and optional output status, list
+cardinality, subject roles, selector profiles, value origins, and safe selector
+field validation metadata. An unentitled caller receives an empty list. An
+ambiguous authority shape is omitted because the corresponding evidence request
+would be denied.
 
 This is requester-scoped discovery, not a public or process-wide catalog. The
 response excludes source URLs and identifiers, paths, projections, scripts,
@@ -314,8 +316,11 @@ that same document unauthenticated at `GET /openapi.json`. Operators still
 publish static onboarding material through their API catalog, developer portal,
 configuration repository, or bilateral process for token acquisition, human
 descriptions, legal context, endpoint trust, and verifier policy. The public
-JWKS at `/.well-known/evidence/jwks.json` supplies verification keys only. The
-complete contract and change rules are in
+JWKS at `/.well-known/evidence/jwks.json` supplies verification keys only. For
+profile-driven clients, `GET /.well-known/oauth-protected-resource` binds the
+exact public Evidence origin to one authorization-server issuer, the Evidence
+JWKS location, and header-only bearer transport. It carries no requester-scoped
+definition or entitlement data. The complete contract and change rules are in
 [the operator contract](OPERATOR-CONTRACT.md#discovery-of-available-evidence).
 
 ## Requesting evidence

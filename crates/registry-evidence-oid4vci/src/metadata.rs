@@ -36,12 +36,6 @@ const ES256: &str = "ES256";
 const JWK_BINDING: &str = "jwk";
 const DID_JWK_BINDING: &str = "did:jwk";
 
-/// The widest collection a requested concept may answer with.
-///
-/// A delivery front end holds no relying procedure, so it has no narrower
-/// bound to state. The client refuses anything wider.
-const MAXIMUM_LIST_ITEMS: usize = 64;
-
 /// One credential this service can offer, as Evidence described it.
 #[derive(Debug, Clone)]
 pub struct CredentialConfiguration {
@@ -209,7 +203,7 @@ fn configuration_for(definition: &EvidenceDefinition) -> Option<CredentialConfig
     let mut expected_outputs = Vec::with_capacity(definition.concepts.len());
     for concept in &definition.concepts {
         let expected = if concept.form.is_list() {
-            concept.list_expected_output(1, MAXIMUM_LIST_ITEMS)
+            concept.list_expected_output()
         } else {
             concept.scalar_expected_output()
         }?;
@@ -240,17 +234,20 @@ pub(crate) mod tests {
     pub(crate) const DEFINITIONS: &str = r#"{
       "schema": "registry.evidence-definitions/v1",
       "assuranceProfile": "local",
+      "audience": "https://wallet.example.org",
       "issuedBy": "https://registry.example.org",
       "providedBy": "https://provider.example.org",
       "holderBoundBatchMaxSize": 4,
       "definitions": [
         {
+          "handle": "holder-bound",
           "requirement": "urn:example:requirement:holder-bound",
           "configurationRevision": "rev-1",
           "kind": "criterion",
           "subjectBindingMode": "holder-bound",
           "evidenceType": "urn:example:evidence-type:holder-bound",
           "purpose": "urn:example:purpose:demonstration",
+          "responseFormats": ["sd-jwt-vc"],
           "referenceFrameworks": [],
           "subjects": [
             {
@@ -265,14 +262,16 @@ pub(crate) mod tests {
               }
             }
           ],
-          "concepts": [{"id": "urn:example:concept:outcome", "form": "boolean"}]
+          "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": "boolean"}]
         },
         {
+          "handle": "audience-scoped",
           "requirement": "urn:example:requirement:audience-scoped",
           "configurationRevision": "rev-1",
           "kind": "criterion",
           "evidenceType": "urn:example:evidence-type:audience-scoped",
           "purpose": "urn:example:purpose:demonstration",
+          "responseFormats": ["signed-jws"],
           "referenceFrameworks": [],
           "subjects": [
             {
@@ -287,7 +286,7 @@ pub(crate) mod tests {
               }
             }
           ],
-          "concepts": [{"id": "urn:example:concept:outcome", "form": "boolean"}]
+          "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": "boolean"}]
         }
       ]
     }"#;

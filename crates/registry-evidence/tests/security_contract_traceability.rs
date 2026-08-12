@@ -335,15 +335,16 @@ fn every_frozen_profile_negative_is_bound_to_a_mapped_security_negative() {
 /// Prove that one mapped reference still names a real Rust test item, so a
 /// renamed, moved, or deleted test fails the traceability checker.
 fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &TestReference) {
-    // Evidence security invariants may be implemented by the runtime, the
-    // portable verifier, the narrowly shared platform primitives they use, or
-    // the OpenID4VCI delivery front end, which owns the wallet-facing
-    // boundary the runtime deliberately does not speak. The front end is a
-    // permitted implementer of its own delivery negatives only; a delivery
-    // negative proven in a shared primitive rather than at the endpoint would
-    // not be traceable here, which is the point.
+    // Evidence security invariants may be implemented by the runtime, its
+    // relying-party client, the portable verifier, the narrowly shared
+    // platform primitives they use, or the OpenID4VCI delivery front end,
+    // which owns the wallet-facing boundary the runtime deliberately does not
+    // speak. The front end is a permitted implementer of its own delivery
+    // negatives only; a delivery negative proven in a shared primitive rather
+    // than at the endpoint would not be traceable here, which is the point.
     let permitted_crate = [
         "crates/registry-evidence/",
+        "crates/registry-evidence-client/",
         "crates/registry-evidence-verifier/",
         "crates/registry-evidence-oid4vci/",
         "crates/registry-platform-audit/",

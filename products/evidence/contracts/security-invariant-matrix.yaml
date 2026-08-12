@@ -128,9 +128,9 @@ invariants:
     enforcement: Rhai returns ConceptValueSet only; core owns identifiers, subjects, metadata, decimal serialization, entity-reference HMAC projection, public projection, and JWS.
     negative_test: sec-script-cannot-construct-evidence
   - id: V1-I26
-    rule: Evidence-definition discovery is authenticated, requester-scoped, and never creates authority or exposes deployment internals.
-    threat: A public catalog, entitlement oracle, or overbroad metadata response reveals unavailable definitions, authority structure, selectors, source plans, or credentials.
-    enforcement: Rust authenticates and rate-limits discovery, projects only complete shapes matching exactly one authority path and valid token-owned selector material through a closed response allowlist, omits unentitled and ambiguous shapes, and performs no provider or evidence-data audit access.
+    rule: Evidence-definition discovery is authenticated and requester-scoped; public protected-resource metadata is origin-bound and neither surface creates authority or exposes deployment internals.
+    threat: A public catalog, entitlement oracle, or overbroad metadata response reveals unavailable definitions, authority structure, selectors, source plans, or credentials, or redirects a client to attacker-selected token or key endpoints.
+    enforcement: Rust publishes a closed RFC 9728 document derived only from the canonical service.publicOrigin and configured issuer, authenticates and rate-limits definition discovery, projects only complete shapes matching exactly one authority path and valid token-owned selector material through a closed response allowlist, omits unentitled and ambiguous shapes, and performs no provider or evidence-data audit access.
     negative_test: sec-discovery-requester-scoped
   - id: V1-I27
     rule: Every request carries one exact canonical 32-byte random nonce that is echoed into Evidence under the audience-scoped subject binding but never stored, uniqueness-checked, or exposed to authorization, rate limits, Rhai, source requests, logs, metrics, traces, or native audit. A holder-bound assertion is issued to a key rather than answered to a requester, so it has no party to echo to and carries no request nonce at all; the member is absent, never empty or fabricated.

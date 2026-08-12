@@ -1,6 +1,6 @@
 version: 1
 assuranceProfile: evidence-grade
-service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}
+service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}
 issuer: {id: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication: {kind: oidc-access-token, issuer: https://identity.invalid, audiences: [evidence-fixture], tokenTypes: [at+jwt], algorithms: [ES256], jwksUri: https://identity.invalid/.well-known/jwks.json, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, grantIdClaim: evidence_grant_id, grantAuthorityClaim: evidence_authority, maximumTokenLifetimeSeconds: 300, revokedKeyIds: []}
@@ -52,7 +52,8 @@ authorityProfiles:
         responseFormats: [signed-jws]
         subjects: [{role: subject, selectorProfile: licence-register-v1, valueOrigin: request}]
 requirements:
-  - id: urn:example:fixture:requirement:professional-licence-status:v1
+  - handle: professional-licence-status
+    id: urn:example:fixture:requirement:professional-licence-status:v1
     kind: criterion
     acquisition:
       kind: single
@@ -73,8 +74,9 @@ requirements:
           - {minimumInclusive: {type: decimal, value: '31'}, maximumExclusive: {type: decimal, value: '91'}, code: within-90-days}
           - {minimumInclusive: {type: decimal, value: '91'}, maximumExclusive: {type: decimal, value: '365001'}, code: later}
     concepts:
-      - {id: urn:example:fixture:concept:licence-active, form: boolean, required: true, constraints: {}}
-      - id: urn:example:fixture:concept:licence-expiry-category
+      - {handle: licence-active, id: urn:example:fixture:concept:licence-active, form: boolean, required: true, constraints: {}}
+      - handle: licence-expiry-category
+        id: urn:example:fixture:concept:licence-expiry-category
         form: controlled-category
         required: true
         constraints: {categoryScheme: urn:example:fixture:scheme:licence-expiry, schemeVersion: '1', maximumBytes: 32, codelist: codelists/expiry-categories.yaml}

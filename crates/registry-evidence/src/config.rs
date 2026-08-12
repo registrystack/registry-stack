@@ -11,12 +11,14 @@ use std::path::{Component, Path};
 use std::str::FromStr;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use schemars::JsonSchema;
 use serde::de::{self, MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_norway::Value as YamlValue;
 use thiserror::Error;
 use url::{Host, Url};
+use utoipa::ToSchema;
 
 pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 pub const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
@@ -489,6 +491,7 @@ impl EvidenceConfig {
         }
         validate_uri(&self.service.provider_id)?;
         validate_uri(&self.service.trust_domain)?;
+        validate_public_origin(&self.service.public_origin, self.assurance_profile)?;
         validate_uri(&self.issuer.id)?;
         if let Some(publication) = &self.publication {
             publication.validate(self.assurance_profile)?;
@@ -525,6 +528,7 @@ impl EvidenceConfig {
         validate_len(self.requirements.len(), 1, 128, "requirements")?;
 
         let mut requirement_ids = BTreeSet::new();
+        let mut requirement_handles = BTreeSet::new();
         let mut evidence_types = BTreeSet::new();
         let mut concept_ids = BTreeSet::new();
         let mut disclosure_families = BTreeSet::new();
@@ -562,6 +566,9 @@ impl EvidenceConfig {
             }
             if !requirement_ids.insert(requirement.id.as_str()) {
                 return invalid("requirement identifiers must be unique");
+            }
+            if !requirement_handles.insert(requirement.handle.as_str()) {
+                return invalid("requirement handles must be unique");
             }
             if !evidence_types.insert(requirement.evidence_type.as_str()) {
                 return invalid("Evidence Type identifiers must be unique");
@@ -1027,11 +1034,50 @@ fn validate_https_origin(value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// Validate the one externally visible origin a relying party is allowed to
+/// use as this protected resource's identity.
+///
+/// Production origins are canonical HTTPS origins. The local assurance
+/// profile additionally permits one deliberately narrow tutorial form:
+/// canonical HTTP on numeric 127.0.0.1 with an explicit non-zero port. Host
+/// names, paths, credentials, queries, fragments, and alternative loopback
+/// spellings are refused so discovery cannot redirect trust to another host.
+fn validate_public_origin(
+    value: &str,
+    assurance_profile: AssuranceProfile,
+) -> Result<(), ConfigError> {
+    let url = Url::parse(value)
+        .map_err(|_| ConfigError::Invalid("service publicOrigin is not a canonical origin"))?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || value.ends_with('/')
+        || url.origin().ascii_serialization() != value
+    {
+        return invalid("service publicOrigin is not a canonical origin");
+    }
+    if url.scheme() == "https" {
+        return Ok(());
+    }
+    if assurance_profile == AssuranceProfile::Local
+        && url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port().is_some_and(|port| port != 0)
+    {
+        return Ok(());
+    }
+    invalid("service publicOrigin must be HTTPS outside the local loopback profile")
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServiceConfig {
     pub provider_id: String,
     pub trust_domain: String,
+    /// Exact public resource-server origin used by RFC 9728 discovery.
+    pub public_origin: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -3441,7 +3487,7 @@ fn subject_binding_mode_discriminant(mode: SubjectBindingMode) -> u8 {
 }
 
 /// Closed Version 1 response-format vocabulary.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize, Serialize, JsonSchema, ToSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResponseFormat {
     SignedJws,
@@ -3857,6 +3903,10 @@ impl StageInputs {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequirementConfig {
+    /// Stable application-facing handle for the complete published
+    /// definition. It is explicit rather than inferred from the requirement
+    /// URI so URI revisions cannot silently rename application code.
+    pub handle: String,
     pub id: String,
     pub kind: RequirementKind,
     /// What the subject bindings in this requirement's assertions are derived
@@ -3895,6 +3945,9 @@ impl RequirementConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
+        if !valid_local_id(&self.handle) {
+            return invalid("requirement handle is invalid");
+        }
         validate_uri(&self.id)?;
         self.acquisition.validate()?;
         validate_unique_strings(&self.purposes, 1, 32, 1, 128, "requirement purposes")?;
@@ -3931,11 +3984,15 @@ impl RequirementConfig {
         self.derivation.validate()?;
         validate_len(self.concepts.len(), 1, 16, "requirement concepts")?;
         let mut concepts = BTreeSet::new();
+        let mut concept_handles = BTreeSet::new();
         let mut sd_jwt_claims = BTreeSet::new();
         for concept in &self.concepts {
             concept.validate()?;
             if !concepts.insert(concept.id.as_str()) {
                 return invalid("requirement concepts must be unique");
+            }
+            if !concept_handles.insert(concept.handle.as_str()) {
+                return invalid("requirement concept handles must be unique");
             }
             if let Some(projection) = &concept.sd_jwt_vc {
                 if !sd_jwt_claims.insert(projection.claim.as_str()) {
@@ -4082,6 +4139,8 @@ pub struct BucketBoundary {
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConceptConfig {
+    /// Stable key used in high-level client result maps.
+    pub handle: String,
     pub id: String,
     pub form: ConceptForm,
     pub required: bool,
@@ -4093,6 +4152,9 @@ pub struct ConceptConfig {
 
 impl ConceptConfig {
     fn validate(&self) -> Result<(), ConfigError> {
+        if !valid_local_id(&self.handle) {
+            return invalid("concept handle is invalid");
+        }
         validate_uri(&self.id)?;
         validate_len(self.constraints.len(), 0, 32, "concept constraints")?;
         validate_concept_constraints(self)?;
@@ -5287,6 +5349,80 @@ fn invalid<T>(reason: &'static str) -> Result<T, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_origin_is_canonical_https_or_the_exact_local_loopback_exception() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        config.assurance_profile = AssuranceProfile::Production;
+        config.service.public_origin = "https://evidence.example.test".to_owned();
+        config.validate().expect("canonical HTTPS origin validates");
+
+        for invalid in [
+            "https://evidence.example.test/",
+            "https://evidence.example.test/path",
+            "https://evidence.example.test?tenant=other",
+            "https://user@evidence.example.test",
+            "http://evidence.example.test",
+            "http://127.0.0.1:8080",
+        ] {
+            let mut candidate = config.clone();
+            candidate.service.public_origin = invalid.to_owned();
+            assert!(candidate.validate().is_err(), "accepted {invalid}");
+        }
+
+        config.assurance_profile = AssuranceProfile::Local;
+        config.service.public_origin = "http://127.0.0.1:8080".to_owned();
+        config
+            .validate()
+            .expect("the exact tutorial loopback origin validates locally");
+        for invalid in [
+            "http://localhost:8080",
+            "http://127.0.0.1",
+            "http://127.0.0.2:8080",
+            "http://[::1]:8080",
+        ] {
+            let mut candidate = config.clone();
+            candidate.service.public_origin = invalid.to_owned();
+            assert!(candidate.validate().is_err(), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn stable_handles_are_explicit_unique_and_name_one_complete_definition() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+
+        config.requirements[1].handle = config.requirements[0].handle.clone();
+        assert_eq!(
+            config.validate(),
+            invalid("requirement handles must be unique")
+        );
+
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/all-definitions/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        let second_handle = config.requirements[1].concepts[0].handle.clone();
+        config.requirements[0].concepts.push(ConceptConfig {
+            handle: second_handle,
+            id: "urn:example:fixture:concept:another".to_owned(),
+            form: ConceptForm::Boolean,
+            required: false,
+            constraints: OrderedMap::default(),
+            sd_jwt_vc: None,
+        });
+        config.requirements[0].concepts[1].handle =
+            config.requirements[0].concepts[0].handle.clone();
+        assert_eq!(
+            config.validate(),
+            invalid("requirement concept handles must be unique")
+        );
+    }
     // The bound `SqliteRequest::validate` holds a prepared parameter name to,
     // read from the preparation ABI itself so the two cannot drift apart
     // unnoticed.
@@ -6749,6 +6885,7 @@ mod tests {
             .expect("projection exists")
             .claim = "duplicateClaim".to_owned();
         let mut duplicate = config.requirements[0].concepts[structured_index].clone();
+        duplicate.handle = "another-structured-value".to_owned();
         duplicate.id = "urn:example:fixture:concept:another-structured-value".to_owned();
         config.requirements[0].concepts.push(duplicate);
         assert!(matches!(
@@ -6853,8 +6990,8 @@ mod tests {
                 .is_err()
         );
         let unexpected = valid.replacen(
-            "service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}",
-            "service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance, unexpected: true}",
+            "service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}",
+            "service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance, unexpected: true}",
             1,
         );
         assert_ne!(unexpected, valid, "fixture mutation must remain effective");
@@ -6958,6 +7095,7 @@ mod tests {
         .expect("adult fixture validates");
 
         let mut alternative = config.requirements[0].clone();
+        alternative.handle = "adult-status-alternative".to_owned();
         alternative.id = "urn:example:fixture:requirement:adult-status-alternative:v1".to_owned();
         alternative.subject_roles[0].role = "alternate-subject".to_owned();
         alternative.evidence_type =
@@ -6967,6 +7105,7 @@ mod tests {
                 .expect("alternative derivation path");
         alternative.concepts[0].id =
             "urn:example:fixture:concept:adult-status-alternative".to_owned();
+        alternative.concepts[0].handle = "adult-status-alternative".to_owned();
         alternative.disclosure_guard.families[0] =
             "urn:example:fixture:disclosure-family:adult-status-alternative".to_owned();
 
@@ -7011,8 +7150,8 @@ mod tests {
         ))
         .expect("fixture is UTF-8");
         let invalid = valid.replacen(
-            "service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}",
-            "service: {providerId: urn:example:fixture:provider:evidence, trustDomains: [urn:example:fixture:trust-domain:a, urn:example:fixture:trust-domain:b]}",
+            "service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}",
+            "service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomains: [urn:example:fixture:trust-domain:a, urn:example:fixture:trust-domain:b]}",
             1,
         );
         assert_ne!(invalid, valid, "fixture mutation must remain effective");
@@ -7549,11 +7688,13 @@ mod tests {
         ))
         .expect("fixture validates");
         let mut duplicate = config.requirements[0].clone();
+        duplicate.handle = "other".to_owned();
         duplicate.id = "urn:example:fixture:requirement:other:v1".to_owned();
         duplicate.evidence_type = "urn:example:fixture:evidence-type:other:v1".to_owned();
         duplicate.derivation.script =
             ArtifactPath::parse("derivations/other.rhai").expect("artifact path");
         duplicate.concepts[0].id = "urn:example:fixture:concept:other".to_owned();
+        duplicate.concepts[0].handle = "other".to_owned();
         config.requirements.push(duplicate);
         assert_eq!(
             config.validate(),
@@ -8783,8 +8924,8 @@ outboundTls:
             ),
             (
                 "requirement mode",
-                "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n",
-                "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound\n",
+                "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n",
+                "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound\n",
             ),
         ] {
             let rewritten = bundle.replace(from, to);
@@ -8945,10 +9086,10 @@ outboundTls:
     #[test]
     fn a_holder_bound_requirement_may_not_disclose_an_entity_reference_value_form() {
         let bundle = holder_bound_bundle();
-        let anchor = "      - {id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}\n";
+        let anchor = "      - {handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}\n";
         for form in [
-            "      - {id: urn:example:fixture:concept:audience-scoped-entity-reference, form: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}\n",
-            "      - {id: urn:example:fixture:concept:entity-reference-list, form: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}\n",
+            "      - {handle: entity_reference, id: urn:example:fixture:concept:audience-scoped-entity-reference, form: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}\n",
+            "      - {handle: entity_references, id: urn:example:fixture:concept:entity-reference-list, form: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}\n",
         ] {
             let mutated = bundle.replace(anchor, &format!("{anchor}{form}"));
             assert_ne!(mutated, bundle, "the {form} mutation applies");
@@ -9209,6 +9350,11 @@ outboundTls:
                 "provider identifier",
                 "  providerId: https://provider.invalid\n",
                 "  providerId: urn:example:fixture:provider:evidence\n",
+            ),
+            (
+                "public Evidence origin",
+                "  publicOrigin: https://provider.invalid\n",
+                "  publicOrigin: https://evidence.invalid\n",
             ),
         ] {
             let rewritten = normalized.replace(from, to);

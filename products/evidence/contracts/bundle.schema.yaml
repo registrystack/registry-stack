@@ -43,6 +43,7 @@ properties:
     additionalProperties: false
     required:
       - providerId
+      - publicOrigin
       - trustDomain
     properties:
       providerId:
@@ -51,6 +52,15 @@ properties:
           outside local assurance requires this value to be the stable HTTPS origin of the
           deployment, because issuer metadata and the published JWKS URI are derived from
           that origin.
+        type: string
+        format: uri
+        maxLength: 512
+      publicOrigin:
+        description: >-
+          Exact public origin of this Evidence protected resource. Production and
+          evidence-grade deployments require a canonical HTTPS origin. The local
+          assurance profile also permits canonical HTTP on numeric 127.0.0.1 with
+          an explicit non-zero port for supervised tutorials.
         type: string
         format: uri
         maxLength: 512
@@ -2233,6 +2243,7 @@ $defs:
     type: object
     additionalProperties: false
     required:
+      - handle
       - id
       - kind
       - acquisition
@@ -2246,6 +2257,12 @@ $defs:
       - disclosureGuard
       - existenceDisclosure
     properties:
+      handle:
+        description: >-
+          Stable application-facing identifier for selecting this requirement's
+          complete published definition. It is governed explicitly and is never
+          inferred from the requirement URI.
+        $ref: '#/$defs/local-id'
       id:
         description: >-
           Stable requirement URI a public request names to select this requirement; the runtime
@@ -2424,10 +2441,17 @@ $defs:
           type: object
           additionalProperties: false
           required:
+            - handle
             - id
             - form
             - required
           properties:
+            handle:
+              description: >-
+                Stable application-facing key for this output in typed client
+                result maps. It is governed explicitly and is never inferred
+                from the concept URI.
+              $ref: '#/$defs/local-id'
             id:
               description: >-
                 Stable identifier that names this concept as `providesValueFor` in the assertion

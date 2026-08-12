@@ -3620,8 +3620,8 @@ mod tests {
         copy_acceptance_bundle("adult-status", directory.path());
         let config_path = directory.path().join("evidence.yaml");
         let config = fs::read_to_string(&config_path).expect("read configuration");
-        let original = "    concepts: [{id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]\n";
-        let replacement = "    concepts: [{id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}, {id: urn:example:fixture:concept:structured, form: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:structured:v1, maximumSerializedBytes: 512}}]\n";
+        let original = "    concepts: [{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]\n";
+        let replacement = "    concepts: [{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}, {handle: structured, id: urn:example:fixture:concept:structured, form: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:structured:v1, maximumSerializedBytes: 512}}]\n";
         let config = config.replacen(original, replacement, 1);
         assert_ne!(
             config,

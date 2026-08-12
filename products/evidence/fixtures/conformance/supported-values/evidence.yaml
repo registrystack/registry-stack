@@ -2,6 +2,7 @@ version: 1
 assuranceProfile: evidence-grade
 service:
   providerId: urn:example:fixture:provider:evidence
+  publicOrigin: https://evidence.invalid
   trustDomain: urn:example:fixture:trust-domain:supported-values
 issuer: {id: urn:example:fixture:issuer:authority}
 authentication:
@@ -90,7 +91,8 @@ authorityProfiles:
         subjects:
           - {role: subject, selectorProfile: synthetic-subject-v1, valueOrigin: request}
 requirements:
-  - id: urn:example:fixture:requirement:supported-values:v1
+  - handle: supported-values
+    id: urn:example:fixture:requirement:supported-values:v1
     kind: information-requirement
     acquisition:
       kind: single
@@ -106,17 +108,17 @@ requirements:
       script: derivations/values.rhai
       parameters: {}
     concepts:
-      - {id: urn:example:fixture:concept:boolean, form: boolean, required: true, constraints: {}}
-      - {id: urn:example:fixture:concept:controlled-code, form: controlled-code, required: false, constraints: {codelist: codelists/synthetic-codes.yaml, codelistVersion: '1', maximumBytes: 8}}
-      - {id: urn:example:fixture:concept:controlled-category, form: controlled-category, required: false, constraints: {categoryScheme: urn:example:fixture:scheme:category, schemeVersion: '1', maximumBytes: 16, codelist: codelists/categories.yaml}}
-      - {id: urn:example:fixture:concept:bounded-integer, form: bounded-integer, required: false, constraints: {minimum: -10, maximum: 10}}
-      - {id: urn:example:fixture:concept:bounded-decimal, form: bounded-decimal, required: false, constraints: {minimum: '-10.5', maximum: '10.5', maximumScale: 2}}
-      - {id: urn:example:fixture:concept:date-bucket, form: date-bucket, required: false, constraints: {bucketScheme: urn:example:fixture:scheme:date-bucket, schemeVersion: '1'}}
-      - {id: urn:example:fixture:concept:time-bucket, form: time-bucket, required: false, constraints: {bucketScheme: urn:example:fixture:scheme:time-bucket, schemeVersion: '1'}}
-      - {id: urn:example:fixture:concept:audience-scoped-entity-reference, form: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}
-      - {id: urn:example:fixture:concept:controlled-code-list, form: controlled-code-list, required: false, constraints: {codelist: codelists/synthetic-codes.yaml, codelistVersion: '1', minimumItems: 1, maximumItems: 3, unique: true}}
-      - {id: urn:example:fixture:concept:entity-reference-list, form: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}
-      - {id: urn:example:fixture:concept:reviewed-structured-value, form: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:closed-structure:v1, maximumSerializedBytes: 512}}
+      - {handle: boolean, id: urn:example:fixture:concept:boolean, form: boolean, required: true, constraints: {}}
+      - {handle: controlled-code, id: urn:example:fixture:concept:controlled-code, form: controlled-code, required: false, constraints: {codelist: codelists/synthetic-codes.yaml, codelistVersion: '1', maximumBytes: 8}}
+      - {handle: controlled-category, id: urn:example:fixture:concept:controlled-category, form: controlled-category, required: false, constraints: {categoryScheme: urn:example:fixture:scheme:category, schemeVersion: '1', maximumBytes: 16, codelist: codelists/categories.yaml}}
+      - {handle: bounded-integer, id: urn:example:fixture:concept:bounded-integer, form: bounded-integer, required: false, constraints: {minimum: -10, maximum: 10}}
+      - {handle: bounded-decimal, id: urn:example:fixture:concept:bounded-decimal, form: bounded-decimal, required: false, constraints: {minimum: '-10.5', maximum: '10.5', maximumScale: 2}}
+      - {handle: date-bucket, id: urn:example:fixture:concept:date-bucket, form: date-bucket, required: false, constraints: {bucketScheme: urn:example:fixture:scheme:date-bucket, schemeVersion: '1'}}
+      - {handle: time-bucket, id: urn:example:fixture:concept:time-bucket, form: time-bucket, required: false, constraints: {bucketScheme: urn:example:fixture:scheme:time-bucket, schemeVersion: '1'}}
+      - {handle: entity-reference, id: urn:example:fixture:concept:audience-scoped-entity-reference, form: audience-scoped-entity-reference, required: false, constraints: {maximumBytes: 160}}
+      - {handle: controlled-code-list, id: urn:example:fixture:concept:controlled-code-list, form: controlled-code-list, required: false, constraints: {codelist: codelists/synthetic-codes.yaml, codelistVersion: '1', minimumItems: 1, maximumItems: 3, unique: true}}
+      - {handle: entity-reference-list, id: urn:example:fixture:concept:entity-reference-list, form: entity-reference-list, required: false, constraints: {minimumItems: 1, maximumItems: 2, unique: true}}
+      - {handle: structured, id: urn:example:fixture:concept:reviewed-structured-value, form: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:closed-structure:v1, maximumSerializedBytes: 512}}
     fixtures: fixtures/cases.yaml
     disclosureGuard:
       families: [urn:example:fixture:disclosure-family:supported-values]

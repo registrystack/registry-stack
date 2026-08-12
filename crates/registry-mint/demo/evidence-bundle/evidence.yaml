@@ -9,7 +9,7 @@
 # Synthetic identifiers only. Nothing here describes a real person or source.
 version: 1
 assuranceProfile: local
-service: {providerId: urn:example:demo:provider:evidence, trustDomain: urn:example:demo:trust-domain:delegation}
+service: {publicOrigin: http://127.0.0.1:8080, providerId: urn:example:demo:provider:evidence, trustDomain: urn:example:demo:trust-domain:delegation}
 issuer: {id: urn:example:demo:issuer:authority}
 authentication:
   kind: oidc-access-token
@@ -86,7 +86,8 @@ authorityProfiles:
               family_name: identity.family_name
               birth_date: identity.birth_date
 requirements:
-  - id: urn:example:demo:requirement:residence-region:v1
+  - handle: residence-region
+    id: urn:example:demo:requirement:residence-region:v1
     kind: information-requirement
     acquisition:
       kind: single
@@ -98,7 +99,8 @@ requirements:
     validitySeconds: 86400
     derivation: {script: derivations/residence-region.rhai, parameters: {}}
     concepts:
-      - id: urn:example:demo:concept:residence-region
+      - handle: region
+        id: urn:example:demo:concept:residence-region
         form: controlled-code
         required: true
         constraints: {codelist: codelists/region-map.yaml, codelistVersion: '2026-01', maximumBytes: 32}

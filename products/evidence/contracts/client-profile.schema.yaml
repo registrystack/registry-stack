@@ -1,0 +1,71 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/client-profile-v1.json
+title: Evidence relying-party client profile Version 1
+type: object
+additionalProperties: false
+required: [schema, baseUrl, clientId, privateKey]
+properties:
+  schema: {const: registry.evidence-client-profile/v1}
+  baseUrl:
+    description: Canonical Evidence public origin. HTTPS is required outside the exact local loopback mode.
+    type: string
+    format: uri
+    maxLength: 1024
+  clientId: {type: string, minLength: 1, maxLength: 256}
+  privateKey:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [source, path]
+        properties:
+          source: {const: file}
+          path: {type: string, minLength: 1, maxLength: 4096}
+      - type: object
+        additionalProperties: false
+        required: [source, variable]
+        properties:
+          source: {const: environment}
+          variable: {type: string, pattern: '^[A-Za-z_][A-Za-z0-9_]*$'}
+  trust:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties: {type: {const: https-discovery}}
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties: {type: {const: local-loopback-discovery}}
+      - type: object
+        additionalProperties: false
+        required: [type, file]
+        properties:
+          type: {const: pinned-jwks}
+          file: {type: string, minLength: 1, maxLength: 4096}
+  contracts:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [type]
+        properties: {type: {const: published}}
+      - type: object
+        additionalProperties: false
+        required: [type, file]
+        properties:
+          type: {const: reviewed}
+          file: {type: string, minLength: 1, maxLength: 4096}
+  verification:
+    type: object
+    additionalProperties: false
+    properties:
+      maximumAssertionLifetimeSeconds: {type: integer, minimum: 1, maximum: 31536000}
+      clockSkewSeconds: {type: integer, minimum: 0, maximum: 300}
+  expected:
+    type: object
+    additionalProperties: false
+    minProperties: 1
+    properties:
+      audience: {type: string, format: uri, maxLength: 512}
+      issuer: {type: string, format: uri, maxLength: 512}
+      provider: {type: string, format: uri, maxLength: 512}
+  maximumMetadataCacheSeconds: {type: integer, minimum: 1, maximum: 600}

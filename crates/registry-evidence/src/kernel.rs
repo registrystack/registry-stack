@@ -3270,8 +3270,10 @@ fn extract_batch(response, context) {
     }
 
     fn concept(body: &str) -> ConceptConfig {
-        serde_norway::from_str(&format!("id: urn:example:concept\n{body}\n"))
-            .expect("concept parses")
+        serde_norway::from_str(&format!(
+            "handle: example-concept\nid: urn:example:concept\n{body}\n"
+        ))
+        .expect("concept parses")
     }
 
     fn observed_for_case(fixture: &Value, test_case: &Value) -> DateTime<Utc> {

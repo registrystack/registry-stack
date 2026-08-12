@@ -78,9 +78,11 @@ $defs:
   expected-output:
     type: object
     additionalProperties: false
-    required: [concept, form]
+    required: [handle, concept, required, form]
     properties:
+      handle: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
       concept: {type: string, format: uri, maxLength: 512}
+      required: {type: boolean}
       form: {$ref: '#/$defs/expected-form'}
   expected-form:
     oneOf:
@@ -92,10 +94,12 @@ $defs:
           list:
             type: object
             additionalProperties: false
-            required: [minimumItems, maximumItems]
+            required: [items, minimumItems, maximumItems, unique]
             properties:
+              items: {enum: [string, entity-reference]}
               minimumItems: {type: integer, minimum: 1, maximum: 64}
               maximumItems: {type: integer, minimum: 1, maximum: 64}
+              unique: {const: true}
 ownership:
   document: relying party
   producer: the relying procedure that retained the original request and accepted the original transaction
