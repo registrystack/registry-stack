@@ -76,25 +76,42 @@ release/scripts/registry-release prepare \
 Review and commit the version, lockfile, changelog, release-note, manifest, and
 generated contract changes reported by the planner. Do not mix release-workflow
 or release-tool implementation changes into this PR. Merge after the protected
-checks pass. The merge commit is both the candidate source and future tag
-target. There is no finalization or closeout PR.
+checks pass. The merge commit is the intended candidate source. The exact
+protected-main revision accepted by `request-candidate` becomes the candidate
+source and future tag target. There is no finalization or closeout PR.
 
 Before opening the release PR, push the prepared branch and run the read-only
 Ubuntu rehearsal from that branch:
 
 ```sh
+rehearsal_branch="$(git branch --show-current)"
 gh workflow run release-rehearsal.yml \
   --repo registrystack/registry-stack \
-  --ref "$(git branch --show-current)" \
+  --ref "${rehearsal_branch}" \
   -f version=<version> \
   -f release_id=<release-id>
+
+rehearsal_run="$(
+  gh run list \
+    --repo registrystack/registry-stack \
+    --workflow release-rehearsal.yml \
+    --branch "${rehearsal_branch}" \
+    --event workflow_dispatch \
+    --limit 1 \
+    --json databaseId \
+    --jq '.[0].databaseId'
+)"
+gh run watch "${rehearsal_run}" \
+  --repo registrystack/registry-stack \
+  --exit-status
 ```
 
 The rehearsal requires the future tag to remain absent. It validates the
 prepared plan, current manifest and source model, reproduces the exact archive
 lock on Ubuntu, exercises unpublished-tag archive bootstrap, and checks the
 production-shaped `/dev/` documentation links. It publishes nothing and stays
-outside the release clock.
+outside the release clock. Require the exact dispatched run to succeed before
+opening the PR.
 
 Starting with version `0.19.1`, the release manifest records the committed
 identifier catalog path, SHA-256 digest, and active entry count. The planner
@@ -122,12 +139,20 @@ release/scripts/registry-release request-candidate \
 
 The command prints the exact candidate run ID and URL immediately after the
 dispatch is correlated. `--wait-for-ci` waits only for protected-main `ci.yml`
-at the exact source SHA. `--wait` then follows only that candidate run. Omit
-either flag when another operator or monitor owns the corresponding wait.
+at the exact source SHA, then refreshes protected `main` again immediately
+before dispatch. `--wait` follows only that uniquely identified candidate run.
+Omit either flag when another operator or monitor owns the corresponding wait.
 
 The request is accepted only when `source_sha` is the exact protected-main
-workflow revision and that revision has successful protected-main CI. The
-candidate workflow then:
+workflow revision and that revision has successful protected-main CI. Request
+the candidate immediately after the release PR merges. If `main` advances
+before dispatch, the CLI stops without creating a candidate. Inspect the
+intervening commits, rerun `prepare` and the applicable validators and
+rehearsal against the new tip, and use the new protected-main revision only
+when the release identity and notes remain accurate. Otherwise update them in
+another release PR. A later `main` advance does not invalidate a candidate that
+the workflow already accepted and bound to its exact source. The candidate
+workflow then:
 
 - Validates the release identity, manifests, pins, recipes, and destinations.
 - Builds the release payloads and OCI image once.
