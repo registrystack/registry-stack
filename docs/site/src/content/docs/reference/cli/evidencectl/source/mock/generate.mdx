@@ -14,7 +14,7 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Create editable configuration and response bodies without overwriting files.
+Materialize or extend editable mock cases from OpenAPI.
 
 ## Contract status
 
@@ -48,13 +48,13 @@ evidencectl source mock generate [OPTIONS]
 | Option | Always required | Repeatable | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- | --- |
 | `--openapi <OPENAPI>` | No | No | n/a | n/a | n/a | OpenAPI document for initial standalone materialization |
-| `--config <CONFIG>` | No | No | n/a | n/a | n/a | Create only missing bodies from an existing editable configuration |
+| `--config <CONFIG>` | No | No | n/a | n/a | n/a | Existing editable configuration to complete or extend |
 | `--output <OUTPUT>` | No | No | n/a | n/a | n/a | Initial configuration path. Defaults to mocks/source.yaml |
 | `--project <PROJECT>` | No | No | n/a | n/a | n/a | Explicit Evidence authoring project; the current directory is used when omitted |
-| `--operation <OPERATION>` | No | No | n/a | n/a | n/a | Narrow generation to one `METHOD /path/template` operation |
-| `--case <CASE>` | No | No | n/a | n/a | n/a | Override the starter case name for the selected operation |
+| `--operation <OPERATION>` | No | No | n/a | n/a | n/a | Select one `METHOD /path/template` operation |
+| `--case <CASE>` | No | No | n/a | n/a | n/a | Starter or appended case name for the selected operation |
 | `--path-parameter <PATH_PARAMETERS>` | No | Yes | n/a | n/a | n/a | Concrete selected-operation path parameter as NAME=VALUE; repeat as needed |
-| `--seed <SEED>` | No | No | n/a | n/a | n/a | Deterministic unsigned generation seed. Initial generation defaults to zero |
+| `--seed <SEED>` | No | No | n/a | n/a | n/a | Deterministic unsigned generation seed for a new plan. Defaults to zero |
 | `--as-of <AS_OF>` | No | No | n/a | n/a | n/a | Calendar date used only by explicit or inferred age generation |
 | `--explain` | No | No | n/a | n/a | n/a | Explain generator choices without printing generated or authored values |
 | `-h, --help` | No | No | n/a | n/a | n/a | Print help |

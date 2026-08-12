@@ -1840,7 +1840,7 @@
                 {
                   "name": "generate",
                   "invocation": "evidencectl source mock generate",
-                  "about": "Create editable configuration and response bodies without overwriting files",
+                  "about": "Materialize or extend editable mock cases from OpenAPI",
                   "long_about": null,
                   "usage": "evidencectl source mock generate [OPTIONS]",
                   "arguments": [],
@@ -1856,7 +1856,7 @@
                     },
                     {
                       "display": "--config <CONFIG>",
-                      "description": "Create only missing bodies from an existing editable configuration",
+                      "description": "Existing editable configuration to complete or extend",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -1883,7 +1883,7 @@
                     },
                     {
                       "display": "--operation <OPERATION>",
-                      "description": "Narrow generation to one `METHOD /path/template` operation",
+                      "description": "Select one `METHOD /path/template` operation",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -1892,7 +1892,7 @@
                     },
                     {
                       "display": "--case <CASE>",
-                      "description": "Override the starter case name for the selected operation",
+                      "description": "Starter or appended case name for the selected operation",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],
@@ -1910,7 +1910,7 @@
                     },
                     {
                       "display": "--seed <SEED>",
-                      "description": "Deterministic unsigned generation seed. Initial generation defaults to zero",
+                      "description": "Deterministic unsigned generation seed for a new plan. Defaults to zero",
                       "always_required": false,
                       "repeatable": false,
                       "default_values": [],

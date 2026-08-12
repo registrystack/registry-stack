@@ -74,9 +74,15 @@ test('--only accepts the current first Evidence tutorial', async () => {
   assert.match(branch, /stop-background/u);
   assert.match(branch, /run:5-6/u);
   assert.match(branch, /releases\/latest\/download\/evidencectl-install\.sh/u);
-  assert.match(branch, /VERSION=0\.19\.1/u);
+  assert.match(branch, /VERSION=0\.20\.0/u);
+  assert.match(branch, /evidencectl client profile create/u);
+  assert.match(branch, /--local-loopback-discovery/u);
   assert.match(branch, /registry_evidence_client-\$\{VERSION\}/u);
   assert.match(branch, /evidence-client-node-v\$\{VERSION\}/u);
+  assert.match(branch, /source mock generate/u);
+  assert.match(branch, /--case person-123/u);
+  assert.match(branch, /--case person-456/u);
+  assert.match(branch, /--case person-789/u);
   assert.match(branch, /source mock check --config mocks\/source\.yaml/u);
 });
 
