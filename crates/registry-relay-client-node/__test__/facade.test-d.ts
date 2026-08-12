@@ -9,6 +9,7 @@ import {
 } from '..'
 
 declare const client: RelayClient
+declare function expectType<T>(value: T): void
 
 const listOptions: ListOptions = { filters: { status: 'active' }, pageSize: 25 }
 const searchOptions: SearchOptions = { bbox: [100.45, 13.65, 100.65, 13.85], pageSize: 25 }
@@ -36,12 +37,12 @@ declare const capability: Capability
 declare const record: RecordResponse
 declare const records: RecordCollectionResponse
 
-service.registryIdentifier
-capability.family
-if ('data' in record) record.data.domainData
-if ('items' in records) records.items[0].domainData
+expectType<ServiceMetadata['registryIdentifier']>(service.registryIdentifier)
+expectType<Capability['family']>(capability.family)
+if ('data' in record) expectType<unknown>(record.data.domainData)
+if ('items' in records) expectType<unknown>(records.items[0].domainData)
 
 // @ts-expect-error Fixed service metadata does not admit deployment-defined members.
-service.deploymentDefined
+expectType<unknown>(service.deploymentDefined)
 // @ts-expect-error Capability families are closed by the Relay contract.
-capability.unknownCapability
+expectType<unknown>(capability.unknownCapability)
