@@ -45,6 +45,14 @@ external:
     ref: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
 """
 
+NO_EXTERNAL_MANIFEST_YAML = """\
+stack:
+  release: test
+  version: 0.19.1
+
+external: {}
+"""
+
 
 class MonorepoSourceModelTest(unittest.TestCase):
     def test_monorepo_mode_passes_without_lab_directory(self) -> None:
@@ -142,6 +150,16 @@ class MonorepoSourceModelTest(unittest.TestCase):
         )
         self.assertNotIn("registry-atlas", result.stdout)
         self.assertNotIn("esignet-relay-authenticator", result.stdout)
+
+    def test_monorepo_mode_allows_no_external_source_dependencies(self) -> None:
+        with MonorepoFixture() as stack_root:
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(NO_EXTERNAL_MANIFEST_YAML, encoding="utf-8")
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("release-source-external", result.stdout)
 
     def test_monorepo_mode_requires_externals_for_historical_lab_artifact(self) -> None:
         with MonorepoFixture() as stack_root:

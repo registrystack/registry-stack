@@ -122,8 +122,8 @@ for path in manifest_paths:
         manifest=path,
     )
     external = manifest.get("external") if isinstance(manifest, dict) else None
-    if not isinstance(external, dict) or not external:
-        fail(f"{path.name} has no external section")
+    if not isinstance(external, dict):
+        fail(f"{path.name} external must be a mapping")
         continue
     required_externals = []
     artifacts = manifest.get("artifacts")

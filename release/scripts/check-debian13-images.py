@@ -43,9 +43,11 @@ DOCKERFILES = (
 # HTTP probes instead). The Debian 13 boundary and the digest pins still bind
 # them, so they are checked here under their own shape rather than left
 # uncovered for not fitting the release one.
+ADOPTER_DOCKERFILES = (Path("docker/Dockerfile"),)
+
 # These are the maintained image and image-policy surfaces. Historical release
 # notes are immutable evidence and intentionally are not rewritten by this gate.
-MAINTAINED_TEXT_PATHS = DOCKERFILES + (
+MAINTAINED_TEXT_PATHS = DOCKERFILES + ADOPTER_DOCKERFILES + (
     Path(".github/workflows/release-candidate.yml"),
     Path(".github/workflows/release.yml"),
     Path("release/scripts/build-release-binaries.sh"),
@@ -56,6 +58,7 @@ PREPARATION_DOCKERFILES = DOCKERFILES
 RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
 
 FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
+STAGE_NAME_RE = re.compile(r"^FROM\s+\S+\s+AS\s+(\S+)", re.MULTILINE | re.IGNORECASE)
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETIRED_DEBIAN_RE = re.compile(
     r"\b(?:bookworm|debian[\s_:-]*v?[\s_:-]*12)\b",
@@ -87,6 +90,20 @@ def runtime_stage(text: str) -> str:
     marker = f"FROM {DISTROLESS_RUNTIME} AS runtime"
     offset = text.find(marker)
     return text[offset:] if offset >= 0 else ""
+
+
+def distroless_stages(text: str) -> list[tuple[str, str]]:
+    """Return each stage built on the Distroless runtime."""
+    stages = []
+    for segment in re.split(r"^FROM ", text, flags=re.MULTILINE)[1:]:
+        base = segment.split(maxsplit=1)[0] if segment.split() else ""
+        if not base.startswith(DISTROLESS_REPOSITORY):
+            continue
+        instructions = "\n".join(
+            line for line in segment.splitlines() if not line.lstrip().startswith("#")
+        )
+        stages.append((base, f"\n{instructions}"))
+    return stages
 
 
 def check_repository(root: Path = ROOT) -> list[str]:
@@ -178,6 +195,53 @@ def check_repository(root: Path = ROOT) -> list[str]:
             "normalized release filesystem metadata",
             failures,
         )
+
+    for relative in ADOPTER_DOCKERFILES:
+        text = texts[relative]
+        if not text.startswith(f"# syntax={DOCKERFILE_FRONTEND}\n"):
+            failures.append(
+                f"{relative}: pinned Dockerfile frontend must be the first line"
+            )
+        bases = FROM_RE.findall(text)
+        if not bases:
+            failures.append(f"{relative}: no FROM instruction found")
+        local_stages = set(STAGE_NAME_RE.findall(text))
+        for base in bases:
+            if base in local_stages:
+                continue
+            if not DIGEST_PIN_RE.search(base):
+                failures.append(
+                    f"{relative}: upstream base is not pinned by immutable digest: {base}"
+                )
+        require(
+            text,
+            f"FROM {RUST_BUILDER} AS chef",
+            relative,
+            "pinned Debian 13 Rust builder",
+            failures,
+        )
+        require(
+            text,
+            "chown -R 65532:65532",
+            relative,
+            "numeric nonroot-owned runtime directories",
+            failures,
+        )
+        stages = distroless_stages(text)
+        if not stages:
+            failures.append(
+                f"{relative}: no stage runs on the Distroless Debian 13 non-root runtime"
+            )
+        for base, stage in stages:
+            if base != DISTROLESS_RUNTIME:
+                failures.append(
+                    f"{relative}: Distroless runtime is not the pinned base: {base}"
+                )
+            for forbidden in ("\nRUN ", "apt-get", "/bin/sh", "curl ", "wget "):
+                if forbidden in stage:
+                    failures.append(
+                        f"{relative}: Distroless runtime contains {forbidden.strip()!r}"
+                    )
 
     for relative in RELAY_V2_DOCKERFILES:
         text = texts[relative]
