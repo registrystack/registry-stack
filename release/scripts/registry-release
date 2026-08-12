@@ -313,6 +313,55 @@ def validate(manifest_path: Path) -> int:
     return 0
 
 
+def validate_current(manifest_dir: Path) -> int:
+    candidates: list[tuple[tuple[int, int, int], Path]] = []
+    for path in sorted(manifest_dir.glob("registry-stack-*.yaml")):
+        try:
+            manifest = load_yaml(path)
+            stack = manifest.get("stack", {}) if isinstance(manifest, dict) else {}
+            release_id = stack.get("release")
+            if not isinstance(release_id, str):
+                raise ReleasePlanError("stack.release must be text")
+            validate_release_id(release_id)
+            if path.name != f"registry-stack-{release_id}.yaml":
+                raise ReleasePlanError(
+                    f"filename {path.name} does not match stack.release {release_id!r}"
+                )
+            version = str(stack.get("version", ""))
+            candidates.append((strict_semver(version), path))
+        except (
+            OSError,
+            UnicodeError,
+            ValueError,
+            YamlDependencyError,
+            ReleasePlanError,
+        ) as exc:
+            print(
+                f"error: cannot select current release manifest from {path}: {exc}",
+                file=sys.stderr,
+            )
+            return 1
+
+    if not candidates:
+        print(
+            f"error: no Registry Stack release manifests found in {manifest_dir}",
+            file=sys.stderr,
+        )
+        return 1
+
+    current_version = max(version for version, _path in candidates)
+    current_paths = [path for version, path in candidates if version == current_version]
+    if len(current_paths) != 1:
+        rendered = ", ".join(str(path) for path in current_paths)
+        print(
+            f"error: version {'.'.join(str(part) for part in current_version)} "
+            f"has multiple release manifests: {rendered}",
+            file=sys.stderr,
+        )
+        return 1
+    return validate(current_paths[0])
+
+
 def validate_docsets(
     manifest_dir: Path,
     docsets_path: Path,
@@ -2026,6 +2075,10 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("manifest", type=Path)
+    validate_current_parser = subparsers.add_parser("validate-current")
+    validate_current_parser.add_argument(
+        "--manifest-dir", type=Path, default=RELEASE_MANIFEST_DIR
+    )
     docsets_parser = subparsers.add_parser("validate-docsets")
     docsets_parser.add_argument(
         "--manifest-dir", type=Path, default=RELEASE_MANIFEST_DIR
@@ -2076,6 +2129,8 @@ def main() -> int:
 
     if args.command == "validate":
         return validate(args.manifest)
+    if args.command == "validate-current":
+        return validate_current(args.manifest_dir)
     if args.command == "validate-docsets":
         return validate_docsets(args.manifest_dir, args.docsets, args.archive_lock)
     if args.command == "validate-source":

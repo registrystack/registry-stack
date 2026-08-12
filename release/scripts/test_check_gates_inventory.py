@@ -743,8 +743,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_release_manifest_validation_uses_only_the_maintained_manifest(self) -> None:
         command = (
-            "release/scripts/registry-release validate "
-            "release/manifests/registry-stack-beta-29.yaml"
+            "release/scripts/registry-release validate-current"
         )
         self.assertIn(command, self.workflow)
         self.assertNotIn(
