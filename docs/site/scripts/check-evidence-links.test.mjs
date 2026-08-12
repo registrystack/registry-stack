@@ -13,7 +13,11 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
-import { checkEvidenceLinks, extractEvidenceUrlsFromYaml } from './check-evidence-links.mjs';
+import {
+  candidateTagFromValidationOutput,
+  checkEvidenceLinks,
+  extractEvidenceUrlsFromYaml,
+} from './check-evidence-links.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(here, '../../..');
@@ -96,6 +100,52 @@ test('accepts semver tags, full commits, and root-relative current docs', (t) =>
     checked: 3,
     errors: [],
   });
+});
+
+test('reads the candidate tag only from validated current-manifest output', () => {
+  assert.equal(
+    candidateTagFromValidationOutput(
+      'validated /tmp/registry-stack-beta-30.yaml: beta-30 0.20.0\n',
+    ),
+    'v0.20.0',
+  );
+  assert.equal(candidateTagFromValidationOutput('error: validation failed\n'), undefined);
+});
+
+test('checks the exact unpublished release tag against the selected source', (t) => {
+  const { root, commit } = createRepository(t);
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v9.9.9/source/file.md',
+    ],
+  });
+
+  assert.deepEqual(
+    checkEvidenceLinks({
+      repoRoot: root,
+      dataDir,
+      sourceRef: commit,
+      candidateTag: 'v9.9.9',
+    }),
+    { checked: 1, errors: [] },
+  );
+});
+
+test('does not substitute the selected source for another missing tag', (t) => {
+  const { root, commit } = createRepository(t);
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v9.9.8/source/file.md',
+    ],
+  });
+
+  const result = checkEvidenceLinks({
+    repoRoot: root,
+    dataDir,
+    sourceRef: commit,
+    candidateTag: 'v9.9.9',
+  });
+  assert.match(result.errors[0], /missing Git commit or tag v9\.9\.8/);
 });
 
 test('rejects branches, short commits, missing refs, and missing paths', async (t) => {
