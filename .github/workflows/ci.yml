@@ -601,6 +601,9 @@ jobs:
       - name: Test public release verifier
         run: python3 -m unittest release/scripts/test_verify_public_release.py
 
+      - name: Test client registry reconciliation
+        run: python3 -m unittest release/scripts/test_client_registry.py
+
       - name: Test release storage preflight
         run: python3 -m unittest release/scripts/test_check_release_storage.py
 

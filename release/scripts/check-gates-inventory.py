@@ -175,6 +175,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_verify_public_release.py",
     ),
     (
+        "Client registry reconciliation tests",
+        "run: python3 -m unittest release/scripts/test_client_registry.py",
+    ),
+    (
         "Release storage preflight tests",
         "run: python3 -m unittest release/scripts/test_check_release_storage.py",
     ),
@@ -358,10 +362,27 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ".github/workflows/release.yml",
         (
             "dispatch-docs:\n    name: Dispatch authenticated docs promotion",
-            "if: needs.verify.outputs.docs_sha256 != ''",
+            "needs.verify.outputs.docs_sha256 != ''",
             "name: Dispatch authenticated docs promotion",
             '-f "released_tag=${{ needs.verify.outputs.tag }}"',
             '-f "docs_sha256=${{ needs.verify.outputs.docs_sha256 }}"',
+        ),
+    ),
+    (
+        "Client trusted registry promotion",
+        ".github/workflows/release.yml",
+        (
+            "publish_client_npm:",
+            "publish_client_pypi:",
+            "client: [evidence, relay]",
+            "id-token: write",
+            "environment: npm",
+            "environment: pypi-evidence",
+            "environment: pypi",
+            "client_registry.py npm-state",
+            "client_registry.py pypi-state",
+            "npm publish",
+            "pypa/gh-action-pypi-publish@",
         ),
     ),
     (

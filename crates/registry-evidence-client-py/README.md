@@ -7,13 +7,17 @@ crate is a thin `#[pymodule]` surface plus a JSON conversion layer, and
 re-implements none of it.
 
 The package is named `registry-evidence-client` and imported as
-`registry_evidence_client` (matching the crate's own `[lib] name`). Publishing
-to PyPI is out of scope. Registry Stack GitHub releases starting at v0.17.0
-carry one native wheel per supported platform. Download the
-`registry_evidence_client-<version>-<wheel-tag>.whl` asset matching the target
-platform, verify it through the release's signed `SHA256SUMS`, then install the
-local file with `python -m pip install <path-to-wheel>`. Linux wheels require
-the release build runner's glibc version or newer.
+`registry_evidence_client` (matching the crate's own `[lib]` name). Starting
+with Registry Stack v0.21.0, install the exact client version that matches the
+Evidence deployment:
+
+```sh
+python -m pip install "registry-evidence-client==<version>"
+```
+
+PyPI carries manylinux wheels requiring glibc 2.17 or newer for Linux amd64 and
+Linux arm64, plus a macOS arm64 wheel. Earlier versions remain available as
+wheels attached to their GitHub Releases.
 
 ## Python surface
 

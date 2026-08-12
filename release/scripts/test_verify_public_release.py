@@ -270,6 +270,49 @@ class PublicReleaseVerifierTest(TestCase):
                     os.environ["AWS_SECRET_ACCESS_KEY"] = original_aws
             self.assertEqual("evidence 1.2.3", observed)
 
+    def test_client_registry_verifier_requires_all_exact_public_packages(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            mock.patch.object(
+                self.module.client_registry,
+                "validate_distribution",
+            ),
+            mock.patch.object(
+                self.module.client_registry,
+                "npm_tarballs",
+                return_value=[Path(temporary) / "root.tgz"],
+            ),
+            mock.patch.object(
+                self.module.client_registry,
+                "npm_metadata",
+                return_value={},
+            ),
+            mock.patch.object(
+                self.module.client_registry,
+                "npm_registry_state",
+                return_value="present",
+            ),
+            mock.patch.object(
+                self.module.client_registry,
+                "wheel_paths",
+                return_value=[Path(temporary) / "client.whl"],
+            ),
+            mock.patch.object(
+                self.module.client_registry,
+                "pypi_metadata",
+                return_value={},
+            ),
+            mock.patch.object(
+                self.module.client_registry,
+                "pypi_registry_state",
+                return_value="present",
+            ),
+        ):
+            self.assertEqual(
+                4,
+                self.module.verify_client_registries(Path(temporary), "1.2.3"),
+            )
+
 
 if __name__ == "__main__":
     main()

@@ -614,6 +614,52 @@ class ReleaseCandidateTest(TestCase):
             current["registry_relay_client-0.19.1-cp310-abi3-linux_x86_64.whl"],
         )
 
+    def test_client_registry_payloads_begin_with_v0_21_0(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.20.2")
+        current = self.module._relay_v2_payload_inventory("0.21.0")
+
+        self.assertNotIn("registrystack-relay-client-0.20.2.tgz", historical)
+        self.assertIn(
+            "registry_relay_client-0.20.2-cp310-abi3-linux_x86_64.whl",
+            historical,
+        )
+        self.assertNotIn(
+            "registry_relay_client-0.21.0-cp310-abi3-linux_x86_64.whl",
+            current,
+        )
+        self.assertEqual(
+            "client-package",
+            current[
+                "registry_relay_client-0.21.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+            ],
+        )
+        self.assertEqual(
+            "client-package",
+            current[
+                "registry_evidence_client-0.21.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+            ],
+        )
+        self.assertEqual(
+            "client-package",
+            current["registrystack-relay-client-0.21.0.tgz"],
+        )
+        self.assertEqual(
+            "client-package",
+            current[
+                "registrystack-relay-client-linux-x64-gnu-0.21.0.tgz"
+            ],
+        )
+        self.assertEqual(
+            "client-package",
+            current["registrystack-evidence-client-0.21.0.tgz"],
+        )
+        self.assertEqual(
+            "client-package",
+            current[
+                "registrystack-evidence-client-linux-x64-gnu-0.21.0.tgz"
+            ],
+        )
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

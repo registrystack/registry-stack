@@ -133,6 +133,32 @@ contains the advisory verdict used for candidate acceptance. Each report names
 the exact candidate digest that was promoted. The archive hash is covered by
 the authenticated checksum chain.
 
+## Verify client registries
+
+Registry Stack v0.21.0 and later publish the checksum-covered Evidence and Relay client
+packages to npm and PyPI. With the release assets still in the current
+directory, compare every registry version with its release tarball or wheel:
+
+```sh
+version="${tag#v}"
+for client in evidence relay; do
+  for tarball in \
+    "registrystack-${client}-client-darwin-arm64-${version}.tgz" \
+    "registrystack-${client}-client-linux-arm64-gnu-${version}.tgz" \
+    "registrystack-${client}-client-linux-x64-gnu-${version}.tgz" \
+    "registrystack-${client}-client-${version}.tgz"; do
+    test "$(python3 release/scripts/client_registry.py npm-state \
+      --tarball "${tarball}")" = present
+  done
+  test "$(python3 release/scripts/client_registry.py pypi-state \
+    --directory . --version "${version}" --client "${client}")" = present
+done
+```
+
+The npm comparison uses the registry's SHA-512 integrity. The PyPI comparison
+uses each file's SHA-256 digest and rejects missing, additional, changed, or
+repeated release files.
+
 ## Provenance boundary
 
 The candidate manifest records the candidate workflow revision, run, attempt,
