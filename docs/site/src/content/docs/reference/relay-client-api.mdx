@@ -115,12 +115,17 @@ Authentication is optional. Probes and OpenAPI never ask a configured token prov
 and never send authorization. Other methods attach a bearer when a provider is configured and
 Relay accepts credentials for that operation.
 
-| Mode | Rust | Python | Node |
-| --- | --- | --- | --- |
-| No bearer | Omit `with_token_provider` | Omit `authorization` | Omit `authorization` |
-| Static bearer | `Arc::new(StaticToken::new(token)?)` passed to `with_token_provider` | `authorization={"static": token}` | `authorization: { static: token }` |
-| Private-key JWT | `PrivateKeyJwt` passed as a `TokenProvider` | `authorization={"private_key_jwt": config}` | `authorization: { privateKeyJwt: config }` |
-| Custom provider | Implement the public `TokenProvider` trait | Not exposed | Not exposed |
+The supported modes are:
+
+- **No bearer:** omit `with_token_provider` in Rust or `authorization` in Python and Node.
+- **Static bearer:** pass `Arc::new(StaticToken::new(token)?)` to `with_token_provider` in
+  Rust, `authorization={"static": token}` in Python, or
+  `authorization: { static: token }` in Node.
+- **Private-key JWT:** pass `PrivateKeyJwt` as a `TokenProvider` in Rust,
+  `authorization={"private_key_jwt": config}` in Python, or
+  `authorization: { privateKeyJwt: config }` in Node.
+- **Custom provider:** implement the public `TokenProvider` trait in Rust. Python and Node do not
+  expose custom token providers.
 
 The built-in private-key-JWT configuration requires a token endpoint, client identifier, and
 private signing JWK. It also accepts audience, assertion lifetime, refresh margin, token request
