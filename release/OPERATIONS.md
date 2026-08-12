@@ -85,22 +85,30 @@ Ubuntu rehearsal from that branch:
 
 ```sh
 rehearsal_branch="$(git branch --show-current)"
+rehearsal_request_id="$(openssl rand -hex 16)"
 gh workflow run release-rehearsal.yml \
   --repo registrystack/registry-stack \
   --ref "${rehearsal_branch}" \
   -f version=<version> \
-  -f release_id=<release-id>
+  -f release_id=<release-id> \
+  -f request_id="${rehearsal_request_id}"
 
-rehearsal_run="$(
-  gh run list \
-    --repo registrystack/registry-stack \
-    --workflow release-rehearsal.yml \
-    --branch "${rehearsal_branch}" \
-    --event workflow_dispatch \
-    --limit 1 \
-    --json databaseId \
-    --jq '.[0].databaseId'
-)"
+rehearsal_run=""
+for _ in $(seq 1 30); do
+  rehearsal_run="$(
+    gh run list \
+      --repo registrystack/registry-stack \
+      --workflow release-rehearsal.yml \
+      --branch "${rehearsal_branch}" \
+      --event workflow_dispatch \
+      --limit 100 \
+      --json databaseId,displayTitle \
+      --jq ".[] | select(.displayTitle | endswith(\"(${rehearsal_request_id})\")) | .databaseId"
+  )"
+  test -z "${rehearsal_run}" || break
+  sleep 2
+done
+test -n "${rehearsal_run}"
 gh run watch "${rehearsal_run}" \
   --repo registrystack/registry-stack \
   --exit-status
