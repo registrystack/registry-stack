@@ -175,6 +175,54 @@ fn awkward_and_dataset_apis_materialize_and_check_offline() {
 }
 
 #[test]
+fn regenerating_missing_bodies_explains_the_actual_inference_choices() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    copy_fixture_tree(temporary.path());
+    let generated = run(
+        temporary.path(),
+        &[
+            "source",
+            "mock",
+            "generate",
+            "--openapi",
+            "awkward.openapi.yaml",
+            "--output",
+            "mocks/source.yaml",
+            "--operation",
+            "GET /people/{person_id}",
+        ],
+    );
+    assert!(generated.status.success());
+    let body = only_json_body(&temporary.path().join("mocks/cases"));
+    fs::remove_file(body).expect("remove generated body");
+
+    let regenerated = run(
+        temporary.path(),
+        &[
+            "source",
+            "mock",
+            "generate",
+            "--config",
+            "mocks/source.yaml",
+            "--explain",
+        ],
+    );
+    assert!(
+        regenerated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&regenerated.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&regenerated.stdout);
+    assert!(
+        stdout.contains("Generator contract=evidencectl-source-mock-v1"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Inference pointer="), "{stdout}");
+    assert!(stdout.contains("rule=field."), "{stdout}");
+    assert!(!stdout.contains("Missing bodies used"), "{stdout}");
+}
+
+#[test]
 fn ambiguous_routes_and_unsupported_formats_refuse_before_publication() {
     for spec in ["ambiguous.openapi.yaml", "unsupported-format.openapi.yaml"] {
         let temporary = tempfile::tempdir().expect("tempdir");
@@ -704,6 +752,13 @@ fn start_server(directory: &Path, arguments: &[&str]) -> Child {
             .expect("read server stderr");
         panic!("server did not become ready: {line}{stderr}");
     }
+    // The server prints bounded route details after readiness. Keep draining
+    // the captured pipe so dropping this reader cannot terminate those writes
+    // before Axum begins accepting requests.
+    thread::spawn(move || {
+        let mut remainder = String::new();
+        let _ = reader.read_to_string(&mut remainder);
+    });
     child
 }
 

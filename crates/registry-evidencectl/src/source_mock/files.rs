@@ -202,7 +202,7 @@ pub(super) fn publish_initial_tree(
     ensure_absent(&parent, &root_name, "mock root")?;
     let (stage_name, stage) = create_stage(&parent)?;
     let mut published_root = false;
-    let result = (|| {
+    let result: Result<Vec<PathBuf>> = (|| {
         populate_tree(&stage, &files)?;
         rustix::fs::fsync(&stage).context("persisting staged mock tree")?;
         rustix::fs::renameat_with(
@@ -231,8 +231,9 @@ pub(super) fn publish_initial_tree(
     result
 }
 
-/// Create every missing body without replacing any author-owned path. A
-/// handled failure removes files created by this invocation.
+/// Create every missing body without replacing any author-owned path. Once a
+/// body is visible, a later failure preserves it; rerunning fills only the
+/// bodies that are still missing.
 pub(super) fn publish_missing(root: &Path, files: &[PublicationFile]) -> Result<Vec<PathBuf>> {
     publish_missing_with(root, files, |_, _| Ok(()))
 }
@@ -257,18 +258,12 @@ where
     }
 
     let mut published = Vec::new();
-    let mut created_dirs = Vec::new();
-    let result = (|| {
+    let result: Result<()> = (|| {
         for (index, file) in files.iter().enumerate() {
             before_publish(index, file)?;
-            let (destination_parent, leaf) = open_parent(
-                &root,
-                &file.relative_path,
-                true,
-                Some(&mut created_dirs),
-                "body destination",
-            )?
-            .expect("create mode returns a parent");
+            let (destination_parent, leaf) =
+                open_parent(&root, &file.relative_path, true, None, "body destination")?
+                    .expect("create mode returns a parent");
             let (stage_parent, stage_leaf) =
                 open_parent(&stage, &file.relative_path, false, None, "staged body")?
                     .expect("staged parent exists");
@@ -280,16 +275,17 @@ where
                 RenameFlags::NOREPLACE,
             )
             .context("publishing body without replacement")?;
-            rustix::fs::fsync(&destination_parent).context("persisting body publication")?;
             published.push(file.relative_path.clone());
+            rustix::fs::fsync(&destination_parent).context("persisting body publication")?;
         }
         Ok(())
     })();
 
     if let Err(error) = result {
-        rollback_publication(&root, &published, &created_dirs);
         remove_staged_tree(&root, &stage_name, &stage, &files);
-        return Err(error);
+        return Err(error).context(
+            "body publication stopped; any bodies already created were preserved and a rerun will complete the missing set",
+        );
     }
     remove_staged_tree(&root, &stage_name, &stage, &files);
     rustix::fs::fsync(&root).context("persisting completed body publication")?;
@@ -496,22 +492,6 @@ fn checked_files(files: &[PublicationFile]) -> Result<Vec<PublicationFile>> {
     let mut checked = files.to_vec();
     checked.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(checked)
-}
-
-fn rollback_publication(root: &OwnedFd, published: &[PathBuf], created_dirs: &[PathBuf]) {
-    for path in published.iter().rev() {
-        if let Ok(Some((parent, leaf))) = open_parent(root, path, false, None, "rollback path") {
-            let _ = rustix::fs::unlinkat(&parent, &leaf, AtFlags::empty());
-            let _ = rustix::fs::fsync(&parent);
-        }
-    }
-    for path in created_dirs.iter().rev() {
-        if let Ok(Some((parent, leaf))) = open_parent(root, path, false, None, "rollback directory")
-        {
-            let _ = rustix::fs::unlinkat(&parent, &leaf, AtFlags::REMOVEDIR);
-        }
-    }
-    let _ = rustix::fs::fsync(root);
 }
 
 /// Remove only the random directory held by `stage`, using known publication
@@ -747,7 +727,7 @@ mod tests {
     }
 
     #[test]
-    fn handled_commit_error_rolls_back_every_created_path() {
+    fn handled_commit_error_preserves_the_valid_published_subset_for_rerun() {
         let temporary = tempdir().unwrap();
         let root = temporary.path().join("mocks");
         std::fs::create_dir(&root).unwrap();
@@ -764,9 +744,9 @@ mod tests {
             Ok(())
         });
         assert!(result.is_err());
-        assert!(!root.join("a/one.json").exists());
-        assert!(!root.join("a").exists());
+        assert_eq!(std::fs::read(root.join("a/one.json")).unwrap(), b"one");
         assert_eq!(std::fs::read(root.join("b/two.json")).unwrap(), b"racer");
+        assert!(format!("{:#}", result.unwrap_err()).contains("a rerun will complete"));
         assert!(!std::fs::read_dir(&root).unwrap().any(|entry| {
             entry
                 .unwrap()
@@ -774,6 +754,69 @@ mod tests {
                 .to_string_lossy()
                 .starts_with(STAGE_PREFIX)
         }));
+        std::fs::remove_file(root.join("b/two.json")).unwrap();
+        assert_eq!(
+            publish_missing(&root, &[artifact("b/two.json", b"two")]).unwrap(),
+            vec![PathBuf::from("b/two.json")]
+        );
+        assert_eq!(std::fs::read(root.join("a/one.json")).unwrap(), b"one");
+        assert_eq!(std::fs::read(root.join("b/two.json")).unwrap(), b"two");
+    }
+
+    #[test]
+    fn handled_commit_error_preserves_a_concurrently_edited_published_file() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("mocks");
+        std::fs::create_dir(&root).unwrap();
+        let files = [
+            artifact("a/one.json", b"one"),
+            artifact("b/two.json", b"two"),
+        ];
+        let result = publish_missing_with(&root, &files, |index, file| {
+            if index == 1 {
+                std::fs::write(root.join("a/one.json"), b"author edit")?;
+                let path = root.join(&file.relative_path);
+                std::fs::create_dir_all(path.parent().unwrap())?;
+                std::fs::write(path, b"racer")?;
+            }
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(root.join("a/one.json")).unwrap(),
+            b"author edit"
+        );
+        assert_eq!(std::fs::read(root.join("b/two.json")).unwrap(), b"racer");
+    }
+
+    #[test]
+    fn handled_commit_error_preserves_a_concurrently_replaced_published_file() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("mocks");
+        std::fs::create_dir(&root).unwrap();
+        let files = [
+            artifact("a/one.json", b"one"),
+            artifact("b/two.json", b"two"),
+        ];
+        let result = publish_missing_with(&root, &files, |index, file| {
+            if index == 1 {
+                let replacement = root.join("replacement.json");
+                std::fs::write(&replacement, b"author replacement")?;
+                std::fs::rename(replacement, root.join("a/one.json"))?;
+                let path = root.join(&file.relative_path);
+                std::fs::create_dir_all(path.parent().unwrap())?;
+                std::fs::write(path, b"racer")?;
+            }
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(root.join("a/one.json")).unwrap(),
+            b"author replacement"
+        );
+        assert_eq!(std::fs::read(root.join("b/two.json")).unwrap(), b"racer");
     }
 
     #[test]

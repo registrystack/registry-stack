@@ -276,7 +276,9 @@ fn serve_ephemeral(
         }));
     }
     for skipped in &prepared.skipped {
-        routes.push(server::RouteSpec::unsupported_get(skipped.key.path.clone()));
+        if server::can_compile_route_template(&skipped.key.path) {
+            routes.push(server::RouteSpec::unsupported_get(skipped.key.path.clone()));
+        }
     }
     let snapshot = server::RouteSnapshot::new(routes)?;
     let skipped_count = prepared.skipped.len();
@@ -533,6 +535,7 @@ fn generate_missing(args: GenerateArgs) -> Result<ExitCode> {
     let as_of = generation.as_of_date()?;
     let config_dir = root.join(config.parent().unwrap_or_else(|| Path::new(".")));
     let mut publications = Vec::new();
+    let mut explanations = Vec::new();
     for (operation_index, case_index) in checked.missing {
         let plan_operation = &checked.plan.operations[operation_index];
         let case = &plan_operation.cases[case_index];
@@ -545,9 +548,11 @@ fn generate_missing(args: GenerateArgs) -> Result<ExitCode> {
             .operation(&key)
             .context("configured operation is no longer compatible")?;
         let raw = operation.authored_parameters(&case.request.path_parameters)?;
-        let (_, body) = checked
-            .prepared
-            .generate(operation, &raw, generation.seed, as_of)?;
+        let (generated, body) =
+            checked
+                .prepared
+                .generate(operation, &raw, generation.seed, as_of)?;
+        explanations.extend(generated.inference);
         publications.push(PublicationFile::new(&case.body, body));
     }
     let published = files::publish_missing(&config_dir, &publications)?;
@@ -562,7 +567,14 @@ fn generate_missing(args: GenerateArgs) -> Result<ExitCode> {
         );
     }
     if args.explain {
-        println!("Missing bodies used the retained generator contract and seed.");
+        println!(
+            "Generator contract={} faker={} format={} inference={}",
+            generator::GENERATOR_CONTRACT,
+            generator::FAKER_REGISTRY_ID,
+            generator::FORMAT_REGISTRY_ID,
+            infer::INFERENCE_REGISTRY_ID
+        );
+        print_explanations(&explanations);
     }
     Ok(ExitCode::SUCCESS)
 }
