@@ -35,7 +35,8 @@ JOIN_TIMEOUT_SECONDS = 5.0
 
 DEFINITIONS_DOCUMENT_BODY = (
     b'{"schema": "registry.evidence-definitions/v1", "assuranceProfile": "local",'
-    b' "issuedBy": "i", "providedBy": "p", "holderBoundBatchMaxSize": 1,'
+    b' "audience": "urn:example:audience", "issuedBy": "i", "providedBy": "p",'
+    b' "holderBoundBatchMaxSize": 1,'
     b' "definitions": []}'
 )
 

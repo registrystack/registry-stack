@@ -28,7 +28,9 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
     assert_success(&request);
     let request = String::from_utf8_lossy(&request.stdout);
     for visible in [
-        "<QUESTION>",
+        "[QUESTION]",
+        "--profile",
+        "--requirement",
         "--purpose",
         "--subject",
         "--subjects-file",
@@ -52,6 +54,12 @@ fn public_help_exposes_only_the_adopter_request_and_verify_inputs() {
         assert!(verify.contains(visible), "missing {visible}: {verify}");
     }
     assert!(!verify.contains("--evidence-bin"));
+
+    let nested_verify = command()
+        .args(["request", "verify", "--help"])
+        .output()
+        .expect("nested verify help");
+    assert_success(&nested_verify);
 }
 
 #[test]
@@ -873,8 +881,10 @@ impl Fixture {
                 "age-check",
                 "urn:registrystack:evidence:local:evidence-type:adult-status",
                 json!([{
+                    "handle": "is_adult",
                     "concept": "urn:registrystack:evidence:local:concept:adult-status:is_adult",
-                    "form": "boolean"
+                    "form": "boolean",
+                    "required": true
                 }]),
                 vec!["person"],
             ),
@@ -883,8 +893,10 @@ impl Fixture {
                 "service-path-selection",
                 "urn:registrystack:evidence:local:evidence-type:age-bracket",
                 json!([{
+                    "handle": "age_bracket",
                     "concept": "urn:registrystack:evidence:local:concept:age-bracket:age_bracket",
-                    "form": "string"
+                    "form": "string",
+                    "required": true
                 }]),
                 vec!["person"],
             ),
@@ -893,8 +905,10 @@ impl Fixture {
                 "relationship-review",
                 "urn:registrystack:evidence:local:evidence-type:relationship-check",
                 json!([{
+                    "handle": "relationship_confirmed",
                     "concept": "urn:registrystack:evidence:local:concept:relationship-check:relationship_confirmed",
-                    "form": "boolean"
+                    "form": "boolean",
+                    "required": true
                 }]),
                 vec!["child", "candidate"],
             ),
@@ -902,7 +916,7 @@ impl Fixture {
                 "urn:registrystack:evidence:local:requirement:other",
                 "other",
                 "urn:registrystack:evidence:local:evidence-type:other",
-                json!([{"concept": "urn:other", "form": "boolean"}]),
+                json!([{"handle": "other", "concept": "urn:other", "form": "boolean", "required": true}]),
                 vec!["person"],
             ),
         };
@@ -1176,9 +1190,16 @@ fn write_sealed_bundle(root: &Path, state: &Value) {
                 .as_array()
                 .expect("question concepts")
                 .iter()
-                .map(|concept| json!({"id": concept["uri"], "form": concept["form"]}))
+                .map(|concept| {
+                    json!({
+                        "handle": concept["alias"],
+                        "id": concept["uri"],
+                        "form": concept["form"]
+                    })
+                })
                 .collect::<Vec<_>>();
             json!({
+                "handle": question["alias"],
                 "id": question["requirementUri"],
                 "purposes": [question["purpose"].clone()],
                 "subjectRoles": roles,

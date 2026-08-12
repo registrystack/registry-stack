@@ -18,15 +18,18 @@ const GOLDEN_JWKS = JSON.parse(
 const DEFINITIONS_DOCUMENT = {
   schema: 'registry.evidence-definitions/v1',
   assuranceProfile: 'local',
+  audience: 'urn:example:node-test:audience',
   issuedBy: 'urn:example:node-test:issuer',
   providedBy: 'urn:example:node-test:provider',
   definitions: [
     {
+      handle: 'status',
       requirement: 'urn:example:node-test:requirement:status:v1',
       configurationRevision: `sha256:${'0'.repeat(64)}`,
       kind: 'criterion',
       evidenceType: 'urn:example:node-test:evidence-type:status:v1',
       purpose: 'example-decision',
+      responseFormats: ['signed-jws', 'sd-jwt-vc'],
       referenceFrameworks: ['urn:example:node-test:framework:status:v1'],
       subjects: [
         {
@@ -39,7 +42,14 @@ const DEFINITIONS_DOCUMENT = {
           },
         },
       ],
-      concepts: [{ id: 'urn:example:node-test:concept:status-holds', form: 'boolean' }],
+      concepts: [
+        {
+          handle: 'status-holds',
+          concept: 'urn:example:node-test:concept:status-holds',
+          required: true,
+          form: 'boolean',
+        },
+      ],
     },
   ],
 };

@@ -43,7 +43,7 @@ const PROJECT_OPENAPI: &str = "source.openapi.yaml";
 pub enum MockCommand {
     /// Serve schema-valid synthetic responses from OpenAPI or exact edited cases.
     Serve(ServeArgs),
-    /// Create editable configuration and response bodies without overwriting files.
+    /// Materialize or extend editable mock cases from OpenAPI.
     Generate(GenerateArgs),
     /// Validate edited configuration and response bodies without writing or binding.
     Check(CheckArgs),
@@ -117,11 +117,11 @@ pub struct GenerateArgs {
     #[arg(long, conflicts_with_all = ["openapi", "config"])]
     project: Option<PathBuf>,
 
-    /// Narrow generation to one `METHOD /path/template` operation.
+    /// Select one `METHOD /path/template` operation.
     #[arg(long)]
     operation: Option<String>,
 
-    /// Override the starter case name for the selected operation.
+    /// Starter or appended case name for the selected operation.
     #[arg(long, requires = "operation")]
     case: Option<String>,
 
@@ -129,7 +129,7 @@ pub struct GenerateArgs {
     #[arg(long = "path-parameter", requires = "operation")]
     path_parameters: Vec<String>,
 
-    /// Deterministic unsigned generation seed. Initial generation defaults to zero.
+    /// Deterministic unsigned generation seed for a new plan. Defaults to zero.
     #[arg(long)]
     seed: Option<u64>,
 
@@ -352,13 +352,11 @@ fn serve_materialized(checked: CheckedPlan, address: SocketAddr) -> Result<ExitC
 
 fn generate(args: GenerateArgs) -> Result<ExitCode> {
     if args.config.is_some() {
-        if args.operation.is_some()
-            || args.case.is_some()
-            || !args.path_parameters.is_empty()
-            || args.seed.is_some()
-            || args.as_of.is_some()
-        {
-            bail!("generate --config uses the stored plan and rejects generation overrides");
+        if args.seed.is_some() || args.as_of.is_some() {
+            bail!("generate --config uses the stored generation settings");
+        }
+        if args.operation.is_some() {
+            return append_generated_case(args);
         }
         return generate_missing(args);
     }
@@ -519,34 +517,7 @@ fn generate_missing(args: GenerateArgs) -> Result<ExitCode> {
         println!("Mock plan is complete; no body was created.");
         return Ok(ExitCode::SUCCESS);
     }
-    let generation = checked
-        .plan
-        .generation
-        .clone()
-        .context("generate --config needs retained generation metadata")?;
-    if checked.plan.openapi_digest.is_none() {
-        bail!("generate --config needs a retained openapiDigest");
-    }
-    let openapi_relative = files::resolve_openapi_reference(&root, &config, &checked.plan.openapi)?;
-    let openapi_bytes = files::read_confined(
-        &root,
-        &openapi_relative,
-        registry_evidence_authoring::layout::MAX_OPENAPI_BYTES,
-        "configured OpenAPI document",
-    )?;
-    let (loaded, undeclared) =
-        load_referenced_datasets(&root, &openapi_relative, &openapi_bytes, &checked.prepared)?;
-    if !undeclared.is_empty() {
-        bail!("a configured response recipe references an undeclared dataset");
-    }
-    let actual_digests = loaded
-        .iter()
-        .map(|(identifier, dataset)| (identifier.clone(), Digest::from_bytes(dataset.digest)))
-        .collect::<BTreeMap<_, _>>();
-    if actual_digests != generation.datasets {
-        bail!("generation.datasets does not match the current referenced dataset bytes");
-    }
-    checked.prepared.datasets = loaded;
+    let generation = restore_generation_inputs(&root, &config, &mut checked)?;
     let as_of = generation.as_of_date()?;
     let config_dir = root.join(config.parent().unwrap_or_else(|| Path::new(".")));
     let mut publications = Vec::new();
@@ -592,6 +563,129 @@ fn generate_missing(args: GenerateArgs) -> Result<ExitCode> {
         print_explanations(&explanations);
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn append_generated_case(args: GenerateArgs) -> Result<ExitCode> {
+    let root = current_root()?;
+    let config = normal_relative(
+        args.config
+            .as_deref()
+            .expect("append mode requires --config"),
+        "--config",
+    )?;
+    let case_name = args
+        .case
+        .as_deref()
+        .context("generate --config with --operation also needs --case")?;
+    let selected = openapi::parse_operation(
+        args.operation
+            .as_deref()
+            .expect("append mode requires --operation"),
+    )?;
+    let original = files::read_confined(&root, &config, plan::MAX_PLAN_BYTES as u64, "mock plan")?;
+    let mut checked = load_checked_plan(&root, &config, false)?;
+    let generation = restore_generation_inputs(&root, &config, &mut checked)?;
+    let parameters = parse_path_parameters(&args.path_parameters)?;
+    let operation = checked
+        .prepared
+        .operation(&selected)
+        .context("selected operation is not present in the materialized plan")?;
+    let request_parameters = operation.plan_parameters(&parameters)?;
+    let (generated, body) = checked.prepared.generate(
+        operation,
+        &parameters,
+        generation.seed,
+        generation.as_of_date()?,
+    )?;
+    let body_path = case_body_path(&selected, case_name);
+
+    let plan_operation = checked
+        .plan
+        .operations
+        .iter_mut()
+        .find(|operation| operation.method == selected.method && operation.path == selected.path)
+        .context("selected operation is not present in the materialized plan")?;
+    plan_operation.cases.push(PlanCase {
+        name: case_name.to_owned(),
+        request: PlanRequest {
+            path_parameters: request_parameters,
+        },
+        body: body_path.to_string_lossy().into_owned(),
+    });
+    let replacement = plan::render_plan(&checked.plan)?;
+    let config_directory = root.join(config.parent().unwrap_or_else(|| Path::new(".")));
+    files::ensure_confined_absent(&config_directory, &body_path)?;
+    files::replace_confined(&root, &config, &original, &replacement)?;
+    let publication = PublicationFile::new(&body_path, body);
+    let published = files::publish_missing(&config_directory, &[publication]).context(
+        "the case was added to the config but its body was not created; rerun generate --config to complete it",
+    )?;
+
+    println!("Updated {}", config.display());
+    for path in published {
+        println!(
+            "Created {}",
+            config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(path)
+                .display()
+        );
+    }
+    println!(
+        "Generated synthetic values: explicit={} inferred={} format={} generic={}",
+        generated.counts.explicit,
+        generated.counts.inferred,
+        generated.counts.format,
+        generated.counts.generic
+    );
+    if args.explain {
+        println!(
+            "Generator contract={} faker={} format={} inference={}",
+            generator::GENERATOR_CONTRACT,
+            generator::FAKER_REGISTRY_ID,
+            generator::FORMAT_REGISTRY_ID,
+            infer::INFERENCE_REGISTRY_ID
+        );
+        print_explanations(&generated.inference);
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn restore_generation_inputs(
+    root: &Path,
+    config: &Path,
+    checked: &mut CheckedPlan,
+) -> Result<GenerationSettings> {
+    let generation = checked
+        .plan
+        .generation
+        .clone()
+        .context("generate --config needs retained generation metadata")?;
+    if checked.plan.openapi_digest.is_none() {
+        bail!("generate --config needs a retained openapiDigest");
+    }
+    let openapi_relative = files::resolve_openapi_reference(root, config, &checked.plan.openapi)?;
+    let openapi_bytes = files::read_confined(
+        root,
+        &openapi_relative,
+        registry_evidence_authoring::layout::MAX_OPENAPI_BYTES,
+        "configured OpenAPI document",
+    )?;
+    let (loaded, undeclared) =
+        load_referenced_datasets(root, &openapi_relative, &openapi_bytes, &checked.prepared)?;
+    if !undeclared.is_empty() {
+        bail!("a configured response recipe references an undeclared dataset");
+    }
+    let actual_digests = loaded
+        .iter()
+        .map(|(identifier, dataset)| (identifier.clone(), Digest::from_bytes(dataset.digest)))
+        .collect::<BTreeMap<_, _>>();
+    if actual_digests != generation.datasets {
+        bail!("generation.datasets does not match the current referenced dataset bytes");
+    }
+    checked.prepared.datasets = loaded;
+    Ok(generation)
 }
 
 fn check(args: CheckArgs) -> Result<ExitCode> {

@@ -362,6 +362,11 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
         1,
     );
     assert_requirement_forms(&requirements, RELATIONSHIP_REQUIREMENT, &["boolean"], 2);
+    assert_eq!(requirements[REQUIREMENT]["handle"], "adult-status");
+    assert_eq!(
+        requirements[REQUIREMENT]["concepts"][0]["handle"],
+        "is_adult"
+    );
     for fixture_path in [
         "adult-status.yaml",
         "age-bracket.yaml",
@@ -1384,7 +1389,7 @@ privacy_expectation:
             format!(
                 r#"version: 1
 assuranceProfile: production
-service: {{providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:acceptance}}
+service: {{providerId: urn:example:providers:evidence, trustDomain: urn:example:trust-domains:acceptance, publicOrigin: https://evidence.example.test}}
 issuer: {{id: urn:example:issuers:evidence}}
 authentication:
   kind: oidc-access-token

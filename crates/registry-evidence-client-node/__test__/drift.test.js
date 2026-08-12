@@ -32,11 +32,15 @@ const SYNC_METHODS = [
 const ASYNC_METHODS = [
   'discover',
   'fetchJwks',
+  'refreshMetadata',
+  'request',
   'send',
   'sendBatch',
   'requestAndVerify',
   'requestAndVerifyBatch',
 ];
+
+const STATIC_METHODS = ['fromProfile'];
 
 function ownMethodNames(prototype) {
   return Object.getOwnPropertyNames(prototype)
@@ -59,6 +63,21 @@ test('every native EvidenceClient method is accounted for as sync or async', () 
     'the native EvidenceClient surface changed; update SYNC_METHODS/ASYNC_METHODS and the ' +
       'matching wrapSync/wrapAsync calls in client.js',
   );
+});
+
+test('every native EvidenceClient static method is normalized by the wrapper', () => {
+  const actual = Object.getOwnPropertyNames(native.EvidenceClient)
+    .filter((name) => !['length', 'name', 'prototype'].includes(name))
+    .filter((name) => typeof native.EvidenceClient[name] === 'function')
+    .sort();
+  assert.deepEqual(
+    actual,
+    STATIC_METHODS,
+    'the native EvidenceClient static surface changed; update client.js and client.d.ts',
+  );
+  for (const name of STATIC_METHODS) {
+    assert.equal(typeof wrapper.EvidenceClient[name], 'function');
+  }
 });
 
 test('every native prepared and raw response getter is wrapped', () => {
@@ -91,6 +110,20 @@ test('every native SdJwtVcBatchResponse member is wrapped', () => {
   assert.deepEqual(ownGetterNames(native.SdJwtVcBatchResponse.prototype).sort(), [
     'count',
     'credentials',
+  ]);
+});
+
+test('every native progressive result getter is wrapped', () => {
+  assert.equal(wrapper.AudienceScopedResult, native.AudienceScopedResult);
+  assert.deepEqual(ownGetterNames(native.AudienceScopedResult.prototype).sort(), [
+    'assertion',
+    'credential',
+    'evidence',
+    'responseFormat',
+    'subjectContinuity',
+    'traceId',
+    'value',
+    'values',
   ]);
 });
 

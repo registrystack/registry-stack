@@ -83,6 +83,22 @@ function wrapAsync(prototype, name) {
   };
 }
 
+// The public Node API exposes the opaque native result directly, with the
+// encoding tag next to its artifact, so the one-call tutorial can read
+// `result.value`. Its getters stay native: notably, only reading an ambiguous
+// `value` fails.
+function wrapProgressiveRequest(prototype) {
+  const original = prototype.request;
+  prototype.request = function (...args) {
+    return original.apply(this, args).then(
+      (result) => result,
+      (error) => {
+        throw normalize(error);
+      },
+    );
+  };
+}
+
 function wrapGetter(prototype, name) {
   const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
   const originalGet = descriptor.get;
@@ -117,6 +133,8 @@ wrapSync(native.EvidenceClient.prototype, 'verify');
 wrapSync(native.EvidenceClient.prototype, 'verifyBatch');
 wrapAsync(native.EvidenceClient.prototype, 'requestAndVerify');
 wrapAsync(native.EvidenceClient.prototype, 'requestAndVerifyBatch');
+wrapProgressiveRequest(native.EvidenceClient.prototype);
+wrapAsync(native.EvidenceClient.prototype, 'refreshMetadata');
 wrapSync(native.EvidenceClient.prototype, 'verifyAsOf');
 wrapSync(native.EvidenceClient.prototype, 'verifyBatchAsOf');
 
@@ -134,6 +152,19 @@ wrapGetter(native.RawEvidenceResponse.prototype, 'traceId');
 
 wrapGetter(native.RawEvidenceRequestBatchResponse.prototype, 'body');
 wrapGetter(native.RawEvidenceRequestBatchResponse.prototype, 'traceId');
+
+for (const name of [
+  'responseFormat',
+  'evidence',
+  'traceId',
+  'assertion',
+  'credential',
+  'values',
+  'value',
+  'subjectContinuity',
+]) {
+  wrapGetter(native.AudienceScopedResult.prototype, name);
+}
 
 wrapSync(native.SdJwtVcBatchResponse.prototype, 'credentialForHolderKey');
 wrapGetter(native.SdJwtVcBatchResponse.prototype, 'credentials');
@@ -160,6 +191,24 @@ class EvidenceClient extends native.EvidenceClient {
       throw normalize(error);
     }
   }
+
+  /**
+   * Construct the progressive client from an application-owned profile.
+   *
+   * The native implementation reads the profile, resolves any secret
+   * reference, discovers metadata, and owns every trust decision. Keeping
+   * that work below this wrapper is intentional: JavaScript never receives a
+   * key set or a subject-continuity store to accidentally retain.
+   */
+  static fromProfile(path, privateKeyJwk) {
+    try {
+      return privateKeyJwk === undefined
+        ? native.EvidenceClient.fromProfile(path)
+        : native.EvidenceClient.fromProfile(path, privateKeyJwk);
+    } catch (error) {
+      throw normalize(error);
+    }
+  }
 }
 
 class SdJwtVcBatchResponse extends native.SdJwtVcBatchResponse {
@@ -179,5 +228,6 @@ module.exports = {
   PreparedEvidenceRequestBatch: native.PreparedEvidenceRequestBatch,
   RawEvidenceResponse: native.RawEvidenceResponse,
   RawEvidenceRequestBatchResponse: native.RawEvidenceRequestBatchResponse,
+  AudienceScopedResult: native.AudienceScopedResult,
   SdJwtVcBatchResponse,
 };

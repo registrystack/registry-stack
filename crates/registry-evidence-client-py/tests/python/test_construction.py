@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import tempfile
 import unittest
 
 _TESTS_DIR = pathlib.Path(__file__).resolve().parent
@@ -88,6 +89,22 @@ class ConstructionTest(unittest.TestCase):
             "token_kind",
         ):
             self.assertTrue(hasattr(raised.exception, attribute), attribute)
+
+    def test_profile_load_errors_do_not_disclose_the_profile_path(self):
+        # A profile path often names a deployment directory. It is not useful
+        # to an application error handler and must not escape in diagnostics.
+        with tempfile.TemporaryDirectory(prefix="evidence-profile-canary-") as directory:
+            profile = pathlib.Path(directory) / "client-secret-location.json"
+            with self.assertRaises(revc.ConfigurationError) as raised:
+                revc.EvidenceClient.from_profile(str(profile))
+        self.assertEqual(raised.exception.kind, "configuration")
+        self.assertNotIn("client-secret-location", str(raised.exception))
+
+    def test_progressive_surface_is_available_on_the_compiled_client(self):
+        self.assertTrue(callable(revc.EvidenceClient.from_profile))
+        self.assertTrue(callable(revc.EvidenceClient.refresh_metadata))
+        self.assertTrue(callable(revc.EvidenceClient.request))
+        self.assertTrue(callable(revc.SubjectBindingReceipt.from_json))
 
 
 if __name__ == "__main__":

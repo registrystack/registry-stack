@@ -177,7 +177,9 @@ fn fixture_policy_document(evidence: &Evidence) -> EvidenceVerificationPolicyDoc
             .supported_values
             .iter()
             .map(|value| ExpectedOutputDocument {
+                handle: "status-holds".to_owned(),
                 concept: value.provides_value_for.clone(),
+                required: true,
                 form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
             })
             .collect(),

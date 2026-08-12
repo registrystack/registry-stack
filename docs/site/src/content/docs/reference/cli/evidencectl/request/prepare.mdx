@@ -23,7 +23,7 @@ This page is generated from the public Clap command tree for Registry Stack sour
 ## Usage
 
 ```text
-evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION>
+evidencectl request prepare [OPTIONS] --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION|--profile <PROFILE>>
 ```
 
 ## Constraints
@@ -32,18 +32,21 @@ evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --name <NAME> <--subje
 | --- | --- |
 | Command invocation | Exactly one of `--subject <SUBJECT>`, `--subjects-file <PATH>` is required. |
 | Command invocation | `--subject <SUBJECT>` and `--subjects-file <PATH>` cannot be used together. |
+| Command invocation | Exactly one of `[QUESTION]`, `--profile <PROFILE>` is required. |
 
 ## Arguments
 
 | Argument | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
-| `<QUESTION>` | Yes | n/a | n/a | n/a | Question defined by the active local project |
+| `[QUESTION]` | No | n/a | n/a | n/a | Question defined by the active local project |
 
 ## Options
 
 | Option | Always required | Repeatable | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `--purpose <PURPOSE>` | Yes | No | n/a | n/a | n/a | Exact purpose declared by the question |
+| `--profile <PROFILE>` | No | No | n/a | n/a | n/a | Owner-only progressive client profile |
+| `--requirement <REQUIREMENT>` | No | No | n/a | n/a | n/a | Stable public requirement handle from the selected contract catalog |
+| `--purpose <PURPOSE>` | No | No | n/a | n/a | n/a | Exact purpose declared by the question |
 | `--subject <SUBJECT>` | No | Yes | n/a | n/a | n/a | Subject selector. Repeat role:field=value for a multi-subject question |
 | `--subjects-file <PATH>` | No | No | n/a | n/a | n/a | Owner-only JSON file containing the complete subject selector set |
 | `--name <NAME>` | Yes | No | n/a | n/a | n/a | Safe name for this retained request |

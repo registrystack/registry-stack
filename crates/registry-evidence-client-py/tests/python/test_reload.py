@@ -24,8 +24,8 @@ bootstrap.ensure_built()
 
 import registry_evidence_client as revc  # noqa: E402
 
-# The seventeen runtime names `__init__.pyi` declares: the eight plain classes, the
-# base exception, and its eight subclasses. Kept in lockstep with
+# The progressive result and continuity classes join the original runtime
+# names declared by `__init__.pyi`. Kept in lockstep with
 # `test_drift.py`'s own `PLAIN_CLASS_NAMES` and `EXCEPTION_SUBCLASS_NAMES`.
 PUBLIC_SURFACE_NAMES = {
     "EvidenceClient",
@@ -36,6 +36,10 @@ PUBLIC_SURFACE_NAMES = {
     "SdJwtVcBatchResponse",
     "VerifiedEvidence",
     "VerifiedEvidenceRequestBatch",
+    "SubjectBindingReceipt",
+    "SubjectContinuity",
+    "VerifiedAssertion",
+    "VerifiedAudienceScopedCredential",
     "EvidenceClientError",
     "ConfigurationError",
     "NonceError",

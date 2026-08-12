@@ -562,6 +562,262 @@
       "constraints": [],
       "subcommands": [
         {
+          "name": "client",
+          "invocation": "evidencectl client",
+          "about": "Configure progressive relying-party clients and fetch contract candidates",
+          "long_about": null,
+          "usage": "evidencectl client <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "profile",
+              "invocation": "evidencectl client profile",
+              "about": "Create and inspect relying-party client profiles",
+              "long_about": null,
+              "usage": "evidencectl client profile <COMMAND>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": [
+                {
+                  "name": "create",
+                  "invocation": "evidencectl client profile create",
+                  "about": "Create a strict profile containing only references to local key material",
+                  "long_about": null,
+                  "usage": "evidencectl client profile create [OPTIONS] --base-url <BASE_URL> --client-id <CLIENT_ID> --out <OUT> <--private-key-file <PATH>|--private-key-env <VARIABLE>>",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "--base-url <BASE_URL>",
+                      "description": "Evidence Gateway base URL. HTTPS is required by default",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--client-id <CLIENT_ID>",
+                      "description": "Registered OAuth client identifier",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--private-key-file <PATH>",
+                      "description": "Safe path to a private JWK, relative to the profile file",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--private-key-env <VARIABLE>",
+                      "description": "Environment variable holding the private JWK JSON",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--local-loopback-discovery",
+                      "description": "Permit discovery over plain HTTP only when the base URL is loopback",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--pinned-jwks <PATH>",
+                      "description": "Reviewed pinned JWKS file, relative to the profile file",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--contracts-file <PATH>",
+                      "description": "Reviewed contract catalog, relative to the profile file",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--maximum-assertion-lifetime-seconds <MAXIMUM_ASSERTION_LIFETIME_SECONDS>",
+                      "description": "Maximum accepted assertion lifetime in seconds",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [
+                        "300"
+                      ],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--clock-skew-seconds <CLOCK_SKEW_SECONDS>",
+                      "description": "Accepted verifier clock skew in seconds",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [
+                        "30"
+                      ],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--expected-audience <EXPECTED_AUDIENCE>",
+                      "description": "Optional expected audience override",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--expected-issuer <EXPECTED_ISSUER>",
+                      "description": "Optional expected Evidence issuer",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--expected-provider <EXPECTED_PROVIDER>",
+                      "description": "Optional expected Evidence provider",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--out <OUT>",
+                      "description": "New owner-only profile file",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [
+                    {
+                      "kind": "required_exactly_one",
+                      "when": null,
+                      "arguments": [
+                        "--private-key-file <PATH>",
+                        "--private-key-env <VARIABLE>"
+                      ]
+                    }
+                  ],
+                  "subcommands": []
+                }
+              ]
+            },
+            {
+              "name": "contracts",
+              "invocation": "evidencectl client contracts",
+              "about": "Fetch requester-scoped contract candidates for review",
+              "long_about": null,
+              "usage": "evidencectl client contracts <COMMAND>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": [
+                {
+                  "name": "fetch",
+                  "invocation": "evidencectl client contracts fetch",
+                  "about": "Fetch a closed requester-scoped contract candidate",
+                  "long_about": null,
+                  "usage": "evidencectl client contracts fetch --profile <PROFILE> --out <OUT>",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "--profile <PROFILE>",
+                      "description": "Owner-only client profile",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--out <OUT>",
+                      "description": "New owner-only contract-candidate file",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "access",
           "invocation": "evidencectl access",
           "about": "Manage local caller access policies and clients",
@@ -2006,12 +2262,12 @@
               "invocation": "evidencectl request prepare",
               "about": "Prepare the request, authorization header, and verification context",
               "long_about": null,
-              "usage": "evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION>",
+              "usage": "evidencectl request prepare [OPTIONS] --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION|--profile <PROFILE>>",
               "arguments": [
                 {
-                  "display": "<QUESTION>",
+                  "display": "[QUESTION]",
                   "description": "Question defined by the active local project",
-                  "always_required": true,
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -2020,9 +2276,27 @@
               ],
               "options": [
                 {
+                  "display": "--profile <PROFILE>",
+                  "description": "Owner-only progressive client profile",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--requirement <REQUIREMENT>",
+                  "description": "Stable public requirement handle from the selected contract catalog",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--purpose <PURPOSE>",
                   "description": "Exact purpose declared by the question",
-                  "always_required": true,
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -2104,8 +2378,65 @@
                     "--subject <SUBJECT>",
                     "--subjects-file <PATH>"
                   ]
+                },
+                {
+                  "kind": "required_exactly_one",
+                  "when": null,
+                  "arguments": [
+                    "[QUESTION]",
+                    "--profile <PROFILE>"
+                  ]
                 }
               ],
+              "subcommands": []
+            },
+            {
+              "name": "verify",
+              "invocation": "evidencectl request verify",
+              "about": "Verify one retained Evidence Gateway response offline",
+              "long_about": null,
+              "usage": "evidencectl request verify --context <CONTEXT> --output <OUTPUT> <RESPONSE>",
+              "arguments": [
+                {
+                  "display": "<RESPONSE>",
+                  "description": "Signed JWS or SD-JWT VC response returned by Evidence Gateway",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--context <CONTEXT>",
+                  "description": "Owner-only verification context retained before the response existed",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <OUTPUT>",
+                  "description": "New owner-only file for the exact verified Evidence Gateway payload",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
               "subcommands": []
             }
           ]

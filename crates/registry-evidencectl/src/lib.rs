@@ -11,6 +11,7 @@ mod access;
 mod audit_view;
 mod authoring;
 mod build;
+mod client;
 mod dev;
 mod doctor;
 mod evidence_binary;
@@ -38,6 +39,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Configure progressive relying-party clients and fetch contract candidates.
+    #[command(subcommand)]
+    Client(client::ClientCommand),
     /// Manage local caller access policies and clients.
     #[command(subcommand)]
     Access(access::AccessCommand),
@@ -86,6 +90,7 @@ pub fn command() -> clap::Command {
 pub fn main_entry() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
+        Command::Client(command) => client::run(command),
         Command::Access(command) => access::run(command),
         Command::Keygen(command) => keygen::run(command),
         Command::Jwks(args) => jwks::run(args),

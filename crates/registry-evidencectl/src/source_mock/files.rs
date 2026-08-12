@@ -31,6 +31,7 @@ const DIRECTORY_MODE: Mode = Mode::from_raw_mode(0o755);
 const FILE_MODE: Mode = Mode::from_raw_mode(0o644);
 const STAGE_ATTEMPTS: usize = 16;
 const STAGE_PREFIX: &str = ".evidencectl-source-mock-stage-";
+const REPLACE_PREFIX: &str = ".evidencectl-source-mock-replace-";
 
 /// One already-validated artifact to publish relative to a mock root.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -236,6 +237,92 @@ pub(super) fn publish_initial_tree(
 /// bodies that are still missing.
 pub(super) fn publish_missing(root: &Path, files: &[PublicationFile]) -> Result<Vec<PathBuf>> {
     publish_missing_with(root, files, |_, _| Ok(()))
+}
+
+/// Refuse when a confined authoring path already exists.
+pub(super) fn ensure_confined_absent(root_path: &Path, relative_path: &Path) -> Result<()> {
+    let relative = relative_text(relative_path, "publication path")?;
+    validate_relative_path(&relative, "publication path")?;
+    let root = open_directory(root_path, "mock root")?;
+    ensure_destination_absent(&root, relative_path)
+}
+
+/// Atomically replace one confined regular file when its bytes still match the
+/// version the caller validated. No ancestor or leaf symlink is followed.
+pub(super) fn replace_confined(
+    root_path: &Path,
+    relative_path: &Path,
+    expected: &[u8],
+    replacement: &[u8],
+) -> Result<()> {
+    let relative = relative_text(relative_path, "replacement path")?;
+    validate_relative_path(&relative, "replacement path")?;
+    if replacement.is_empty() || replacement.len() > MAX_PUBLICATION_FILE_BYTES {
+        bail!("replacement file must be non-empty and bounded");
+    }
+
+    let root = open_directory(root_path, "mock root")?;
+    let (parent, leaf) = open_parent(&root, relative_path, false, None, "replacement path")?
+        .context("replacement parent does not exist")?;
+    refuse_changed_file(&parent, &leaf, expected)?;
+
+    let mut staged_name = None;
+    let result: Result<()> = (|| {
+        for _ in 0..STAGE_ATTEMPTS {
+            let mut random = [0_u8; 12];
+            getrandom::fill(&mut random).context("generating a replacement staging name")?;
+            let name = OsString::from(format!("{REPLACE_PREFIX}{}", hex::encode(random)));
+            match rustix::fs::openat(
+                &parent,
+                &name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                FILE_MODE,
+            ) {
+                Ok(descriptor) => {
+                    staged_name = Some(name);
+                    let mut file = File::from(descriptor);
+                    file.write_all(replacement)
+                        .context("writing staged replacement")?;
+                    file.sync_all().context("persisting staged replacement")?;
+                    break;
+                }
+                Err(Errno::EXIST) => continue,
+                Err(error) => return Err(error).context("creating staged replacement"),
+            }
+        }
+        let name = staged_name
+            .as_ref()
+            .context("could not allocate a unique replacement staging file")?;
+
+        // An editor may have replaced the config while the staged bytes were
+        // written. Recheck immediately before the atomic rename.
+        refuse_changed_file(&parent, &leaf, expected)?;
+        rustix::fs::renameat_with(&parent, name, &parent, &leaf, RenameFlags::empty())
+            .context("publishing the updated mock config")?;
+        staged_name = None;
+        rustix::fs::fsync(&parent).context("persisting the updated mock config")?;
+        Ok(())
+    })();
+    if let Some(name) = staged_name {
+        let _ = rustix::fs::unlinkat(&parent, &name, AtFlags::empty());
+        let _ = rustix::fs::fsync(&parent);
+    }
+    result
+}
+
+fn refuse_changed_file(parent: &OwnedFd, leaf: &OsStr, expected: &[u8]) -> Result<()> {
+    let descriptor = rustix::fs::openat(
+        parent,
+        leaf,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .context("opening the current mock config")?;
+    let actual = read_descriptor(descriptor, MAX_PUBLICATION_FILE_BYTES as u64, "mock config")?;
+    if actual != expected {
+        bail!("mock config changed while the generated case was prepared");
+    }
+    Ok(())
 }
 
 fn publish_missing_with<F>(
@@ -696,6 +783,45 @@ mod tests {
         );
         assert!(publish_initial_tree(&config, &files).is_err());
         assert_eq!(std::fs::read(&config).unwrap(), b"version: 1\n");
+    }
+
+    #[test]
+    fn confined_replacement_requires_the_validated_bytes_and_refuses_symlinks() {
+        let temporary = tempdir().unwrap();
+        std::fs::create_dir(temporary.path().join("mocks")).unwrap();
+        let config = temporary.path().join("mocks/source.yaml");
+        std::fs::write(&config, b"version: 1\n").unwrap();
+
+        replace_confined(
+            temporary.path(),
+            Path::new("mocks/source.yaml"),
+            b"version: 1\n",
+            b"version: 1\ncases: 2\n",
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&config).unwrap(), b"version: 1\ncases: 2\n");
+
+        assert!(replace_confined(
+            temporary.path(),
+            Path::new("mocks/source.yaml"),
+            b"version: 1\n",
+            b"changed: true\n",
+        )
+        .is_err());
+        assert_eq!(std::fs::read(&config).unwrap(), b"version: 1\ncases: 2\n");
+
+        let target = temporary.path().join("outside.yaml");
+        std::fs::write(&target, b"outside\n").unwrap();
+        let linked = temporary.path().join("mocks/linked.yaml");
+        symlink(&target, &linked).unwrap();
+        assert!(replace_confined(
+            temporary.path(),
+            Path::new("mocks/linked.yaml"),
+            b"outside\n",
+            b"replaced\n",
+        )
+        .is_err());
+        assert_eq!(std::fs::read(target).unwrap(), b"outside\n");
     }
 
     #[test]

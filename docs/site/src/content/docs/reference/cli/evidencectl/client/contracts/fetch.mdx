@@ -1,0 +1,38 @@
+---
+title: "evidencectl client contracts fetch command reference"
+description: "Generated syntax and options for evidencectl client contracts fetch."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Fetch a closed requester-scoped contract candidate.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl client contracts fetch --profile <PROFILE> --out <OUT>
+```
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--profile <PROFILE>` | Yes | n/a | n/a | n/a | Owner-only client profile |
+| `--out <OUT>` | Yes | n/a | n/a | n/a | New owner-only contract-candidate file |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

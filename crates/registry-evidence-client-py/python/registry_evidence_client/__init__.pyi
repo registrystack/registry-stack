@@ -312,6 +312,43 @@ class VerifiedEvidenceRequestBatch:
     items: Sequence[VerifiedEvidenceRequestBatchItem]
     trace_id: Optional[str]
 
+class SubjectBindingReceipt:
+    """A versioned opaque continuity receipt for application-owned storage.
+
+    The client never persists this object. It contains verification scope and
+    opaque role bindings, never selectors or disclosed values.
+    """
+
+    def to_json(self) -> str: ...
+    @staticmethod
+    def from_json(document: str) -> "SubjectBindingReceipt": ...
+
+class SubjectContinuity:
+    """The outcome of subject-continuity verification for one result."""
+
+    status: Literal["first_use", "matched"]
+    receipt: SubjectBindingReceipt
+
+class VerifiedAssertion:
+    """A locally verified signed JWS assertion, retaining its exact bytes."""
+
+    evidence: Any
+    trace_id: Optional[str]
+    values: Mapping[str, Any]
+    value: Any
+    subject_continuity: SubjectContinuity
+    assertion: bytes
+
+class VerifiedAudienceScopedCredential:
+    """A locally verified audience-scoped SD-JWT VC response."""
+
+    evidence: Any
+    trace_id: Optional[str]
+    values: Mapping[str, Any]
+    value: Any
+    subject_continuity: SubjectContinuity
+    credential: str
+
 class EvidenceClient:
     """A relying party's connection to one Evidence deployment."""
 
@@ -328,6 +365,20 @@ class EvidenceClient:
         max_response_bytes: Optional[int] = ...,
         max_metadata_bytes: Optional[int] = ...,
     ) -> None: ...
+    @staticmethod
+    def from_profile(
+        profile_path: str,
+        private_key_jwk: Optional[Mapping[str, Any]] = ...,
+    ) -> "EvidenceClient": ...
+    def refresh_metadata(self) -> None: ...
+    def request(
+        self,
+        requirement: str,
+        response_format: EvidenceResponseFormat = ...,
+        binding_receipt: Optional[SubjectBindingReceipt] = ...,
+        subjects: Optional[Mapping[str, Mapping[str, Union[str, int, bool]]]] = ...,
+        **selectors: Union[str, int, bool],
+    ) -> Union[VerifiedAssertion, VerifiedAudienceScopedCredential]: ...
     def prepare(
         self,
         spec: Union[EvidenceRequestSpec, EvidenceRequestSpecWithHolderKeys],

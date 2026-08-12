@@ -23,15 +23,15 @@ const MAX_VERIFIED_BYTES: u64 = 256 * 1024;
 #[derive(Debug, Args)]
 pub struct VerifyArgs {
     /// Signed JWS or SD-JWT VC response returned by Evidence Gateway.
-    response: PathBuf,
+    pub(crate) response: PathBuf,
 
     /// Owner-only verification context retained before the response existed.
     #[arg(long)]
-    context: PathBuf,
+    pub(crate) context: PathBuf,
 
     /// New owner-only file for the exact verified Evidence Gateway payload.
     #[arg(long)]
-    output: PathBuf,
+    pub(crate) output: PathBuf,
 }
 
 pub fn run(args: VerifyArgs) -> Result<ExitCode> {

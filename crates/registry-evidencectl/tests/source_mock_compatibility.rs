@@ -223,6 +223,126 @@ fn regenerating_missing_bodies_explains_the_actual_inference_choices() {
 }
 
 #[test]
+fn generated_cases_can_extend_a_materialized_plan_without_replacing_a_body() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    copy_fixture_tree(temporary.path());
+    let initial = run(
+        temporary.path(),
+        &[
+            "source",
+            "mock",
+            "generate",
+            "--openapi",
+            "awkward.openapi.yaml",
+            "--output",
+            "mocks/source.yaml",
+            "--operation",
+            "GET /people/{person_id}",
+            "--case",
+            "person-one",
+            "--path-parameter",
+            "person_id=person-one",
+        ],
+    );
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+    let before = snapshot_tree(temporary.path());
+    let original_body = before
+        .iter()
+        .find(|(path, _)| {
+            path.starts_with("mocks/cases")
+                && path.extension().and_then(|value| value.to_str()) == Some("json")
+        })
+        .map(|(path, bytes)| (path.clone(), bytes.clone()))
+        .expect("initial case body");
+
+    let missing_case = run(
+        temporary.path(),
+        &[
+            "source",
+            "mock",
+            "generate",
+            "--config",
+            "mocks/source.yaml",
+            "--operation",
+            "GET /people/{person_id}",
+            "--path-parameter",
+            "person_id=person-two",
+        ],
+    );
+    assert!(!missing_case.status.success());
+    assert_eq!(snapshot_tree(temporary.path()), before);
+
+    let appended = run(
+        temporary.path(),
+        &[
+            "source",
+            "mock",
+            "generate",
+            "--config",
+            "mocks/source.yaml",
+            "--operation",
+            "GET /people/{person_id}",
+            "--case",
+            "person-two",
+            "--path-parameter",
+            "person_id=person-two",
+        ],
+    );
+    assert!(
+        appended.status.success(),
+        "{}",
+        String::from_utf8_lossy(&appended.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&appended.stdout);
+    assert!(stdout.contains("Updated mocks/source.yaml"), "{stdout}");
+
+    let after = snapshot_tree(temporary.path());
+    assert_eq!(after.get(&original_body.0), Some(&original_body.1));
+    let bodies = after
+        .iter()
+        .filter(|(path, _)| {
+            path.starts_with("mocks/cases")
+                && path.extension().and_then(|value| value.to_str()) == Some("json")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(bodies.len(), 2);
+    assert!(bodies.iter().any(|(_, bytes)| {
+        String::from_utf8_lossy(bytes).contains("\"person_id\": \"person-two\"")
+    }));
+
+    let checked = run(
+        temporary.path(),
+        &["source", "mock", "check", "--config", "mocks/source.yaml"],
+    );
+    assert!(checked.status.success());
+    assert!(String::from_utf8_lossy(&checked.stdout).contains("operations=1 cases=2"));
+
+    let complete = snapshot_tree(temporary.path());
+    let duplicate = run(
+        temporary.path(),
+        &[
+            "source",
+            "mock",
+            "generate",
+            "--config",
+            "mocks/source.yaml",
+            "--operation",
+            "GET /people/{person_id}",
+            "--case",
+            "person-two",
+            "--path-parameter",
+            "person_id=person-two",
+        ],
+    );
+    assert!(!duplicate.status.success());
+    assert_eq!(snapshot_tree(temporary.path()), complete);
+}
+
+#[test]
 fn ambiguous_routes_and_unsupported_formats_refuse_before_publication() {
     for spec in ["ambiguous.openapi.yaml", "unsupported-format.openapi.yaml"] {
         let temporary = tempfile::tempdir().expect("tempdir");

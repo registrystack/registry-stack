@@ -26,7 +26,7 @@
 
 mod convert;
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 // `napi::Result` is imported unaliased (shadowing the prelude's
 // `std::result::Result`, the standard convention in napi-rs bindings):
@@ -39,19 +39,21 @@ use napi::{
 };
 use napi_derive::napi;
 use registry_evidence_client::{
-    EvidenceClient as RealEvidenceClient, PreparedEvidenceRequest as RealPreparedEvidenceRequest,
+    AudienceScopedResult as RealAudienceScopedResult, EvidenceClient as RealEvidenceClient,
+    PreparedEvidenceRequest as RealPreparedEvidenceRequest,
     PreparedEvidenceRequestBatch as RealPreparedEvidenceRequestBatch,
     RawEvidenceRequestBatchResponse as RealRawEvidenceRequestBatchResponse,
     RawEvidenceResponse as RealRawEvidenceResponse,
-    SdJwtVcBatchResponse as RealSdJwtVcBatchResponse, VerifiedEvidence as RealVerifiedEvidence,
+    SdJwtVcBatchResponse as RealSdJwtVcBatchResponse, SubjectContinuity as RealSubjectContinuity,
+    VerifiedEvidence as RealVerifiedEvidence,
     VerifiedEvidenceRequestBatch as RealVerifiedEvidenceRequestBatch,
     VerifiedEvidenceRequestBatchItem as RealVerifiedEvidenceRequestBatchItem,
 };
 
 use convert::{
-    batch_spec_from_json, config_from_json, datetime_from_unix_millis, evidence_to_json,
-    map_client_error, map_config_error, map_conversion_error, spec_from_json,
-    subject_expectations_to_json,
+    audience_scoped_request_from_json, batch_spec_from_json, config_from_json,
+    datetime_from_unix_millis, evidence_to_json, map_client_error, map_config_error,
+    map_conversion_error, spec_from_json, subject_expectations_to_json,
 };
 
 /// Every mapped failure (see `convert::map_client_error` and friends) carries
@@ -428,6 +430,143 @@ fn verified_request_batch_to_napi(
     })
 }
 
+/// An application-owned receipt emitted after a verified audience-scoped
+/// result. It is serializable but deliberately opaque to this binding: no
+/// selector or disclosed value is copied into it here.
+#[napi(discriminant = "status", discriminant_case = "camelCase")]
+pub enum SubjectContinuity {
+    FirstUse { receipt: serde_json::Value },
+    Matched { receipt: serde_json::Value },
+}
+
+fn subject_continuity_to_napi(continuity: &RealSubjectContinuity) -> Result<SubjectContinuity> {
+    match continuity {
+        RealSubjectContinuity::FirstUse { receipt } => serde_json::to_value(receipt)
+            .map(|receipt| SubjectContinuity::FirstUse { receipt })
+            .map_err(|error| to_napi_serialization_error("the subject-continuity receipt", error)),
+        RealSubjectContinuity::Matched { receipt } => serde_json::to_value(receipt)
+            .map(|receipt| SubjectContinuity::Matched { receipt })
+            .map_err(|error| to_napi_serialization_error("the subject-continuity receipt", error)),
+    }
+}
+
+/// One opaque, locally verified progressive result. Its getters keep the
+/// ambiguity check for `value` lazy and retain the exact artifact below the
+/// FFI boundary until the caller asks for it.
+#[napi]
+pub struct AudienceScopedResult {
+    inner: Arc<RealAudienceScopedResult>,
+}
+
+fn audience_scoped_result_to_napi(
+    result: &RealAudienceScopedResult,
+) -> Result<AudienceScopedResult> {
+    match result {
+        RealAudienceScopedResult::Assertion(verified) => Ok(AudienceScopedResult {
+            inner: Arc::new(RealAudienceScopedResult::Assertion(verified.clone())),
+        }),
+        RealAudienceScopedResult::Credential(verified) => Ok(AudienceScopedResult {
+            inner: Arc::new(RealAudienceScopedResult::Credential(verified.clone())),
+        }),
+    }
+}
+
+#[napi]
+impl AudienceScopedResult {
+    #[napi(getter)]
+    pub fn response_format(&self) -> Result<String> {
+        catch_panic("reading the progressive response format", || {
+            Ok(match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(_) => "signed-jws",
+                RealAudienceScopedResult::Credential(_) => "sd-jwt-vc",
+            }
+            .to_owned())
+        })
+    }
+
+    #[napi(getter)]
+    pub fn evidence(&self) -> Result<serde_json::Value> {
+        catch_panic("reading progressive evidence", || {
+            let evidence = match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(verified) => verified.evidence(),
+                RealAudienceScopedResult::Credential(verified) => verified.evidence(),
+            };
+            evidence_to_json(evidence).map_err(|error| to_napi_error(map_conversion_error(&error)))
+        })
+    }
+
+    #[napi(getter)]
+    pub fn trace_id(&self) -> Result<Option<String>> {
+        catch_panic("reading progressive trace_id", || {
+            Ok(match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(verified) => verified.trace_id(),
+                RealAudienceScopedResult::Credential(verified) => verified.trace_id(),
+            }
+            .map(str::to_owned))
+        })
+    }
+
+    #[napi(getter)]
+    pub fn assertion(&self) -> Result<Option<Buffer>> {
+        catch_panic("reading progressive assertion bytes", || {
+            Ok(match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(verified) => {
+                    Some(verified.assertion_bytes().to_vec().into())
+                }
+                RealAudienceScopedResult::Credential(_) => None,
+            })
+        })
+    }
+
+    #[napi(getter)]
+    pub fn credential(&self) -> Result<Option<String>> {
+        catch_panic("reading progressive credential", || {
+            Ok(match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(_) => None,
+                RealAudienceScopedResult::Credential(verified) => {
+                    Some(verified.credential().to_owned())
+                }
+            })
+        })
+    }
+
+    #[napi(getter)]
+    pub fn values(&self) -> Result<serde_json::Value> {
+        catch_panic("reading progressive values", || {
+            let values = match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(verified) => verified.values(),
+                RealAudienceScopedResult::Credential(verified) => verified.values(),
+            };
+            serde_json::to_value(values)
+                .map_err(|error| to_napi_serialization_error("the verified values", error))
+        })
+    }
+
+    #[napi(getter)]
+    pub fn value(&self) -> Result<serde_json::Value> {
+        catch_panic("reading the progressive value", || {
+            let value = match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(verified) => verified.value(),
+                RealAudienceScopedResult::Credential(verified) => verified.value(),
+            }
+            .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            serde_json::to_value(value)
+                .map_err(|error| to_napi_serialization_error("the verified value", error))
+        })
+    }
+
+    #[napi(getter)]
+    pub fn subject_continuity(&self) -> Result<SubjectContinuity> {
+        catch_panic("reading progressive subject continuity", || {
+            let continuity = match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(verified) => verified.subject_continuity(),
+                RealAudienceScopedResult::Credential(verified) => verified.subject_continuity(),
+            };
+            subject_continuity_to_napi(continuity)
+        })
+    }
+}
+
 /// A relying party's connection to one Evidence deployment.
 #[napi]
 pub struct EvidenceClient {
@@ -450,6 +589,35 @@ impl EvidenceClient {
                 .map_err(|error| to_napi_error(map_config_error(&error)))?;
             let client = RealEvidenceClient::new(config)
                 .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            Ok(Self {
+                inner: Arc::new(client),
+            })
+        })
+    }
+
+    /// Build the progressive client from an application-owned profile. An
+    /// optional private JWK is an in-memory override for a secret-manager
+    /// integration; it is parsed without ever rendering its contents in an
+    /// error. Profile paths and file-backed secrets remain inside the core
+    /// client and are likewise redacted there.
+    #[napi(factory, ts_args_type = "path: string, privateKeyJwk?: any")]
+    pub fn from_profile(path: String, private_key_jwk: Option<serde_json::Value>) -> Result<Self> {
+        catch_panic("constructing the client from a profile", || {
+            let path = PathBuf::from(path);
+            let client = match private_key_jwk {
+                Some(private_key_jwk) => {
+                    let private_key: registry_platform_crypto::PrivateJwk =
+                        serde_json::from_value(private_key_jwk).map_err(|_| {
+                            to_napi_error(serde_json::json!({
+                                "kind": "configuration",
+                                "message": "`privateKeyJwk` must be a valid client private JWK",
+                            }))
+                        })?;
+                    RealEvidenceClient::from_profile_path_with_key(path, private_key)
+                }
+                None => RealEvidenceClient::from_profile_path(path),
+            }
+            .map_err(|error| to_napi_error(map_client_error(&error)))?;
             Ok(Self {
                 inner: Arc::new(client),
             })
@@ -523,6 +691,42 @@ impl EvidenceClient {
             .map_err(|error| to_napi_error(map_client_error(&error)))?;
         serde_json::to_value(&document)
             .map_err(|error| to_napi_serialization_error("the key set", error))
+    }
+
+    /// Refresh the profile's public metadata under the core client's bounded,
+    /// single-flight cache policy. It never substitutes a response-time key
+    /// refresh for the key snapshot closed before a request.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn refresh_metadata<'env>(&self, env: &'env Env) -> Result<PromiseRaw<'env, ()>> {
+        let client = Arc::clone(&self.inner);
+        env.spawn_future(async move {
+            client
+                .refresh_metadata()
+                .await
+                .map_err(|error| to_napi_error(map_client_error(&error)))
+        })
+    }
+
+    /// Discover, prepare, send exactly once, and verify one audience-scoped
+    /// request. The request object intentionally accepts only explicit
+    /// selectors or explicit role maps, and the Rust core owns all definition
+    /// selection, metadata trust, receipt matching, and result construction.
+    #[napi(ts_return_type = "Promise<AudienceScopedResult>")]
+    pub fn request<'env>(
+        &self,
+        env: &'env Env,
+        request: serde_json::Value,
+    ) -> Result<PromiseRaw<'env, AudienceScopedResult>> {
+        let request = audience_scoped_request_from_json(&request)
+            .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
+        let client = Arc::clone(&self.inner);
+        env.spawn_future(async move {
+            let result = client
+                .request(request)
+                .await
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+            audience_scoped_result_to_napi(&result)
+        })
     }
 
     /// Send one prepared request and read the signed response.
