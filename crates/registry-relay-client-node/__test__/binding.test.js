@@ -169,6 +169,28 @@ test('request validation failures have a distinct stable kind', async () => {
   );
 });
 
+test('record and SDMX inputs use the canonical cross-language literals', async () => {
+  const client = new RelayClient({ baseUrl });
+  const before = requestUrls.length;
+  const invalid = (error) => error instanceof RelayClientError
+    && error.kind === 'invalid_request';
+
+  await assert.rejects(
+    client.readRecord('people', 'one', { format: 'geo-json-rfc7946' }),
+    invalid,
+  );
+  await assert.rejects(
+    client.sdmxStructure({
+      kind: 'data-structure',
+      agency: 'AGENCY',
+      resource: 'FLOW',
+      version: '1.0.0',
+    }),
+    invalid,
+  );
+  assert.equal(requestUrls.length, before);
+});
+
 test('constructor numeric options preserve JavaScript safe integers', () => {
   for (const numericOptions of [
     { maxResponseBytes: 2 ** 32 },

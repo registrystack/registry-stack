@@ -1,17 +1,20 @@
 """Types for the synchronous Registry Relay V2 client binding."""
 
-from typing import Any, Literal, Optional, Sequence, TypedDict, Union
+from typing import Generic, Literal, Optional, Sequence, TypeAlias, TypeVar, TypedDict, Union
 
+JsonScalar = Union[str, int, float, bool, None]
+JsonValue = Union[JsonScalar, list["JsonValue"], dict[str, "JsonValue"]]
 RecordFormat = Literal["json", "json-ld", "geojson", "json-fg"]
 SdmxDataFormat = Literal["json", "csv"]
 SdmxStructureKind = Literal["dataflow", "datastructure"]
 Selector = Union[str, int, bool]
 BoundingBox = list[float] | tuple[float, float, float, float]
 
+
 class _PrivateKeyJwtRequired(TypedDict):
     token_endpoint: str
     client_id: str
-    client_key: dict[str, Any]
+    client_key: dict[str, JsonValue]
 
 
 class PrivateKeyJwtConfig(_PrivateKeyJwtRequired, total=False):
@@ -24,9 +27,12 @@ class PrivateKeyJwtConfig(_PrivateKeyJwtRequired, total=False):
     trusted_root_certificates: bytes
 
 
+StaticAuthorization = TypedDict("StaticAuthorization", {"static": str})
 PrivateKeyJwtAuthorization = TypedDict(
     "PrivateKeyJwtAuthorization", {"private_key_jwt": PrivateKeyJwtConfig}
 )
+RelayAuthorization = Union[StaticAuthorization, PrivateKeyJwtAuthorization]
+
 RecordsRoute = TypedDict(
     "RecordsRoute", {"kind": Literal["records"], "resource": str}
 )
@@ -50,53 +56,330 @@ class CollectionContinuation(_CollectionContinuationRequired, total=False):
     accessProfile: str
 
 
-CompleteOutcome = TypedDict(
-    "CompleteOutcome",
+class ProbeStatus(TypedDict):
+    status: str
+
+
+class Institution(TypedDict):
+    identifier: str
+    name: str
+
+
+class Product(TypedDict):
+    name: str
+    version: str
+
+
+class ApiBinding(TypedDict):
+    name: str
+    version: str
+
+
+class _AlignmentTargetRequired(TypedDict):
+    name: str
+    version: str
+    status: str
+
+
+class AlignmentTarget(_AlignmentTargetRequired, total=False):
+    cfrTarget: str
+
+
+ServiceLinks = TypedDict(
+    "ServiceLinks", {"self": str, "resources": str, "openapi": str}
+)
+
+
+class ServiceMetadata(TypedDict):
+    registryIdentifier: str
+    name: str
+    authority: Institution
+    operator: Optional[Institution]
+    authoritativeScope: str
+    product: Product
+    apiBinding: ApiBinding
+    alignmentTargets: list[AlignmentTarget]
+    capabilities: list[Capability]
+    links: ServiceLinks
+
+
+class FormatProfileCapability(TypedDict):
+    id: str
+    uri: str
+    crs: str
+    conformsTo: list[str]
+
+
+class WireFormatCapability(TypedDict):
+    id: str
+    mediaType: str
+    formatProfiles: list[FormatProfileCapability]
+
+
+class BboxCapability(TypedDict):
+    crs: str
+    predicate: str
+    maximumLongitudeSpanDegrees: float
+    maximumLatitudeSpanDegrees: float
+
+
+class SpatialQueryCapability(TypedDict):
+    bbox: BboxCapability
+
+
+class _ConsultationCapabilityRequired(TypedDict):
+    family: Literal["consultation"]
+    pattern: str
+    resourceIdentifier: str
+    operationIdentifier: str
+    accessProfileIdentifier: str
+    isDefault: bool
+    disclosureProfile: str
+    schemaReference: str
+    semanticModelReference: str
+    contextReference: str
+    href: str
+    wireFormats: list[WireFormatCapability]
+
+
+class ConsultationCapability(_ConsultationCapabilityRequired, total=False):
+    spatialQuery: SpatialQueryCapability
+    classificationReference: str
+    processingReference: str
+
+
+class SdmxProfile(TypedDict):
+    sdmxRestVersion: str
+    sdmxDataJsonVersion: str
+    sdmxDataCsvVersion: str
+    sdmxStructureJsonVersion: str
+
+
+class SdmxWireFormat(TypedDict):
+    id: str
+    mediaType: str
+
+
+class SdmxStructureLinks(TypedDict):
+    dataflow: str
+    datastructure: str
+
+
+class AggregateDataCapability(TypedDict):
+    family: Literal["aggregate-data"]
+    pattern: str
+    statisticalDatasetIdentifier: str
+    operationIdentifier: str
+    profile: SdmxProfile
+    wireFormats: list[SdmxWireFormat]
+    href: str
+    structureLinks: SdmxStructureLinks
+
+
+Capability = Union[ConsultationCapability, AggregateDataCapability]
+
+ResourceLinks = TypedDict("ResourceLinks", {"self": str})
+
+
+class ResourceDocument(TypedDict):
+    resourceIdentifier: str
+    title: str
+    description: str
+    semanticClass: str
+    enumerationPosture: str
+    capabilities: list[Capability]
+    links: ResourceLinks
+
+
+class RegistryMetadata(TypedDict):
+    registryIdentifier: str
+
+
+class CursorPageInfo(TypedDict):
+    nextCursor: Optional[str]
+
+
+class ResourceCollection(TypedDict):
+    items: list[ResourceDocument]
+    pageInfo: CursorPageInfo
+    meta: RegistryMetadata
+
+
+class ResourceEnvelope(TypedDict):
+    data: ResourceDocument
+    meta: RegistryMetadata
+
+
+class _RegistryRecordRequired(TypedDict):
+    registryIdentifier: str
+    recordIdentifier: str
+    revisionIdentifier: str
+    lifecycleState: str
+    schemaReference: str
+    semanticModelReference: str
+    authorityIdentifier: str
+    recordedAt: str
+    domainData: dict[str, JsonValue]
+
+
+_RegistryRecordJsonLd = TypedDict(
+    "_RegistryRecordJsonLd", {"@id": str, "@type": str}, total=False
+)
+
+
+class RegistryRecord(_RegistryRecordRequired, _RegistryRecordJsonLd):
+    pass
+
+
+class SourceRevision(TypedDict):
+    profile: str
+    status: str
+    value: Optional[str]
+
+
+RecordLinks = TypedDict(
+    "RecordLinks",
+    {"self": str, "context": str, "schema": str, "semanticModel": str},
+)
+
+
+class RecordMetadata(TypedDict):
+    operationIdentifier: str
+    accessProfile: str
+    family: str
+    pattern: str
+    disclosureProfile: str
+    contractRevision: str
+    sourceRevision: SourceRevision
+    selectedFields: list[str]
+    links: RecordLinks
+
+
+class _RecordEnvelopeRequired(TypedDict):
+    data: RegistryRecord
+    meta: RecordMetadata
+
+
+_RecordEnvelopeJsonLd = TypedDict(
+    "_RecordEnvelopeJsonLd", {"@context": str}, total=False
+)
+
+
+class RecordEnvelope(_RecordEnvelopeRequired, _RecordEnvelopeJsonLd):
+    pass
+
+
+class _RecordCollectionRequired(TypedDict):
+    items: list[RegistryRecord]
+    pageInfo: CursorPageInfo
+    meta: RecordMetadata
+
+
+_RecordCollectionJsonLd = TypedDict(
+    "_RecordCollectionJsonLd", {"@context": str}, total=False
+)
+
+
+class RecordCollection(_RecordCollectionRequired, _RecordCollectionJsonLd):
+    pass
+
+
+_GeoJsonFeatureRequired = TypedDict(
+    "_GeoJsonFeatureRequired",
     {
-        "kind": Literal["complete"],
-        "value": Any,
-        "trace_id": str,
-        "etag": Optional[str],
+        "type": str,
+        "id": str,
+        "geometry": JsonValue,
+        "properties": RegistryRecord,
     },
 )
-RawCompleteOutcome = TypedDict(
-    "RawCompleteOutcome",
+
+
+class _GeoJsonFeatureOptional(TypedDict, total=False):
+    meta: RecordMetadata
+    conformsTo: list[str]
+    featureType: str
+    coordRefSys: str
+
+
+class GeoJsonFeature(_GeoJsonFeatureRequired, _GeoJsonFeatureOptional):
+    pass
+
+
+_GeoJsonFeatureCollectionRequired = TypedDict(
+    "_GeoJsonFeatureCollectionRequired",
     {
-        "kind": Literal["complete"],
-        "body": bytes,
-        "media_type": str,
-        "trace_id": str,
-        "etag": Optional[str],
+        "type": str,
+        "features": list[GeoJsonFeature],
+        "pageInfo": CursorPageInfo,
+        "meta": RecordMetadata,
     },
 )
-ResourcePageCompleteOutcome = TypedDict(
-    "ResourcePageCompleteOutcome",
-    {
-        "kind": Literal["complete"],
-        "value": Any,
-        "continuation": Optional[ResourceContinuation],
-        "trace_id": str,
-        "etag": Optional[str],
-    },
-)
-CollectionPageCompleteOutcome = TypedDict(
-    "CollectionPageCompleteOutcome",
-    {
-        "kind": Literal["complete"],
-        "value": Any,
-        "continuation": Optional[CollectionContinuation],
-        "trace_id": str,
-        "etag": Optional[str],
-    },
-)
-NotModifiedOutcome = TypedDict(
-    "NotModifiedOutcome",
-    {"kind": Literal["not_modified"], "etag": str, "trace_id": str},
-)
-Outcome = Union[CompleteOutcome, NotModifiedOutcome]
-RawOutcome = Union[RawCompleteOutcome, NotModifiedOutcome]
-ResourcePageOutcome = Union[ResourcePageCompleteOutcome, NotModifiedOutcome]
-CollectionPageOutcome = Union[CollectionPageCompleteOutcome, NotModifiedOutcome]
+
+
+class _GeoJsonFeatureCollectionOptional(TypedDict, total=False):
+    conformsTo: list[str]
+    featureType: str
+    coordRefSys: str
+
+
+class GeoJsonFeatureCollection(
+    _GeoJsonFeatureCollectionRequired, _GeoJsonFeatureCollectionOptional
+):
+    pass
+
+
+RecordResponse = Union[RecordEnvelope, GeoJsonFeature]
+RecordCollectionResponse = Union[RecordCollection, GeoJsonFeatureCollection]
+
+T = TypeVar("T")
+
+
+class CompleteOutcome(TypedDict, Generic[T]):
+    kind: Literal["complete"]
+    value: T
+    trace_id: str
+    etag: Optional[str]
+
+
+class RawCompleteOutcome(TypedDict):
+    kind: Literal["complete"]
+    body: bytes
+    media_type: str
+    trace_id: str
+    etag: Optional[str]
+
+
+class ResourcePageCompleteOutcome(TypedDict):
+    kind: Literal["complete"]
+    value: ResourceCollection
+    continuation: Optional[ResourceContinuation]
+    trace_id: str
+    etag: Optional[str]
+
+
+class CollectionPageCompleteOutcome(TypedDict):
+    kind: Literal["complete"]
+    value: RecordCollectionResponse
+    continuation: Optional[CollectionContinuation]
+    trace_id: str
+    etag: Optional[str]
+
+
+class NotModifiedOutcome(TypedDict):
+    kind: Literal["not_modified"]
+    etag: str
+    trace_id: str
+
+
+Outcome: TypeAlias = Union[CompleteOutcome[T], NotModifiedOutcome]
+RawOutcome: TypeAlias = Union[RawCompleteOutcome, NotModifiedOutcome]
+ResourcePageOutcome: TypeAlias = Union[
+    ResourcePageCompleteOutcome, NotModifiedOutcome
+]
+CollectionPageOutcome: TypeAlias = Union[
+    CollectionPageCompleteOutcome, NotModifiedOutcome
+]
 
 
 class RelayClientError(Exception):
@@ -120,9 +403,7 @@ class RelayClient:
     def __init__(
         self,
         base_url: str,
-        authorization: Optional[
-            Union[str, PrivateKeyJwtAuthorization]
-        ] = ...,
+        authorization: Optional[RelayAuthorization] = ...,
         request_timeout_seconds: Optional[float] = ...,
         connect_timeout_seconds: Optional[float] = ...,
         user_agent: Optional[str] = ...,
@@ -130,10 +411,12 @@ class RelayClient:
         trusted_root_certificates: Optional[bytes] = ...,
     ) -> None: ...
 
-    def health(self) -> CompleteOutcome: ...
-    def ready(self) -> CompleteOutcome: ...
+    def health(self) -> CompleteOutcome[ProbeStatus]: ...
+    def ready(self) -> CompleteOutcome[ProbeStatus]: ...
     def openapi(self, etag: Optional[str] = ...) -> RawOutcome: ...
-    def service_metadata(self, etag: Optional[str] = ...) -> Outcome: ...
+    def service_metadata(
+        self, etag: Optional[str] = ...
+    ) -> Outcome[ServiceMetadata]: ...
     def resources(
         self,
         page_size: Optional[int] = ...,
@@ -144,7 +427,7 @@ class RelayClient:
     ) -> ResourcePageOutcome: ...
     def resource(
         self, resource: str, etag: Optional[str] = ...
-    ) -> Outcome: ...
+    ) -> Outcome[ResourceEnvelope]: ...
     def list_records(
         self,
         resource: str,
@@ -170,7 +453,7 @@ class RelayClient:
         access_profile: Optional[str] = ...,
         format: RecordFormat = ...,
         etag: Optional[str] = ...,
-    ) -> Outcome: ...
+    ) -> Outcome[RecordResponse]: ...
     def lookup(
         self,
         resource: str,
@@ -181,7 +464,7 @@ class RelayClient:
         access_profile: Optional[str] = ...,
         format: RecordFormat = ...,
         etag: Optional[str] = ...,
-    ) -> Outcome: ...
+    ) -> Outcome[RecordResponse]: ...
     def search(
         self,
         resource: str,

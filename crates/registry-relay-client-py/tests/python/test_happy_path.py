@@ -75,7 +75,10 @@ class HappyPathTest(unittest.TestCase):
             raise AssertionError(f"unexpected request {request.method} {request.target}")
 
         with RelayServer(respond) as server:
-            client = relay.RelayClient(server.base_url, authorization="static-token")
+            client = relay.RelayClient(
+                server.base_url,
+                authorization={"static": "static-token"},
+            )
             self.assertEqual(client.health()["value"], {"status": "ok"})
             self.assertEqual(client.ready()["kind"], "complete")
             self.assertIsInstance(client.openapi()["body"], bytes)
