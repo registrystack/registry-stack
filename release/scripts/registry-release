@@ -319,6 +319,14 @@ def validate_current(manifest_dir: Path) -> int:
         try:
             manifest = load_yaml(path)
             stack = manifest.get("stack", {}) if isinstance(manifest, dict) else {}
+            release_id = stack.get("release")
+            if not isinstance(release_id, str):
+                raise ReleasePlanError("stack.release must be text")
+            validate_release_id(release_id)
+            if path.name != f"registry-stack-{release_id}.yaml":
+                raise ReleasePlanError(
+                    f"filename {path.name} does not match stack.release {release_id!r}"
+                )
             version = str(stack.get("version", ""))
             candidates.append((strict_semver(version), path))
         except (

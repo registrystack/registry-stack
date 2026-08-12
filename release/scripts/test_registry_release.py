@@ -1210,6 +1210,46 @@ class RegistryReleaseTest(TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("no Registry Stack release manifests found", result.stderr)
 
+    def test_validate_current_rejects_mismatched_release_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_dir = Path(tmp) / "manifests"
+            manifest_dir.mkdir()
+            manifest = write_manifest(manifest_dir)
+            manifest.rename(manifest_dir / "registry-stack-beta-29.yaml")
+
+            result = run_tool(
+                "validate-current",
+                "--manifest-dir",
+                str(manifest_dir),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "filename registry-stack-beta-29.yaml does not match stack.release 'beta-6'",
+            result.stderr,
+        )
+
+    def test_validate_current_rejects_invalid_release_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_dir = Path(tmp) / "manifests"
+            manifest_dir.mkdir()
+            manifest = write_manifest(manifest_dir)
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["stack"]["release"] = "invalid release"
+            manifest = manifest_dir / "registry-stack-invalid-release.yaml"
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+
+            result = run_tool(
+                "validate-current",
+                "--manifest-dir",
+                str(manifest_dir),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("release ID must start with", result.stderr)
+
     def test_validate_rejects_partially_removed_legacy_source_state(self) -> None:
         for removed in ("source_ref", "status"):
             with self.subTest(removed=removed), tempfile.TemporaryDirectory() as tmp:
