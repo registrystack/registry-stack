@@ -125,6 +125,27 @@ function gitObjectExists(repoRoot, object, gitCommand) {
   );
 }
 
+export function candidateTagFromValidationOutput(output) {
+  const match = /^validated .+: [A-Za-z0-9][A-Za-z0-9._-]{0,63} (\d+\.\d+\.\d+)\s*$/.exec(
+    output,
+  );
+  return match ? `v${match[1]}` : undefined;
+}
+
+function currentReleaseCandidateTag(repoRoot) {
+  const validator = resolve(repoRoot, 'release/scripts/registry-release');
+  const result = spawnSync(validator, ['validate-current'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_NO_LAZY_FETCH: '1' },
+    stdio: 'pipe',
+  });
+  if (result.status !== 0) {
+    return undefined;
+  }
+  return candidateTagFromValidationOutput(result.stdout);
+}
+
 function safePathParts(parts) {
   try {
     return parts.map((part) => decodeURIComponent(part));
@@ -148,7 +169,12 @@ function validRepositoryPath(parts) {
   );
 }
 
-function checkRepositoryEvidence(repoRoot, rawUrl, gitCommand) {
+function checkRepositoryEvidence(
+  repoRoot,
+  rawUrl,
+  gitCommand,
+  { candidateTag, sourceRef } = {},
+) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -189,7 +215,10 @@ function checkRepositoryEvidence(repoRoot, rawUrl, gitCommand) {
   }
 
   if (!gitObjectExists(repoRoot, `${commitish}^{commit}`, gitCommand)) {
-    return `references missing Git commit or tag ${ref}`;
+    if (ref !== candidateTag || !gitObjectExists(repoRoot, `${sourceRef}^{commit}`, gitCommand)) {
+      return `references missing Git commit or tag ${ref}`;
+    }
+    commitish = sourceRef;
   }
   const path = repositoryPath.join('/');
   if (!gitObjectExists(repoRoot, `${commitish}^{commit}:${path}`, gitCommand)) {
@@ -244,6 +273,7 @@ export function checkEvidenceLinks({
   dataDir = resolve(scriptDir, '../src/data'),
   sourceRef = 'HEAD',
   gitCommand = 'git',
+  candidateTag,
 } = {}) {
   const errors = [];
   let evidence;
@@ -256,7 +286,7 @@ export function checkEvidenceLinks({
   for (const item of evidence) {
     const error = item.url.startsWith('/')
       ? checkCurrentDocsEvidence(repoRoot, sourceRef, item.url, gitCommand)
-      : checkRepositoryEvidence(repoRoot, item.url, gitCommand);
+      : checkRepositoryEvidence(repoRoot, item.url, gitCommand, { candidateTag, sourceRef });
     if (error) {
       errors.push(`${item.location}: ${item.url}: ${error}`);
     }
@@ -276,7 +306,10 @@ function sourceRefArgument(args) {
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   try {
-    const result = checkEvidenceLinks({ sourceRef: sourceRefArgument(process.argv.slice(2)) });
+    const repoRoot = resolve(scriptDir, '../../..');
+    const sourceRef = sourceRefArgument(process.argv.slice(2));
+    const candidateTag = currentReleaseCandidateTag(repoRoot);
+    const result = checkEvidenceLinks({ repoRoot, sourceRef, candidateTag });
     if (result.errors.length > 0) {
       console.error('Evidence link check failed:');
       for (const error of result.errors) {

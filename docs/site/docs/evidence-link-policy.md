@@ -46,6 +46,13 @@ The checker reads only local files and Git objects. It verifies that:
 - every linked repository path exists at that exact tag or commit
 - every root-relative documentation route exists at the selected source commit
 
+The exact source tag of the newest validated release manifest is the only
+pre-publication exception. While that tag does not exist, repository evidence
+at the future tag is checked against the selected source commit. This lets
+protected pre-tag CI verify the source that will receive the immutable tag
+without creating the tag early. Any other missing tag still fails. Once the
+release tag exists, the checker resolves and verifies that tag directly.
+
 The release workflow passes its resolved tag commit with `--source-ref`, so
 current-documentation routes are verified against the same source that the
 release uses. The checker has no network fallback. A shallow or incomplete
