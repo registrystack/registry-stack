@@ -45,7 +45,7 @@ jobs:
       manifest: ${{ steps.request.outputs.manifest }}
     steps:
       - name: Checkout protected workflow revision
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -235,7 +235,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout exact candidate source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 1
@@ -243,7 +243,7 @@ jobs:
           submodules: false
 
       - name: Restore reusable Cargo cache
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4.2.3
         with:
           path: |
             .cargo-home/registry
@@ -265,7 +265,7 @@ jobs:
 
       - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v3.11.1
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v3.11.1
         with:
           version: ${{ env.RELEASE_BUILDX_VERSION }}
           driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}
@@ -298,7 +298,7 @@ jobs:
           done
 
       - name: Setup Node for exact release docs archive
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4.4.0
         with:
           node-version: 22.12.0
           cache: npm
@@ -331,7 +331,7 @@ jobs:
             candidate-canonical/
 
       - name: Upload canonical build products
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-canonical-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-canonical
@@ -357,7 +357,7 @@ jobs:
             asset: linux-arm64
     steps:
       - name: Checkout exact candidate source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 1
@@ -392,7 +392,7 @@ jobs:
           mv platform candidate-platform/platform
 
       - name: Upload native platform payload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-platform
@@ -428,7 +428,7 @@ jobs:
             napi_platform: darwin-arm64
     steps:
       - name: Checkout exact candidate source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 1
@@ -436,7 +436,7 @@ jobs:
           submodules: false
 
       - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4.4.0
         with:
           node-version: 22.12.0
           cache: npm
@@ -445,7 +445,7 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
 
       - name: Restore native client Cargo cache
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4.2.3
         with:
           path: |
             ~/.cargo/registry
@@ -558,7 +558,7 @@ jobs:
           done
 
       - name: Upload native client packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-clients-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-client-package
@@ -580,7 +580,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout exact candidate source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 1
@@ -588,7 +588,7 @@ jobs:
           submodules: false
 
       - name: Download exact build products
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: candidate-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: inputs
@@ -1073,7 +1073,7 @@ jobs:
             --output candidate/release-candidate-manifest.json
 
       - name: Upload one candidate manifest and bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1096,7 +1096,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout exact candidate verifier
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.workflow_revision }}
           fetch-depth: 1
@@ -1104,7 +1104,7 @@ jobs:
           submodules: false
 
       - name: Download compact candidate
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate
@@ -1136,7 +1136,7 @@ jobs:
             --allow-current-run-in-progress
 
       - name: Attest manifest and bundle after re-verification
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             candidate/release-candidate-manifest.json
