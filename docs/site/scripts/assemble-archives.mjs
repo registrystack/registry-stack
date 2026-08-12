@@ -134,6 +134,10 @@ async function bootstrapArchive({
 }) {
   await buildArchive(docset, {
     docsRoot,
+    // Bootstrap is the pre-publication verification path. Candidate archives
+    // may therefore use the checked-out source until their exact tag exists;
+    // buildDocsetArchive still resolves and prefers the tag once published.
+    allowUnpublishedCandidate: true,
     // Candidate-era archives authenticate the canonical root separately from
     // the versioned tree. Build that root exactly as the release workflow does.
     indexable: !lockEntry.tree_sha256,
