@@ -23,7 +23,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.20.1 Linux AMD64 Evidence binary imports sscanf, contains AWS-LC markers, and contains no %mc-style format marker. Evidence does not construct libc scanf format strings, and the product and dependency source are unchanged on this release-tooling branch. The exact candidate image scan remains mandatory.",
-      "reviewed_at": "2026-08-13",
+      "reviewed_at": "2026-08-12",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
         "expired",
@@ -40,7 +40,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed v0.20.1 Linux AMD64 Evidence binary does not import ungetwc, Evidence has no wide-character input path, and the product and dependency source are unchanged on this release-tooling branch. The exact candidate image scan remains mandatory.",
-      "reviewed_at": "2026-08-13",
+      "reviewed_at": "2026-08-12",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
         "expired",
@@ -57,7 +57,7 @@
       "status": "accepted_risk",
       "owner": "@jeremi",
       "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The reviewed v0.20.1 Linux AMD64 Evidence binary does not import ns_printrrf, ns_printrr, or fp_nquery, Evidence has no DNS-printing path, and the product and dependency source are unchanged on this release-tooling branch. The exact candidate image scan remains mandatory.",
-      "reviewed_at": "2026-08-13",
+      "reviewed_at": "2026-08-12",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
         "expired",
