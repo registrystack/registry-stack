@@ -3,6 +3,7 @@
   "version": "0.21.0",
   "description": "Node.js binding for the Evidence relying-party client, via napi-rs.",
   "license": "Apache-2.0",
+  "publishConfig": { "access": "public", "provenance": true },
   "repository": {
     "type": "git",
     "url": "https://github.com/registrystack/registry-stack"
@@ -15,7 +16,6 @@
       "default": "./client.js"
     }
   },
-  "private": true,
   "files": [
     "client.js",
     "client.d.ts",
@@ -24,7 +24,12 @@
     "*.node"
   ],
   "napi": {
-    "binaryName": "evidence-client"
+    "binaryName": "evidence-client",
+    "targets": [
+      "aarch64-apple-darwin",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-gnu"
+    ]
   },
   "engines": {
     "node": ">=22.12.0"
@@ -37,5 +42,10 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "3.8.2"
+  },
+  "optionalDependencies": {
+    "@registrystack/evidence-client-darwin-arm64": "0.21.0",
+    "@registrystack/evidence-client-linux-arm64-gnu": "0.21.0",
+    "@registrystack/evidence-client-linux-x64-gnu": "0.21.0"
   }
 }

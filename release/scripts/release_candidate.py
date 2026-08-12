@@ -43,6 +43,7 @@ RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
 OFFICIAL_RUNTIME_IMAGE_MINIMUM_VERSION = (0, 21, 0)
 HISTORICAL_RUNTIME_IMAGE_NAMES = {"relay"}
 OFFICIAL_RUNTIME_IMAGE_NAMES = {"evidence", "mint", "relay"}
+CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION = (0, 21, 0)
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -112,6 +113,7 @@ def _version_uses_release_docs(version: tuple[int, int, int]) -> bool:
 
 def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
     tag = f"v{version}"
+    version_tuple = tuple(int(part) for part in version.split("."))
     inventory = {
         f"{name}-{tag}-linux-amd64": "binary"
         for name in (
@@ -135,7 +137,14 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             inventory[f"{name}-{tag}-{platform}"] = "binary"
     for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
         inventory[f"evidence-client-node-{tag}-{platform}.tgz"] = "client-package"
-    for platform in ("linux_x86_64", "linux_aarch64", "macosx_11_0_arm64"):
+    wheel_platforms = ("linux_x86_64", "linux_aarch64", "macosx_11_0_arm64")
+    if version_tuple >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION:
+        wheel_platforms = (
+            "manylinux_2_17_x86_64.manylinux2014_x86_64",
+            "manylinux_2_17_aarch64.manylinux2014_aarch64",
+            "macosx_11_0_arm64",
+        )
+    for platform in wheel_platforms:
         inventory[
             f"registry_evidence_client-{version}-cp310-abi3-{platform}.whl"
         ] = "client-package"
@@ -150,26 +159,34 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
         }
     )
     if (
-        tuple(int(part) for part in version.split("."))
-        >= RELAY_INSTALLER_MINIMUM_VERSION
+        version_tuple >= RELAY_INSTALLER_MINIMUM_VERSION
     ):
         inventory[f"relay-{tag}-install.sh"] = "installer"
         inventory["relay-install.sh"] = "installer"
     if (
-        tuple(int(part) for part in version.split("."))
-        >= DOCS_RELEASE_RESUMPTION_VERSION
+        version_tuple >= DOCS_RELEASE_RESUMPTION_VERSION
     ):
         inventory[f"registry-docs-{tag}.tar.gz"] = "docs"
     if (
-        tuple(int(part) for part in version.split("."))
-        >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION
+        version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION
     ):
         for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
             inventory[f"relay-client-node-{tag}-{platform}.tgz"] = "client-package"
-        for platform in ("linux_x86_64", "linux_aarch64", "macosx_11_0_arm64"):
+        for platform in wheel_platforms:
             inventory[
                 f"registry_relay_client-{version}-cp310-abi3-{platform}.whl"
             ] = "client-package"
+    if (
+        version_tuple >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION
+    ):
+        for client in ("evidence", "relay"):
+            inventory[f"registrystack-{client}-client-{version}.tgz"] = (
+                "client-package"
+            )
+            for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
+                inventory[
+                    f"registrystack-{client}-client-{platform}-{version}.tgz"
+                ] = "client-package"
     return inventory
 
 

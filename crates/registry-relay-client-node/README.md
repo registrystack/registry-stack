@@ -4,6 +4,19 @@ Thin napi-rs binding for the Rust `registry-relay-client` SDK. It exposes no
 JavaScript HTTP, routing, authentication, retry, or problem parsing logic.
 All Relay wire handling remains in the wrapped Rust client.
 
+Starting with Registry Stack v0.21.0, install the exact client version that
+matches the Relay deployment:
+
+```sh
+npm install "@registrystack/relay-client@<version>"
+```
+
+The root package selects one exact native package for Linux amd64 with glibc,
+Linux arm64 with glibc, or macOS arm64. Linux addons target glibc 2.17; the
+installed Node.js runtime may impose a newer system requirement. Registry
+Stack v0.20.0 and v0.20.1 remain available only as packages attached to their
+GitHub Releases.
+
 ```js
 const { RelayClient } = require('@registrystack/relay-client');
 const client = new RelayClient({ baseUrl: 'https://relay.example.invalid/' });

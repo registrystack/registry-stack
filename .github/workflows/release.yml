@@ -41,6 +41,7 @@ jobs:
       promotion_revision: ${{ steps.identity.outputs.promotion_revision }}
       workflow_revision: ${{ steps.candidate.outputs.workflow_revision }}
       docs_sha256: ${{ steps.candidate.outputs.docs_sha256 }}
+      client_registries: ${{ steps.candidate.outputs.client_registries }}
       candidate_run: ${{ steps.binding.outputs.run_id }}
       candidate_attempt: ${{ steps.binding.outputs.run_attempt }}
       manifest_sha256: ${{ steps.binding.outputs.manifest_sha256 }}
@@ -219,6 +220,7 @@ jobs:
               --deny-self-hosted-runners
           done
           docs_sha256=
+          client_registries=false
           IFS=. read -r major minor patch <<<"${{ steps.identity.outputs.version }}"
           if ((
             major > 0 ||
@@ -229,10 +231,16 @@ jobs:
                 "${manifest}"
             )"
           fi
+          if ((
+            major > 0 || minor >= 21
+          )); then
+            client_registries=true
+          fi
           {
             echo "release_id=${release_id}"
             echo "workflow_revision=${workflow_revision}"
             echo "docs_sha256=${docs_sha256}"
+            echo "client_registries=${client_registries}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Verify any existing draft is bound to the exact candidate
@@ -867,11 +875,22 @@ jobs:
 
   publish:
     name: Publish the reconciled Beta draft
+    if: >-
+      always() &&
+      needs.verify.result == 'success' &&
+      needs.stage-draft.result == 'success' &&
+      needs.promote-images.result == 'success' &&
+      needs.finalize-assets.result == 'success' &&
+      (needs.verify.outputs.client_registries != 'true' ||
+       (needs.publish_client_npm.result == 'success' &&
+        needs.publish_client_pypi.result == 'success'))
     needs:
       - verify
       - stage-draft
       - promote-images
       - finalize-assets
+      - publish_client_npm
+      - publish_client_pypi
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -1084,9 +1103,235 @@ jobs:
              ((.body // "") | contains($marker))' \
             published-release.json >/dev/null
 
+  publish_client_npm:
+    name: Publish exact ${{ matrix.client }} client packages to npm
+    if: needs.verify.outputs.client_registries == 'true'
+    needs:
+      - verify
+      - finalize-assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [evidence, relay]
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout protected promotion workflow
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.verify.outputs.promotion_revision }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Download exact verified candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-promotion-input-${{ github.run_id }}
+          path: promotion
+
+      - name: Recheck candidate expiry after environment approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=promotion/release-candidate-manifest.json
+          expires_at="$(jq -er '.validity.expires_at' "${manifest}")"
+          expires_epoch="$(date -u -d "${expires_at}" +%s)"
+          now_epoch="$(date -u +%s)"
+          if (( now_epoch >= expires_epoch )); then
+            echo "Candidate expired before npm publication" >&2
+            exit 1
+          fi
+
+      - name: Setup trusted npm publisher runtime
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 24.8.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Extract and validate the exact npm distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 14)) process.exit(1)'
+          npm_version="$(npm --version)"
+          python3 - "${npm_version}" <<'PY'
+          import sys
+          version = tuple(int(part) for part in sys.argv[1].split("."))
+          if version < (11, 5, 1):
+              raise SystemExit("trusted publishing requires npm >= 11.5.1")
+          PY
+          bundle="promotion/registry-stack-${{ needs.verify.outputs.tag }}-candidate.tar.gz"
+          mkdir -p dist
+          tar -xzf "${bundle}" -C dist
+          python3 release/scripts/client_registry.py validate-dist \
+            --directory dist \
+            --version "${{ needs.verify.outputs.version }}" \
+            --client "${{ matrix.client }}"
+
+      - name: Reconcile platform packages, then publish the root package
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=promotion/release-candidate-manifest.json
+          expires_at="$(jq -er '.validity.expires_at' "${manifest}")"
+          expires_epoch="$(date -u -d "${expires_at}" +%s)"
+          require_unexpired_candidate() {
+            if (( $(date -u +%s) >= expires_epoch )); then
+              echo "Candidate expired before npm publication" >&2
+              exit 1
+            fi
+          }
+          version="${{ needs.verify.outputs.version }}"
+          client="${{ matrix.client }}"
+          packages=(
+            "registrystack-${client}-client-darwin-arm64-${version}.tgz"
+            "registrystack-${client}-client-linux-arm64-gnu-${version}.tgz"
+            "registrystack-${client}-client-linux-x64-gnu-${version}.tgz"
+            "registrystack-${client}-client-${version}.tgz"
+          )
+          for name in "${packages[@]}"; do
+            tarball="dist/${name}"
+            state="$(python3 release/scripts/client_registry.py npm-state \
+              --tarball "${tarball}")"
+            if [[ "${state}" == absent ]]; then
+              require_unexpired_candidate
+              npm publish "${tarball}" --access public --provenance
+            else
+              test "${state}" = present
+            fi
+            for attempt in $(seq 1 12); do
+              observed="$(python3 release/scripts/client_registry.py npm-state \
+                --tarball "${tarball}")"
+              if [[ "${observed}" == present ]]; then
+                break
+              fi
+              if [[ "${attempt}" -eq 12 ]]; then
+                echo "npm did not expose exact ${name}" >&2
+                exit 1
+              fi
+              sleep 5
+            done
+          done
+
+  publish_client_pypi:
+    name: Publish exact ${{ matrix.client }} client wheels to PyPI
+    if: needs.verify.outputs.client_registries == 'true'
+    needs:
+      - verify
+      - finalize-assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: ${{ matrix.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - client: evidence
+            environment: pypi-evidence
+          - client: relay
+            environment: pypi
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout protected promotion workflow
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.verify.outputs.promotion_revision }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Download exact verified candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-promotion-input-${{ github.run_id }}
+          path: promotion
+
+      - name: Recheck candidate expiry after environment approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=promotion/release-candidate-manifest.json
+          expires_at="$(jq -er '.validity.expires_at' "${manifest}")"
+          expires_epoch="$(date -u -d "${expires_at}" +%s)"
+          now_epoch="$(date -u +%s)"
+          if (( now_epoch >= expires_epoch )); then
+            echo "Candidate expired before PyPI publication" >&2
+            exit 1
+          fi
+
+      - name: Extract and classify the exact PyPI distribution
+        id: pypi_state
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          client="${{ matrix.client }}"
+          bundle="promotion/registry-stack-${{ needs.verify.outputs.tag }}-candidate.tar.gz"
+          mkdir -p extracted dist
+          tar -xzf "${bundle}" -C extracted
+          for platform in manylinux_2_17_x86_64.manylinux2014_x86_64 manylinux_2_17_aarch64.manylinux2014_aarch64 macosx_11_0_arm64; do
+            cp "extracted/registry_${client}_client-${version}-cp310-abi3-${platform}.whl" dist/
+          done
+          state="$(python3 release/scripts/client_registry.py pypi-state \
+            --directory dist --version "${version}" --client "${client}")"
+          echo "state=${state}" >> "${GITHUB_OUTPUT}"
+
+      - name: Recheck candidate expiry immediately before PyPI publication
+        if: steps.pypi_state.outputs.state != 'present'
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=promotion/release-candidate-manifest.json
+          expires_at="$(jq -er '.validity.expires_at' "${manifest}")"
+          expires_epoch="$(date -u -d "${expires_at}" +%s)"
+          now_epoch="$(date -u +%s)"
+          if (( now_epoch >= expires_epoch )); then
+            echo "Candidate expired before PyPI publication" >&2
+            exit 1
+          fi
+
+      - name: Publish absent exact wheels through PyPI trusted publishing
+        if: steps.pypi_state.outputs.state != 'present'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+      - name: Verify the complete immutable PyPI release
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            state="$(python3 release/scripts/client_registry.py pypi-state \
+              --directory dist \
+              --version "${{ needs.verify.outputs.version }}" \
+              --client "${{ matrix.client }}")"
+            if [[ "${state}" == present ]]; then
+              exit 0
+            fi
+            if [[ "${attempt}" -eq 12 ]]; then
+              echo "PyPI did not expose the complete exact wheel set" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
   dispatch-docs:
     name: Dispatch authenticated docs promotion
-    if: needs.verify.outputs.docs_sha256 != ''
+    if: >-
+      always() &&
+      needs.verify.outputs.docs_sha256 != '' &&
+      needs.publish.result == 'success'
     needs:
       - verify
       - publish

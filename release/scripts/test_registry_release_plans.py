@@ -347,6 +347,36 @@ version = "1.1.0"
                     "packages": {"": {"name": name, "version": "1.1.0"}},
                 },
             )
+            optional_dependencies = {
+                f"{name}-{platform}": "1.1.0"
+                for platform in (
+                    "darwin-arm64",
+                    "linux-arm64-gnu",
+                    "linux-x64-gnu",
+                )
+            }
+            package = json.loads(
+                (client_root / "package.json").read_text(encoding="utf-8")
+            )
+            package["optionalDependencies"] = optional_dependencies
+            write_json(client_root / "package.json", package)
+            lock = json.loads(
+                (client_root / "package-lock.json").read_text(encoding="utf-8")
+            )
+            lock["packages"][""]["optionalDependencies"] = optional_dependencies
+            write_json(client_root / "package-lock.json", lock)
+            for platform in (
+                "darwin-arm64",
+                "linux-arm64-gnu",
+                "linux-x64-gnu",
+            ):
+                write_json(
+                    client_root / "npm" / platform / "package.json",
+                    {
+                        "name": f"{name}-{platform}",
+                        "version": "1.1.0",
+                    },
+                )
             write(
                 client_root / "index.js",
                 "if (bindingPackageVersion !== '1.1.0') throw new Error();\n",
@@ -620,6 +650,28 @@ version = "1.0.0"
             "products/platform/fuzz/Cargo.lock path packages must use version 1.1.0",
             stale_lock.stderr,
         )
+
+    def test_prepare_rejects_stale_client_platform_package_version(self) -> None:
+        for client in ("evidence", "relay"):
+            with self.subTest(client=client):
+                platform = (
+                    self.repo.root
+                    / f"crates/registry-{client}-client-node/npm/"
+                    "linux-x64-gnu/package.json"
+                )
+                package = json.loads(platform.read_text(encoding="utf-8"))
+                package["version"] = "1.0.0"
+                write_json(platform, package)
+
+                result = self.prepare()
+
+                self.assertEqual(1, result.returncode)
+                self.assertIn(
+                    f"{client}-client-linux-x64-gnu at version 1.1.0",
+                    result.stderr,
+                )
+                package["version"] = "1.1.0"
+                write_json(platform, package)
 
     def test_prepare_requires_exact_release_archive_lock(self) -> None:
         archive_lock = self.repo.root / "docs/site/src/data/archive-lock.yaml"

@@ -4,3 +4,8 @@ maturin==1.9.6 \
     --hash=sha256:0246202377c49449315305209f45c8ecef6e2d6bd27a04b5b6f1ab3e4ea47238 \
     --hash=sha256:f5bac167700fbb6f8c8ed1a97b494522554b4432d7578e11403b894b6a91d99f \
     --hash=sha256:5263dda3f71feef2e4122baf5c4620e4b3710dbb7f2121f85a337182de214369
+# Maturin 1.9.6 supports ziglang >=0.10,<0.13. Zig cross-links the two Linux
+# wheels against the public manylinux_2_17 contract before maturin audits them.
+ziglang==0.12.1 ; sys_platform == "linux" \
+    --hash=sha256:dcde948140b9e5776c2295b9b808fb4950df7ecadaecb54623dd701502be2017 \
+    --hash=sha256:945ea8ac157373e8437b377f7eac39f16fe63cd21b2b27fb4e518466e1cd561d

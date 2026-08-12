@@ -497,34 +497,69 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         matrix = clients["strategy"]["matrix"]["include"]
         self.assertEqual(
             {
-                (entry["asset"], entry["wheel_tag"], entry["napi_platform"])
+                (
+                    entry["asset"],
+                    entry["target"],
+                    entry["wheel_tag"],
+                    entry["registry_wheel_tag"],
+                    entry["napi_platform"],
+                )
                 for entry in matrix
             },
             {
                 (
                     "linux-amd64-glibc",
+                    "x86_64-unknown-linux-gnu",
                     "cp310-abi3-linux_x86_64",
+                    "cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64",
                     "linux-x64-gnu",
                 ),
                 (
                     "linux-arm64-glibc",
+                    "aarch64-unknown-linux-gnu",
                     "cp310-abi3-linux_aarch64",
+                    "cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64",
                     "linux-arm64-gnu",
                 ),
-                ("macos-arm64", "cp310-abi3-macosx_11_0_arm64", "darwin-arm64"),
+                (
+                    "macos-arm64",
+                    "aarch64-apple-darwin",
+                    "cp310-abi3-macosx_11_0_arm64",
+                    "cp310-abi3-macosx_11_0_arm64",
+                    "darwin-arm64",
+                ),
             },
         )
         self.assertEqual(
             clients["env"]["CLIENT_VERSION"],
             "${{ needs.validate.outputs.version }}",
         )
+        setup_node = next(
+            step for step in clients["steps"] if step.get("name") == "Setup Node"
+        )
+        self.assertEqual(setup_node["with"]["node-version"], "22.20.0")
+        cargo_cache = next(
+            step
+            for step in clients["steps"]
+            if step.get("name") == "Restore native client Cargo cache"
+        )
+        cache_key = cargo_cache["with"]["key"]
+        self.assertIn("napi-cross-glibc-2.17", cache_key)
+        self.assertIn("crates/registry-evidence-client-node/package-lock.json", cache_key)
+        self.assertIn("crates/registry-relay-client-node/package-lock.json", cache_key)
         wheel = step_run(document, "clients", "Build Python client wheels")
         self.assertIn("--compatibility linux", wheel)
+        self.assertIn("--compatibility manylinux_2_17 --zig", wheel)
+        self.assertIn("matrix.registry_wheel_tag", wheel)
         self.assertIn("registry_${client}_client", wheel)
         self.assertIn("expected_wheels=2", wheel)
         self.assertIn("--require-hashes --only-binary=:all:", wheel)
         self.assertIn("release/requirements/maturin-1.9.6.txt", wheel)
         node = step_run(document, "clients", "Build Node client packages")
+        self.assertIn("--use-napi-cross", node)
+        self.assertIn('--target "${{ matrix.target }}"', node)
+        self.assertIn("readelf --version-info", node)
+        self.assertIn("GLIBC_2.17", node)
         self.assertIn(
             "package/${client}-client.${{ matrix.napi_platform }}.node",
             node,
@@ -534,6 +569,21 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             smoke = step_run(document, "clients", name)
             self.assertIn("smoke-${client}-client-package", smoke)
             self.assertIn("for client in evidence relay", smoke)
+        node_smoke = step_run(document, "clients", "Smoke Node client packages")
+        self.assertIn("node-root-${client}", node_smoke)
+        self.assertIn("root_package", node_smoke)
+        self.assertIn("platform_package", node_smoke)
+        self.assertIn('packages=("${root_package}" "${platform_package}")', node_smoke)
+        self.assertIn("docker run --rm --network none", node_smoke)
+        self.assertIn('"${NODE_GLIBC_BASELINE_IMAGE}"', node_smoke)
+        baseline = clients["env"]["NODE_GLIBC_BASELINE_IMAGE"]
+        self.assertRegex(baseline, r"^node:22\.12\.0-bullseye-slim@sha256:[0-9a-f]{64}$")
+        self.assertIn("-maxdepth 1 -name '*.node'", node_smoke)
+        self.assertIn("node_modules/@registrystack/${client}-client-", node_smoke)
+        self.assertIn(
+            "crates/registry-evidence-client-node/package-lock.json",
+            str(clients),
+        )
         self.assertIn(
             "crates/registry-relay-client-node/package-lock.json",
             str(clients),
@@ -550,9 +600,15 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("diff -u", assemble)
         self.assertIn("include_relay_clients=1", assemble)
         self.assertIn("expected_client_assets=4", assemble)
+        self.assertIn("expected_client_assets=6", assemble)
         self.assertIn("relay-client-node-", assemble)
+        self.assertIn("registrystack-${client}-client-${version}.tgz", assemble)
+        self.assertIn("for client in evidence relay", assemble)
+        self.assertIn("client_registry.py validate-dist", assemble)
         self.assertIn("registry_relay_client-", assemble)
         self.assertIn("kind=client-package", text)
+        self.assertIn("registrystack-evidence-client-*.tgz", text)
+        self.assertIn("registrystack-relay-client-*.tgz", text)
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
             self.assertNotIn(forbidden, text)
 
@@ -605,6 +661,8 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 "promote-images",
                 "finalize-assets",
                 "publish",
+                "publish_client_npm",
+                "publish_client_pypi",
                 "dispatch-docs",
             ],
         )
@@ -798,10 +856,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "${{ steps.candidate.outputs.docs_sha256 }}",
         )
         dispatch = document["jobs"]["dispatch-docs"]
-        self.assertEqual(
-            dispatch["if"],
-            "needs.verify.outputs.docs_sha256 != ''",
-        )
+        self.assertIn("needs.verify.outputs.docs_sha256 != ''", dispatch["if"])
+        self.assertIn("needs.publish.result == 'success'", dispatch["if"])
+        self.assertEqual(dispatch["needs"], ["verify", "publish"])
         dispatch_run = step_run(
             document,
             "dispatch-docs",
@@ -813,12 +870,95 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             dispatch_run,
         )
 
+    def test_promotes_exact_client_packages_with_oidc_and_retry_safety(self) -> None:
+        text, document = workflow("release.yml")
+        npm = document["jobs"]["publish_client_npm"]
+        pypi = document["jobs"]["publish_client_pypi"]
+        for job, environment in ((npm, "npm"),):
+            self.assertEqual(job["environment"], environment)
+            self.assertEqual(
+                job["permissions"],
+                {"actions": "read", "contents": "read", "id-token": "write"},
+            )
+            self.assertEqual(job["if"], "needs.verify.outputs.client_registries == 'true'")
+            self.assertEqual(
+                job["strategy"]["matrix"]["client"],
+                ["evidence", "relay"],
+            )
+        self.assertEqual(pypi["environment"], "${{ matrix.environment }}")
+        self.assertEqual(
+            pypi["strategy"]["matrix"]["include"],
+            [
+                {"client": "evidence", "environment": "pypi-evidence"},
+                {"client": "relay", "environment": "pypi"},
+            ],
+        )
+        self.assertEqual(
+            pypi["permissions"],
+            {"actions": "read", "contents": "read", "id-token": "write"},
+        )
+        self.assertEqual(
+            pypi["if"], "needs.verify.outputs.client_registries == 'true'"
+        )
+        self.assertEqual(npm["needs"], ["verify", "finalize-assets"])
+        self.assertEqual(pypi["needs"], ["verify", "finalize-assets"])
+        publish = document["jobs"]["publish"]
+        self.assertIn("publish_client_npm", publish["needs"])
+        self.assertIn("publish_client_pypi", publish["needs"])
+        self.assertIn("needs.publish_client_npm.result == 'success'", publish["if"])
+        self.assertIn("needs.publish_client_pypi.result == 'success'", publish["if"])
+        npm_publish = step_run(
+            document,
+            "publish_client_npm",
+            "Reconcile platform packages, then publish the root package",
+        )
+        self.assertIn("client_registry.py npm-state", npm_publish)
+        self.assertIn("npm publish", npm_publish)
+        self.assertIn("require_unexpired_candidate", npm_publish)
+        self.assertLess(
+            npm_publish.rindex("require_unexpired_candidate"),
+            npm_publish.index("npm publish"),
+        )
+        self.assertLess(
+            npm_publish.index("registrystack-${client}-client-linux-x64-gnu"),
+            npm_publish.index('"registrystack-${client}-client-${version}.tgz"'),
+        )
+        pypi_publish = next(
+            step
+            for step in pypi["steps"]
+            if step.get("uses", "").startswith("pypa/gh-action-pypi-publish@")
+        )
+        self.assertEqual(pypi_publish["with"]["packages-dir"], "dist")
+        self.assertTrue(pypi_publish["with"]["skip-existing"])
+        pypi_expiry_index = next(
+            index
+            for index, step in enumerate(pypi["steps"])
+            if step.get("name")
+            == "Recheck candidate expiry immediately before PyPI publication"
+        )
+        pypi_publish_index = pypi["steps"].index(pypi_publish)
+        self.assertEqual(pypi_expiry_index + 1, pypi_publish_index)
+        immediate_pypi_expiry = pypi["steps"][pypi_expiry_index]["run"]
+        self.assertIn(".validity.expires_at", immediate_pypi_expiry)
+        self.assertIn("now_epoch >= expires_epoch", immediate_pypi_expiry)
+        for job_name in ("publish_client_npm", "publish_client_pypi"):
+            expiry = step_run(
+                document,
+                job_name,
+                "Recheck candidate expiry after environment approval",
+            )
+            self.assertIn(".validity.expires_at", expiry)
+            self.assertIn("now_epoch >= expires_epoch", expiry)
+        self.assertNotIn("NODE_AUTH_TOKEN", text)
+        self.assertNotIn("PYPI_TOKEN", text)
+
 
 class SupportingWorkflowStructureTest(unittest.TestCase):
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
         verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")
-        self.assertIn("public, non-prerelease GitHub Release", operations)
+        self.assertIn("public, non-prerelease", operations)
+        self.assertIn("GitHub Release", operations)
         self.assertNotIn("marked as a prerelease", operations)
         self.assertIn(".isPrerelease == false", verify)
         self.assertNotIn(".isPrerelease == true", verify)

@@ -22,6 +22,8 @@ Start release preparation when:
   unused.
 - Each final GHCR package is public and grants this repository's Actions
   workflow write access.
+- The `npm`, `pypi`, and `pypi-evidence` GitHub environments exist with the
+  intended release approvers.
 
 The scheduled release canary is useful maintenance telemetry, but it is not a
 Beta release prerequisite.
@@ -69,6 +71,53 @@ Each result must name the requested package and report `container` and
 `public`. Keep each bootstrap version until the first real version is public,
 then remove only that bootstrap version. This is a package-identity setup step,
 not part of later releases.
+
+### Provision client registries
+
+Registry Stack v0.21.0 and later promote the exact candidate Evidence and Relay client
+packages to npm and PyPI before the GitHub Release becomes public. The two
+publication jobs use GitHub-hosted runners and OpenID Connect trusted
+publishing. Do not add npm or PyPI write tokens to the repository.
+
+On PyPI, register pending trusted publishers for `registry-evidence-client`
+and `registry-relay-client` with these exact values before requesting the first
+candidate:
+
+- Owner: `registrystack`
+- Repository: `registry-stack`
+- Workflow: `release.yml`
+- Environment: `pypi` for Relay and `pypi-evidence` for Evidence
+
+Configure the `pypi` and `pypi-evidence` GitHub environments with required
+reviewers. PyPI creates each project when its first trusted publication
+succeeds.
+
+npm does not provide a pending trusted publisher for an uncreated package.
+The first Registry Stack release that publishes to npm therefore has a
+one-time bootstrap:
+
+1. Create inert `0.0.0` root and platform packages for both
+   `@registrystack/evidence-client` and `@registrystack/relay-client`. Each
+   client has `darwin-arm64`, `linux-arm64-gnu`, and `linux-x64-gnu` platform
+   packages. Give every bootstrap package only a README, `package.json`, and
+   Apache-2.0 license. Do not include executable code.
+2. Publish each package with `npm publish --access public --tag bootstrap` and
+   a maintainer's two-factor authentication. Verify the resulting tags. npm
+   can initialize `latest` when the first package version is created, even
+   when the publication names a nondefault tag. Until the first real release
+   moves `latest`, a normal install may therefore resolve only the inert
+   placeholder.
+3. Configure each package to trust `registrystack/registry-stack`, workflow
+   `release.yml`, environment `npm`, with `npm publish` permission.
+4. Configure the `npm` GitHub environment with required reviewers, disallow
+   token publishing for each package, and revoke any bootstrap credential.
+5. After the first real version is public, remove the `bootstrap` distribution
+   tag. Keep the immutable `0.0.0` records as package-identity history.
+
+The release workflow classifies an existing package version by the SHA-512
+integrity of the candidate tarball. Real versions always use trusted
+publishing. The workflow retries an exact partial state and stops on any
+immutable digest mismatch.
 
 ## Prepare one release PR
 
@@ -232,9 +281,13 @@ Publication:
    digest. An absent tag is copied, an existing exact digest is accepted, and a
    mismatch stops publication.
 4. Adds `SHA256SUMS` and one keyless Sigstore bundle for the checksum file.
-5. Rechecks the full asset inventory, checksum signature, and image digests,
-   then publishes a public, non-prerelease GitHub Release.
-6. Dispatches the docs workflow with the exact released documentation digest.
+5. Reconciles the exact Evidence and Relay wheels on PyPI and the exact root
+   and platform packages on npm. Absent packages use trusted short-lived
+   credentials; existing packages must match the candidate bytes.
+6. Rechecks the full asset inventory, checksum signature, image digests, and
+   completed client registry jobs, then publishes a public, non-prerelease
+   GitHub Release.
+7. Dispatches the docs workflow with the exact released documentation digest.
    The same workflow rebuilds `/dev/` on every push to protected `main` while
    retaining the latest authenticated docs-bearing release at the canonical
    and versioned routes.
@@ -255,7 +308,10 @@ It verifies the annotated tag target, latest published non-prerelease state,
 every downloadable asset against GitHub's digest metadata, the exact
 `SHA256SUMS` closure and its protected-main Sigstore identity, the release-body
 manifest binding, every final OCI digest, and one maintained binary version
-smoke. It is read-only and can be rerun independently.
+smoke. For v0.21.0 and later, the publication workflow also verifies the npm
+SHA-512 integrity and PyPI SHA-256 digest of every client package before
+docs promotion. The public verifier is read-only and can be rerun
+independently.
 
 ## Failure handling
 
@@ -268,6 +324,10 @@ smoke. It is read-only and can be rerun independently.
 | Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then dispatch `release.yml` again with the same tag |
 | Documentation deployment fails after publication | Rerun `docs-pages.yml`; its optional exact tag and digest inputs fail closed if the request is stale |
 | One final image tag already has the expected digest | Retry; publication accepts and re-verifies the exact digest |
+| npm or PyPI already has every expected client byte | Retry; publication accepts and re-verifies the exact registry state |
+| npm or PyPI has only an exact subset of the client packages | Retry; publication uploads only the absent exact packages |
+| npm or PyPI publication fails while the GitHub Release is still a draft | Fix the protected workflow if needed, then retry the same exact candidate and tag; the draft remains nonpublic |
+| An npm or PyPI package version has different bytes | Stop and patch forward with a new version |
 | A final image tag has a different digest, or a published asset differs | Stop and patch forward with a new version |
 | Repeatability, canary, Scorecard, telemetry, hosted, or announcement failure | Record follow-up work; do not change the public release result |
 

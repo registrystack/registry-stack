@@ -23,6 +23,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import release_candidate
+import client_registry
 
 
 TAG_PATTERN = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
@@ -335,6 +336,40 @@ def smoke_asset_name(tag: str) -> str:
     return f"evidence-{tag}-{platform_name}"
 
 
+def verify_client_registries(directory: Path, version: str) -> int:
+    package_count = 0
+    try:
+        for client in sorted(client_registry.CLIENTS):
+            client_registry.validate_distribution(directory, version, client)
+            npm_packages = client_registry.npm_tarballs(directory, version, client)
+            for tarball in npm_packages:
+                state = client_registry.npm_registry_state(
+                    tarball,
+                    client_registry.npm_metadata(tarball),
+                )
+                if state != "present":
+                    raise client_registry.ClientRegistryError(
+                        f"npm package is not public: {tarball.name}"
+                    )
+            wheels = client_registry.wheel_paths(directory, version, client)
+            state = client_registry.pypi_registry_state(
+                wheels,
+                version,
+                client_registry.pypi_metadata(version, client),
+                client,
+            )
+            if state != "present":
+                raise client_registry.ClientRegistryError(
+                    f"PyPI {client} release does not contain the complete wheel set"
+                )
+            package_count += len(npm_packages) + len(wheels)
+    except client_registry.ClientRegistryError as exc:
+        raise PublicReleaseError(
+            f"client registry verification failed: {exc}"
+        ) from exc
+    return package_count
+
+
 def verify(
     *,
     repo: Path,
@@ -359,6 +394,7 @@ def verify(
     if manifest_name not in assets:
         raise PublicReleaseError(f"GitHub Release is missing {manifest_name}")
 
+    client_registry_package_count = 0
     with tempfile.TemporaryDirectory(prefix="registry-public-release-") as temporary:
         directory = Path(temporary)
         run_text(
@@ -444,6 +480,12 @@ def verify(
             raise PublicReleaseError(
                 f"{smoke_name} reports {observed_version!r}, not {expected_version!r}"
             )
+        version = tag.removeprefix("v")
+        if tuple(int(part) for part in version.split(".")) >= (0, 21, 0):
+            client_registry_package_count = verify_client_registries(
+                directory,
+                version,
+            )
 
     return {
         "tag": tag,
@@ -453,5 +495,6 @@ def verify(
         "checksum_payload_count": len(checksums),
         "image_count": len(images),
         "smoke_asset": smoke_name,
+        "client_registry_package_count": client_registry_package_count,
         "status": "verified",
     }

@@ -1287,6 +1287,43 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
                 f"must use only version {version}, found {sorted(loader_versions)!r}"
             )
         surfaces.extend((package_path, lock_path, loader_path))
+        if expected_name in {
+            "@registrystack/evidence-client",
+            "@registrystack/relay-client",
+        }:
+            expected_optional = {
+                f"{expected_name}-{platform}": version
+                for platform in (
+                    "darwin-arm64",
+                    "linux-arm64-gnu",
+                    "linux-x64-gnu",
+                )
+            }
+            if (
+                package.get("optionalDependencies") != expected_optional
+                or lock_package.get("optionalDependencies") != expected_optional
+            ):
+                raise ReleasePlanError(
+                    f"{relative_path(repo, package_path)} and its lockfile must "
+                    "bind the exact platform package versions"
+                )
+            for platform in (
+                "darwin-arm64",
+                "linux-arm64-gnu",
+                "linux-x64-gnu",
+            ):
+                platform_path = root / "npm" / platform / "package.json"
+                platform_package = required_json(platform_path)
+                if (
+                    not isinstance(platform_package, dict)
+                    or platform_package.get("name") != f"{expected_name}-{platform}"
+                    or platform_package.get("version") != version
+                ):
+                    raise ReleasePlanError(
+                        f"{relative_path(repo, platform_path)} must identify "
+                        f"{expected_name}-{platform} at version {version}"
+                    )
+                surfaces.append(platform_path)
 
     for relative_root, expected_name, dependency_name in PYTHON_CLIENT_RELEASE_SURFACES:
         root = repo / relative_root
