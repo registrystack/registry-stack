@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VERSION=""
+RELEASE_ID=""
+BASE_REF="origin/main"
+
+usage() {
+  cat <<'EOF'
+usage: rehearse-release --version <version> --release-id <release-id> [--base-ref <ref>]
+
+Run the nonpublishing Ubuntu release rehearsal after preparing and committing a
+release branch, but before opening its pull request.
+EOF
+}
+
+while (($#)); do
+  case "$1" in
+    --version)
+      VERSION="${2:-}"
+      shift 2
+      ;;
+    --release-id)
+      RELEASE_ID="${2:-}"
+      shift 2
+      ;;
+    --base-ref)
+      BASE_REF="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ ! "${VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  echo "--version must be canonical semantic version text" >&2
+  exit 2
+fi
+if [[ ! "${RELEASE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+  echo "--release-id is invalid" >&2
+  exit 2
+fi
+if [[ -z "${BASE_REF}" ]]; then
+  echo "--base-ref must not be empty" >&2
+  exit 2
+fi
+
+cd "${ROOT}"
+if [[ -n "$(git status --short)" ]]; then
+  echo "release rehearsal requires a committed, clean checkout" >&2
+  exit 1
+fi
+
+tag="v${VERSION}"
+if git show-ref --verify --quiet "refs/tags/${tag}"; then
+  echo "release rehearsal requires the future tag ${tag} to be absent" >&2
+  exit 1
+fi
+if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+  echo "release rehearsal requires the future tag ${tag} to be absent on origin" >&2
+  exit 1
+else
+  tag_lookup_status=$?
+  if [[ "${tag_lookup_status}" -ne 2 ]]; then
+    echo "cannot prove future tag ${tag} is absent on origin" >&2
+    exit 1
+  fi
+fi
+
+release/scripts/registry-release prepare \
+  --version "${VERSION}" \
+  --release-id "${RELEASE_ID}"
+release/scripts/registry-release validate-current
+release/scripts/registry-release validate-docsets
+REGISTRY_RELEASE_SOURCE_MODE=monorepo \
+  release/scripts/check-release-source-model.sh
+
+if [[ -n "${RUNNER_TEMP:-}" ]]; then
+  rehearsal_dir="$(mktemp -d "${RUNNER_TEMP%/}/registry-release-rehearsal.XXXXXX")"
+else
+  rehearsal_dir="$(mktemp -d)"
+fi
+archive="${rehearsal_dir}/registry-docs-${tag}.tar.gz"
+
+cd docs/site
+npm run check:archive-lock -- --base-ref "${BASE_REF}"
+DOCS_ARCHIVE_OUTPUT="${archive}" DOCS_DOCSET="${tag}" npm run build:archive
+npm run archive:snapshot -- \
+  "${tag}" \
+  --output "${archive}" \
+  --verify-lock
+npm run build:dev
+npm run check:production:built
+npm run check:archives
+
+cd "${ROOT}"
+git diff --exit-code
+echo "Release rehearsal passed for ${RELEASE_ID} ${tag}."

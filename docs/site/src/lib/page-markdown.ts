@@ -8,6 +8,20 @@ Index of all pages: https://docs.registrystack.org/llms.txt
 Full corpus: https://docs.registrystack.org/llms-full.txt`;
 
 /**
+ * Bind discovery URLs to the public base used by this build.
+ *
+ * @param publicBase - Astro base path, such as "/" or "/dev/".
+ */
+export function discoveryHeaderForBase(publicBase: string | undefined = '/'): string {
+  const normalizedBase = `/${String(publicBase)
+    .replace(/^\/+|\/+$/g, '')}/`.replace(/^\/\/$/, '/');
+  return DISCOVERY_HEADER.replaceAll(
+    'https://docs.registrystack.org/',
+    `https://docs.registrystack.org${normalizedBase}`,
+  );
+}
+
+/**
  * Map a docs collection entry slug to the output path param used in
  * src/pages/[...slug].md.ts so the generated file URL matches the page URL.
  *
@@ -43,8 +57,9 @@ export function buildPageMarkdown(
   title: string,
   description: string | undefined,
   body: string,
+  publicBase: string | undefined = '/',
 ): string {
-  const parts: string[] = [DISCOVERY_HEADER, '', `# ${title}`];
+  const parts: string[] = [discoveryHeaderForBase(publicBase), '', `# ${title}`];
   if (description) {
     parts.push('', `> ${description}`);
   }

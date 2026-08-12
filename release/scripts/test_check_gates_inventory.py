@@ -598,6 +598,14 @@ class GateInventoryTest(unittest.TestCase):
                 "release/scripts/test_release_repeatability_workflow.py",
                 "Release repeatability workflow tests",
             ),
+            (
+                "release/scripts/test_release_rehearsal.py",
+                "Release rehearsal workflow tests",
+            ),
+            (
+                "release/scripts/test_verify_public_release.py",
+                "Public release verifier tests",
+            ),
         )
         for path, gate in tests:
             with self.subTest(path=path):
@@ -627,6 +635,10 @@ class GateInventoryTest(unittest.TestCase):
             (
                 ".github/workflows/release-candidate-cleanup.yml",
                 "Release candidate cleanup workflow change classification",
+            ),
+            (
+                ".github/workflows/release-rehearsal.yml",
+                "Release rehearsal workflow change classification",
             ),
         )
         for path, gate in workflows:
@@ -720,12 +732,15 @@ class GateInventoryTest(unittest.TestCase):
         text = self.workflow.replace("-max_total_time=60", "-runs=0")
         self.assertIn("Platform fuzz bounded runtime", self.module.missing_gates(text))
 
-    def test_missing_docs_build_check_is_reported(self) -> None:
+    def test_missing_production_shaped_docs_build_check_is_reported(self) -> None:
         text = self.workflow.replace(
-            "run: npm run check",
+            "run: npm run check:production",
             "run: npm run verify",
         )
-        self.assertIn("Docs build check", self.module.missing_gates(text))
+        self.assertIn(
+            "Production-shaped docs build check",
+            self.module.missing_gates(text),
+        )
 
     def test_missing_manifest_profile_validation_is_reported(self) -> None:
         text = self.workflow.replace(

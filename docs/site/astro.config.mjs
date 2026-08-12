@@ -10,7 +10,7 @@ import remarkGfm from 'remark-gfm';
 // Single source of truth for the machine-discovery pointer. Reused as the
 // llms.txt `details` block so it can never drift from the header the per-page
 // .md endpoint prepends (src/pages/[...slug].md.ts).
-import { DISCOVERY_HEADER } from './src/lib/page-markdown.ts';
+import { discoveryHeaderForBase } from './src/lib/page-markdown.ts';
 import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayV2RetirementRedirects } from './src/lib/relay-v2-retirement-redirects.mjs';
@@ -224,7 +224,7 @@ export default defineConfig({
         // canonical root. Historical archives retain their sealed output.
         ...(isHistoricalArchiveBuild ? [] : [starlightLlmsTxt({
           description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Evidence Gateway.',
-          details: DISCOVERY_HEADER,
+          details: discoveryHeaderForBase(base),
           exclude: ['reference/apis/**'],
           promote: ['index*', 'explanation/**'],
           demote: ['reference/**', 'decisions/**'],

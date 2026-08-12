@@ -186,6 +186,7 @@ RELEASE_SECURITY_WORKFLOWS = frozenset(
         ".github/workflows/release-candidate.yml",
         ".github/workflows/release-repeatability.yml",
         ".github/workflows/release-candidate-cleanup.yml",
+        ".github/workflows/release-rehearsal.yml",
     }
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -250,6 +250,19 @@ version = "1.1.0"
         write_yaml(data / "docsets.yaml", docsets)
         write_json(data / "generated/docsets.json", docsets)
         write_yaml(
+            data / "archive-lock.yaml",
+            {
+                "schema_version": "registry-docs.archive-lock.v1",
+                "archives": {
+                    "v1.1.0": {
+                        "bundle_sha256": "a" * 64,
+                        "root_tree_sha256": "b" * 64,
+                        "version_tree_sha256": "c" * 64,
+                    }
+                },
+            },
+        )
+        write_yaml(
             data / "repo-docs.yaml",
             {
                 "repos": {
@@ -302,6 +315,85 @@ version = "1.1.0"
         write_json(data / "generated/contracts.json", contracts)
         write_yaml(data / "standards.yaml", standards)
         write_json(data / "generated/standards.json", standards)
+        write(
+            root / "docs/site/scripts/release-identity.test.mjs",
+            "const version = 'v1.1.0'; const train = 'beta-9';\n",
+        )
+        write(
+            root / "docs/site/src/content/docs/changelog.mdx",
+            "---\ntitle: Changelog\n---\n\n## v1.1.0 beta-9\n",
+        )
+        for relative_root, name in (
+            (
+                "crates/registry-evidence-client-node",
+                "@registrystack/evidence-client",
+            ),
+            (
+                "crates/registry-relay-client-node",
+                "@registrystack/relay-client",
+            ),
+        ):
+            client_root = self.root / relative_root
+            write_json(
+                client_root / "package.json",
+                {"name": name, "version": "1.1.0"},
+            )
+            write_json(
+                client_root / "package-lock.json",
+                {
+                    "name": name,
+                    "version": "1.1.0",
+                    "lockfileVersion": 3,
+                    "packages": {"": {"name": name, "version": "1.1.0"}},
+                },
+            )
+            write(
+                client_root / "index.js",
+                "if (bindingPackageVersion !== '1.1.0') throw new Error();\n",
+            )
+        for relative_root, name, dependency in (
+            (
+                "crates/registry-evidence-client-py",
+                "registry-evidence-client",
+                "evidence-client-sdk",
+            ),
+            (
+                "crates/registry-relay-client-py",
+                "registry-relay-client",
+                "relay-client-sdk",
+            ),
+        ):
+            client_root = self.root / relative_root
+            write(
+                client_root / "pyproject.toml",
+                f'''[project]
+name = "{name}"
+version = "1.1.0"
+''',
+            )
+            write(
+                client_root / "Cargo.toml",
+                f'''[package]
+name = "{name}-py"
+version.workspace = true
+
+[dependencies]
+{dependency} = {{ package = "{name}", path = "../{name}", version = "1.1.0" }}
+''',
+            )
+        for relative in (
+            "products/manifest/fuzz/Cargo.lock",
+            "products/platform/fuzz/Cargo.lock",
+        ):
+            write(
+                self.root / relative,
+                '''version = 4
+
+[[package]]
+name = "registry-core"
+version = "1.1.0"
+''',
+            )
         write(
             root / "products/manifest/CHANGELOG.md",
             "# Changelog\n\n## [1.1.0]\n\n- Ready.\n",
@@ -438,7 +530,11 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 "release-identity",
                 "immutable-release-tag",
                 "workspace-versions",
+                "client-package-versions",
+                "excluded-fuzz-locks",
                 "docsets",
+                "docs-archive-lock",
+                "active-release-identity-surfaces",
                 "repo-docs",
                 "release-documents",
                 "openapi-versions",
@@ -453,7 +549,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertTrue(
             all(set(change) == {"path", "kind", "from", "to"} for change in plan["changes"])
         )
-        self.assertNotIn(
+        self.assertIn(
             "docs/site/src/data/repo-docs.yaml",
             {change["path"] for change in plan["changes"]},
         )
@@ -465,6 +561,19 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "docs/site/src/data/generated/docsets.json",
             {change["path"] for change in plan["changes"]},
         )
+        for required_surface in (
+            "crates/registry-evidence-client-node/package.json",
+            "crates/registry-evidence-client-node/index.js",
+            "crates/registry-relay-client-py/pyproject.toml",
+            "products/manifest/fuzz/Cargo.lock",
+            "products/platform/fuzz/Cargo.lock",
+            "docs/site/src/data/archive-lock.yaml",
+            "docs/site/src/data/repo-docs.yaml",
+        ):
+            self.assertIn(
+                required_surface,
+                {change["path"] for change in plan["changes"]},
+            )
         keys = [(change["path"], change.get("pointer")) for change in plan["changes"]]
         self.assertEqual(len(keys), len(set(keys)))
         self.assertEqual(
@@ -486,6 +595,45 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(1, result.returncode)
         self.assertIn("required release surface is missing", result.stderr)
         self.assertIn("docs/site/src/data/docsets.yaml", result.stderr)
+
+    def test_prepare_rejects_stale_client_loader_and_excluded_fuzz_lock(self) -> None:
+        loader = self.repo.root / "crates/registry-evidence-client-node/index.js"
+        write(loader, "if (bindingPackageVersion !== '1.0.0') throw new Error();\n")
+        stale_loader = self.prepare()
+        self.assertEqual(1, stale_loader.returncode)
+        self.assertIn("generated binding loader must use only version 1.1.0", stale_loader.stderr)
+
+        write(loader, "if (bindingPackageVersion !== '1.1.0') throw new Error();\n")
+        fuzz_lock = self.repo.root / "products/platform/fuzz/Cargo.lock"
+        write(
+            fuzz_lock,
+            '''version = 4
+
+[[package]]
+name = "registry-core"
+version = "1.0.0"
+''',
+        )
+        stale_lock = self.prepare()
+        self.assertEqual(1, stale_lock.returncode)
+        self.assertIn(
+            "products/platform/fuzz/Cargo.lock path packages must use version 1.1.0",
+            stale_lock.stderr,
+        )
+
+    def test_prepare_requires_exact_release_archive_lock(self) -> None:
+        archive_lock = self.repo.root / "docs/site/src/data/archive-lock.yaml"
+        document = yaml.safe_load(archive_lock.read_text(encoding="utf-8"))
+        document["archives"]["v1.1.0"].pop("root_tree_sha256")
+        write_yaml(archive_lock, document)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn(
+            "archive-lock.yaml v1.1.0 must contain exactly",
+            result.stderr,
+        )
 
     def test_prepare_writes_an_identical_optional_plan_output(self) -> None:
         output = Path(self.temporary.name) / "release-plan.json"
@@ -703,11 +851,17 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertNotIn("closeout", help_result.stdout)
         self.assertNotIn("source-ref", help_result.stdout)
         self.assertIn("verify-candidate", help_result.stdout)
+        self.assertIn("verify-public", help_result.stdout)
         request_help = run("request-candidate", "--help")
         self.assertEqual(0, request_help.returncode, request_help.stderr)
         self.assertNotIn("--proof-level", request_help.stdout)
         self.assertNotIn("--milestone", request_help.stdout)
         self.assertNotIn("--measurement-bootstrap", request_help.stdout)
+        self.assertIn("--wait-for-ci", request_help.stdout)
+        self.assertIn("--wait", request_help.stdout)
+        public_help = run("verify-public", "--help")
+        self.assertEqual(0, public_help.returncode, public_help.stderr)
+        self.assertIn("--tag", public_help.stdout)
 
     def test_prepare_rejects_stale_local_tag_when_origin_has_target(self) -> None:
         git(self.repo.root, "tag", "--annotate", "v1.1.0", "--message", "release")
