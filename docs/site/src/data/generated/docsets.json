@@ -32,6 +32,35 @@
       }
     },
     {
+      "id": "v0.21.0",
+      "label": "v0.21.0",
+      "path": "/v/0.21.0/",
+      "status": "archived",
+      "availability": "candidate",
+      "source": "registry-stack-v0.21.0",
+      "repo_docs_source": "monorepo",
+      "published_at": "2026-08-13",
+      "description": "Registry Stack v0.21.0 beta-32 candidate documentation set with official Relay, Evidence Gateway, and Registry Mint runtime images.",
+      "products": {
+        "registry-stack": {
+          "version": "v0.21.0",
+          "ref": "v0.21.0"
+        },
+        "registry-relay": {
+          "version": "v0.21.0",
+          "ref": "v0.21.0"
+        },
+        "registry-manifest": {
+          "version": "v0.21.0",
+          "ref": "v0.21.0"
+        },
+        "registry-evidence": {
+          "version": "v0.21.0",
+          "ref": "v0.21.0"
+        }
+      }
+    },
+    {
       "id": "v0.20.1",
       "label": "v0.20.1",
       "path": "/v/0.20.1/",

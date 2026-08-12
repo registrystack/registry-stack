@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.21.0 - 2026-08-13
+
+- No separately versioned Registry Platform API changes. This release adds
+  official Evidence Gateway and Registry Mint runtime image distribution.
+
 ## v0.20.1 - 2026-08-12
 
 - No separately versioned Registry Platform API changes. This patch release
