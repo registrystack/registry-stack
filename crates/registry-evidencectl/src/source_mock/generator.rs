@@ -38,6 +38,7 @@ const MAX_DEPTH: usize = 32;
 const MAX_PROPERTIES: usize = 256;
 const MAX_ARRAY_ITEMS: usize = 256;
 const DEFAULT_ARRAY_MAX: usize = 3;
+const DEFAULT_INTEGER_SPAN: i64 = 1000;
 pub(super) const MAX_STRING_CHARS: usize = 4096;
 const DEFAULT_STRING_MAX: usize = 16;
 const MAX_ATTEMPTS: u64 = 16;
@@ -533,7 +534,8 @@ impl State<'_, '_> {
             )
         })?;
         let minimum = usize_keyword(schema, "minItems", pointer)?.unwrap_or(1);
-        let maximum = usize_keyword(schema, "maxItems", pointer)?.unwrap_or(DEFAULT_ARRAY_MAX);
+        let maximum = usize_keyword(schema, "maxItems", pointer)?
+            .unwrap_or_else(|| minimum.max(DEFAULT_ARRAY_MAX));
         if minimum > maximum || maximum > MAX_ARRAY_ITEMS {
             return Err(GenerationError::at(
                 pointer,
@@ -1719,22 +1721,11 @@ fn format_valid(format: &str, value: &str) -> bool {
                     .parse::<u16>()
                     .is_ok()
         }
-        "email" => value.split_once('@').is_some_and(|(local, host)| {
-            !local.is_empty() && host.contains('.') && !host.contains(' ')
-        }),
+        "email" => valid_email(value),
         "uuid" => uuid_shape(value),
         "uri" | "url" => url::Url::parse(value).is_ok(),
         "uri-reference" => value.starts_with('/'),
-        "hostname" => {
-            value.len() <= 253
-                && value.split('.').all(|label| {
-                    !label.is_empty()
-                        && label.len() <= 63
-                        && label
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                })
-        }
+        "hostname" => valid_hostname(value),
         "ipv4" => value.parse::<Ipv4Addr>().is_ok(),
         "ipv6" => value.parse::<Ipv6Addr>().is_ok(),
         "byte" => BASE64_STANDARD.decode(value).is_ok(),
@@ -1746,6 +1737,67 @@ fn format_valid(format: &str, value: &str) -> bool {
         }),
         _ => false,
     }
+}
+
+fn valid_email(value: &str) -> bool {
+    if value.len() > 254 {
+        return false;
+    }
+    let mut parts = value.split('@');
+    let Some(local) = parts.next() else {
+        return false;
+    };
+    let Some(host) = parts.next() else {
+        return false;
+    };
+    if parts.next().is_some()
+        || local.is_empty()
+        || local.len() > 64
+        || local.starts_with('.')
+        || local.ends_with('.')
+        || local.contains("..")
+    {
+        return false;
+    }
+    let local_is_conservative_ascii = local.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'/'
+                    | b'='
+                    | b'?'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'{'
+                    | b'|'
+                    | b'}'
+                    | b'~'
+            )
+    });
+    local_is_conservative_ascii && host.contains('.') && valid_hostname(host)
+}
+
+fn valid_hostname(value: &str) -> bool {
+    value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 fn valid_pointer_escapes(value: &str) -> bool {
@@ -1824,8 +1876,8 @@ fn random_uuid(rng: &mut ChaCha20Rng) -> String {
 }
 
 fn integer_bounds(schema: &Value, pointer: &str) -> Result<(i64, i64), GenerationError> {
-    let mut minimum = integer_limit(schema, "minimum", pointer, f64::ceil)?.unwrap_or(0);
-    let mut maximum = integer_limit(schema, "maximum", pointer, f64::floor)?.unwrap_or(1000);
+    let mut minimum = integer_limit(schema, "minimum", pointer, f64::ceil)?;
+    let mut maximum = integer_limit(schema, "maximum", pointer, f64::floor)?;
     if let Some(bound) = integer_limit(schema, "exclusiveMinimum", pointer, f64::floor)? {
         let exclusive = bound.checked_add(1).ok_or_else(|| {
             GenerationError::at(
@@ -1834,7 +1886,7 @@ fn integer_bounds(schema: &Value, pointer: &str) -> Result<(i64, i64), Generatio
                 "the integer minimum overflows",
             )
         })?;
-        minimum = minimum.max(exclusive);
+        minimum = Some(minimum.map_or(exclusive, |minimum| minimum.max(exclusive)));
     }
     if let Some(bound) = integer_limit(schema, "exclusiveMaximum", pointer, f64::ceil)? {
         let exclusive = bound.checked_sub(1).ok_or_else(|| {
@@ -1844,8 +1896,14 @@ fn integer_bounds(schema: &Value, pointer: &str) -> Result<(i64, i64), Generatio
                 "the integer maximum underflows",
             )
         })?;
-        maximum = maximum.min(exclusive);
+        maximum = Some(maximum.map_or(exclusive, |maximum| maximum.min(exclusive)));
     }
+    let (minimum, maximum) = match (minimum, maximum) {
+        (Some(minimum), Some(maximum)) => (minimum, maximum),
+        (Some(minimum), None) => (minimum, minimum.saturating_add(DEFAULT_INTEGER_SPAN)),
+        (None, Some(maximum)) => (maximum.saturating_sub(DEFAULT_INTEGER_SPAN), maximum),
+        (None, None) => (0, DEFAULT_INTEGER_SPAN),
+    };
     if minimum > maximum {
         return Err(GenerationError::at(
             pointer,
@@ -2094,6 +2152,17 @@ mod tests {
     }
 
     #[test]
+    fn lower_bound_only_arrays_use_a_compatible_default_maximum() {
+        let schema = json!({"type": "array", "minItems": 5, "items": {"type": "string"}});
+        let paths = BTreeMap::new();
+        let datasets = BTreeMap::new();
+        let generated = generate(&schema, &context(&paths, &datasets)).unwrap();
+
+        assert_eq!(generated.value.as_array().unwrap().len(), 5);
+        assert!(value_satisfies(&schema, &generated.value));
+    }
+
+    #[test]
     fn inclusive_and_exclusive_integer_bounds_are_combined() {
         assert_eq!(
             integer_bounds(
@@ -2110,6 +2179,22 @@ mod tests {
             )
             .unwrap(),
             (0, 0)
+        );
+    }
+
+    #[test]
+    fn one_sided_integer_bounds_choose_a_bounded_valid_window() {
+        assert_eq!(
+            integer_bounds(&json!({"minimum": 2000}), "").unwrap(),
+            (2000, 3000)
+        );
+        assert_eq!(
+            integer_bounds(&json!({"maximum": -1}), "").unwrap(),
+            (-1001, -1)
+        );
+        assert_eq!(
+            integer_bounds(&json!({"minimum": i64::MAX}), "").unwrap(),
+            (i64::MAX, i64::MAX)
         );
     }
 
@@ -2373,6 +2458,14 @@ mod tests {
         assert!(!value_satisfies(
             &schema,
             &json!({"profile": {"email": "not-an-email"}})
+        ));
+        assert!(!value_satisfies(
+            &schema,
+            &json!({"profile": {"email": "a@@b.example"}})
+        ));
+        assert!(!value_satisfies(
+            &schema,
+            &json!({"profile": {"email": "person@-example.invalid"}})
         ));
         assert!(!value_satisfies(
             &schema,

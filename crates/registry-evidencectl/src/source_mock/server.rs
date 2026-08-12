@@ -257,6 +257,10 @@ pub fn validate_numeric_loopback_addr(addr: SocketAddr) -> Result<SocketAddr> {
     Ok(addr)
 }
 
+pub(super) fn can_compile_route_template(template: &str) -> bool {
+    parse_template(template).is_ok()
+}
+
 pub async fn bind_validated_listener(addr: SocketAddr) -> Result<TcpListener> {
     let addr = validate_numeric_loopback_addr(addr)?;
     TcpListener::bind(addr)
@@ -556,6 +560,14 @@ mod tests {
             Some(&APPLICATION_JSON)
         );
         assert_eq!(body_text(response).await, r#"{"kind":"literal"}"#);
+    }
+
+    #[test]
+    fn skipped_route_filter_uses_the_server_route_grammar() {
+        assert!(can_compile_route_template("/legacy/{id}"));
+        assert!(can_compile_route_template("/"));
+        assert!(!can_compile_route_template("/legacy/"));
+        assert!(!can_compile_route_template("legacy"));
     }
 
     #[tokio::test]

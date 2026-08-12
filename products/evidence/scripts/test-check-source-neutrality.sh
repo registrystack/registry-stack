@@ -166,14 +166,34 @@ plant_acceptance_vocabulary_in_production_code() {
 
 plant_generic_synthetic_vocabulary_in_source_mock() {
   mkdir -p "$1/crates/registry-evidencectl/src/source_mock"
-  printf 'pub const GENERATORS: &[&str] = &["given_name", "family_name", "birth_date"];\n' \
-    >"$1/crates/registry-evidencectl/src/source_mock/generator.rs"
+  cat >"$1/crates/registry-evidencectl/src/source_mock/infer.rs" <<'RUST'
+pub const ALIASES: &[&str] = &[
+    "given name",
+    "givenname",
+    "family name",
+    "familyname",
+    "birth date",
+    "birthdate",
+];
+RUST
 }
 
 plant_acceptance_vocabulary_in_source_mock() {
   mkdir -p "$1/crates/registry-evidencectl/src/source_mock"
   printf 'pub fn adult_status() -> bool {\n    true\n}\n' \
     >"$1/crates/registry-evidencectl/src/source_mock/generator.rs"
+}
+
+plant_acceptance_derivation_in_source_mock() {
+  mkdir -p "$1/crates/registry-evidencectl/src/source_mock"
+  printf 'pub fn derive_birth_date() -> bool {\n    true\n}\n' \
+    >"$1/crates/registry-evidencectl/src/source_mock/infer.rs"
+}
+
+plant_compact_acceptance_derivation_in_source_mock() {
+  mkdir -p "$1/crates/registry-evidencectl/src/source_mock"
+  printf 'pub fn derive_birthdate() -> bool {\n    true\n}\n' \
+    >"$1/crates/registry-evidencectl/src/source_mock/infer.rs"
 }
 
 plant_acceptance_vocabulary_in_evidencectl_sibling() {
@@ -246,6 +266,10 @@ run_case 'generic synthetic vocabulary in the authoring source mock passes' \
   pass plant_generic_synthetic_vocabulary_in_source_mock
 run_case 'acceptance behavior in the authoring source mock fails' \
   fail plant_acceptance_vocabulary_in_source_mock
+run_case 'an acceptance derivation beside the inference registry fails' \
+  fail plant_acceptance_derivation_in_source_mock
+run_case 'a compact acceptance derivation beside the inference registry fails' \
+  fail plant_compact_acceptance_derivation_in_source_mock
 run_case 'acceptance vocabulary in an evidencectl sibling fails' \
   fail plant_acceptance_vocabulary_in_evidencectl_sibling
 run_case 'a source-product name in the authoring source mock fails' \

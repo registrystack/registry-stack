@@ -17,6 +17,7 @@ use super::generator::{
     self, GeneratedDocument, GenerationContext, PathParameter, ReferenceDataset,
     GENERATOR_CONTRACT, MAX_STRING_CHARS,
 };
+use super::plan::MAX_OPERATIONS;
 
 pub(super) const DEFAULT_SEED: u64 = 0;
 pub(super) const DEFAULT_AS_OF: &str = "2025-01-01";
@@ -449,11 +450,16 @@ pub(super) fn discover(
     let declared = spec.declared_operations()?;
     let mut operations = Vec::new();
     let mut skipped = Vec::new();
+    let candidates = declared
+        .into_iter()
+        .filter(|key| key.method == "GET")
+        .filter(|key| selected.is_none_or(|selected| same_operation(selected, key)))
+        .collect::<Vec<_>>();
+    if candidates.len() > MAX_OPERATIONS {
+        bail!("OpenAPI discovery exceeds the {MAX_OPERATIONS}-operation limit");
+    }
 
-    for key in declared.into_iter().filter(|key| key.method == "GET") {
-        if selected.is_some_and(|selected| !same_operation(selected, &key)) {
-            continue;
-        }
+    for key in candidates {
         match compatible_operation(&spec, key.clone()) {
             Ok(operation) => operations.push(operation),
             Err(reason) => skipped.push(SkippedOperation { key, reason }),
@@ -500,10 +506,12 @@ fn compatible_operation(
     let resolved = spec
         .response_schema(&key, "200", "application/json")
         .map_err(|_| "no exact 200 application/json response schema")?;
-    if contains_recursive_marker(&resolved.schema.0) {
+    let mut response_schema = resolved.schema.0;
+    normalize_response_schema(&mut response_schema);
+    if contains_recursive_marker(&response_schema) {
         return Err("recursive response schema");
     }
-    generator::validate_schema(&resolved.schema.0).map_err(|_| "unsupported response schema")?;
+    generator::validate_schema(&response_schema).map_err(|_| "unsupported response schema")?;
     let parameters = spec
         .operation_parameters(&key)
         .map_err(|_| "invalid operation parameters")?;
@@ -527,7 +535,7 @@ fn compatible_operation(
     if declared_names != template_names {
         return Err("path-template parameter mismatch");
     }
-    validate_from_request_recipes(&resolved.schema.0, &path_parameters)?;
+    validate_from_request_recipes(&response_schema, &path_parameters)?;
 
     let operation = spec.operation(&key).map_err(|_| "invalid operation")?;
     if operation.get("x-evidencectl-mock").is_some() {
@@ -542,7 +550,7 @@ fn compatible_operation(
         "path": key.path,
         "status": 200,
         "mediaType": "application/json",
-        "schema": generation_schema_projection(&resolved.schema.0),
+        "schema": generation_schema_projection(&response_schema),
         "pathParameters": path_parameters.iter().map(|parameter| json!({
             "name": parameter.name,
             "schema": generation_schema_projection(&parameter.schema),
@@ -551,14 +559,40 @@ fn compatible_operation(
     let canonical =
         canonicalize_json(&surface).map_err(|_| "response schema is not canonicalizable")?;
     let projection_digest = Sha256::digest(canonical).into();
-    let schema = resolved.schema.0;
     Ok(CompatibleOperation {
         key,
         operation_id,
-        schema,
+        schema: response_schema,
         path_parameters,
         projection_digest,
     })
+}
+
+fn normalize_response_schema(schema: &mut Value) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let mut removed = BTreeSet::new();
+    if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+        properties.retain(|name, child| {
+            let retained = child.get("writeOnly").and_then(Value::as_bool) != Some(true);
+            if !retained {
+                removed.insert(name.clone());
+            }
+            retained
+        });
+        for child in properties.values_mut() {
+            normalize_response_schema(child);
+        }
+    }
+    if !removed.is_empty() {
+        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+            required.retain(|name| name.as_str().is_none_or(|name| !removed.contains(name)));
+        }
+    }
+    if let Some(items) = object.get_mut("items") {
+        normalize_response_schema(items);
+    }
 }
 
 fn validate_from_request_recipes(
@@ -964,5 +998,94 @@ paths:
             baseline.operations[0].projection_digest,
             changed.operations[0].projection_digest
         );
+    }
+
+    #[test]
+    fn response_projection_omits_write_only_properties_and_required_entries() {
+        let spec = r#"
+openapi: 3.1.0
+info: {title: Write-only response, version: 1.0.0}
+paths:
+  /account:
+    get:
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, password]
+                properties:
+                  id: {type: string}
+                  password: {type: string, writeOnly: true}
+                  nested:
+                    type: object
+                    required: [visible, secret]
+                    properties:
+                      visible: {type: boolean}
+                      secret: {type: string, writeOnly: true}
+"#;
+        let prepared = discover(spec.as_bytes(), "write-only response", None).unwrap();
+        let operation = &prepared.operations[0];
+
+        assert!(operation.schema["properties"].get("password").is_none());
+        assert_eq!(operation.schema["required"], json!(["id"]));
+        assert!(operation.schema["properties"]["nested"]["properties"]
+            .get("secret")
+            .is_none());
+        assert_eq!(
+            operation.schema["properties"]["nested"]["required"],
+            json!(["visible"])
+        );
+        let (_, body) = prepared
+            .generate(
+                operation,
+                &BTreeMap::new(),
+                0,
+                NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
+            )
+            .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert!(body.get("password").is_none());
+        assert!(body["nested"].get("secret").is_none());
+    }
+
+    #[test]
+    fn unselected_discovery_enforces_the_materialized_operation_ceiling_early() {
+        let paths = (0..=MAX_OPERATIONS)
+            .map(|index| {
+                (
+                    format!("/records/{index}"),
+                    json!({
+                        "get": {
+                            "responses": {
+                                "200": {
+                                    "description": "ok",
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {"type": "object", "properties": {}}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let document = json!({
+            "openapi": "3.1.0",
+            "info": {"title": "bounded discovery", "version": "1.0.0"},
+            "paths": paths,
+        });
+        let bytes = serde_json::to_vec(&document).unwrap();
+
+        let error = discover(&bytes, "operation ceiling", None).unwrap_err();
+        assert!(error.to_string().contains("256-operation limit"));
+
+        let selected = parse_operation("GET /records/0").unwrap();
+        let prepared = discover(&bytes, "selected operation", Some(&selected)).unwrap();
+        assert_eq!(prepared.operations.len(), 1);
     }
 }
