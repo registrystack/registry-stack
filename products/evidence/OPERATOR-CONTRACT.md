@@ -1186,6 +1186,12 @@ whether or not any grant enables the credential format, it never reveals which
 requesters or requirements do, and it is discovery rather than a trust anchor
 on exactly the terms in [secrets and keys](#secrets-and-keys).
 No-match and ambiguous outcomes are publicly indistinguishable by default.
+An HTTP source may additionally declare one exact unresolved Problem Details
+tuple. Only the closed exact response becomes public evidence unavailable at a
+singular or search stage; its neutral audit decision is `unresolved`, not
+`no-match`, because the upstream result may be hidden or ambiguous. The problem
+body, type, code, detail, and trace are never recorded. A mismatch and an
+unresolved fetch after unique search are dependency failures.
 Source, signing, and dependency failures use stable safe problem codes and do
 not reflect protected inputs. Signing failure returns a safe transient failure.
 

@@ -9,7 +9,7 @@
       "marker": "evidence-bundle-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 261,
+      "field_count": 265,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -4184,6 +4184,68 @@
           "constraints": [],
           "conditional_constraints": [],
           "description": "For `http-json`: Selects the HTTP-plus-JSON transport, which reaches a fixed HTTPS origin over the network under one request and response contract for method, media type, and body shape. The tag chooses the shape of the whole source, so a key belonging to another transport is an unknown key here rather than an ignored one. For `sqlite-extract`: Selects the statement transport, which runs one reviewed SQL statement against a read-only SQLite extract file mounted beside the process. There is no origin, no credential, and no network hop, so the keys the HTTP transport needs for those are unknown keys here rather than ignored ones.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.unresolvedProblem",
+          "kind": "property",
+          "type": "object",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Optional exact source-neutral Problem Details tuple which declares one HTTP 404 response as an explicit unresolved lookup outcome. The runtime accepts it only with exactly one application/problem+json Content-Type and an exact duplicate-free six-member Problem Details object whose status, type, and code equal this tuple. Omission preserves the ordinary rule that every HTTP 404 is a dependency failure. This outcome is unavailable for an optimized physical source batch because one response cannot identify the unresolved logical item.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.unresolvedProblem.code",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 64",
+              "minLength: 1",
+              "pattern: ^[a-z][a-z0-9._-]{0,63}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.unresolvedProblem.status",
+          "kind": "property",
+          "type": "integer",
+          "required": "conditional",
+          "values": [
+            "404"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "sources.*.unresolvedProblem.type",
+          "kind": "property",
+          "type": "string",
+          "required": "conditional",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uri",
+              "maxLength: 512",
+              "pattern: ^https://"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
           "runtime_validation": null
         },
         {

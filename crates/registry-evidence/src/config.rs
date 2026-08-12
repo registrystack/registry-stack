@@ -1985,6 +1985,11 @@ pub enum SourceConfig {
     HttpJson {
         base_url: String,
         posture: AcquisitionPosture,
+        /// Optional exact upstream Problem Details tuple which means that the
+        /// source deliberately did not resolve this lookup. The transport
+        /// remains source-neutral: no provider code is built in.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unresolved_problem: Option<DeclaredUnresolvedProblem>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tls_trust_profile: Option<String>,
         authentication: Box<SourceAuthentication>,
@@ -2029,6 +2034,7 @@ impl SourceConfig {
                 authentication,
                 request,
                 batch,
+                unresolved_problem,
                 ..
             } => {
                 validate_source_origin(base_url)?;
@@ -2053,6 +2059,14 @@ impl SourceConfig {
                 }
                 authentication.validate()?;
                 request.validate()?;
+                if let Some(problem) = unresolved_problem {
+                    problem.validate()?;
+                    if batch.is_some() {
+                        return invalid(
+                            "declared unresolved problems are not supported by source batching",
+                        );
+                    }
+                }
                 if let Some(batch) = batch {
                     if request.path.is_none() || request.path_template.is_some() {
                         return invalid("source batch optimization requires a fixed request path");
@@ -2166,6 +2180,19 @@ impl SourceConfig {
     pub fn batch(&self) -> Option<&HttpBatchConfig> {
         match self {
             Self::HttpJson { batch, .. } => batch.as_deref(),
+            Self::SqliteExtract { .. } => None,
+        }
+    }
+
+    /// The exact source-neutral unresolved tuple this HTTP source recognizes.
+    ///
+    /// Callers receive only the governed declaration, never an upstream
+    /// Problem Details body. Statement sources cannot declare this outcome.
+    pub fn unresolved_problem(&self) -> Option<&DeclaredUnresolvedProblem> {
+        match self {
+            Self::HttpJson {
+                unresolved_problem, ..
+            } => unresolved_problem.as_ref(),
             Self::SqliteExtract { .. } => None,
         }
     }
@@ -2298,6 +2325,49 @@ impl SourceConfig {
             Self::HttpJson { request, .. } => request.concurrency_limit,
             Self::SqliteExtract { request, .. } => request.concurrency_limit,
         }
+    }
+}
+
+/// Exact, source-neutral Problem Details tuple an HTTP source may declare as
+/// an explicit unresolved lookup outcome.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeclaredUnresolvedProblem {
+    pub status: u16,
+    #[serde(rename = "type")]
+    pub type_uri: String,
+    pub code: String,
+}
+
+impl DeclaredUnresolvedProblem {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.status != 404 {
+            return invalid("declared unresolved problem status must be 404");
+        }
+        if self.type_uri.chars().count() > 512 {
+            return invalid("declared unresolved problem type is too long");
+        }
+        let uri = Url::parse(&self.type_uri)
+            .map_err(|_| ConfigError::Invalid("declared unresolved problem type is invalid"))?;
+        if uri.scheme() != "https"
+            || uri.host().is_none()
+            || !uri.username().is_empty()
+            || uri.password().is_some()
+        {
+            return invalid("declared unresolved problem type must be an absolute HTTPS URI");
+        }
+        let bytes = self.code.as_bytes();
+        if !(1..=64).contains(&bytes.len())
+            || !matches!(bytes.first(), Some(b'a'..=b'z'))
+            || !bytes.iter().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            })
+        {
+            return invalid("declared unresolved problem code is invalid");
+        }
+        Ok(())
     }
 }
 
@@ -7557,6 +7627,96 @@ outboundTls:
                 "source batch adapter name must be a local identifier"
             )),
             "the batch adapter identity emitted to audit must use the closed local grammar"
+        );
+
+        let unresolved_batch = edited(
+            &document,
+            "    batch:\n",
+            "    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n    batch:\n",
+        );
+        assert_eq!(
+            EvidenceConfig::parse_yaml(unresolved_batch.as_bytes()).err(),
+            Some(ConfigError::Invalid(
+                "declared unresolved problems are not supported by source batching"
+            )),
+            "one physical response cannot resolve one logical batch item"
+        );
+    }
+
+    #[test]
+    fn declared_unresolved_problem_tuple_is_closed_and_bounded() {
+        DeclaredUnresolvedProblem {
+            status: 404,
+            type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
+            code: "consultation.unresolved".to_owned(),
+        }
+        .validate()
+        .expect("the exact source-neutral tuple validates");
+
+        for (label, problem) in [
+            (
+                "status",
+                DeclaredUnresolvedProblem {
+                    status: 403,
+                    type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
+                    code: "consultation.unresolved".to_owned(),
+                },
+            ),
+            (
+                "type",
+                DeclaredUnresolvedProblem {
+                    status: 404,
+                    type_uri: "http://id.example.invalid/problems/unresolved".to_owned(),
+                    code: "consultation.unresolved".to_owned(),
+                },
+            ),
+            (
+                "code",
+                DeclaredUnresolvedProblem {
+                    status: 404,
+                    type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
+                    code: "Consultation Unresolved".to_owned(),
+                },
+            ),
+        ] {
+            assert!(problem.validate().is_err(), "{label}");
+        }
+
+        let overlong_type = format!("https://id.example.invalid/problems/{}", "a".repeat(513));
+        let candidate = acceptance_fixture().replacen(
+            "    posture: field-projected\n",
+            &format!(
+                "    posture: field-projected\n    unresolvedProblem: {{status: 404, type: {overlong_type}, code: consultation.unresolved}}\n"
+            ),
+            1,
+        );
+        assert_eq!(
+            EvidenceConfig::parse_yaml(candidate.as_bytes()).err(),
+            Some(ConfigError::Invalid(
+                "declared unresolved problem type is too long"
+            )),
+            "runtime parsing must enforce the schema's 512-character type ceiling"
+        );
+
+        assert!(
+            DeclaredUnresolvedProblem {
+                status: 404,
+                type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
+                code: format!("a{}", "x".repeat(63)),
+            }
+            .validate()
+            .is_ok(),
+            "the bounded ASCII code grammar admits exactly 64 characters"
+        );
+        assert!(
+            DeclaredUnresolvedProblem {
+                status: 404,
+                type_uri: "https://id.example.invalid/problems/unresolved".to_owned(),
+                code: format!("a{}", "x".repeat(64)),
+            }
+            .validate()
+            .is_err(),
+            "the bounded ASCII code grammar rejects 65 characters"
         );
     }
 

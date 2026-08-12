@@ -56,7 +56,9 @@ use crate::{
         ResolvedAuthorization, ResolvedSelectorValue, ResolvedSubjectScope,
     },
     signing::EvidenceSigner,
-    source::{statement_inputs, ResolvedSourceSelector, SourceError, SourceExecutor},
+    source::{
+        statement_inputs, ResolvedSourceSelector, SourceError, SourceExecutor, SourceResponse,
+    },
     EVIDENCE_DEFINITIONS_SCHEMA_V1, EVIDENCE_JWS_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_MEDIA_TYPE,
     EVIDENCE_REQUEST_BATCH_SCHEMA_V1, EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE,
     EVIDENCE_SD_JWT_VC_MEDIA_TYPE, EVIDENCE_UNSIGNED_ENVELOPE_SCHEMA_V1,
@@ -1513,8 +1515,23 @@ impl EvidenceRuntime {
                     )
                     .await?;
                 match stage.lookup {
-                    LookupResult::Match(facts) => (facts, stage.source_id, stage.adapter_id),
-                    LookupResult::NoMatch => {
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
+                        (facts, stage.source_id, stage.adapter_id)
+                    }
+                    SourceStageLookup::DeclaredUnresolved => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::Unresolved,
+                            "unresolved",
+                            &stage.source_id,
+                            &stage.adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(evidence_unavailable_failure());
+                    }
+                    SourceStageLookup::Lookup(LookupResult::NoMatch) => {
                         self.append_failure(
                             &material,
                             operation,
@@ -1527,7 +1544,7 @@ impl EvidenceRuntime {
                         .await?;
                         return Err(evidence_unavailable_failure());
                     }
-                    LookupResult::Ambiguous => {
+                    SourceStageLookup::Lookup(LookupResult::Ambiguous) => {
                         self.append_failure(
                             &material,
                             operation,
@@ -1556,8 +1573,21 @@ impl EvidenceRuntime {
                     )
                     .await?;
                 let search_facts = match search_stage.lookup {
-                    LookupResult::Match(facts) => facts,
-                    LookupResult::NoMatch => {
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => facts,
+                    SourceStageLookup::DeclaredUnresolved => {
+                        self.append_failure(
+                            &material,
+                            operation,
+                            AuditDecision::Unresolved,
+                            "unresolved",
+                            &search_stage.source_id,
+                            &search_stage.adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(evidence_unavailable_failure());
+                    }
+                    SourceStageLookup::Lookup(LookupResult::NoMatch) => {
                         self.append_failure(
                             &material,
                             operation,
@@ -1570,7 +1600,7 @@ impl EvidenceRuntime {
                         .await?;
                         return Err(evidence_unavailable_failure());
                     }
-                    LookupResult::Ambiguous => {
+                    SourceStageLookup::Lookup(LookupResult::Ambiguous) => {
                         self.append_failure(
                             &material,
                             operation,
@@ -1597,10 +1627,11 @@ impl EvidenceRuntime {
                     )
                     .await?;
                 match fetch_stage.lookup {
-                    LookupResult::Match(facts) => {
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => {
                         (facts, fetch_stage.source_id, fetch_stage.adapter_id)
                     }
-                    LookupResult::NoMatch | LookupResult::Ambiguous => {
+                    SourceStageLookup::DeclaredUnresolved
+                    | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
                         // A unique search match that cannot be fetched through
                         // the fixed second source is a dependency inconsistency,
                         // not evidence that the subject is unresolved.
@@ -1684,17 +1715,36 @@ impl EvidenceRuntime {
                     adapter_ids.push(adapter_id.clone());
                     last_stage = Some((source_id.clone(), adapter_id.clone()));
                     match (stage.role, lookup) {
-                        (StageRole::Search, LookupResult::Match(facts)) => {
+                        (
+                            StageRole::Search,
+                            SourceStageLookup::Lookup(LookupResult::Match(facts)),
+                        ) => {
                             search_facts.clone_from(&facts);
                             merged = facts;
                         }
-                        (StageRole::Member, LookupResult::Match(facts)) => {
+                        (
+                            StageRole::Member,
+                            SourceStageLookup::Lookup(LookupResult::Match(facts)),
+                        ) => {
                             // The bundle proved every stage of this set
                             // declares disjoint fact names, so extending the
                             // union cannot overwrite an earlier stage's fact.
                             merged.extend(facts);
                         }
-                        (StageRole::Search, LookupResult::NoMatch) => {
+                        (StageRole::Search, SourceStageLookup::DeclaredUnresolved) => {
+                            self.append_failure(
+                                &material,
+                                operation,
+                                AuditDecision::Unresolved,
+                                "unresolved",
+                                &source_id,
+                                &adapter_id,
+                                started,
+                            )
+                            .await?;
+                            return Err(evidence_unavailable_failure());
+                        }
+                        (StageRole::Search, SourceStageLookup::Lookup(LookupResult::NoMatch)) => {
                             self.append_failure(
                                 &material,
                                 operation,
@@ -1707,7 +1757,7 @@ impl EvidenceRuntime {
                             .await?;
                             return Err(evidence_unavailable_failure());
                         }
-                        (StageRole::Search, LookupResult::Ambiguous) => {
+                        (StageRole::Search, SourceStageLookup::Lookup(LookupResult::Ambiguous)) => {
                             self.append_failure(
                                 &material,
                                 operation,
@@ -1720,7 +1770,13 @@ impl EvidenceRuntime {
                             .await?;
                             return Err(evidence_unavailable_failure());
                         }
-                        (StageRole::Member, LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                        (StageRole::Member, SourceStageLookup::DeclaredUnresolved)
+                        | (
+                            StageRole::Member,
+                            SourceStageLookup::Lookup(
+                                LookupResult::NoMatch | LookupResult::Ambiguous,
+                            ),
+                        ) => {
                             // A unique search match a declared member cannot
                             // resolve is a dependency inconsistency, not
                             // evidence that the subject is unresolved. The
@@ -2390,6 +2446,18 @@ impl EvidenceRuntime {
                     source_failure_category(&error),
                 )
             })?;
+        let response = match response {
+            SourceResponse::Data(response) => response,
+            // Bundle validation rejects this combination. Keep the optimized
+            // physical batch fail-closed because it cannot attribute one
+            // transport outcome to a logical item.
+            SourceResponse::DeclaredUnresolved => {
+                return Err(failure(
+                    ProblemCode::DependencyUnavailable,
+                    "source-protocol",
+                ));
+            }
+        };
         let lookups = self
             .kernel
             .extract_source_batch(&prepared, &response)
@@ -2446,8 +2514,11 @@ impl EvidenceRuntime {
                     Err(error) => return Err(error),
                 };
                 match stage.lookup {
-                    LookupResult::Match(facts) => Ok(Some(facts)),
-                    LookupResult::NoMatch | LookupResult::Ambiguous => Ok(None),
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => Ok(Some(facts)),
+                    SourceStageLookup::DeclaredUnresolved
+                    | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                        Ok(None)
+                    }
                 }
             }
             AcquisitionConfig::SearchThenFetch { search, fetch } => {
@@ -2472,8 +2543,11 @@ impl EvidenceRuntime {
                     Err(error) => return Err(error),
                 };
                 let search_facts = match search_stage.lookup {
-                    LookupResult::Match(facts) => facts,
-                    LookupResult::NoMatch | LookupResult::Ambiguous => return Ok(None),
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => facts,
+                    SourceStageLookup::DeclaredUnresolved
+                    | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                        return Ok(None)
+                    }
                 };
                 let fetch_stage = self
                     .execute_request_batch_source_stage(
@@ -2496,8 +2570,9 @@ impl EvidenceRuntime {
                     Err(error) => return Err(error),
                 };
                 match fetch_stage.lookup {
-                    LookupResult::Match(facts) => Ok(Some(facts)),
-                    LookupResult::NoMatch | LookupResult::Ambiguous => {
+                    SourceStageLookup::Lookup(LookupResult::Match(facts)) => Ok(Some(facts)),
+                    SourceStageLookup::DeclaredUnresolved
+                    | SourceStageLookup::Lookup(LookupResult::NoMatch | LookupResult::Ambiguous) => {
                         Err(failure(ProblemCode::DependencyUnavailable, "fetch-result"))
                     }
                 }
@@ -2538,15 +2613,33 @@ impl EvidenceRuntime {
                         Err(error) => return Err(error),
                     };
                     match (stage.role, outcome.lookup) {
-                        (StageRole::Search, LookupResult::Match(facts)) => {
+                        (
+                            StageRole::Search,
+                            SourceStageLookup::Lookup(LookupResult::Match(facts)),
+                        ) => {
                             search_facts.clone_from(&facts);
                             merged = facts;
                         }
-                        (StageRole::Member, LookupResult::Match(facts)) => merged.extend(facts),
-                        (StageRole::Search, LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                        (
+                            StageRole::Member,
+                            SourceStageLookup::Lookup(LookupResult::Match(facts)),
+                        ) => merged.extend(facts),
+                        (StageRole::Search, SourceStageLookup::DeclaredUnresolved)
+                        | (
+                            StageRole::Search,
+                            SourceStageLookup::Lookup(
+                                LookupResult::NoMatch | LookupResult::Ambiguous,
+                            ),
+                        ) => {
                             return Ok(None);
                         }
-                        (StageRole::Member, LookupResult::NoMatch | LookupResult::Ambiguous) => {
+                        (StageRole::Member, SourceStageLookup::DeclaredUnresolved)
+                        | (
+                            StageRole::Member,
+                            SourceStageLookup::Lookup(
+                                LookupResult::NoMatch | LookupResult::Ambiguous,
+                            ),
+                        ) => {
                             return Err(failure(
                                 ProblemCode::DependencyUnavailable,
                                 "fetch-result",
@@ -2647,15 +2740,19 @@ impl EvidenceRuntime {
                 source_failure_category(&error),
             )
         })?;
-        let lookup = self
-            .kernel
-            .extract_source_for_request_batch(&source_id, &source_response, prior_facts)
-            .map_err(|error| {
-                failure(
-                    kernel_failure_problem(&error),
-                    kernel_failure_category(&error),
-                )
-            })?;
+        let lookup = match source_response {
+            SourceResponse::Data(source_response) => SourceStageLookup::Lookup(
+                self.kernel
+                    .extract_source_for_request_batch(&source_id, &source_response, prior_facts)
+                    .map_err(|error| {
+                        failure(
+                            kernel_failure_problem(&error),
+                            kernel_failure_category(&error),
+                        )
+                    })?,
+            ),
+            SourceResponse::DeclaredUnresolved => SourceStageLookup::DeclaredUnresolved,
+        };
         Ok(SourceStageOutcome {
             lookup,
             source_id,
@@ -2808,32 +2905,37 @@ impl EvidenceRuntime {
                 return Err(failure(source_failure_problem(&error), category));
             }
         };
-        let lookup = match self
-            .kernel
-            .extract_source(&source_id, &source_response, prior_facts)
-        {
-            Ok(lookup) => lookup,
-            Err(error) => {
-                let category = kernel_failure_category(&error);
-                let problem = kernel_failure_problem(&error);
-                let decision = match error {
-                    KernelError::Extraction | KernelError::DerivationInput => {
-                        AuditDecision::FactMissing
+        let lookup = match source_response {
+            SourceResponse::DeclaredUnresolved => SourceStageLookup::DeclaredUnresolved,
+            SourceResponse::Data(source_response) => {
+                match self
+                    .kernel
+                    .extract_source(&source_id, &source_response, prior_facts)
+                {
+                    Ok(lookup) => SourceStageLookup::Lookup(lookup),
+                    Err(error) => {
+                        let category = kernel_failure_category(&error);
+                        let problem = kernel_failure_problem(&error);
+                        let decision = match error {
+                            KernelError::Extraction | KernelError::DerivationInput => {
+                                AuditDecision::FactMissing
+                            }
+                            KernelError::SourceProtocol => AuditDecision::DependencyFailure,
+                            _ => AuditDecision::EvaluationFailure,
+                        };
+                        self.append_failure(
+                            material,
+                            operation,
+                            decision,
+                            category,
+                            &source_id,
+                            &adapter_id,
+                            started,
+                        )
+                        .await?;
+                        return Err(failure(problem, category));
                     }
-                    KernelError::SourceProtocol => AuditDecision::DependencyFailure,
-                    _ => AuditDecision::EvaluationFailure,
-                };
-                self.append_failure(
-                    material,
-                    operation,
-                    decision,
-                    category,
-                    &source_id,
-                    &adapter_id,
-                    started,
-                )
-                .await?;
-                return Err(failure(problem, category));
+                }
             }
         };
 
@@ -2997,9 +3099,10 @@ impl EvidenceRuntime {
         started: Instant,
     ) -> Result<(), RuntimeFailure> {
         let phase = match decision {
-            AuditDecision::NoMatch | AuditDecision::Ambiguous | AuditDecision::FactMissing => {
-                AuditPhase::Denial
-            }
+            AuditDecision::NoMatch
+            | AuditDecision::Ambiguous
+            | AuditDecision::Unresolved
+            | AuditDecision::FactMissing => AuditPhase::Denial,
             _ => AuditPhase::TransientFailure,
         };
         let mut event = material.event(operation, phase, decision, elapsed_millis(started));
@@ -3121,9 +3224,14 @@ impl RequestBatchAuditMaterial {
 }
 
 struct SourceStageOutcome {
-    lookup: LookupResult,
+    lookup: SourceStageLookup,
     source_id: String,
     adapter_id: String,
+}
+
+enum SourceStageLookup {
+    Lookup(LookupResult),
+    DeclaredUnresolved,
 }
 
 struct AuditMaterial {
@@ -3400,6 +3508,7 @@ fn source_failure_category(error: &SourceError) -> &'static str {
         SourceError::ResponseTooLarge => "source-response-size",
         SourceError::InvalidJson
         | SourceError::ErrorEnvelope
+        | SourceError::ProblemMismatch
         | SourceError::ProjectionViolation => "source-protocol",
         SourceError::InvalidPlan | SourceError::InvalidSelectors | SourceError::Transport => {
             "source-unavailable"

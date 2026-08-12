@@ -1441,7 +1441,8 @@ available result carries one flattened JWS under the ordinary signed Evidence
 profile. Every condition that singular evaluation already exposes as
 `evidence_not_available` becomes that closed outcome for the item, including
 `no_match`, `ambiguous`, required-fact-missing, and
-derivation-input-unresolved. Mixed and all-unavailable
+derivation-input-unresolved, plus an exact source-declared unresolved outcome
+from a singular or search stage. Mixed and all-unavailable
 envelopes return `200`. Every other failure aborts the outer request through the
 existing safe Problem Details contract, and no completed item is released.
 Unsigned, SD-JWT VC, and holder-bound formats are not accepted on this route.
@@ -1456,6 +1457,17 @@ set fits its ceiling. A source block without both capability gates is a startup
 error. An omitted block, an item count above its ceiling, SQLite, path
 templates, and multi-stage acquisitions stay sequential. Once optimized
 execution begins, no failure retries through sequential fanout.
+
+An HTTP JSON source may optionally declare one exact source-neutral unresolved
+Problem Details tuple. This does not make 404 a lookup result in general. Only
+an exact 404 `application/problem+json` response with the duplicate-free closed
+six-member shape and exact configured status, type, and code becomes a
+data-free unresolved transport outcome. Omission, mismatch, malformed shape,
+oversize, or any other status remains a dependency failure. A singular or
+search-stage outcome collapses to Evidence unavailable and the neutral audit
+decision `unresolved`; a fetch or member reached after unique search remains a
+dependency failure. No problem body or trace reaches scripts, evidence, audit,
+or logs.
 
 This operation is independent of holder-bound issuance batch. That profile
 accepts several holder keys on `POST /v1/evidence`, performs one acquisition and

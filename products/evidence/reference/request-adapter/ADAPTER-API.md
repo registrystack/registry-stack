@@ -679,6 +679,12 @@ These engine ceilings apply independently of script logic:
 | `required` error code | 64 ASCII bytes |
 | Exact decimal precision | 28 significant digits |
 | Exact decimal scale | 9 fractional digits |
+
+An HTTP source's optional exact `unresolvedProblem` declaration is resolved in
+Rust before this ABI. A matching 404 response becomes a data-free transport
+outcome, so neither `extract/2` nor any other Rhai entry point receives its
+Problem Details body. Any mismatch follows the ordinary dependency-failure
+path and also never reaches Rhai.
 | Instant/local-time fractional precision | 9 digits |
 
 The Version 1 preparation profile adds these hard ceilings. A source may

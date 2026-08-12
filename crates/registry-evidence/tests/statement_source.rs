@@ -294,7 +294,14 @@ async fn run(
     request: &PreparedSourceRequest,
     at: &str,
 ) -> Result<JsonValue, SourceError> {
-    executor.execute(selectors, request, instant(at)).await
+    executor
+        .execute(selectors, request, instant(at))
+        .await
+        .map(|response| {
+            response
+                .into_data()
+                .expect("statement sources cannot declare unresolved")
+        })
 }
 
 fn artifact_fault_text(error: &SourceError) -> String {

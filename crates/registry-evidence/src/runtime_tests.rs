@@ -6461,6 +6461,110 @@ async fn one_runtime_proves_all_definitions_and_collapses_unresolved_relationshi
     }
 }
 
+/// Threat: a Relay-style policy-hidden or ambiguous lookup must not be
+/// misreported as a source outage, and its Problem Details body must not reach
+/// scripts, assertions, public errors, or audit. Enforcement: the source
+/// declares only the exact neutral tuple; the HTTP transport recognizes the
+/// closed response and the singular acquisition maps its data-free outcome to
+/// Evidence unavailable.
+#[tokio::test]
+async fn sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable() {
+    let server = MockServer::start().await;
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &server.uri(),
+        &FixtureCeilings::deployment_defaults(),
+        configure_exact_relay_lookup_source,
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("exact Relay lookup composition initializes");
+    let expected_body = json!({
+        "selectors": {"recordReference": "synthetic-residence-record-001"}
+    });
+
+    Mock::given(method("POST"))
+        .and(path(
+            "/v2/resources/residence-record/lookups/by-record-reference",
+        ))
+        .and(header("accept", "application/json"))
+        .and(header("authorization", format!("Bearer {BEARER}").as_str()))
+        .and(body_json(expected_body.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {"domainData": {"official_residence_code": "R-101"}}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    runtime
+        .evaluate(
+            "operation-relay-lookup-success",
+            &access_token(None),
+            &residence_request(),
+        )
+        .await
+        .expect("Relay lookup data.domainData produces Evidence");
+
+    const TRACE_CANARY: &str = "relay-upstream-trace-secret-canary";
+    Mock::given(method("POST"))
+        .and(path(
+            "/v2/resources/residence-record/lookups/by-record-reference",
+        ))
+        .and(body_json(expected_body))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .insert_header("Content-Type", "application/problem+json")
+                .set_body_raw(
+                    format!(
+                        r#"{{"type":"https://id.registrystack.org/problems/registry-relay/consultation/unresolved","title":"Requested record was not resolved","status":404,"detail":"the requested record was not resolved","code":"consultation.unresolved","traceId":"{TRACE_CANARY}"}}"#
+                    ),
+                    "application/problem+json",
+                ),
+        )
+        .with_priority(1)
+        .expect(2)
+        .mount(&server)
+        .await;
+    let error = runtime
+        .evaluate(
+            "operation-relay-lookup-unresolved",
+            &access_token(None),
+            &residence_request(),
+        )
+        .await
+        .expect_err("declared Relay unresolved releases no Evidence");
+    assert_eq!(error.problem(), ProblemCode::EvidenceNotAvailable);
+    let batch = request_batch_from_request(&residence_request(), 1);
+    let batch_response = runtime
+        .evaluate_request_batch(
+            "operation-relay-lookup-unresolved-batch",
+            &access_token(None),
+            &batch,
+        )
+        .await
+        .expect("sequential singular unresolved maps to one unavailable item");
+    let batch_response: EvidenceRequestBatchResponse =
+        serde_json::from_slice(batch_response.bytes()).expect("batch response parses");
+    assert!(matches!(
+        batch_response.items.as_slice(),
+        [EvidenceRequestBatchResponseItem::EvidenceNotAvailable]
+    ));
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(audit.contains("\"decision\":\"unresolved\""));
+    for forbidden in [
+        "consultation.unresolved",
+        "registry-relay/consultation/unresolved",
+        TRACE_CANARY,
+    ] {
+        assert!(!audit.contains(forbidden), "audit leaked {forbidden}");
+        assert!(
+            !format!("{error:?}").contains(forbidden),
+            "error leaked {forbidden}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn runtime_output_gate_rejects_every_fixture_injected_derivation_without_release() {
     let cases = [
@@ -7359,6 +7463,66 @@ async fn search_then_fetch_is_two_fixed_audited_calls_with_validated_fact_handof
 }
 
 #[tokio::test]
+async fn declared_unresolved_fetch_after_unique_search_is_dependency_failure() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_search_then_fetch(bundle_root, &source_origin);
+            let path = bundle_root.join("evidence.yaml");
+            let mut config = fs::read_to_string(&path).expect("config is readable");
+            replace_exact(
+                &mut config,
+                "  source-a-fetch:\n    transport: http-json\n",
+                "  source-a-fetch:\n    transport: http-json\n    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
+                1,
+            );
+            fs::write(path, config).expect("fetch declaration is written");
+        },
+    );
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("declared unresolved fetch runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_raw(
+                r#"{"type":"https://id.example.invalid/problems/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"fetch-trace-canary"}"#,
+                "application/problem+json",
+            ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = runtime
+        .evaluate(
+            "operation-declared-unresolved-fetch",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("fetch unresolved is not authoritative absence");
+    assert_eq!(error.problem(), ProblemCode::DependencyUnavailable);
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(audit.contains("\"decision\":\"dependency-failure\""));
+    assert!(audit.contains("\"safeErrorCategory\":\"fetch-result\""));
+    assert!(!audit.contains("fetch-trace-canary"));
+}
+
+#[tokio::test]
 async fn search_then_fetch_stops_after_an_unresolved_search() {
     let server = MockServer::start().await;
     let source_origin = server.uri();
@@ -7861,6 +8025,83 @@ async fn fetch_set_stops_at_the_first_unresolved_member_and_calls_no_further_sou
 }
 
 #[tokio::test]
+async fn declared_unresolved_fetch_set_member_after_unique_search_is_dependency_failure() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_fetch_set(bundle_root, &source_origin);
+            let path = bundle_root.join("evidence.yaml");
+            let mut config = fs::read_to_string(&path).expect("fetch-set config is readable");
+            replace_exact(
+                &mut config,
+                "  source-a-fetch:\n    transport: http-json\n",
+                "  source-a-fetch:\n    transport: http-json\n    unresolvedProblem: {status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}\n",
+                1,
+            );
+            fs::write(path, config).expect("fetch-set unresolved declaration is written");
+        },
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime =
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("declared unresolved fetch-set runtime initializes");
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001",
+            "partner_ref": "partner-77"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(ResponseTemplate::new(404).set_body_raw(
+            r#"{"type":"https://id.example.invalid/problems/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"fetch-set-trace-canary"}"#,
+            "application/problem+json",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "partner_status": "active"
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let error = runtime
+        .evaluate(
+            "operation-declared-unresolved-fetch-set",
+            &access_token(None),
+            &adult_request(),
+        )
+        .await
+        .expect_err("a declared unresolved member is a dependency inconsistency");
+    assert_eq!(error.problem(), ProblemCode::DependencyUnavailable);
+    let requests = server
+        .received_requests()
+        .await
+        .expect("request journal is available");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].url.path(), "/v1/records/record-001");
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert!(audit.contains("\"decision\":\"dependency-failure\""));
+    assert!(audit.contains("\"safeErrorCategory\":\"fetch-result\""));
+    assert!(!audit.contains("source-a-partner"));
+    assert!(!audit.contains("fetch-set-trace-canary"));
+    assert!(!format!("{error:?}").contains("fetch-set-trace-canary"));
+}
+
+#[tokio::test]
 async fn fetch_set_abandons_acquisition_when_the_declared_budget_is_exhausted() {
     let server = MockServer::start().await;
     let source_origin = server.uri();
@@ -8243,6 +8484,73 @@ fn prepare_fixture_with_mutation(
         ceilings,
         mutate_bundle,
     )
+}
+
+fn configure_exact_relay_lookup_source(bundle_root: &Path) {
+    let config_path = bundle_root.join("evidence.yaml");
+    let mut config = fs::read_to_string(&config_path).expect("bundle config is readable");
+    let source_b_start = config.find("  source-b:\n").expect("source-b exists");
+    let source_b_end = config[source_b_start..]
+        .find("  source-c:\n")
+        .map(|offset| source_b_start + offset)
+        .expect("source-c follows source-b");
+    let mut source_b = config[source_b_start..source_b_end].to_owned();
+    replace_exact(
+        &mut source_b,
+        "  source-b:\n    transport: http-json\n    baseUrl:",
+        "  source-b:\n    transport: http-json\n    unresolvedProblem: {status: 404, type: https://id.registrystack.org/problems/registry-relay/consultation/unresolved, code: consultation.unresolved}\n    baseUrl:",
+        1,
+    );
+    replace_exact(
+        &mut source_b,
+        "      path: /v1/facts\n",
+        "      path: /v2/resources/residence-record/lookups/by-record-reference\n",
+        1,
+    );
+    replace_exact(
+        &mut source_b,
+        "      projection: [/total, /official_residence_code]\n",
+        "      projection: [/data/domainData/official_residence_code]\n",
+        1,
+    );
+    config.replace_range(source_b_start..source_b_end, &source_b);
+    fs::write(config_path, config).expect("Relay lookup source config is written");
+    fs::write(
+        bundle_root.join("adapters/residence-region-prepare.rhai"),
+        r#"fn prepare(selectors, context) {
+    #{query: [], body: #{selectors: #{recordReference: selectors["subject"]["values"]["record_reference"]}}}
+}
+"#,
+    )
+    .expect("Relay lookup preparation adapter is written");
+    fs::write(
+        bundle_root.join("adapters/residence-region-source.rhai"),
+        r#"fn extract(source_response, context) {
+    #{outcome: "match", facts: #{official_residence_code: required(get_path(source_response, "/data/domainData/official_residence_code"), "required_fact_missing")}}
+}
+"#,
+    )
+    .expect("Relay lookup extraction adapter is written");
+    fs::write(
+        bundle_root.join("schemas/residence-region-response.schema.yaml"),
+        r#"type: object
+additionalProperties: false
+required: [data]
+properties:
+  data:
+    type: object
+    additionalProperties: false
+    required: [domainData]
+    properties:
+      domainData:
+        type: object
+        additionalProperties: false
+        required: [official_residence_code]
+        properties:
+          official_residence_code: {type: string, minLength: 1, maxLength: 32}
+"#,
+    )
+    .expect("Relay lookup response schema is written");
 }
 
 /// The same preparation, from a named acceptance bundle rather than the

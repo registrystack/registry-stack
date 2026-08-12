@@ -55,14 +55,17 @@ impl Stage {
 
 /// How one stage ended.
 ///
-/// `NoMatch` and `Ambiguous` are separated from `Failed` because neither is a
-/// defect: both are outcomes a fixture case is allowed to expect.
+/// `NoMatch`, `Ambiguous`, and `Unresolved` are separated from `Failed`
+/// because none is a defect. `Unresolved` is deliberately neutral: an HTTP
+/// source may have hidden whether its exact declared outcome began as no match
+/// or ambiguity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StageStatus {
     Ok,
     NoMatch,
     Ambiguous,
+    Unresolved,
     Failed,
 }
 
@@ -72,6 +75,7 @@ impl StageStatus {
             Self::Ok => "ok",
             Self::NoMatch => "no-match",
             Self::Ambiguous => "ambiguous",
+            Self::Unresolved => "unresolved",
             Self::Failed => "failed",
         }
     }

@@ -199,6 +199,16 @@ The shared cases are:
 - required fact absent;
 - wrong fact type or controlled code;
 - malformed JSON and wrong media type;
+- for a source declaring `unresolvedProblem`, the one exact 404
+  `application/problem+json` six-member tuple as data-free unresolved, plus
+  undeclared, wrong-status, wrong-media, duplicate-member, missing, extra,
+  mistyped, tuple-mismatch, and oversized negative cases as dependency
+  failures;
+- one complete-project `declaredUnresolved: true` case bound to that source,
+  expecting only the data-free unavailable result. It carries no lookup label
+  because the provider has already hidden whether the upstream state was no
+  match or ambiguity; the one neutral case satisfies both fixture coverage
+  categories while the HTTP contract cases above prove exact wire matching;
 - `401`, `403`, `429`, and `5xx`;
 - timeout, redirect, and response larger than the configured maximum;
 - credentials rejected without any credential value in diagnostics;

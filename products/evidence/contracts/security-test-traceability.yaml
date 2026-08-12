@@ -70,7 +70,9 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: access_audit_failure_blocks_credentials_and_source_access}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
   - id: sec-source-canary-absent-everywhere
-    tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}]
+    tests:
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
   - id: sec-protected-canaries-redacted
     tests:
       - {file: crates/registry-evidence/src/model.rs, name: debug_surfaces_redact_requests_facts_disclosures_and_signed_payloads}
@@ -84,6 +86,12 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_existence_disclosure_mode_governs_the_public_collapse}
       - {file: crates/registry-evidence/src/runtime.rs, name: derivation_input_inconsistency_collapses_with_the_unresolved_classes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_unresolved_fetch_after_unique_search_is_dependency_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_unresolved_fetch_set_member_after_unique_search_is_dependency_failure}
+      - {file: crates/registry-evidence/src/bundle.rs, name: declared_unresolved_fixture_neutrally_covers_hidden_lookup_categories}
+      - {file: crates/registry-evidence/src/main.rs, name: reference_declared_unresolved_form_is_data_free_and_source_bound}
+      - {file: crates/registry-evidence/src/main.rs, name: reference_fixture_evaluates_declared_unresolved_without_problem_data}
   - id: sec-subject-binding-scope
     tests: [{file: crates/registry-evidence/src/binding.rs, name: every_subject_binding_scope_component_is_cryptographically_bound}]
   - id: sec-runtime-bundle-mutation-absent
@@ -237,6 +245,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/kernel.rs, name: a_projected_response_outside_its_declared_shape_fails_before_extraction}
       - {file: crates/registry-evidence/src/config.rs, name: source_schema_roles_are_mandatory_distinct_and_directory_scoped}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: sec_declared_unresolved_problem_is_exact_and_source_neutral}
   - id: sec-script-operation-exhaustion
     tests: [{file: crates/registry-evidence/src/rhai_runtime.rs, name: operation_exhaustion_terminates_a_hostile_script_with_a_value_free_error}]
   - id: sec-reserved-header-aliases-closed

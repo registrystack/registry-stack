@@ -87,6 +87,11 @@ struct FixtureCase {
     selectors: Option<Value>,
     #[serde(default, rename = "sourceFailure")]
     source_failure: Option<String>,
+    /// A data-free replay of the initial HTTP source's exact configured
+    /// unresolved transport outcome. The Problem Details body is deliberately
+    /// not fixture vocabulary.
+    #[serde(default, rename = "declaredUnresolved")]
+    declared_unresolved: Option<bool>,
     #[serde(default, rename = "bundleMutation")]
     bundle_mutation: Option<String>,
     #[serde(default, rename = "statementMutation")]
@@ -510,6 +515,7 @@ fn validate_contract_shape(project_name: &str, fixture: &FixtureContract, statem
             case.response.is_some(),
             case.selectors.is_some(),
             case.source_failure.is_some(),
+            case.declared_unresolved.is_some(),
             case.bundle_mutation.is_some(),
             case.statement_mutation.is_some(),
             case.request_mutation.is_some(),
@@ -536,6 +542,18 @@ fn validate_contract_shape(project_name: &str, fixture: &FixtureContract, statem
             "{project_name}/{}: a recorded response is not this transport",
             case.id
         );
+        if let Some(declared) = case.declared_unresolved {
+            assert!(
+                declared,
+                "{project_name}/{}: declaredUnresolved must be true",
+                case.id
+            );
+            assert!(
+                !statement_source,
+                "{project_name}/{}: declared unresolved is not this transport",
+                case.id
+            );
+        }
         assert!(
             !((case.selectors.is_some() || case.statement_mutation.is_some()) && !statement_source),
             "{project_name}/{}: a statement case form is not this transport",
@@ -649,6 +667,10 @@ async fn execute_fixture(
             execute_source_failure(&label, source, failure, &case.expected);
             continue;
         }
+        if case.declared_unresolved == Some(true) {
+            execute_declared_unresolved(&label, source, &case.expected);
+            continue;
+        }
         let observed_at = observed_at(&label, fixture, case);
         // A statement source answers here, for real, against the extract this
         // fixture's own seed built. A source that answers over a network cannot,
@@ -660,7 +682,9 @@ async fn execute_fixture(
                 .execute(&source_selectors, &prepared, observed_at)
                 .await
             {
-                Ok(response) => response,
+                Ok(response) => response
+                    .into_data()
+                    .unwrap_or_else(|| panic!("{label}: statement source declared unresolved")),
                 Err(error) => {
                     assert_source_error(&label, &case.expected, &error);
                     assert_expected_count(&label, &case.expected, 1);
@@ -1004,6 +1028,51 @@ fn execute_source_failure(
     };
     assert_source_error(label, expected, &source_error);
     assert_expected_count(label, expected, 1);
+}
+
+fn execute_declared_unresolved(
+    label: &str,
+    source: &registry_evidence::config::SourceConfig,
+    expected: &Expected,
+) {
+    assert!(
+        source.unresolved_problem().is_some(),
+        "{label}: fixture declared unresolved without a source declaration"
+    );
+    assert_eq!(
+        expected.public_problem.as_deref(),
+        Some("evidence.unavailable"),
+        "{label}: declared unresolved public problem is not exact"
+    );
+    assert_eq!(
+        expected.derivation_runs,
+        Some(false),
+        "{label}: declared unresolved must stop before derivation"
+    );
+    assert_eq!(
+        expected.signed,
+        Some(false),
+        "{label}: declared unresolved must not be signed"
+    );
+    assert_eq!(
+        expected.source_request_count,
+        Some(1),
+        "{label}: declared unresolved request count is not exact"
+    );
+    assert!(
+        expected.lookup.is_none()
+            && expected.facts.is_none()
+            && expected.value.is_none()
+            && expected.values.is_none()
+            && expected.entity_reference_count.is_none()
+            && expected.raw_references_disclosed.is_none()
+            && expected.error.is_none()
+            && expected.bundle.is_none()
+            && expected.output_gate.is_none()
+            && expected.rejected_before.is_none()
+            && expected.expected_transport.is_none(),
+        "{label}: declared unresolved expectation carries an inapplicable field"
+    );
 }
 
 /// A source that did not complete carries one public class, whichever transport
