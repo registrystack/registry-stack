@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
@@ -43,18 +43,41 @@ const archiveExecutionEnvironmentKeys = Object.freeze([
   'no_proxy',
 ]);
 // Artifacts a current-source generator writes from the checked-out tree, which
-// an archive must instead take from its docset's pinned source ref. Every
-// entry this list carried was generated from the retired registryctl authoring
-// and diagnostic contracts, so the list is empty until a Relay V2 generator
-// writes an artifact with the same drift exposure. `stagePinnedGeneratedArtifacts`
-// keeps working when it is empty; the staging behavior stays under test through
-// the `artifacts` option.
-export const currentSourceGeneratedArtifacts = Object.freeze([]);
+// an archive must instead take from its docset's pinned source ref. A directory
+// entry stages every regular file below it. That keeps command
+// additions covered without maintaining a second manifest of generated pages.
+export const currentSourceGeneratedArtifacts = Object.freeze([
+  'docs/site/src/content/docs/reference/cli',
+  'docs/site/src/data/generated/cli-reference.json',
+]);
 
 function compareEntryNames(left, right) {
   if (left.name < right.name) return -1;
   if (left.name > right.name) return 1;
   return 0;
+}
+
+async function regularFilesBelow(path) {
+  let info;
+  try {
+    info = await lstat(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  if (info.isSymbolicLink()) {
+    throw new Error(`generated archive input must not be a symlink: ${path}`);
+  }
+  if (info.isFile()) return [path];
+  if (!info.isDirectory()) {
+    throw new Error(`generated archive input must be a regular file or directory: ${path}`);
+  }
+
+  const files = [];
+  for (const entry of (await readdir(path, { withFileTypes: true })).sort(compareEntryNames)) {
+    files.push(...await regularFilesBelow(resolve(path, entry.name)));
+  }
+  return files;
 }
 
 function archiveBuildEnvironment(inheritedEnvironment, docset, {
@@ -206,22 +229,52 @@ async function git(command, args, cwd) {
   }
 }
 
+async function resolveLocalCommit(ref, cwd) {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+      { cwd, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+    );
+    const commit = stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(commit)) {
+      throw new Error(`git resolved ${ref} to an invalid commit: ${commit}`);
+    }
+    return commit;
+  } catch (error) {
+    if (error?.code === 1) return null;
+    const stderr = String(error?.stderr ?? '').trim();
+    throw new Error(`git could not resolve ${ref}: ${stderr || error.message}`);
+  }
+}
+
 export async function stagePinnedGeneratedArtifacts(docset, {
   docsRoot = process.cwd(),
   executeGit = git,
+  resolveCommit = resolveLocalCommit,
+  allowUnpublishedCandidate = false,
   artifacts = currentSourceGeneratedArtifacts,
 } = {}) {
   const sourceProduct = docset.products?.['registry-stack'];
   const declaredSourceRef = sourceProduct?.ref;
+  const repoRoot = resolve(docsRoot, '../..');
   let sourceRef = declaredSourceRef;
   if (isCandidateSourceProduct(docset, sourceProduct)) {
-    sourceRef = 'HEAD';
+    // An archive that has already been tagged must remain bound to that tag.
+    // Before publication the exact candidate tag does not exist yet, so the
+    // release-candidate entrypoint intentionally stages the checked-out source.
+    const taggedCommit = await resolveCommit(declaredSourceRef, repoRoot);
+    if (taggedCommit === null && !allowUnpublishedCandidate) {
+      throw new Error(
+        `Archived candidate docset "${docset.id}" must resolve its exact source tag`,
+      );
+    }
+    sourceRef = taggedCommit ?? 'HEAD';
   } else if (typeof sourceRef !== 'string' || !/^[0-9a-f]{40}$/.test(sourceRef)) {
     throw new Error(
       `Archived docset "${docset.id}" must pin products.registry-stack.ref to a full commit or its exact candidate tag`,
     );
   }
-  const repoRoot = resolve(docsRoot, '../..');
   // `git ls-tree` with no pathspec lists the whole tree, so an empty artifact
   // list must short-circuit rather than fall through. The ref check above still
   // runs: an archived docset has to pin its source ref whether or not there is
@@ -229,9 +282,19 @@ export async function stagePinnedGeneratedArtifacts(docset, {
   if (artifacts.length === 0) {
     return async () => {};
   }
+  const currentPaths = new Set();
+  for (const repoRelative of artifacts) {
+    const local = resolve(repoRoot, repoRelative);
+    if (relative(docsRoot, local).startsWith('..')) {
+      throw new Error(`generated archive input resolves outside docs root: ${repoRelative}`);
+    }
+    for (const file of await regularFilesBelow(local)) {
+      currentPaths.add(relative(repoRoot, file).split(sep).join('/'));
+    }
+  }
   const { stdout: listed } = await executeGit(
     'git',
-    ['ls-tree', '-rz', '--name-only', sourceRef, '--', ...artifacts],
+    ['ls-tree', '-rz', '-r', '--name-only', sourceRef, '--', ...artifacts],
     repoRoot,
   );
   const pinnedPaths = new Set(
@@ -246,12 +309,10 @@ export async function stagePinnedGeneratedArtifacts(docset, {
     pinnedContents.set(path, stdout);
   }
 
+  const affectedPaths = [...new Set([...pinnedPaths, ...currentPaths])].sort();
   const snapshots = new Map();
-  for (const repoRelative of artifacts) {
+  for (const repoRelative of affectedPaths) {
     const local = resolve(repoRoot, repoRelative);
-    if (relative(docsRoot, local).startsWith('..')) {
-      throw new Error(`generated archive input resolves outside docs root: ${repoRelative}`);
-    }
     snapshots.set(local, await readOptionalRegularFile(local));
   }
 
@@ -262,7 +323,7 @@ export async function stagePinnedGeneratedArtifacts(docset, {
     }
   };
   try {
-    for (const repoRelative of artifacts) {
+    for (const repoRelative of affectedPaths) {
       const local = resolve(repoRoot, repoRelative);
       const contents = pinnedContents.get(repoRelative);
       if (contents === undefined) await rm(local, { force: true });
@@ -282,6 +343,7 @@ export async function buildDocsetArchive(docset, {
   applySeo = applyArchiveSeo,
   normalizePagefind = normalizePagefindGzipMetadata,
   stageGeneratedArtifacts = stagePinnedGeneratedArtifacts,
+  allowUnpublishedCandidate = false,
   indexable = false,
 } = {}) {
   if (docset.status !== 'archived') {
@@ -315,7 +377,10 @@ export async function buildDocsetArchive(docset, {
   // metadata.
   let restoreGeneratedArtifacts = async () => {};
   try {
-    restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, { docsRoot });
+    restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, {
+      docsRoot,
+      allowUnpublishedCandidate,
+    });
     await runCommand('npm', ['run', 'generate:archive'], rootEnv);
     await runCommand('npx', ['astro', 'check'], rootEnv);
     await runCommand(

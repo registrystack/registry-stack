@@ -17,6 +17,7 @@ import { gzipSync } from 'node:zlib';
 
 import {
   buildDocsetArchive,
+  currentSourceGeneratedArtifacts,
   normalizePagefindGzipMetadata,
   readOptionalRegularFile,
   stagePinnedGeneratedArtifacts,
@@ -39,11 +40,8 @@ const archivedDocset = {
     },
   },
 };
-// The staging behavior is exercised through fixture paths rather than through
-// currentSourceGeneratedArtifacts, so it stays proven whether or not the site
-// currently ships a generated artifact that has to be pinned per docset.
 const stagedArtifactFixtures = Object.freeze([
-  'docs/site/src/data/generated/staged-fixture.json',
+  'docs/site/src/data/generated/staged-fixtures',
   'docs/site/public/generated/staged-fixture.v1.json',
 ]);
 
@@ -151,6 +149,7 @@ test('archive generation excludes current-source generators', async () => {
   }
   for (const script of [
     'generate-evidence-configuration.mjs',
+    'generate-cli-reference.mjs',
   ]) {
     assert.doesNotMatch(
       archiveGeneration,
@@ -165,6 +164,10 @@ test('archive generation excludes current-source generators', async () => {
     packageJson.scripts.build,
     /node scripts\/apply-archive-seo\.mjs dist/,
   );
+  assert.deepEqual(currentSourceGeneratedArtifacts, [
+    'docs/site/src/content/docs/reference/cli',
+    'docs/site/src/data/generated/cli-reference.json',
+  ]);
 });
 
 test('archive byte producers pin collation independently of the host locale', async () => {
@@ -199,6 +202,11 @@ test('candidate archive stages generated artifacts from the checked-out source',
     {
       docsRoot: resolve(repoRoot, 'docs/site'),
       artifacts: stagedArtifactFixtures,
+      allowUnpublishedCandidate: true,
+      resolveCommit: async (ref) => {
+        assert.equal(ref, 'v1.2.3');
+        return null;
+      },
       executeGit: async (_command, args) => {
         calls.push(args);
         return { stdout: Buffer.alloc(0) };
@@ -208,7 +216,75 @@ test('candidate archive stages generated artifacts from the checked-out source',
 
   await restore();
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0].slice(0, 5), ['ls-tree', '-rz', '--name-only', 'HEAD', '--']);
+  assert.deepEqual(calls[0].slice(0, 6), ['ls-tree', '-rz', '-r', '--name-only', 'HEAD', '--']);
+});
+
+test('published candidate archive fails closed when its tag is unavailable', async (t) => {
+  const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-candidate-missing-tag-'));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+
+  await assert.rejects(
+    stagePinnedGeneratedArtifacts(
+      {
+        ...archivedDocset,
+        availability: 'candidate',
+        products: {
+          'registry-stack': {
+            version: 'v1.2.3',
+            ref: 'v1.2.3',
+          },
+        },
+      },
+      {
+        docsRoot: resolve(repoRoot, 'docs/site'),
+        artifacts: stagedArtifactFixtures,
+        resolveCommit: async () => null,
+      },
+    ),
+    /must resolve its exact source tag/,
+  );
+});
+
+test('published candidate archive stages generated artifacts from its tag', async (t) => {
+  const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-candidate-tag-'));
+  t.after(() => rm(repoRoot, { recursive: true, force: true }));
+  const pinnedPath = `${stagedArtifactFixtures[0]}/pinned.json`;
+  const pinnedLocal = resolve(repoRoot, pinnedPath);
+  await mkdir(dirname(pinnedLocal), { recursive: true });
+  await writeFile(pinnedLocal, '{"source_label":"v1.2.3"}\n');
+  await execFileAsync('git', ['init', '--quiet'], { cwd: repoRoot });
+  await execFileAsync('git', ['config', 'user.name', 'Archive Test'], { cwd: repoRoot });
+  await execFileAsync('git', ['config', 'user.email', 'archive@example.invalid'], {
+    cwd: repoRoot,
+  });
+  await execFileAsync('git', ['add', pinnedPath], { cwd: repoRoot });
+  await execFileAsync('git', ['commit', '--quiet', '-m', 'release'], { cwd: repoRoot });
+  await execFileAsync('git', ['tag', 'v1.2.3'], { cwd: repoRoot });
+  await writeFile(pinnedLocal, '{"source_label":"Main source (unreleased)"}\n');
+
+  const restore = await stagePinnedGeneratedArtifacts(
+    {
+      ...archivedDocset,
+      availability: 'candidate',
+      products: {
+        'registry-stack': {
+          version: 'v1.2.3',
+          ref: 'v1.2.3',
+        },
+      },
+    },
+    {
+      docsRoot: resolve(repoRoot, 'docs/site'),
+      artifacts: stagedArtifactFixtures,
+    },
+  );
+
+  assert.equal(await readFile(pinnedLocal, 'utf8'), '{"source_label":"v1.2.3"}\n');
+  await restore();
+  assert.equal(
+    await readFile(pinnedLocal, 'utf8'),
+    '{"source_label":"Main source (unreleased)"}\n',
+  );
 });
 
 test('an empty artifact list stages nothing instead of listing the whole tree', async () => {
@@ -243,7 +319,9 @@ test('candidate archive rejects a tag that does not match its release identity',
 
 test('single release archive build does not depend on the mutable released pointer', async () => {
   const source = await readFile(resolve(docsRoot, 'scripts/build-archive.mjs'), 'utf8');
-  assert.match(source, /buildDocsetArchive\(docset, \{ indexable: true \}\)/);
+  assert.match(source, /buildDocsetArchive\(docset, \{/);
+  assert.match(source, /allowUnpublishedCandidate: true/);
+  assert.match(source, /indexable: true/);
   assert.doesNotMatch(source, /docset\.id === docsets\.released/);
 });
 
@@ -437,8 +515,8 @@ test('archive output uses pinned generated artifacts and restores current files'
   const repoRoot = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-ref-'));
   t.after(() => rm(repoRoot, { recursive: true, force: true }));
   const siteRoot = resolve(repoRoot, 'docs/site');
-  const pinnedPath = stagedArtifactFixtures[0];
-  const absentAtReleasePath = stagedArtifactFixtures.at(-1);
+  const pinnedPath = `${stagedArtifactFixtures[0]}/pinned.json`;
+  const absentAtReleasePath = `${stagedArtifactFixtures[0]}/current-only.json`;
   const pinnedLocal = resolve(repoRoot, pinnedPath);
   const absentAtReleaseLocal = resolve(repoRoot, absentAtReleasePath);
 

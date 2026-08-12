@@ -4,49 +4,14 @@
 //! `inspect` prints its derived metadata, `openapi` renders the public contract,
 //! and `serve` runs the delivery service until it is terminated.
 
-use std::{path::PathBuf, process::ExitCode, sync::Arc};
+use std::{process::ExitCode, sync::Arc};
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use registry_evidence_oid4vci::{
+    cli::{Cli, Command},
     config::DeliveryConfig,
     service::{serve, DeliveryService},
 };
-
-#[derive(Debug, Parser)]
-#[command(
-    name = "evidence-oid4vci",
-    about = "Registry Stack wallet delivery front end for Evidence credentials",
-    version = registry_platform_buildinfo::DISPLAY_VERSION
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Load and validate the configuration and the client key, then exit.
-    Check {
-        #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
-        config: PathBuf,
-    },
-    /// Validate the deployment and print its derived protocol metadata.
-    Inspect {
-        #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
-        config: PathBuf,
-    },
-    /// Render the deterministic OpenAPI 3.1 contract, then exit.
-    Openapi {
-        /// Write to a file instead of stdout.
-        #[arg(long)]
-        output: Option<PathBuf>,
-    },
-    /// Serve the delivery endpoints until terminated.
-    Serve {
-        #[arg(long, env = "EVIDENCE_OID4VCI_CONFIG")]
-        config: PathBuf,
-    },
-}
 
 fn main() -> ExitCode {
     let cli = Cli::parse();

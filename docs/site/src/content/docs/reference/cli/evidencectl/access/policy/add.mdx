@@ -1,0 +1,43 @@
+---
+title: "evidencectl access policy add command reference"
+description: "Generated syntax and options for evidencectl access policy add."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Add one governed access policy.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl access policy add --question <QUESTION> <POLICY>
+```
+
+## Arguments
+
+| Argument | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `<POLICY>` | Yes | n/a | n/a | n/a | Lowercase policy identifier |
+
+## Options
+
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--question <QUESTION>` | Yes | Yes | n/a | n/a | n/a | Authored question granted by this policy. Repeat for more than one |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

@@ -1,0 +1,2722 @@
+{
+  "schema_version": "registry.cli-reference/v1",
+  "binaries": [
+    {
+      "name": "evidence",
+      "invocation": "evidence",
+      "about": "Evidence Gateway Version 1",
+      "long_about": null,
+      "usage": "evidence [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--runtime <RUNTIME>",
+          "description": "One closed operator runtime file that binds the governed bundle",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [
+            "/etc/registry-evidence/runtime.yaml"
+          ],
+          "possible_values": [],
+          "environment": "REGISTRY_EVIDENCE_RUNTIME"
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "evidence check",
+          "about": "Validate and compile the complete immutable bundle, and validate the mounted secret material exactly as startup does",
+          "long_about": null,
+          "usage": "evidence check [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "One closed operator runtime file that binds the governed bundle",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "/etc/registry-evidence/runtime.yaml"
+              ],
+              "possible_values": [],
+              "environment": "REGISTRY_EVIDENCE_RUNTIME"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "evaluate",
+          "invocation": "evidence evaluate",
+          "about": "Evaluate one bundle-owned fixture without source or credential access",
+          "long_about": null,
+          "usage": "evidence evaluate [OPTIONS] --fixture <FIXTURE>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--fixture <FIXTURE>",
+              "description": "Bundle-relative fixture path referenced by exactly one requirement",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--explain",
+              "description": "Print the per-stage trace of what each case actually did. A failure names the contract that broke and nothing else, which says that a case failed but never why. The trace says how far each case got, what shape the response and facts had, and which declared concept the output gate was checking. It reports shapes, counts, and identifiers, never document values, and it never changes an outcome, an exit code, or a message.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--explain-format <EXPLAIN_FORMAT>",
+              "description": "Render the `--explain` trace for a machine reader instead of a person. The JSON form is the whole of standard output, so the summary line's verdict and evaluated-case count move inside the document rather than trailing it",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "text",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "One closed operator runtime file that binds the governed bundle",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "/etc/registry-evidence/runtime.yaml"
+              ],
+              "possible_values": [],
+              "environment": "REGISTRY_EVIDENCE_RUNTIME"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--explain-format <EXPLAIN_FORMAT>",
+              "arguments": [
+                "--explain"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "serve",
+          "invocation": "evidence serve",
+          "about": "Start the native Evidence Gateway HTTP service",
+          "long_about": null,
+          "usage": "evidence serve [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "One closed operator runtime file that binds the governed bundle",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "/etc/registry-evidence/runtime.yaml"
+              ],
+              "possible_values": [],
+              "environment": "REGISTRY_EVIDENCE_RUNTIME"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "verify",
+          "invocation": "evidence verify",
+          "about": "Re-verify one stored signed response offline against a pinned key set",
+          "long_about": "Re-verify one stored signed response offline against a pinned key set. Exactly one stored response is named, and its format is named with it. The command never infers a format from the file's contents, so a credential can never be re-verified under the other format's rules.",
+          "usage": "evidence verify [OPTIONS] --jwks <JWKS> --policy <POLICY> <--jws <JWS>|--sd-jwt-vc <SD_JWT_VC>>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--jws <JWS>",
+              "description": "Stored flattened JWS JSON response file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--sd-jwt-vc <SD_JWT_VC>",
+              "description": "Stored compact SD-JWT VC response file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--jwks <JWKS>",
+              "description": "Pinned trusted JWKS document. This file is the complete trust set",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--policy <POLICY>",
+              "description": "Relying-procedure verification policy document",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--at <AT>",
+              "description": "Verification instant as strict RFC 3339 UTC; system time by default",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "One closed operator runtime file that binds the governed bundle",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "/etc/registry-evidence/runtime.yaml"
+              ],
+              "possible_values": [],
+              "environment": "REGISTRY_EVIDENCE_RUNTIME"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "required_exactly_one",
+              "when": null,
+              "arguments": [
+                "--jws <JWS>",
+                "--sd-jwt-vc <SD_JWT_VC>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "verify-presentation",
+          "invocation": "evidence verify-presentation",
+          "about": "Re-verify one stored holder-bound presentation offline against a pinned key set",
+          "long_about": "Re-verify one stored holder-bound presentation offline against a pinned key set. The named file is one compact SD-JWT VC serialization carrying the holder's key-binding JWT after its last tilde, so the proof is never a separate input. Naming the input states its shape: a stored credential that ends in a trailing tilde offers no proof of possession and is refused here rather than verified without one. Success proves the presenter held the confirmation key's private key when the key-binding JWT was signed. It does not prove that the presentation is fresh, single-use, or unreplayed: the expected challenge is compared, never consumed, and this command retains no state between runs, so the same file verifies again under the same policy. Retiring a challenge belongs to the relying party's own challenge lifecycle.",
+          "usage": "evidence verify-presentation [OPTIONS] --sd-jwt-vc-presentation <SD_JWT_VC_PRESENTATION> --jwks <JWKS> --policy <POLICY>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--sd-jwt-vc-presentation <SD_JWT_VC_PRESENTATION>",
+              "description": "Stored compact SD-JWT VC presentation file",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--jwks <JWKS>",
+              "description": "Pinned trusted JWKS document. This file is the complete trust set",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--policy <POLICY>",
+              "description": "Holder-bound relying-procedure verification policy document",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--at <AT>",
+              "description": "Verification instant as strict RFC 3339 UTC; system time by default",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "One closed operator runtime file that binds the governed bundle",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "/etc/registry-evidence/runtime.yaml"
+              ],
+              "possible_values": [],
+              "environment": "REGISTRY_EVIDENCE_RUNTIME"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "verify-audit",
+          "invocation": "evidence verify-audit",
+          "about": "Run a full out-of-band verification pass over the audit chain",
+          "long_about": "Run a full out-of-band verification pass over the audit chain. Startup verification is deliberately bounded to the active segment, so restart time does not grow with retained history; tampering inside an already sealed segment is not caught there. This is the counterpart check that catches it, meant to run out of band.",
+          "usage": "evidence verify-audit [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "One closed operator runtime file that binds the governed bundle",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "/etc/registry-evidence/runtime.yaml"
+              ],
+              "possible_values": [],
+              "environment": "REGISTRY_EVIDENCE_RUNTIME"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "name": "evidence-oid4vci",
+      "invocation": "evidence-oid4vci",
+      "about": "Registry Stack wallet delivery front end for Evidence credentials",
+      "long_about": null,
+      "usage": "evidence-oid4vci <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "evidence-oid4vci check",
+          "about": "Load and validate the configuration and the client key, then exit",
+          "long_about": null,
+          "usage": "evidence-oid4vci check --config <CONFIG>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--config <CONFIG>",
+              "description": "",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "EVIDENCE_OID4VCI_CONFIG"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "inspect",
+          "invocation": "evidence-oid4vci inspect",
+          "about": "Validate the deployment and print its derived protocol metadata",
+          "long_about": null,
+          "usage": "evidence-oid4vci inspect --config <CONFIG>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--config <CONFIG>",
+              "description": "",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "EVIDENCE_OID4VCI_CONFIG"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "openapi",
+          "invocation": "evidence-oid4vci openapi",
+          "about": "Render the deterministic OpenAPI 3.1 contract, then exit",
+          "long_about": null,
+          "usage": "evidence-oid4vci openapi [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--output <OUTPUT>",
+              "description": "Write to a file instead of stdout",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "serve",
+          "invocation": "evidence-oid4vci serve",
+          "about": "Serve the delivery endpoints until terminated",
+          "long_about": null,
+          "usage": "evidence-oid4vci serve --config <CONFIG>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--config <CONFIG>",
+              "description": "",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "EVIDENCE_OID4VCI_CONFIG"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "name": "evidencectl",
+      "invocation": "evidencectl",
+      "about": "Evidence adopter tooling: keys, source authoring, fixture runs",
+      "long_about": null,
+      "usage": "evidencectl <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "access",
+          "invocation": "evidencectl access",
+          "about": "Manage local caller access policies and clients",
+          "long_about": null,
+          "usage": "evidencectl access <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "policy",
+              "invocation": "evidencectl access policy",
+              "about": "Define which authored questions a policy may request",
+              "long_about": null,
+              "usage": "evidencectl access policy <COMMAND>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": [
+                {
+                  "name": "add",
+                  "invocation": "evidencectl access policy add",
+                  "about": "Add one governed access policy",
+                  "long_about": null,
+                  "usage": "evidencectl access policy add --question <QUESTION> <POLICY>",
+                  "arguments": [
+                    {
+                      "display": "<POLICY>",
+                      "description": "Lowercase policy identifier",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "options": [
+                    {
+                      "display": "--question <QUESTION>",
+                      "description": "Authored question granted by this policy. Repeat for more than one",
+                      "always_required": true,
+                      "repeatable": true,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                },
+                {
+                  "name": "list",
+                  "invocation": "evidencectl access policy list",
+                  "about": "List governed access policies",
+                  "long_about": null,
+                  "usage": "evidencectl access policy list",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                }
+              ]
+            },
+            {
+              "name": "client",
+              "invocation": "evidencectl access client",
+              "about": "Register and revoke local Evidence Gateway clients",
+              "long_about": null,
+              "usage": "evidencectl access client <COMMAND>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": [
+                {
+                  "name": "add",
+                  "invocation": "evidencectl access client add",
+                  "about": "Add one local client and generate its private key",
+                  "long_about": null,
+                  "usage": "evidencectl access client add --policy <POLICY> --generate-local-key <CLIENT>",
+                  "arguments": [
+                    {
+                      "display": "<CLIENT>",
+                      "description": "Lowercase client identifier",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "options": [
+                    {
+                      "display": "--policy <POLICY>",
+                      "description": "Access policy assigned to this client. Repeat for more than one",
+                      "always_required": true,
+                      "repeatable": true,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "--generate-local-key",
+                      "description": "Generate an owner-only P-256 key for local client authentication",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                },
+                {
+                  "name": "list",
+                  "invocation": "evidencectl access client list",
+                  "about": "List local clients and their policy membership",
+                  "long_about": null,
+                  "usage": "evidencectl access client list",
+                  "arguments": [],
+                  "options": [
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                },
+                {
+                  "name": "revoke",
+                  "invocation": "evidencectl access client revoke",
+                  "about": "Revoke one local client",
+                  "long_about": null,
+                  "usage": "evidencectl access client revoke <CLIENT>",
+                  "arguments": [
+                    {
+                      "display": "<CLIENT>",
+                      "description": "Lowercase client identifier",
+                      "always_required": true,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "options": [
+                    {
+                      "display": "-h, --help",
+                      "description": "Print help",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    }
+                  ],
+                  "constraints": [],
+                  "subcommands": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "keygen",
+          "invocation": "evidencectl keygen",
+          "about": "Generate Evidence Gateway deployment key material as owner-only files",
+          "long_about": null,
+          "usage": "evidencectl keygen <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "signing",
+              "invocation": "evidencectl keygen signing",
+              "about": "P-256 ES256 signing keypair as private and public JWK files",
+              "long_about": null,
+              "usage": "evidencectl keygen signing [OPTIONS] --out-dir <OUT_DIR>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--out-dir <OUT_DIR>",
+                  "description": "Secret directory receiving the private JWK file (created 0700)",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--public-out <PUBLIC_OUT>",
+                  "description": "Public JWK output path; defaults to a file inside the secret directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "secret",
+              "invocation": "evidencectl keygen secret",
+              "about": "One random raw secret file, 32 bytes (audit or subject-binding HMAC)",
+              "long_about": "One random raw secret file, 32 bytes (audit or subject-binding HMAC). This is HMAC key material, not a credential a source will accept: the bytes are arbitrary and an HTTP header value rejects most of them. Use `keygen token` for a bearer token.",
+              "usage": "evidencectl keygen secret --out <OUT>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--out <OUT>",
+                  "description": "Output file for the raw secret (written 0600)",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "token",
+              "invocation": "evidencectl keygen token",
+              "about": "One random bearer token file, printable and header-safe",
+              "long_about": null,
+              "usage": "evidencectl keygen token --out <OUT>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--out <OUT>",
+                  "description": "Output file for the bearer token (written 0600)",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "holder",
+              "invocation": "evidencectl keygen holder",
+              "about": "P-256 ES256 holder keypair for SD-JWT VC confirmation binding",
+              "long_about": null,
+              "usage": "evidencectl keygen holder [OPTIONS] --out-dir <OUT_DIR>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--out-dir <OUT_DIR>",
+                  "description": "Directory receiving the holder private JWK file (created 0700)",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--public-out <PUBLIC_OUT>",
+                  "description": "Public JWK output path; defaults to a file inside the secret directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "client-assertion",
+              "invocation": "evidencectl keygen client-assertion",
+              "about": "Keypair a source's `clientAssertionKeyRef` points at, for a token endpoint that authenticates the client by signed assertion",
+              "long_about": null,
+              "usage": "evidencectl keygen client-assertion [OPTIONS] --out-dir <OUT_DIR>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--out-dir <OUT_DIR>",
+                  "description": "Secret directory receiving the private JWK file (created 0700)",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--public-out <PUBLIC_OUT>",
+                  "description": "Public JWK output path; defaults to a file inside the secret directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--private-name <PRIVATE_NAME>",
+                  "description": "Name of the private JWK file, which is the `secret:file/NAME` a source's `clientAssertionKeyRef` points at; defaults to one naming the algorithm. The public half follows it as `NAME-public.jwk.json`",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--algorithm <ALGORITHM>",
+                  "description": "Signature algorithm the assertion is signed with",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "es384"
+                  ],
+                  "possible_values": [
+                    "es384",
+                    "rs384"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "jwks",
+          "invocation": "evidencectl jwks",
+          "about": "Assemble a public JWKS document from public JWK files",
+          "long_about": null,
+          "usage": "evidencectl jwks [OPTIONS] --out <OUT> <PUBLIC_JWK_FILES>...",
+          "arguments": [
+            {
+              "display": "<PUBLIC_JWK_FILES>",
+              "description": "Public JWK files to include, in order",
+              "always_required": true,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--out <OUT>",
+              "description": "Output JWKS document path",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--force",
+              "description": "Overwrite an existing output file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "new",
+          "invocation": "evidencectl new",
+          "about": "Start an editable Evidence Gateway project from OpenAPI or a SQLite extract",
+          "long_about": null,
+          "usage": "evidencectl new --profile <PROFILE> <--openapi <OPENAPI>|--transport <TRANSPORT>> <DIRECTORY>",
+          "arguments": [
+            {
+              "display": "<DIRECTORY>",
+              "description": "New directory to create for the editable authoring project",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--openapi <OPENAPI>",
+              "description": "OpenAPI 3.0 or 3.1 document: a local path or an HTTPS URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--transport <TRANSPORT>",
+              "description": "Source transport to author without an API description",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "sqlite-extract"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--profile <PROFILE>",
+              "description": "Explicit development profile for local authoring",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [
+                "local"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "required_exactly_one",
+              "when": null,
+              "arguments": [
+                "--openapi <OPENAPI>",
+                "--transport <TRANSPORT>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "build",
+          "invocation": "evidencectl build",
+          "about": "Compile an editable project into a reviewed deployment candidate",
+          "long_about": null,
+          "usage": "evidencectl build [OPTIONS] --target <TARGET> --output <OUTPUT>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Editable Evidence Gateway project; defaults to the current directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "."
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--target <TARGET>",
+              "description": "Explicit deployment target containing governance.yaml and runtime.yaml",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "New candidate directory to create. It must not already exist",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "fixtures",
+          "invocation": "evidencectl fixtures",
+          "about": "Drive the evidence binary across a project's bundle fixtures",
+          "long_about": null,
+          "usage": "evidencectl fixtures <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "run",
+              "invocation": "evidencectl fixtures run",
+              "about": "Run `evidence check` and every bundle fixture through `evidence evaluate`",
+              "long_about": null,
+              "usage": "evidencectl fixtures run [OPTIONS] --project <PROJECT>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Deployment project directory containing runtime.yaml and bundle/",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--evidence-bin <EVIDENCE_BIN>",
+                  "description": "Path to the evidence binary; defaults to `evidence` on PATH",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--json",
+                  "description": "Emit one machine-readable JSON report on standard output",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--explain",
+                  "description": "Ask `evidence` to explain each evaluation, and relay the trace it prints. The trace can name what a source returned, so it is relayed only when it is asked for. For the structured form, run `evidence evaluate --explain --explain-format json` against the fixture directly.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "source",
+          "invocation": "evidencectl source",
+          "about": "Work with a project's sources, starting from their own API documents",
+          "long_about": null,
+          "usage": "evidencectl source <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "suggest",
+              "invocation": "evidencectl source suggest",
+              "about": "Suggest source configuration from an OpenAPI document",
+              "long_about": null,
+              "usage": "evidencectl source suggest [OPTIONS] <--openapi <OPENAPI>|--project <PROJECT>>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--openapi <OPENAPI>",
+                  "description": "OpenAPI 3.0 or 3.1 document for a print-only draft. With --project, the retained source.openapi.yaml is used instead",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--operation <OPERATION>",
+                  "description": "Operation as \"METHOD /path/template\"; interactive selection if absent",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--status <STATUS>",
+                  "description": "Response status code to read the schema from",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "200"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--media-type <MEDIA_TYPE>",
+                  "description": "Response media type to read the schema from",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "application/json"
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--select <SELECTION>",
+                  "description": "Projection pointer to select; repeat once per leaf. Interactive selection if absent",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--sample <SAMPLE>",
+                  "description": "Sample response JSON file used to suggest bounds. Read only; nothing from it is copied into any artifact except derived bounds",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--source-id <SOURCE_ID>",
+                  "description": "Source identifier for the generated artifacts",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Deployment project to write the draft into; print-only if absent",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "required_exactly_one",
+                  "when": null,
+                  "arguments": [
+                    "--openapi <OPENAPI>",
+                    "--project <PROJECT>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "doctor",
+          "invocation": "evidencectl doctor",
+          "about": "Report every project artifact whose mode or owner the runtime refuses",
+          "long_about": null,
+          "usage": "evidencectl doctor [OPTIONS] --project <PROJECT>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--project <PROJECT>",
+              "description": "Deployment project directory containing runtime.yaml and bundle/",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--mint-config <PATH>",
+              "description": "Mechanically compare this Registry Mint configuration with Evidence Gateway authentication",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--json",
+              "description": "Emit one machine-readable JSON report on standard output",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "dev",
+          "invocation": "evidencectl dev",
+          "about": "Run the private local Registry Mint and Evidence Gateway pair",
+          "long_about": null,
+          "usage": "evidencectl dev [OPTIONS] --detach\n       evidencectl dev <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--detach",
+              "description": "Return after Registry Mint and Evidence Gateway are ready on loopback",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--evidence-port <EVIDENCE_PORT>",
+              "description": "Loopback port for the local Evidence Gateway service",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "8080"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--mint-port <MINT_PORT>",
+              "description": "Loopback port for the local Mint service",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "8081"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "stop",
+              "invocation": "evidencectl dev stop",
+              "about": "Stop the active local Registry Mint and Evidence Gateway pair",
+              "long_about": null,
+              "usage": "evidencectl dev stop",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "clean",
+              "invocation": "evidencectl dev clean",
+              "about": "Remove one completed stopped local generation",
+              "long_about": null,
+              "usage": "evidencectl dev clean",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "request",
+          "invocation": "evidencectl request",
+          "about": "Prepare a closed request for the active local project",
+          "long_about": null,
+          "usage": "evidencectl request <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "prepare",
+              "invocation": "evidencectl request prepare",
+              "about": "Prepare the request, authorization header, and verification context",
+              "long_about": null,
+              "usage": "evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION>",
+              "arguments": [
+                {
+                  "display": "<QUESTION>",
+                  "description": "Question defined by the active local project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--purpose <PURPOSE>",
+                  "description": "Exact purpose declared by the question",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--subject <SUBJECT>",
+                  "description": "Subject selector. Repeat role:field=value for a multi-subject question",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--subjects-file <PATH>",
+                  "description": "Owner-only JSON file containing the complete subject selector set",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--name <NAME>",
+                  "description": "Safe name for this retained request",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--client <CLIENT>",
+                  "description": "Registered local application used to request authorization",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Response format to request and verify",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "signed-jws"
+                  ],
+                  "possible_values": [
+                    "signed-jws",
+                    "sd-jwt-vc"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "required_exactly_one",
+                  "when": null,
+                  "arguments": [
+                    "--subject <SUBJECT>",
+                    "--subjects-file <PATH>"
+                  ]
+                }
+              ],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "verify",
+          "invocation": "evidencectl verify",
+          "about": "Verify one retained Evidence Gateway response offline",
+          "long_about": null,
+          "usage": "evidencectl verify --context <CONTEXT> --output <OUTPUT> <RESPONSE>",
+          "arguments": [
+            {
+              "display": "<RESPONSE>",
+              "description": "Signed JWS or SD-JWT VC response returned by Evidence Gateway",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--context <CONTEXT>",
+              "description": "Owner-only verification context retained before the response existed",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--output <OUTPUT>",
+              "description": "New owner-only file for the exact verified Evidence Gateway payload",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "audit",
+          "invocation": "evidencectl audit",
+          "about": "Inspect stopped local audit history",
+          "long_about": null,
+          "usage": "evidencectl audit <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "show",
+              "invocation": "evidencectl audit show",
+              "about": "Show a minimized view of stopped local audit history",
+              "long_about": null,
+              "usage": "evidencectl audit show <--last-operation>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--last-operation",
+                  "description": "Show the last verified local operation after the service has stopped",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [
+                {
+                  "kind": "required_exactly_one",
+                  "when": null,
+                  "arguments": [
+                    "--last-operation"
+                  ]
+                }
+              ],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "tooling",
+          "invocation": "evidencectl tooling",
+          "about": "Advanced: editor and tooling integration surfaces",
+          "long_about": null,
+          "usage": "evidencectl tooling <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "editor",
+              "invocation": "evidencectl tooling editor",
+              "about": "Write project-local schema mappings for a YAML-aware editor",
+              "long_about": null,
+              "usage": "evidencectl tooling editor [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--project <PROJECT>",
+                  "description": "Editable Evidence Gateway project; defaults to the current directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "language-server",
+              "invocation": "evidencectl tooling language-server",
+              "about": "Run cross-file navigation over the Language Server Protocol",
+              "long_about": null,
+              "usage": "evidencectl tooling language-server",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mint",
+      "invocation": "mint",
+      "about": "Registry Stack token issuer",
+      "long_about": null,
+      "usage": "mint <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "check",
+          "invocation": "mint check",
+          "about": "Load the configuration, keys, audit chain, and client registry, then exit",
+          "long_about": null,
+          "usage": "mint check --config <CONFIG>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--config <CONFIG>",
+              "description": "",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "MINT_CONFIG"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "serve",
+          "invocation": "mint serve",
+          "about": "Serve the token endpoint until terminated",
+          "long_about": null,
+          "usage": "mint serve --config <CONFIG>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--config <CONFIG>",
+              "description": "",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "MINT_CONFIG"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "verify-audit",
+          "invocation": "mint verify-audit",
+          "about": "Verify the retained keyed Mint audit chain named by the configuration",
+          "long_about": null,
+          "usage": "mint verify-audit --config <CONFIG>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--config <CONFIG>",
+              "description": "",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "MINT_CONFIG"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "token",
+          "invocation": "mint token",
+          "about": "Obtain an access token from a running token endpoint, as a client would",
+          "long_about": "Obtain an access token from a running token endpoint, as a client would. This authenticates. It signs a client assertion with the caller's own key and posts it; the endpoint decides. Nothing here can produce a token the same request over the wire would not have produced.",
+          "usage": "mint token [OPTIONS] --url <URL> --client-id <CLIENT_ID> --key <KEY>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--url <URL>",
+              "description": "The token endpoint, for example `https://mint.example.org/token`",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--client-id <CLIENT_ID>",
+              "description": "The `clientId` this caller is registered under",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--key <KEY>",
+              "description": "The caller's private JWK. Must be owner-only and not a symlink",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--audience <AUDIENCE>",
+              "description": "The endpoint's configured `clientAssertion.audience`. Defaults to `--url`, which is the usual configuration",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--actor <ACTOR>",
+              "description": "Request a delegated token for this actor. Requires `--subject-file`",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--subject-file <SUBJECT_FILE>",
+              "description": "A JSON object of subject selector fields, for the actor to act for. A file rather than repeated flags on purpose: these are a real person's identifying details, and command lines are visible to every process on the host and land in shell history.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--lifetime-seconds <LIFETIME_SECONDS>",
+              "description": "Assertion lifetime in seconds",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "120"
+              ],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--ca-certificate <CA_CERTIFICATE>",
+              "description": "Trust this PEM certificate bundle in addition to the system roots, for a development deployment behind a private CA",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--verbose",
+              "description": "Print the full endpoint response instead of the access token alone",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help (see a summary with '-h')",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--actor <ACTOR>",
+              "arguments": [
+                "--subject-file <SUBJECT_FILE>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--subject-file <SUBJECT_FILE>",
+              "arguments": [
+                "--actor <ACTOR>"
+              ]
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "name": "relay",
+      "invocation": "relay",
+      "about": "Compiled read-only Registry Relay runtime",
+      "long_about": null,
+      "usage": "relay <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "serve",
+          "invocation": "relay serve",
+          "about": "Verify and activate one sealed Registry package, then serve it",
+          "long_about": null,
+          "usage": "relay serve --runtime <RUNTIME>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "Strict deployment binding for the sealed package and local resources",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": "RELAY_RUNTIME"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "healthcheck",
+          "invocation": "relay healthcheck",
+          "about": "Probe an unauthenticated Relay liveness endpoint",
+          "long_about": null,
+          "usage": "relay healthcheck [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--url <URL>",
+              "description": "Complete HTTP(S) URL of the Relay `/health` endpoint",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "http://127.0.0.1:8080/health"
+              ],
+              "possible_values": [],
+              "environment": "RELAY_HEALTHCHECK_URL"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "name": "relayctl",
+      "invocation": "relayctl",
+      "about": "Relay V2 project authoring, validation, and packaging",
+      "long_about": null,
+      "usage": "relayctl [OPTIONS] <COMMAND>",
+      "arguments": [],
+      "options": [
+        {
+          "display": "--json",
+          "description": "Emit the shared report as best-effort JSON for local automation",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-h, --help",
+          "description": "Print help",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "-V, --version",
+          "description": "Print version",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        }
+      ],
+      "constraints": [],
+      "subcommands": [
+        {
+          "name": "init",
+          "invocation": "relayctl init",
+          "about": "Initialize a complete authoring project with unreviewed starters",
+          "long_about": null,
+          "usage": "relayctl init [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Authoring project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--json",
+              "description": "Emit the shared report as best-effort JSON for local automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "inspect",
+          "invocation": "relayctl inspect",
+          "about": "Inspect SQLite structure without reading row values",
+          "long_about": null,
+          "usage": "relayctl inspect [OPTIONS] <DATABASE>",
+          "arguments": [
+            {
+              "display": "<DATABASE>",
+              "description": "SQLite database to inspect structurally",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--profile <PROFILE>",
+              "description": "Source posture to use while opening the database read-only",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "live-read-only"
+              ],
+              "possible_values": [
+                "snapshot",
+                "live-read-only"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--starters <DIRECTORY>",
+              "description": "Write compiler-derived, visibly unreviewed starters to this directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--statistical-view <VIEW>",
+              "description": "Generate a format-neutral statistical component starter for this view",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--time-column <COLUMN>",
+              "description": "Exact source column for the required time-period dimension",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--measure-column <COLUMN>",
+              "description": "Exact source column for the required observation measure",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--attribute-column <COLUMN>",
+              "description": "Exact source column to treat as an observation attribute instead of a dimension",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--json",
+              "description": "Emit the shared report as best-effort JSON for local automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [
+            {
+              "kind": "requires_all",
+              "when": "--statistical-view <VIEW>",
+              "arguments": [
+                "--starters <DIRECTORY>",
+                "--time-column <COLUMN>",
+                "--measure-column <COLUMN>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--time-column <COLUMN>",
+              "arguments": [
+                "--starters <DIRECTORY>",
+                "--measure-column <COLUMN>",
+                "--statistical-view <VIEW>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--measure-column <COLUMN>",
+              "arguments": [
+                "--starters <DIRECTORY>",
+                "--time-column <COLUMN>",
+                "--statistical-view <VIEW>"
+              ]
+            },
+            {
+              "kind": "requires_all",
+              "when": "--attribute-column <COLUMN>",
+              "arguments": [
+                "--starters <DIRECTORY>",
+                "--time-column <COLUMN>",
+                "--measure-column <COLUMN>",
+                "--statistical-view <VIEW>"
+              ]
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "name": "check",
+          "invocation": "relayctl check",
+          "about": "Compile and validate an authoring project",
+          "long_about": null,
+          "usage": "relayctl check [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Authoring project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--production",
+              "description": "Require all generated suggestions to have been reviewed",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--json",
+              "description": "Emit the shared report as best-effort JSON for local automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "generate",
+          "invocation": "relayctl generate",
+          "about": "Generate deterministic artifacts from the compiled project",
+          "long_about": null,
+          "usage": "relayctl generate [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Authoring project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "Destination for generated artifacts",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--json",
+              "description": "Emit the shared report as best-effort JSON for local automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "test",
+          "invocation": "relayctl test",
+          "about": "Run the project's offline fixture cases through the shared kernel",
+          "long_about": null,
+          "usage": "relayctl test [OPTIONS] <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Authoring project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--fixture <IDENTIFIER>",
+              "description": "Run one exact fixture identifier",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--json",
+              "description": "Emit the shared report as best-effort JSON for local automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "diff",
+          "invocation": "relayctl diff",
+          "about": "Classify meaning, disclosure, and security changes between projects",
+          "long_about": null,
+          "usage": "relayctl diff [OPTIONS] <PREVIOUS> <CURRENT>",
+          "arguments": [
+            {
+              "display": "<PREVIOUS>",
+              "description": "Previously reviewed project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "<CURRENT>",
+              "description": "Candidate project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--json",
+              "description": "Emit the shared report as best-effort JSON for local automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "package",
+          "invocation": "relayctl package",
+          "about": "Build a deterministic sealed deployment package",
+          "long_about": null,
+          "usage": "relayctl package [OPTIONS] --output <DIRECTORY> <PROJECT>",
+          "arguments": [
+            {
+              "display": "<PROJECT>",
+              "description": "Authoring project directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--output <DIRECTORY>",
+              "description": "New sealed package directory",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--json",
+              "description": "Emit the shared report as best-effort JSON for local automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
+          "name": "tooling",
+          "invocation": "relayctl tooling",
+          "about": "Advanced editor and language-server integration surfaces",
+          "long_about": null,
+          "usage": "relayctl tooling [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--json",
+              "description": "Emit the shared report as best-effort JSON for local automation",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "editor",
+              "invocation": "relayctl tooling editor",
+              "about": "Write project-local schema mappings for VS Code and Zed",
+              "long_about": null,
+              "usage": "relayctl tooling editor [OPTIONS] [PROJECT]",
+              "arguments": [
+                {
+                  "display": "[PROJECT]",
+                  "description": "Relay V2 authoring project; defaults to the current directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "."
+                  ],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--json",
+                  "description": "Emit the shared report as best-effort JSON for local automation",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            },
+            {
+              "name": "language-server",
+              "invocation": "relayctl tooling language-server",
+              "about": "Run Relay V2 authoring support over the Language Server Protocol",
+              "long_about": null,
+              "usage": "relayctl tooling language-server [OPTIONS]",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--json",
+                  "description": "Emit the shared report as best-effort JSON for local automation",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -56,15 +56,16 @@ const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 45;
 const SHUTDOWN_TIMEOUT_SECONDS: u64 = 35;
 
 #[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 pub struct DevArgs {
     #[command(subcommand)]
     action: Option<DevAction>,
 
-    /// Return after Mint and Evidence are ready on loopback.
-    #[arg(long)]
+    /// Return after Registry Mint and Evidence Gateway are ready on loopback.
+    #[arg(long, required = true)]
     detach: bool,
 
-    /// Loopback port for the local Evidence service.
+    /// Loopback port for the local Evidence Gateway service.
     #[arg(long, default_value_t = 8080)]
     evidence_port: u16,
 
@@ -93,7 +94,7 @@ pub struct DevArgs {
 
 #[derive(Debug, Subcommand)]
 enum DevAction {
-    /// Stop the active local Mint and Evidence pair.
+    /// Stop the active local Registry Mint and Evidence Gateway pair.
     Stop(StopArgs),
     /// Remove one completed stopped local generation.
     Clean(CleanArgs),

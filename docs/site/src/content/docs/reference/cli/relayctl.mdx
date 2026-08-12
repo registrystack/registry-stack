@@ -1,0 +1,51 @@
+---
+title: "relayctl command reference"
+description: "Generated syntax and options for relayctl."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Relay V2 project authoring, validation, and packaging.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+relayctl [OPTIONS] <COMMAND>
+```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| [`init`](./init/) | Initialize a complete authoring project with unreviewed starters |
+| [`inspect`](./inspect/) | Inspect SQLite structure without reading row values |
+| [`check`](./check/) | Compile and validate an authoring project |
+| [`generate`](./generate/) | Generate deterministic artifacts from the compiled project |
+| [`test`](./test/) | Run the project's offline fixture cases through the shared kernel |
+| [`diff`](./diff/) | Classify meaning, disclosure, and security changes between projects |
+| [`package`](./package/) | Build a deterministic sealed deployment package |
+| [`tooling`](./tooling/) | Advanced editor and language-server integration surfaces |
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--json` | No | n/a | n/a | n/a | Emit the shared report as best-effort JSON for local automation |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| `-V, --version` | No | n/a | n/a | n/a | Print version |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

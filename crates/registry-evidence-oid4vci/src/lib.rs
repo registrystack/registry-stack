@@ -35,6 +35,8 @@ compile_error!(
 );
 
 pub mod authorizer;
+#[doc(hidden)]
+pub mod cli;
 pub mod config;
 pub mod contracts;
 pub mod issuer;
@@ -44,6 +46,8 @@ pub mod offer;
 pub mod secretfile;
 pub mod service;
 pub mod store;
+
+pub use cli::command;
 
 #[cfg(test)]
 mod testing;

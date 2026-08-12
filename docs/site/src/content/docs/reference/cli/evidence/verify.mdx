@@ -1,0 +1,52 @@
+---
+title: "evidence verify command reference"
+description: "Generated syntax and options for evidence verify."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Re-verify one stored signed response offline against a pinned key set.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Description
+
+Re-verify one stored signed response offline against a pinned key set. Exactly one stored response is named, and its format is named with it. The command never infers a format from the file's contents, so a credential can never be re-verified under the other format's rules.
+
+## Usage
+
+```text
+evidence verify [OPTIONS] --jwks <JWKS> --policy <POLICY> <--jws <JWS>|--sd-jwt-vc <SD_JWT_VC>>
+```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | Exactly one of `--jws <JWS>`, `--sd-jwt-vc <SD_JWT_VC>` is required. |
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--jws <JWS>` | No | n/a | n/a | n/a | Stored flattened JWS JSON response file |
+| `--sd-jwt-vc <SD_JWT_VC>` | No | n/a | n/a | n/a | Stored compact SD-JWT VC response file |
+| `--jwks <JWKS>` | Yes | n/a | n/a | n/a | Pinned trusted JWKS document. This file is the complete trust set |
+| `--policy <POLICY>` | Yes | n/a | n/a | n/a | Relying-procedure verification policy document |
+| `--at <AT>` | No | n/a | n/a | n/a | Verification instant as strict RFC 3339 UTC; system time by default |
+| `--runtime <RUNTIME>` | No | `/etc/registry-evidence/runtime.yaml` | n/a | `REGISTRY_EVIDENCE_RUNTIME` | One closed operator runtime file that binds the governed bundle |
+| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

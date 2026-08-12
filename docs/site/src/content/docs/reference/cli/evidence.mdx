@@ -1,0 +1,49 @@
+---
+title: "evidence command reference"
+description: "Generated syntax and options for evidence."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Evidence Gateway Version 1.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidence [OPTIONS] <COMMAND>
+```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| [`check`](./check/) | Validate and compile the complete immutable bundle, and validate the mounted secret material exactly as startup does |
+| [`evaluate`](./evaluate/) | Evaluate one bundle-owned fixture without source or credential access |
+| [`serve`](./serve/) | Start the native Evidence Gateway HTTP service |
+| [`verify`](./verify/) | Re-verify one stored signed response offline against a pinned key set |
+| [`verify-presentation`](./verify-presentation/) | Re-verify one stored holder-bound presentation offline against a pinned key set |
+| [`verify-audit`](./verify-audit/) | Run a full out-of-band verification pass over the audit chain |
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--runtime <RUNTIME>` | No | `/etc/registry-evidence/runtime.yaml` | n/a | `REGISTRY_EVIDENCE_RUNTIME` | One closed operator runtime file that binds the governed bundle |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| `-V, --version` | No | n/a | n/a | n/a | Print version |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

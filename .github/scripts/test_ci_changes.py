@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ci_changes import (
+    CLI_REFERENCE_INPUTS,
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
@@ -270,6 +271,7 @@ class CiChangesTest(unittest.TestCase):
             {
                 "registry-relay-v2",
                 "registry-language-server",
+                "registry-cli-docs",
                 "registry-relayctl",
                 "registryctl",
                 "registry-evidencectl",
@@ -435,7 +437,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-evidence", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"evidence", "mint"},
+            {"developer-tools", "evidence", "mint"},
         )
 
         # A products/evidence path belongs to no crate directory, so it seeds
@@ -558,7 +560,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("registryctl", strict["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in strict["rust_matrix"]["include"]},
-            {"evidence"},
+            {"developer-tools", "evidence"},
         )
 
     def test_the_mutation_fixture_refuses_to_demote_an_absent_link(self) -> None:
@@ -637,7 +639,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["evidence_tutorial"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"evidence"},
+            {"developer-tools", "evidence"},
         )
 
     def test_the_python_binding_and_its_sdk_replay_the_tutorial_that_imports_them(
@@ -800,6 +802,19 @@ on:
             ]
         )
 
+    def test_cli_reference_inputs_run_docs(self) -> None:
+        self.assertEqual(
+            {
+                pattern
+                for pattern, _source in CLI_REFERENCE_INPUTS
+                if pattern in {"Cargo.lock", "Cargo.toml"}
+            },
+            {"Cargo.lock", "Cargo.toml"},
+        )
+        for _pattern, source in CLI_REFERENCE_INPUTS:
+            with self.subTest(source=source):
+                self.assertTrue(classify(self.workspace, (source,))["docs"])
+
     def test_evidence_contract_change_runs_docs_and_evidence_contracts(self) -> None:
         """The docs Evidence configuration page is generated from these files."""
         for path in (
@@ -920,10 +935,9 @@ on:
                 self.assertEqual(entry["reference"], key_path_contract.reference)
 
     def test_relay_docs_routing_matrix(self) -> None:
-        # Relay V2 publishes two product documents and no generated artifact, so
-        # the docs trigger follows those documents rather than crate source.
-        # Every crate below still selects its own Rust work; what it must not do
-        # is rebuild the site.
+        # Relay V2 publishes two product documents and generated CLI reference.
+        # The docs trigger follows those documents and the public Clap trees,
+        # while unrelated crate source still stays out of the docs job.
         cases = (
             (
                 "products/relay-v2/CONCEPT.md",
@@ -957,7 +971,7 @@ on:
             ),
             (
                 "crates/registry-relayctl/src/main.rs",
-                {"docs": False, "relay_v2_contracts": True},
+                {"docs": True, "relay_v2_contracts": True},
             ),
             (
                 "crates/registry-relay/src/server.rs",

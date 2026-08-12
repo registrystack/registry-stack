@@ -1,0 +1,45 @@
+---
+title: "evidence verify-presentation command reference"
+description: "Generated syntax and options for evidence verify-presentation."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Re-verify one stored holder-bound presentation offline against a pinned key set.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Description
+
+Re-verify one stored holder-bound presentation offline against a pinned key set. The named file is one compact SD-JWT VC serialization carrying the holder's key-binding JWT after its last tilde, so the proof is never a separate input. Naming the input states its shape: a stored credential that ends in a trailing tilde offers no proof of possession and is refused here rather than verified without one. Success proves the presenter held the confirmation key's private key when the key-binding JWT was signed. It does not prove that the presentation is fresh, single-use, or unreplayed: the expected challenge is compared, never consumed, and this command retains no state between runs, so the same file verifies again under the same policy. Retiring a challenge belongs to the relying party's own challenge lifecycle.
+
+## Usage
+
+```text
+evidence verify-presentation [OPTIONS] --sd-jwt-vc-presentation <SD_JWT_VC_PRESENTATION> --jwks <JWKS> --policy <POLICY>
+```
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--sd-jwt-vc-presentation <SD_JWT_VC_PRESENTATION>` | Yes | n/a | n/a | n/a | Stored compact SD-JWT VC presentation file |
+| `--jwks <JWKS>` | Yes | n/a | n/a | n/a | Pinned trusted JWKS document. This file is the complete trust set |
+| `--policy <POLICY>` | Yes | n/a | n/a | n/a | Holder-bound relying-procedure verification policy document |
+| `--at <AT>` | No | n/a | n/a | n/a | Verification instant as strict RFC 3339 UTC; system time by default |
+| `--runtime <RUNTIME>` | No | `/etc/registry-evidence/runtime.yaml` | n/a | `REGISTRY_EVIDENCE_RUNTIME` | One closed operator runtime file that binds the governed bundle |
+| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

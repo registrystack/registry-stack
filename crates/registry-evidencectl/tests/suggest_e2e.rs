@@ -235,8 +235,26 @@ fn a_project_always_uses_its_retained_openapi() {
         "/total".to_owned(),
     ]);
     assert!(!output.status.success());
-    assert!(stderr_of(&output).contains("retained source.openapi.yaml"));
+    assert!(
+        stderr_of(&output).contains("cannot be used with"),
+        "unexpected argument conflict: {}",
+        stderr_of(&output)
+    );
     assert!(bundle_entries(&project).is_empty());
+}
+
+#[test]
+fn source_suggest_requires_exactly_one_source() {
+    let output = evidencectl(&["source".to_owned(), "suggest".to_owned()]);
+
+    assert!(!output.status.success());
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("required arguments were not provided")
+            && stderr.contains("--openapi <OPENAPI>")
+            && stderr.contains("--project <PROJECT>"),
+        "unexpected missing source error: {stderr}"
+    );
 }
 
 #[test]

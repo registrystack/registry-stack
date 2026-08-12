@@ -1,0 +1,40 @@
+---
+title: "evidencectl keygen client-assertion command reference"
+description: "Generated syntax and options for evidencectl keygen client-assertion."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Keypair a source's `clientAssertionKeyRef` points at, for a token endpoint that authenticates the client by signed assertion.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl keygen client-assertion [OPTIONS] --out-dir <OUT_DIR>
+```
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--out-dir <OUT_DIR>` | Yes | n/a | n/a | n/a | Secret directory receiving the private JWK file (created 0700) |
+| `--public-out <PUBLIC_OUT>` | No | n/a | n/a | n/a | Public JWK output path; defaults to a file inside the secret directory |
+| `--private-name <PRIVATE_NAME>` | No | n/a | n/a | n/a | Name of the private JWK file, which is the `secret:file/NAME` a source's `clientAssertionKeyRef` points at; defaults to one naming the algorithm. The public half follows it as `NAME-public.jwk.json` |
+| `--algorithm <ALGORITHM>` | No | `es384` | `es384`, `rs384` | n/a | Signature algorithm the assertion is signed with |
+| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

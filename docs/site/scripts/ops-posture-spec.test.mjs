@@ -19,6 +19,7 @@ const page = readFileSync(specPath, 'utf8');
 const serverSource = readFileSync(resolve(relayCrate, 'server.rs'), 'utf8');
 const httpContractSource = readFileSync(relayHttpContract, 'utf8');
 const mainSource = readFileSync(resolve(relayCrate, 'main.rs'), 'utf8');
+const cliSource = readFileSync(resolve(relayCrate, 'cli.rs'), 'utf8');
 const contractSource = readFileSync(resolve(relayCrate, 'contract.rs'), 'utf8');
 const startupSource = readFileSync(resolve(relayCrate, 'startup.rs'), 'utf8');
 
@@ -131,7 +132,7 @@ test('RS-OP-POSTURE states the closed operational log level set', () => {
 });
 
 test('RS-OP-POSTURE states the shipped healthcheck defaults', () => {
-  const url = mainSource.match(/DEFAULT_HEALTHCHECK_URL: &str = "([^"]+)"/);
+  const url = cliSource.match(/DEFAULT_HEALTHCHECK_URL: &str = "([^"]+)"/);
   assert.ok(url, 'expected a default healthcheck URL');
   assert.ok(page.includes(url[1]), 'RS-OP-POSTURE does not state the default healthcheck URL');
   assert.ok(url[1].endsWith('/health'), 'the shipped healthcheck probes liveness');

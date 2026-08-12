@@ -22,7 +22,7 @@ pub use registry_evidence_authoring::openapi::{flatten, narrow, openapi, types};
 use std::{collections::BTreeMap, path::Path, process::ExitCode};
 
 use anyhow::{bail, Result};
-use clap::{Args, Subcommand};
+use clap::{ArgGroup, Args, Subcommand};
 
 use emit::EmitInputs;
 use openapi::Spec;
@@ -38,6 +38,12 @@ pub enum SourceCommand {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("source")
+        .required(true)
+        .multiple(false)
+        .args(["openapi", "project"])
+))]
 pub struct SuggestArgs {
     /// OpenAPI 3.0 or 3.1 document for a print-only draft. With --project,
     /// the retained source.openapi.yaml is used instead.

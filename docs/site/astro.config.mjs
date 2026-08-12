@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 // llms.txt `details` block so it can never drift from the header the per-page
 // .md endpoint prepends (src/pages/[...slug].md.ts).
 import { DISCOVERY_HEADER } from './src/lib/page-markdown.ts';
+import { cliReferenceSidebar } from './src/lib/cli-reference-sidebar.mjs';
 import { buildNotaryRetirementRedirects } from './src/lib/notary-retirement-redirects.mjs';
 import { buildRelayV2RetirementRedirects } from './src/lib/relay-v2-retirement-redirects.mjs';
 
@@ -430,8 +431,9 @@ export default defineConfig({
             { label: 'Validate a project', slug: 'verify' },
             { label: 'Generated files and ownership', slug: 'generated-artifacts' },
             { label: 'Evidence Gateway configuration', slug: 'reference/evidence-configuration' },
-            { label: 'evidencectl CLI', slug: 'reference/evidencectl' },
-            { label: 'relayctl CLI', slug: 'reference/relayctl' },
+            ...cliReferenceSidebar(),
+            { label: 'relayctl workflows', slug: 'reference/relayctl' },
+            { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
             { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
             {
               label: 'API reference',

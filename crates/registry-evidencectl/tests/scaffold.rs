@@ -22,8 +22,10 @@ fn bare_new_names_both_authoring_inputs_and_writes_nothing() {
     let output = evidencectl(&["new", path(&project)]);
 
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("--openapi <path-or-https-url>"));
-    assert!(stderr(&output).contains("--transport sqlite-extract"));
+    assert!(stderr(&output).contains("required arguments"));
+    assert!(stderr(&output).contains("--openapi <OPENAPI>"));
+    assert!(stderr(&output).contains("--transport <TRANSPORT>"));
+    assert!(stderr(&output).contains("--profile <PROFILE>"));
     assert!(!project.exists());
 }
 
@@ -34,8 +36,8 @@ fn sqlite_extract_requires_the_explicit_local_profile_before_writing() {
     let output = evidencectl(&["new", path(&project), "--transport", "sqlite-extract"]);
 
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("SQLite-extract authoring"));
-    assert!(stderr(&output).contains("--profile local"));
+    assert!(stderr(&output).contains("required arguments"));
+    assert!(stderr(&output).contains("--profile <PROFILE>"));
     assert!(!project.exists());
 }
 
@@ -84,7 +86,8 @@ fn openapi_requires_the_explicit_local_profile_before_writing() {
     let output = evidencectl(&["new", path(&project), "--openapi", path(&spec)]);
 
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("--profile local"));
+    assert!(stderr(&output).contains("required arguments"));
+    assert!(stderr(&output).contains("--profile <PROFILE>"));
     assert!(!project.exists());
 
     let wrong = workspace.path().join("wrong");

@@ -10,14 +10,10 @@
 //! token endpoint, which then decides on its own terms. Obtaining a token still
 //! requires authenticating, in the CLI exactly as over the wire.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-    process::ExitCode,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, path::Path, process::ExitCode, sync::Arc};
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use registry_mint::cli::{Cli, Command};
 use registry_mint::{
     audit::MintAuditLog,
     caller::{sign_client_assertion, AssertionRequest},
@@ -28,76 +24,6 @@ use registry_mint::{
 };
 use registry_platform_audit::OptionalHashHex;
 use serde_json::Value;
-
-#[derive(Debug, Parser)]
-#[command(
-    name = "mint",
-    about = "Registry Stack token issuer",
-    version = registry_platform_buildinfo::DISPLAY_VERSION
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Load the configuration, keys, audit chain, and client registry, then exit.
-    Check {
-        #[arg(long, env = "MINT_CONFIG")]
-        config: PathBuf,
-    },
-    /// Serve the token endpoint until terminated.
-    Serve {
-        #[arg(long, env = "MINT_CONFIG")]
-        config: PathBuf,
-    },
-    /// Verify the retained keyed Mint audit chain named by the configuration.
-    VerifyAudit {
-        #[arg(long, env = "MINT_CONFIG")]
-        config: PathBuf,
-    },
-    /// Obtain an access token from a running token endpoint, as a client would.
-    ///
-    /// This authenticates. It signs a client assertion with the caller's own
-    /// key and posts it; the endpoint decides. Nothing here can produce a token
-    /// the same request over the wire would not have produced.
-    Token {
-        /// The token endpoint, for example `https://mint.example.org/token`.
-        #[arg(long)]
-        url: String,
-        /// The `clientId` this caller is registered under.
-        #[arg(long)]
-        client_id: String,
-        /// The caller's private JWK. Must be owner-only and not a symlink.
-        #[arg(long)]
-        key: PathBuf,
-        /// The endpoint's configured `clientAssertion.audience`. Defaults to
-        /// `--url`, which is the usual configuration.
-        #[arg(long)]
-        audience: Option<String>,
-        /// Request a delegated token for this actor. Requires `--subject-file`.
-        #[arg(long)]
-        actor: Option<String>,
-        /// A JSON object of subject selector fields, for the actor to act for.
-        ///
-        /// A file rather than repeated flags on purpose: these are a real
-        /// person's identifying details, and command lines are visible to every
-        /// process on the host and land in shell history.
-        #[arg(long)]
-        subject_file: Option<PathBuf>,
-        /// Assertion lifetime in seconds.
-        #[arg(long, default_value_t = 120)]
-        lifetime_seconds: i64,
-        /// Trust this PEM certificate bundle in addition to the system roots,
-        /// for a development deployment behind a private CA.
-        #[arg(long)]
-        ca_certificate: Option<PathBuf>,
-        /// Print the full endpoint response instead of the access token alone.
-        #[arg(long)]
-        verbose: bool,
-    },
-}
 
 fn main() -> ExitCode {
     let cli = Cli::parse();

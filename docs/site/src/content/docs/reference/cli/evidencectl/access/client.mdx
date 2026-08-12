@@ -1,0 +1,44 @@
+---
+title: "evidencectl access client command reference"
+description: "Generated syntax and options for evidencectl access client."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Register and revoke local Evidence Gateway clients.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl access client <COMMAND>
+```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| [`add`](./add/) | Add one local client and generate its private key |
+| [`list`](./list/) | List local clients and their policy membership |
+| [`revoke`](./revoke/) | Revoke one local client |
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

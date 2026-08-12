@@ -117,7 +117,7 @@ const EDITOR_SCHEMA_CATALOG: [EditorSchema; 2] = [
 
 #[derive(Debug, Args)]
 pub struct EditorArgs {
-    /// Editable Evidence authoring project; defaults to the current directory.
+    /// Editable Evidence Gateway project; defaults to the current directory.
     #[arg(long, default_value = ".")]
     pub project: PathBuf,
 }

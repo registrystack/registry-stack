@@ -29,7 +29,7 @@ const SECRET_PREFIX: &str = "secret:file/";
 
 #[derive(Debug, Args)]
 pub struct BuildArgs {
-    /// Editable Evidence authoring project; defaults to the current directory.
+    /// Editable Evidence Gateway project; defaults to the current directory.
     #[arg(long, default_value = ".")]
     pub project: PathBuf,
 

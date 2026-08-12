@@ -1,0 +1,39 @@
+---
+title: "evidencectl doctor command reference"
+description: "Generated syntax and options for evidencectl doctor."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Report every project artifact whose mode or owner the runtime refuses.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl doctor [OPTIONS] --project <PROJECT>
+```
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--project <PROJECT>` | Yes | n/a | n/a | n/a | Deployment project directory containing runtime.yaml and bundle/ |
+| `--mint-config <PATH>` | No | n/a | n/a | n/a | Mechanically compare this Registry Mint configuration with Evidence Gateway authentication |
+| `--json` | No | n/a | n/a | n/a | Emit one machine-readable JSON report on standard output |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

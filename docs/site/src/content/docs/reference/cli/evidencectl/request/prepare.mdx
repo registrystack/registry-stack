@@ -1,0 +1,54 @@
+---
+title: "evidencectl request prepare command reference"
+description: "Generated syntax and options for evidencectl request prepare."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Prepare the request, authorization header, and verification context.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl request prepare [OPTIONS] --purpose <PURPOSE> --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION>
+```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | Exactly one of `--subject <SUBJECT>`, `--subjects-file <PATH>` is required. |
+
+## Arguments
+
+| Argument | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `<QUESTION>` | Yes | n/a | n/a | n/a | Question defined by the active local project |
+
+## Options
+
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--purpose <PURPOSE>` | Yes | No | n/a | n/a | n/a | Exact purpose declared by the question |
+| `--subject <SUBJECT>` | No | Yes | n/a | n/a | n/a | Subject selector. Repeat role:field=value for a multi-subject question |
+| `--subjects-file <PATH>` | No | No | n/a | n/a | n/a | Owner-only JSON file containing the complete subject selector set |
+| `--name <NAME>` | Yes | No | n/a | n/a | n/a | Safe name for this retained request |
+| `--client <CLIENT>` | No | No | n/a | n/a | n/a | Registered local application used to request authorization |
+| `--format <FORMAT>` | No | No | `signed-jws` | `signed-jws`, `sd-jwt-vc` | n/a | Response format to request and verify |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

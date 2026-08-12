@@ -5,6 +5,10 @@ semantic dependency seam is `src/shared.rs`, which calls
 `registry_relay_v2::tooling` directly. The CLI never starts `relay`, parses
 runtime output, opens SQLite itself, or classifies a contract change.
 
+Documentation and completion generators can inspect the complete public Clap
+command tree through `registry_relayctl::command()` without parsing help text
+or running a Relay operation.
+
 The shared facade must provide:
 
 - `init_project(&InitOptions)` for a complete authoring workspace whose

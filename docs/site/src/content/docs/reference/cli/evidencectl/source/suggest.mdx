@@ -1,0 +1,50 @@
+---
+title: "evidencectl source suggest command reference"
+description: "Generated syntax and options for evidencectl source suggest."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Suggest source configuration from an OpenAPI document.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl source suggest [OPTIONS] <--openapi <OPENAPI>|--project <PROJECT>>
+```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | Exactly one of `--openapi <OPENAPI>`, `--project <PROJECT>` is required. |
+
+## Options
+
+| Option | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `--openapi <OPENAPI>` | No | No | n/a | n/a | n/a | OpenAPI 3.0 or 3.1 document for a print-only draft. With --project, the retained source.openapi.yaml is used instead |
+| `--operation <OPERATION>` | No | No | n/a | n/a | n/a | Operation as "METHOD /path/template"; interactive selection if absent |
+| `--status <STATUS>` | No | No | `200` | n/a | n/a | Response status code to read the schema from |
+| `--media-type <MEDIA_TYPE>` | No | No | `application/json` | n/a | n/a | Response media type to read the schema from |
+| `--select <SELECTION>` | No | Yes | n/a | n/a | n/a | Projection pointer to select; repeat once per leaf. Interactive selection if absent |
+| `--sample <SAMPLE>` | No | No | n/a | n/a | n/a | Sample response JSON file used to suggest bounds. Read only; nothing from it is copied into any artifact except derived bounds |
+| `--source-id <SOURCE_ID>` | No | No | n/a | n/a | n/a | Source identifier for the generated artifacts |
+| `--project <PROJECT>` | No | No | n/a | n/a | n/a | Deployment project to write the draft into; print-only if absent |
+| `-h, --help` | No | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

@@ -1,0 +1,44 @@
+---
+title: "relay command reference"
+description: "Generated syntax and options for relay."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Compiled read-only Registry Relay runtime.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+relay <COMMAND>
+```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| [`serve`](./serve/) | Verify and activate one sealed Registry package, then serve it |
+| [`healthcheck`](./healthcheck/) | Probe an unauthenticated Relay liveness endpoint |
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+| `-V, --version` | No | n/a | n/a | n/a | Print version |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

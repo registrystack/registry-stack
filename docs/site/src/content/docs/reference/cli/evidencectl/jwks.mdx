@@ -1,0 +1,44 @@
+---
+title: "evidencectl jwks command reference"
+description: "Generated syntax and options for evidencectl jwks."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Assemble a public JWKS document from public JWK files.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl jwks [OPTIONS] --out <OUT> <PUBLIC_JWK_FILES>...
+```
+
+## Arguments
+
+| Argument | Always required | Repeatable | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `<PUBLIC_JWK_FILES>` | Yes | Yes | n/a | n/a | n/a | Public JWK files to include, in order |
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--out <OUT>` | Yes | n/a | n/a | n/a | Output JWKS document path |
+| `--force` | No | n/a | n/a | n/a | Overwrite an existing output file |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

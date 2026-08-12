@@ -1,0 +1,40 @@
+---
+title: "evidencectl fixtures run command reference"
+description: "Generated syntax and options for evidencectl fixtures run."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Run `evidence check` and every bundle fixture through `evidence evaluate`.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl fixtures run [OPTIONS] --project <PROJECT>
+```
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--project <PROJECT>` | Yes | n/a | n/a | n/a | Deployment project directory containing runtime.yaml and bundle/ |
+| `--evidence-bin <EVIDENCE_BIN>` | No | n/a | n/a | n/a | Path to the evidence binary; defaults to `evidence` on PATH |
+| `--json` | No | n/a | n/a | n/a | Emit one machine-readable JSON report on standard output |
+| `--explain` | No | n/a | n/a | n/a | Ask `evidence` to explain each evaluation, and relay the trace it prints. The trace can name what a source returned, so it is relayed only when it is asked for. For the structured form, run `evidence evaluate --explain --explain-format json` against the fixture directly. |
+| `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

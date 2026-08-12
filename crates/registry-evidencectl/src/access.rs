@@ -41,7 +41,7 @@ pub enum AccessCommand {
     /// Define which authored questions a policy may request.
     #[command(subcommand)]
     Policy(PolicyCommand),
-    /// Register and revoke local Evidence clients.
+    /// Register and revoke local Evidence Gateway clients.
     #[command(subcommand)]
     Client(ClientCommand),
 }

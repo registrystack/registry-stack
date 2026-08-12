@@ -1,0 +1,46 @@
+---
+title: "evidencectl keygen command reference"
+description: "Generated syntax and options for evidencectl keygen."
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-11"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Generate Evidence Gateway deployment key material as owner-only files.
+
+## Contract status
+
+This page is generated from the public Clap command tree. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl keygen <COMMAND>
+```
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| [`signing`](./signing/) | P-256 ES256 signing keypair as private and public JWK files |
+| [`secret`](./secret/) | One random raw secret file, 32 bytes (audit or subject-binding HMAC) |
+| [`token`](./token/) | One random bearer token file, printable and header-safe |
+| [`holder`](./holder/) | P-256 ES256 holder keypair for SD-JWT VC confirmation binding |
+| [`client-assertion`](./client-assertion/) | Keypair a source's `clientAssertionKeyRef` points at, for a token endpoint that authenticates the client by signed assertion |
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.
