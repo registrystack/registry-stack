@@ -23,10 +23,10 @@ authentication, Problem, trace, and response validation in Rust.
 Registry Stack is pre-1.0 Beta software. Keep a client on the same Registry Stack release as the
 Relay deployment unless a release note states a wider compatibility range.
 
-Beginning with Registry Stack v0.19.1, the release workflow attaches three Python wheels and three
-Node tarballs to the matching GitHub Release. It does not publish them to PyPI or npm. Registry
-Stack v0.19.0 has no prebuilt Relay client packages. The Rust crate has `publish = false`, remains
-source-only in the Registry Stack workspace, and is not published to crates.io.
+Registry Stack v0.20.0 is the first release with prebuilt Relay clients. The release workflow
+attaches three Python wheels and three Node tarballs to the matching GitHub Release. It does not
+publish them to PyPI or npm. The Rust crate has `publish = false`, remains source-only in the
+Registry Stack workspace, and is not published to crates.io.
 
 Python requires version 3.10 or later and uses `abi3-py310`. Node requires version 22.12 or later.
 The release assets cover Linux amd64, Linux arm64, and macOS arm64.

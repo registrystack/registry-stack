@@ -18,14 +18,29 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
-BREAKING:
+## 2026-08-12
 
-- Made `holderBoundBatchMaxSize` a required member of the
+Documentation updates for the v0.20.0 beta-30 release:
+
+- BREAKING: Made `holderBoundBatchMaxSize` a required member of the
   `registry.evidence-definitions/v1` metadata response.
 - Upgrade the Evidence runtime, Evidence clients, and Evidence OID4VCI adapter
   together. New clients read an older response without this member as a batch
   size of `1`; older strict clients reject responses that contain the new
   member.
+- BREAKING: Removed the reserved `registry_relay` vocabulary prefix from
+  `registry-manifest/v1`. Use absolute IRIs or declare an institution-owned
+  active vocabulary before validating and republishing affected metadata.
+- Documented the first prebuilt Relay Node.js and Python client packages, which
+  are attached to the matching GitHub Release rather than published to npm or
+  PyPI.
+- Added the v0.20.0 candidate documentation archive and advanced maintained
+  release, installation, contract, and standards references to v0.20.0.
+- Added generated command references for the current CLIs, Relay V2 editor
+  support, complete OID4VCI delivery guidance, and Evidence local source API
+  mock guidance.
+- Removed the remaining Relay V1 and `registryctl` source references from the
+  current product surface while retaining their v0.19.0 retirement record.
 
 ## 2026-08-11
 

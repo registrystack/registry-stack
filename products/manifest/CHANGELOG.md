@@ -7,6 +7,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-12
+
 - BREAKING: `registry-manifest/v1` no longer reserves the `registry_relay`
   vocabulary prefix or expands it to the retired Registry Relay V1 namespace.
   Replace those compact identifiers with absolute IRIs, or declare

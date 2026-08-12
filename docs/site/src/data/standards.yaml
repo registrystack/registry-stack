@@ -93,7 +93,7 @@
     - label: Retired Relay V1 OGC Features API tests
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-relay/tests/ogc_api.rs
     - label: Relay V2 standards alignment, intentional gaps
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/products/relay-v2/STANDARDS-ALIGNMENT.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/products/relay-v2/STANDARDS-ALIGNMENT.md
   last_checked: 2026-08-11
   notes: No maintained Registry Stack surface implements OGC API Features. The feature-gated routes belonged to the retired Relay V1 runtime and the pinned V1 tests are the record of them. The contract-compiled Relay names OGC API Features an intentional gap. Its spatial surface is the CRS84 Point profile serialized as GeoJSON and JSON-FG on a governed operation, which is a wire format and not a feature service.
 - id: ogc-api-edr
@@ -111,7 +111,7 @@
     - label: Retired Relay V1 OGC EDR API tests
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-relay/tests/ogc_edr_api.rs
     - label: Relay V2 standards alignment, intentional gaps
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/products/relay-v2/STANDARDS-ALIGNMENT.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/products/relay-v2/STANDARDS-ALIGNMENT.md
   last_checked: 2026-08-11
   notes: No maintained Registry Stack surface implements OGC API EDR. The area routes belonged to the retired Relay V1 runtime and the pinned V1 tests are the record of them. The contract-compiled Relay names EDR an intentional gap and offers no area query, no coordinate transformation, and no generic spatial database API.
 - id: geojson
@@ -168,9 +168,9 @@
     - GET /openapi.json
   evidence_docs:
     - label: Relay V2 OpenAPI generation
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/artifacts.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/artifacts.rs
     - label: Relay V2 OpenAPI route
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/api.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/api.rs
     - label: Registry Notary generated OpenAPI document (pinned)
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/notary/openapi/registry-notary.openapi.json
   last_checked: 2026-08-11
@@ -191,9 +191,9 @@
     - generated resource node shapes
   evidence_docs:
     - label: Relay V2 SHACL shape generation
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/semantics.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/semantics.rs
     - label: Relay V2 generated artifact inventory
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/artifacts.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/artifacts.rs
     - label: Registry Manifest README
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/manifest/README.md
   last_checked: 2026-08-11
@@ -235,9 +235,9 @@
     - static discovery bundle
   evidence_docs:
     - label: Relay V2 JSON Schema generation
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/semantics.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/semantics.rs
     - label: Relay V2 generated artifact inventory
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/artifacts.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/artifacts.rs
     - label: Registry Manifest form schema fixture (Draft 2020-12)
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/manifest/fixtures/cpsv-ap/health-linked-child-support.form.schema.json
   last_checked: 2026-08-11
@@ -261,9 +261,9 @@
     - CCCEV render output
   evidence_docs:
     - label: Relay V2 JSON-LD context and vocabulary generation
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/semantics.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/semantics.rs
     - label: Relay V2 JSON-LD response representation
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/api.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/api.rs
     - label: Registry Notary CCCEV renderer
       url: https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-notary-server/src/runtime.rs
     - label: Registry Manifest CPSV-AP JSON-LD fixture
@@ -439,9 +439,9 @@
     - dataflow and data structure definition reads
   evidence_docs:
     - label: Relay V2 SDMX read routes
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/sdmx_http.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/sdmx_http.rs
     - label: Relay V2 SDMX representation profile
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/sdmx/representation.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/sdmx/representation.rs
     - label: Relay V2 authoring guide
       url: /configure/relay/
   last_checked: 2026-08-11
@@ -509,9 +509,9 @@
     - declared contract alignment target
   evidence_docs:
     - label: Relay V2 alignment target declaration
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/contract.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/contract.rs
     - label: Relay V2 alignment target validation
-      url: https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/compiler.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/compiler.rs
   last_checked: 2026-08-11
   notes: Relay explores a protected consultation gateway model rather than a single uniform CRUD platform. A registry contract may declare GovStack as an alignment target, but the compiler accepts that declaration only when its status is `directional`, and it stays descriptive metadata echoed back on the service document. It binds no vocabulary, compiles no route, and is not a conformance claim.
 - id: universal-dpi-safeguards

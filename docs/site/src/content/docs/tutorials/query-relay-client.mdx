@@ -37,9 +37,9 @@ Complete [Publish a governed SQLite registry](../publish-governed-sqlite-registr
 the **Serve it** step. Leave Relay running and open a second shell. The resulting deployment is
 anonymous, contains synthetic records only, and listens at `http://127.0.0.1:8080`.
 
-Prebuilt Relay client packages start with Registry Stack v0.19.1. Registry Stack v0.19.0 has no
-prebuilt Python wheel. The running Relay must therefore be v0.19.1 or later. Install the client
-from that exact Relay release, using the wheel that matches this machine.
+Prebuilt Relay client packages start with Registry Stack v0.20.0. The running Relay must therefore
+be v0.20.0 or later. Install the client from that exact Relay release, using the wheel that matches
+this machine.
 
 ## Install the client and read a record
 
@@ -272,7 +272,7 @@ registry project remains available for later Relay exercises.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| GitHub returns `404` for the wheel | The running Relay is older than v0.19.1, its exact release is not published, or the platform name is wrong | Use a published v0.19.1 or later Relay, then download the wheel from that exact release for one of the three platforms in this tutorial. |
+| GitHub returns `404` for the wheel | The running Relay is older than v0.20.0, its exact release is not published, or the platform name is wrong | Use a published v0.20.0 or later Relay, then download the wheel from that exact release for one of the three platforms in this tutorial. |
 | `No matching distribution found` | The wheel filename or local path does not match the downloaded asset | Keep the original release filename and install that exact local file. |
 | `Connection refused` | The synthetic Relay is not listening on port 8080 | Return to the publishing tutorial, start Relay, and leave it running in its shell. |
 | `configuration` at construction | The base URL is not HTTPS or loopback HTTP, or it contains credentials, a query, or a fragment | Use `http://127.0.0.1:8080` for this local deployment. |
