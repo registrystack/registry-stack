@@ -40,10 +40,10 @@ jobs:
       source_sha: ${{ steps.identity.outputs.source_sha }}
       promotion_revision: ${{ steps.identity.outputs.promotion_revision }}
       workflow_revision: ${{ steps.candidate.outputs.workflow_revision }}
+      docs_sha256: ${{ steps.candidate.outputs.docs_sha256 }}
       candidate_run: ${{ steps.binding.outputs.run_id }}
       candidate_attempt: ${{ steps.binding.outputs.run_attempt }}
       manifest_sha256: ${{ steps.binding.outputs.manifest_sha256 }}
-      docs_sha256: ${{ steps.candidate.outputs.docs_sha256 }}
     steps:
       - name: Checkout protected promotion workflow
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
@@ -72,6 +72,12 @@ jobs:
           fi
           if [[ "${tag%%.*}" != v0 ]]; then
             echo "Beta publication accepts only v0.x.y release tags" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          IFS=. read -r version_major version_minor _ <<< "${version}"
+          if (( version_major == 0 && version_minor < 19 )); then
+            echo "pre-v0.19 releases are immutable historical evidence; use the corresponding ${tag} Git tag and archived assets" >&2
             exit 1
           fi
           git fetch --force origin \
@@ -215,7 +221,6 @@ jobs:
           docs_sha256=
           IFS=. read -r major minor patch <<<"${{ steps.identity.outputs.version }}"
           if ((
-            (major == 0 && minor >= 16 && minor < 19) ||
             major > 0 ||
             (major == 0 && (minor > 19 || (minor == 19 && patch >= 1)))
           )); then
@@ -324,15 +329,6 @@ jobs:
             --promotion \
             --trusted-run-metadata promotion/trusted-run.json
           while IFS= read -r name; do
-            if [[ "${name}" == *-image-lock.json ]]; then
-              version="${{ needs.verify.outputs.version }}"
-              IFS=. read -r major minor _ <<<"${version}"
-              if ((major > 0 || minor >= 19)); then
-                echo "Current releases must not carry a legacy image lock" >&2
-                exit 1
-              fi
-              continue
-            fi
             cp "extracted/${name}" "release-assets/${name}"
           done < <(jq -r '.payloads[].name' "${manifest}")
           public_manifest="registry-stack-${{ needs.verify.outputs.tag }}-release-manifest.json"
@@ -417,11 +413,6 @@ jobs:
             printf '%s\n' \
               SHA256SUMS \
               "registry-stack-${tag}-SHA256SUMS.sigstore.json"
-            version="${{ needs.verify.outputs.version }}"
-            IFS=. read -r major minor _ <<<"${version}"
-            if ((major == 0 && minor < 19)); then
-              printf '%s\n' "registryctl-${tag}-image-lock.json"
-            fi
           } | sort -u > contract/retryable-final-assets
           jq -r '.[].name' contract/staged-assets.json \
             | sort -u > contract/expected-staged-assets
@@ -800,74 +791,6 @@ jobs:
               contract/staged-assets.json
           )
 
-      - name: Render the historical registryctl image lock for pre-0.19 retries
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ needs.verify.outputs.version }}"
-          IFS=. read -r major minor _ <<<"${version}"
-          if ((major > 0 || minor >= 19)); then
-            exit 0
-          fi
-          promotion="inputs/release-promotion-input-${GITHUB_RUN_ID}"
-          candidate="${promotion}/release-candidate-manifest.json"
-          release_manifest="$(
-            python3 - "${{ needs.verify.outputs.version }}" <<'PY'
-          import glob
-          import sys
-          import yaml
-
-          version = sys.argv[1]
-          matches = []
-          for path in sorted(glob.glob("release/manifests/registry-stack-*.yaml")):
-              with open(path, encoding="utf-8") as handle:
-                  stack = yaml.safe_load(handle).get("stack", {})
-              if str(stack.get("version", "")) == version:
-                  matches.append(path)
-          if len(matches) != 1:
-              raise SystemExit(f"expected one release manifest for {version}, found {matches}")
-          print(matches[0])
-          PY
-          )"
-          mkdir -p "${RUNNER_TEMP}/release-image-indexes"
-          for name in registry-relay; do
-            index_digest="$(jq -er --arg name "${name}" \
-              '.images[] | select(.name == $name) | .digest
-               | select(test("^sha256:[0-9a-f]{64}$"))' "${candidate}")"
-            image_ref="${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${index_digest}"
-            test "$(crane digest "${image_ref}")" = "${index_digest}"
-            crane manifest "${image_ref}" \
-              > "${RUNNER_TEMP}/release-image-indexes/${name}.json"
-            printf '%s\n' "${image_ref}" \
-              > "${RUNNER_TEMP}/${name}.release.digest"
-          done
-          postgresql_ref="$(
-            tr -d '\n' < release/registryctl-postgresql-image.ref
-          )"
-          postgresql_index_digest="${postgresql_ref##*@}"
-          test "$(crane digest "${postgresql_ref}")" = \
-            "${postgresql_index_digest}"
-          crane manifest "${postgresql_ref}" \
-            > "${RUNNER_TEMP}/release-image-indexes/postgresql.json"
-          release/scripts/registry-release render-registryctl-image-lock \
-            "${release_manifest}" \
-            --relay-digest "${RUNNER_TEMP}/registry-relay.release.digest" \
-            --postgresql-ref-file release/registryctl-postgresql-image.ref \
-            --tag-target "${{ needs.verify.outputs.source_sha }}" \
-            --source-sha "${{ needs.verify.outputs.workflow_revision }}" \
-            --output \
-              "release-assets/registryctl-${{ needs.verify.outputs.tag }}-image-lock.json"
-          image_lock="registryctl-${{ needs.verify.outputs.tag }}-image-lock.json"
-          expected_image_lock_sha256="$(
-            jq -er --arg name "${image_lock}" \
-              '.payloads[]
-               | select(.kind == "image-lock" and .name == $name)
-               | .sha256' "${candidate}"
-          )"
-          test "$(
-            sha256sum "release-assets/${image_lock}" | awk '{print $1}'
-          )" = "${expected_image_lock_sha256}"
-
       - name: Sign and upload the checksum closure
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1101,11 +1024,6 @@ jobs:
             SHA256SUMS
             "registry-stack-${tag}-SHA256SUMS.sigstore.json"
           )
-          version="${{ needs.verify.outputs.version }}"
-          IFS=. read -r major minor _ <<<"${version}"
-          if ((major == 0 && minor < 19)); then
-            required+=("registryctl-${tag}-image-lock.json")
-          fi
           for name in "${required[@]}"; do
             jq -e --arg name "${name}" \
               '.assets[] | select(.name == $name)' \

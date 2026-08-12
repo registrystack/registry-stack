@@ -64,10 +64,6 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         '"${RUNNER_TEMP}/bin/actionlint"',
     ),
     (
-        "Relay advisory checker tests",
-        "python3 -m unittest crates/registry-relay/tests/advisory_baseline_check_test.py",
-    ),
-    (
         "Debian 13 image contract",
         "run: python3 release/scripts/check-debian13-images.py",
     ),
@@ -89,10 +85,6 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Rust shard matrix",
         "matrix: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}",
     ),
-    (
-        "Relay all-features shard",
-        '"all_features": shard_name in {"relay", "relay-v2"}',
-    ),
     ("Disk-bounded Rust cache", "cache-targets: false"),
     ("Rust disk telemetry", "du -sh target 2>/dev/null || true"),
     (
@@ -109,44 +101,21 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "platform: ${{ steps.filter.outputs.platform }}",
     ),
     (
-        "Config report platform path",
-        '"crates/registry-config-report/*",',
-    ),
-    (
         "Platform hygiene path filter",
         "platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}",
-    ),
-    (
-        "Platform all-features clippy",
-        "run: cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings",
     ),
     ("Platform coverage job", "platform-coverage:"),
     ("Platform coverage version pin", 'CARGO_LLVM_COV_VERSION: "0.8.7"'),
     ("Platform coverage threshold", "--fail-under-lines 80"),
     (
-        "Config report platform coverage",
-        "cargo llvm-cov --locked\n          -p registry-config-report\n          -p 'registry-platform-*'",
-    ),
-    (
         "Platform hygiene alignment",
         "run: products/platform/scripts/check-hygiene-alignment.sh",
     ),
-    (
-        "Platform config inventory",
-        "products/platform/scripts/audit-configs.sh",
-    ),
-    ("Platform config inventory check", "--check"),
     ("Secret scan job", "secrets:"),
     ("Gitleaks version pin", 'GITLEAKS_VERSION: "8.30.1"'),
     ("Gitleaks archive checksum", "GITLEAKS_LINUX_X64_SHA256:"),
     ("Gitleaks root config", "--config .gitleaks.toml"),
     ("Gitleaks redaction", "--redact"),
-    ("oasdiff version pin", 'OASDIFF_VERSION: "1.23.0"'),
-    ("oasdiff archive checksum", "OASDIFF_LINUX_X64_SHA256:"),
-    (
-        "oasdiff pinned install",
-        '"https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"',
-    ),
     ("Platform fuzz job", "platform-fuzz:"),
     ("Platform fuzz version pin", 'CARGO_FUZZ_VERSION: "0.13.2"'),
     ("Platform fuzz bounded runtime", "-max_total_time=60"),
@@ -167,9 +136,6 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Evidence verifier portability",
         "run: products/evidence/scripts/check-verifier-portability.sh",
     ),
-    ("Relay OpenAPI contract", "name: Relay OpenAPI contract"),
-    ("Relay OpenAPI command", "run: just openapi-contract"),
-    ("Relay exposure check", "name: Relay exposure check"),
     ("Relay V2 product contract gate", "relay-v2-contracts:"),
     (
         "Relay V2 contract consistency",
@@ -193,32 +159,12 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_registry_release.py",
     ),
     (
-        "Adopter Compose checker tests",
-        "run: python3 -m unittest release/scripts/test_check_adopter_compose_contract.py",
-    ),
-    (
-        "Adopter Compose conformance",
-        "run: bash release/scripts/check_adopter_compose_contract.sh",
-    ),
-    (
-        "Release-lock runtime and Compose parity",
-        "run: bash release/scripts/check-runtime-contract-parity.sh",
-    ),
-    (
-        "First-country release-form runner tests",
-        "run: python3 -m unittest release/scripts/test_first_country_release_form.py",
-    ),
-    (
         "Release planning command tests",
         "run: python3 -m unittest release/scripts/test_registry_release_plans.py",
     ),
     (
-        "Release candidate receipt and promotion verifier tests",
+        "Release candidate manifest and promotion verifier tests",
         "run: python3 -m unittest release/scripts/test_release_candidate.py",
-    ),
-    (
-        "Release proof-level selection tests",
-        "run: python3 -m unittest release/scripts/test_select_release_proof_level.py",
     ),
     (
         "Release storage preflight tests",
@@ -241,30 +187,17 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",
     ),
     (
+        "Release image OCI label smoke",
+        "run: release/scripts/smoke-release-image-oci-labels.sh",
+    ),
+    (
         "Release image layout comparator tests",
         "run: python3 -m unittest release/scripts/test_compare_release_image_layouts.py",
     ),
     (
-        "Release Relay feature checker tests",
-        "run: python3 -m unittest release/scripts/test_check_release_relay_features.py",
+        "Release manifest validation",
+        "release/scripts/registry-release validate release/manifests/registry-stack-beta-29.yaml",
     ),
-    (
-        "Executable release image OCI label smoke",
-        "run: release/scripts/smoke-release-image-oci-labels.sh",
-    ),
-    (
-        "OpenID conformance runner tests",
-        "run: python3 -m unittest release/scripts/test_openid_conformance_runner.py",
-    ),
-    (
-        "Relay OIDC smoke tests",
-        "run: python3 -m unittest release/scripts/test_relay_oidc_smoke.py",
-    ),
-    (
-        "Relay OIDC smoke offline validation",
-        "run: python3 release/scripts/relay-oidc-smoke.py validate",
-    ),
-    ("Release manifest validation", "release/scripts/registry-release validate"),
     ("Release docset validation", "release/scripts/registry-release validate-docsets"),
     ("Release import audit", "release/scripts/registry-release audit"),
     (
@@ -282,80 +215,6 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Gate inventory tests",
         "run: python3 -m unittest release/scripts/test_check_gates_inventory.py",
-    ),
-    (
-        "Stable surface compatibility",
-        "run: python3 release/scripts/check-stable-surface-compatibility.py",
-    ),
-    (
-        "Stable surface compatibility tests",
-        "run: python3 -m unittest release/scripts/test_check_stable_surface_compatibility.py",
-    ),
-    (
-        "Relay OpenAPI stability filter tests",
-        "run: python3 -m unittest release/scripts/test_filter_relay_openapi_stability.py",
-    ),
-    (
-        "Upgrade exercise validator tests",
-        "run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py",
-    ),
-    (
-        "Product-input lifecycle validator tests",
-        "run: python3 -m unittest release/scripts/test_validate_product_input_lifecycle.py",
-    ),
-    (
-        "Product-input lifecycle record discovery",
-        "python3 release/scripts/validate-product-input-lifecycle.py\n"
-        "          --discover release/exercises\n"
-        "          --candidate-asset-root target/candidate-release-assets",
-    ),
-    (
-        "First-country acceptance validator tests",
-        "run: python3 -m unittest release/scripts/test_validate_first_country_acceptance.py",
-    ),
-    (
-        "First-country acceptance source packet",
-        "run: python3 release/scripts/validate-first-country-acceptance.py check-packet",
-    ),
-    (
-        "Candidate evidence asset preparation tests",
-        "run: python3 -m unittest release/scripts/test_prepare_upgrade_exercise_assets.py",
-    ),
-    (
-        "Candidate evidence asset preparation",
-        "python3 release/scripts/prepare-upgrade-exercise-assets.py\n"
-        "          --discover release/exercises\n"
-        "          --product-input-records "
-        "release/exercises/product-input-lifecycle\n"
-        "          --asset-root target/candidate-release-assets",
-    ),
-    (
-        "Product-input lifecycle candidate asset preparation",
-        "--product-input-records release/exercises/product-input-lifecycle",
-    ),
-    (
-        "Candidate evidence Cosign installation",
-        "name: Install cosign for committed candidate evidence\n"
-        "        if: steps.candidate-assets.outputs.has_candidates == 'true'",
-    ),
-    (
-        "Candidate evidence SLSA verifier installation",
-        "name: Install SLSA verifier for committed candidate evidence\n"
-        "        if: steps.candidate-assets.outputs.has_candidates == 'true'",
-    ),
-    (
-        "Upgrade exercise record discovery",
-        "python3 release/scripts/validate-upgrade-exercise.py\n"
-        "          --discover release/exercises\n"
-        "          --candidate-asset-root target/candidate-release-assets",
-    ),
-    (
-        "Base-reference compatibility input",
-        "STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
-    ),
-    (
-        "OpenAPI base-reference input",
-        "OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
     ),
     (
         "Stable error registry path filter",
@@ -587,8 +446,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Candidate cleanup exact package allowlist",
         "release/scripts/cleanup-release-candidates.py",
         (
-            'CANDIDATE_PACKAGES = (\n    "registry-notary-candidate",\n'
-            '    "registry-relay-candidate",\n    "relay-candidate",\n)',
+            'CANDIDATE_PACKAGES = (\n    "relay-candidate",\n)',
             "if package in PUBLIC_PACKAGES:",
             "if package not in CANDIDATE_PACKAGES:",
         ),
@@ -711,8 +569,6 @@ FORBIDDEN_RELEASE_SECURITY_GATES = (
             "buildx build",
             "run: release/scripts/build-release-binaries.sh",
             "run: release/scripts/build-release-image.sh",
-            "candidate-receipt.json",
-            "release-capsule",
             "extended-proof:",
             "release-telemetry:",
         ),
@@ -728,8 +584,6 @@ FORBIDDEN_RELEASE_SECURITY_GATES = (
             "crane copy",
             "gh release create",
             "gh release upload",
-            "candidate-receipt.json",
-            "release-capsule",
         ),
     ),
     (

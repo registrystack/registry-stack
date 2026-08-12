@@ -278,14 +278,9 @@ The maintained protected-read reference project is written to be product-neutral
 reason: it targets any protected read that projects fields, filters to an exact reference, and
 signals whether a page is complete, and Relay is only the worked example.
 
-{/* TODO[evidence]: products/evidence/reference/request-adapter/deployment-projects/
-    relay-protected-read-evidence illustrates that source with the Relay V1 path shape
-    /v1/datasets/DATASET/entities/ENTITY/records, which no Relay V2 deployment serves. Relay V2
-    does satisfy the three properties the bundle's README names (fields narrowing, declared
-    equality filters, and a pageInfo.nextCursor completeness signal at
-    crates/registry-relay-v2/src/api.rs:719-723), so the pattern holds, but this page deliberately
-    does not tell a reader to copy that bundle's path until the reference project is refreshed
-    against a V2 route shape. */}
+{/* Evidence: products/evidence/reference/request-adapter/deployment-projects/
+    protected-read-evidence/. The project is source-product neutral and documents the bounded
+    protected-read properties Evidence needs, not a Relay route shape. */}
 
 ## Workflow engines
 

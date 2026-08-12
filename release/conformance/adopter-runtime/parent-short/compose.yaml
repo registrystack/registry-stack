@@ -1,7 +1,0 @@
-include:
-  - ../package/generated/compose.yaml
-
-services:
-  parent-runtime-client:
-    image: example.invalid/registrystack/conformance-probe@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-    networks: [registry-runtime]

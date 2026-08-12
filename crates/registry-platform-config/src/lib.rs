@@ -1,26 +1,10 @@
 //! Governed runtime configuration verification contracts.
 
-mod config_bundle;
 mod secrets;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-pub use config_bundle::{
-    canonical_anchor_transition_payload, canonical_product_acceptance_identity,
-    canonical_trust_anchor, load_anchor_transition, load_break_glass_override, load_trust_anchor,
-    parse_anchor_transition, read_config_file_limited, trust_anchor_digest,
-    verify_anchor_transition, verify_config_bundle, AnchorTransitionPayloadV1, AnchorTransitionV1,
-    ConfigBreakGlassMode, ConfigBreakGlassOverride, ConfigBundleError, ConfigBundleFile,
-    ConfigBundleManifest, ConfigBundleSignature, ConfigBundleSignatureEnvelope, ConfigTrustAnchor,
-    ConfigTrustAnchorSigner, ProductAcceptanceIdentityV1, ProductAcceptanceLaneV1,
-    ProductAcceptanceProductV1, ProductTrustDomainV1, VerifiedConfigBundle,
-    ANCHOR_TRANSITION_SCHEMA_ID, ANCHOR_TRANSITION_SCHEMA_VERSION,
-    MAX_ACCEPTANCE_ID_COMPONENT_BYTES, MAX_ANCHOR_TRANSITION_BYTES,
-    MAX_ANCHOR_TRANSITION_SIGNATURES, MAX_BUNDLE_FILE_BYTES, MAX_CONFIG_BUNDLE_SEQUENCE,
-    MAX_MANIFEST_BYTES, MAX_SIGNATURE_ENVELOPE_BYTES, MAX_TRUST_ANCHOR_BYTES,
-    MAX_TRUST_ANCHOR_SIGNERS,
-};
 pub use secrets::{ProtectedSecret, SecretError, SecretProvider, SecretResolver, MAX_SECRET_BYTES};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -274,34 +258,8 @@ fn valid_env_key(key: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
 }
 
-#[derive(Debug, thiserror::Error, Eq, PartialEq)]
-pub enum ConfigVerificationError {
-    #[error("{0} must not be empty")]
-    EmptyField(&'static str),
-    #[error("{field} must be a sha256: URI")]
-    InvalidSha256Uri { field: &'static str },
-}
-
 pub fn sha256_uri(bytes: &[u8]) -> String {
     format!("sha256:{}", hex_lower(&Sha256::digest(bytes)))
-}
-
-fn validate_non_empty(field: &'static str, value: &str) -> Result<(), ConfigVerificationError> {
-    if value.trim().is_empty() {
-        return Err(ConfigVerificationError::EmptyField(field));
-    }
-    Ok(())
-}
-
-fn validate_sha256_uri(field: &'static str, value: &str) -> Result<(), ConfigVerificationError> {
-    validate_non_empty(field, value)?;
-    let Some(digest) = value.strip_prefix("sha256:") else {
-        return Err(ConfigVerificationError::InvalidSha256Uri { field });
-    };
-    if digest.len() != 64 || !digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err(ConfigVerificationError::InvalidSha256Uri { field });
-    }
-    Ok(())
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -324,7 +282,7 @@ mod tests {
         let root = json!({
             "auth": {
                 "oidc": {
-                    "audience": ["registry-relay"]
+                    "audience": ["registry-service"]
                 }
             }
         });

@@ -114,8 +114,8 @@ framework.
 {/* Evidence: the fixed 14-route table with exactly one POST, crates/registry-relay-v2/src/server.rs
      router(); no admin, posture, metrics, or reload route exists anywhere in
      crates/registry-relay-v2. Relay's ODRL and policy-decision vocabulary was retired with V1:
-     crates/registry-platform-pdp is depended on only by the retired crates/registry-relay and by
-     itself, and crates/registry-relay-v2 contains no PDP or policy-evaluation path, so the
+     the retired registry-platform-pdp crate has been removed, and
+     crates/registry-relay-v2 contains no PDP or policy-evaluation path, so the
      ODRL_ENFORCEMENT_PROFILE constant in crates/registry-manifest-core/src/lib.rs:13-14 has no
      current runtime consumer. The shared read-only SQLite boundary is
      crates/registry-platform-sqlite, used by Relay V2 and Evidence Gateway. */}

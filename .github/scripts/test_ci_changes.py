@@ -177,7 +177,7 @@ class PlatformRetirementTest(unittest.TestCase):
                 self.assertNotIn(crate, SHARDS["platform"])
                 self.assertFalse(Path("crates", crate).exists())
 
-        self.assertIn("registry-platform-pdp", SHARDS["platform"])
+        self.assertNotIn("registry-platform-pdp", SHARDS["platform"])
         self.assertIn("registry-platform-sqlite", SHARDS["platform"])
         self.assertIn("registry-platform-testing", SHARDS["platform"])
         self.assertFalse(
@@ -217,12 +217,10 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-relay-v2", outputs["rust_packages"])
         self.assertIn("registry-relayctl", outputs["rust_packages"])
         self.assertTrue(outputs["relay_v2_contracts"])
-        self.assertFalse(outputs["relay_contracts"])
         self.assertTrue(outputs["editors"])
         for package in [
             "registry-language-server",
             "registry-relayctl",
-            "registryctl",
             "registry-evidencectl",
         ]:
             self.assertIn(package, outputs["rust_packages"])
@@ -273,29 +271,11 @@ class CiChangesTest(unittest.TestCase):
                 "registry-language-server",
                 "registry-cli-docs",
                 "registry-relayctl",
-                "registryctl",
                 "registry-evidencectl",
             },
         )
         self.assertTrue(outputs["relay_v2_contracts"])
         self.assertTrue(outputs["editors"])
-
-    def test_example_pr_runs_only_affected_rust_shards(self) -> None:
-        outputs = classify(
-            self.workspace,
-            (
-                ".github/workflows/release.yml",
-                "crates/registry-relay/docs/configuration.md",
-                "crates/registry-relay/src/state_plane/runtime.rs",
-                "crates/registryctl/src/project_authoring/project.rs",
-                "release/scripts/test_registry_release.py",
-            ),
-        )
-        shard_names = {entry["name"] for entry in outputs["rust_matrix"]["include"]}
-        self.assertEqual(shard_names, {"relay", "registryctl"})
-        self.assertTrue(outputs["release_tool"])
-        self.assertTrue(outputs["release_source_proof"])
-        self.assertFalse(outputs["platform"])
 
     def test_evidence_tutorial_inputs_cover_every_registered_tutorial(self) -> None:
         # The gate's registry is the source of truth for which tutorials exist.
@@ -390,7 +370,6 @@ class CiChangesTest(unittest.TestCase):
             ("crates/registry-platform-crypto/src/lib.rs",),
         )
         self.assertIn("registry-platform-crypto", outputs["rust_packages"])
-        self.assertIn("registry-relay", outputs["rust_packages"])
 
     def test_platform_changes_select_relay_client_reverse_dependents(self) -> None:
         # The Relay SDK deliberately reuses the shared bounded outbound and
@@ -444,9 +423,8 @@ class CiChangesTest(unittest.TestCase):
         # every Evidence package and its closure runs wider than the runtime
         # crate's. registry-language-server reads the authoring model and
         # The language server reads the authoring form, so a change reaches the
-        # editor tooling that has to keep agreeing with it. registryctl remains
-        # a compile-time reverse dependent even though it is not a supported
-        # editor launcher. A product contract cannot say in advance which
+        # editor tooling that has to keep agreeing with it. A product contract
+        # cannot say in advance which
         # package it constrains, so the closure reaches every dependent shard.
         for path in (
             "products/evidence/contracts/source-contract.yaml",
@@ -464,25 +442,22 @@ class CiChangesTest(unittest.TestCase):
                         "mint",
                         "relay-v2",
                         "developer-tools",
-                        "registryctl",
                     },
                 )
 
     def test_an_authoring_form_change_runs_the_editor_tooling_that_reads_it(self) -> None:
         # registry-language-server links registry-evidence-authoring to index
         # an adopter's Evidence documents, and evidencectl and relayctl are its
-        # supported CLI hosts. registryctl remains a compile-time reverse
-        # dependent. A change to the authoring form can therefore break an
+        # supported CLI hosts. A change to the authoring form can therefore break an
         # editor session or dependent build without touching a host, so the
         # closure has to carry it into their shards.
         outputs = classify(self.workspace, AUTHORING_FORM_CHANGE)
         self.assertTrue(outputs["evidence_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"evidence", "relay-v2", "developer-tools", "registryctl"},
+            {"evidence", "relay-v2", "developer-tools"},
         )
         self.assertIn("registry-language-server", outputs["rust_packages"])
-        self.assertIn("registryctl", outputs["rust_packages"])
 
         # The language server also dev-depends on the authoring form for its
         # own test suite. Repeating the closure over normal edges alone ties
@@ -493,10 +468,9 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertEqual(
             {entry["name"] for entry in strict["rust_matrix"]["include"]},
-            {"evidence", "relay-v2", "developer-tools", "registryctl"},
+            {"evidence", "relay-v2", "developer-tools"},
         )
         self.assertIn("registry-language-server", strict["rust_packages"])
-        self.assertIn("registryctl", strict["rust_packages"])
 
     def test_editor_integration_routing_follows_language_server_dependency_closure(
         self,
@@ -541,7 +515,7 @@ class CiChangesTest(unittest.TestCase):
         # apart, so hold it against the workspace where it must not hold: the
         # language server keeps the test-only dependency and loses the one it
         # compiles against. A dev edge still selects that direct test suite,
-        # but cannot make registryctl a downstream affected package.
+        # but cannot create a normal reverse-dependency cascade.
         mutated = dev_only_dependency_metadata(
             self.metadata,
             consumer="registry-language-server",
@@ -557,23 +531,10 @@ class CiChangesTest(unittest.TestCase):
             AUTHORING_FORM_CHANGE,
         )
         self.assertNotIn("registry-language-server", strict["rust_packages"])
-        self.assertNotIn("registryctl", strict["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in strict["rust_matrix"]["include"]},
             {"developer-tools", "evidence"},
         )
-
-    def test_the_mutation_fixture_refuses_to_demote_an_absent_link(self) -> None:
-        # The fixture above proves nothing if it silently demotes nothing, so
-        # a link that was never normal has to raise rather than hand back an
-        # unchanged workspace. registryctl reaches the authoring form through
-        # the language server and declares no dependency on it of its own.
-        with self.assertRaisesRegex(ValueError, "no normal dependency"):
-            dev_only_dependency_metadata(
-                self.metadata,
-                consumer="registryctl",
-                dependency="registry-evidence-authoring",
-            )
 
     def test_binding_only_change_runs_contracts_but_not_the_tutorial_job(self) -> None:
         # A Node-binding-only change has no bearing on any tutorial's shell
@@ -698,8 +659,8 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn(
             "products/evidence/scripts/check-source-neutrality.sh", workflow
         )
-        self.assertIn("\n  relay-contracts:\n", workflow)
-        self.assertIn("name: Relay OpenAPI contract", workflow)
+        self.assertIn("\n  relay-v2-contracts:\n", workflow)
+        self.assertIn("name: Relay V2 product contracts", workflow)
         self.assertIn("\n  relay-client-contracts:\n", workflow)
         self.assertIn(
             "products/relay-v2/scripts/check-client-contract.sh", workflow
@@ -708,10 +669,10 @@ class CiChangesTest(unittest.TestCase):
         self.assertNotIn("notary_contracts", workflow)
 
         rust_result = workflow.split("\n  rust-result:\n", 1)[1].split(
-            "\n  project-authoring-determinism:\n", 1
+            "\n  release-tool:\n", 1
         )[0]
         self.assertIn("\n      - evidence-contracts\n", rust_result)
-        self.assertIn("\n      - relay-contracts\n", rust_result)
+        self.assertIn("\n      - relay-v2-contracts\n", rust_result)
         self.assertIn("\n      - relay-client-contracts\n", rust_result)
         self.assertNotIn("\n      - notary-contracts\n", rust_result)
 
@@ -790,16 +751,6 @@ on:
         required: false
         type: string
 """.rstrip(),
-        )
-
-    def test_ops_posture_source_runs_docs(self) -> None:
-        # Relay V2 generates no docs-site artifact from crate source, so the one
-        # crate a published page still reads is registry-platform-ops: the
-        # operational posture page states what that module enforces.
-        self.assertTrue(
-            classify(self.workspace, ("crates/registry-platform-ops/src/lib.rs",))[
-                "docs"
-            ]
         )
 
     def test_cli_reference_inputs_run_docs(self) -> None:
@@ -974,14 +925,6 @@ on:
                 {"docs": True, "relay_v2_contracts": True},
             ),
             (
-                "crates/registry-relay/src/server.rs",
-                {"docs": False, "relay_contracts": True},
-            ),
-            (
-                "crates/registryctl/src/project_authoring/output.rs",
-                {"docs": False, "project_authoring": True},
-            ),
-            (
                 "docs/site/src/data/repo-docs.yaml",
                 {"docs": True, "docs_archives": True, "rust": False},
             ),
@@ -1029,7 +972,7 @@ on:
 
 class RunCargoPackagesTest(unittest.TestCase):
     def test_builds_a_direct_cargo_argument_vector(self) -> None:
-        packages = package_args('["registry-relay","registryctl"]')
+        packages = package_args('["registry-relay-v2","registry-evidence"]')
         self.assertEqual(
             command_args("test", packages, True),
             [
@@ -1039,16 +982,16 @@ class RunCargoPackagesTest(unittest.TestCase):
                 "--profile",
                 "ci",
                 "-p",
-                "registry-relay",
+                "registry-relay-v2",
                 "-p",
-                "registryctl",
+                "registry-evidence",
                 "--all-features",
             ],
         )
 
     def test_rejects_shell_syntax_in_package_names(self) -> None:
         with self.assertRaisesRegex(ValueError, "invalid Cargo package name"):
-            package_args('["registry-relay; id"]')
+            package_args('["registry-relay-v2; id"]')
 
 
 if __name__ == "__main__":

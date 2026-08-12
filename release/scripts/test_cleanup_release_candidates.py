@@ -49,7 +49,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
     def test_dry_run_uses_server_time_and_does_not_delete(self) -> None:
         client = FakeClient(
             {
-                "registry-notary-candidate": [
+                "relay-candidate": [
                     version(1, "2026-07-17T11:59:59Z", ["candidate-old"]),
                     version(2, "2026-07-17T12:00:00Z", ["candidate-boundary"]),
                 ]
@@ -57,7 +57,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         )
         result = self.module.cleanup(
             client,
-            packages=["registry-notary-candidate"],
+            packages=["relay-candidate"],
             server_now=self.now,
             apply=False,
         )
@@ -70,8 +70,6 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
     def test_apply_deletes_expired_versions_from_all_candidates(self) -> None:
         client = FakeClient(
             {
-                "registry-notary-candidate": [version(1, "2026-07-01T00:00:00Z")],
-                "registry-relay-candidate": [version(2, "2026-07-02T00:00:00Z")],
                 "relay-candidate": [version(3, "2026-07-03T00:00:00Z")],
             }
         )
@@ -82,11 +80,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
             apply=True,
         )
         self.assertEqual(
-            [
-                ("registry-notary-candidate", 1),
-                ("registry-relay-candidate", 2),
-                ("relay-candidate", 3),
-            ],
+            [("relay-candidate", 3)],
             client.deleted,
         )
         self.assertFalse(result["dry_run"])
@@ -115,7 +109,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
             with self.subTest(timestamp=timestamp):
                 client = FakeClient(
                     {
-                        "registry-relay-candidate": [
+                        "relay-candidate": [
                             version(2, "2026-07-01T00:00:00Z", ["valid-old"]),
                             version(3, timestamp, ["candidate"]),
                         ]
@@ -124,7 +118,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 with self.assertRaises(self.module.CleanupError):
                     self.module.cleanup(
                         client,
-                        packages=["registry-relay-candidate"],
+                        packages=["relay-candidate"],
                         server_now=self.now,
                         apply=True,
                     )
@@ -133,11 +127,11 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
     def test_malformed_tag_metadata_fails_closed(self) -> None:
         malformed = version(1, "2026-07-01T00:00:00Z")
         malformed["metadata"]["container"]["tags"] = "not-a-list"
-        client = FakeClient({"registry-notary-candidate": [malformed]})
+        client = FakeClient({"relay-candidate": [malformed]})
         with self.assertRaisesRegex(self.module.CleanupError, "malformed tag metadata"):
             self.module.cleanup(
                 client,
-                packages=["registry-notary-candidate"],
+                packages=["relay-candidate"],
                 server_now=self.now,
                 apply=True,
             )
@@ -178,7 +172,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 return [version(2, "2026-07-02T00:00:00Z")], {}
 
         client = PaginatedClient()
-        values = client.package_versions("registry-notary-candidate")
+        values = client.package_versions("relay-candidate")
         self.assertEqual([1, 2], [item["id"] for item in values])
         self.assertEqual(2, len(client.calls))
 
@@ -260,7 +254,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 return [], {"link": '<https://example.test/page/2>; rel="next"'}
 
         with self.assertRaisesRegex(self.module.CleanupError, "changed API origin"):
-            RedirectingClient().package_versions("registry-relay-candidate")
+            RedirectingClient().package_versions("relay-candidate")
 
     def test_pagination_cannot_repeat_a_page(self) -> None:
         class LoopingClient(self.module.GitHubClient):
@@ -271,13 +265,13 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
                 return [], {
                     "link": (
                         "<https://api.github.com/orgs/registrystack/packages/"
-                        "container/registry-relay-candidate/versions?"
+                        "container/relay-candidate/versions?"
                         'per_page=100>; rel="next"'
                     )
                 }
 
         with self.assertRaisesRegex(self.module.CleanupError, "repeated"):
-            LoopingClient().package_versions("registry-relay-candidate")
+            LoopingClient().package_versions("relay-candidate")
 
 
 if __name__ == "__main__":

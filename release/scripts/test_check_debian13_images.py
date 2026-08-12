@@ -113,6 +113,63 @@ class RelayV2ImagePolicyTests(unittest.TestCase):
                         failures,
                     )
 
+    def test_mint_and_evidence_image_is_a_required_maintained_surface(self) -> None:
+        self.assertEqual(
+            (Path("docker/Dockerfile"),),
+            POLICY.ADOPTER_DOCKERFILES,
+        )
+        self.assertIn(Path("docker/Dockerfile"), POLICY.MAINTAINED_TEXT_PATHS)
+
+    def test_mint_and_evidence_image_requires_pinned_upstream_bases(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.repository_copy(root)
+            dockerfile = root / "docker/Dockerfile"
+            dockerfile.write_text(
+                dockerfile.read_text(encoding="utf-8").replace(
+                    f"FROM {POLICY.RUST_BUILDER} AS chef",
+                    "FROM rust:1.95-trixie AS chef",
+                ),
+                encoding="utf-8",
+            )
+
+            failures = POLICY.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "docker/Dockerfile" in failure
+                    and "upstream base is not pinned" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_mint_and_evidence_distroless_stages_forbid_shell_tooling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.repository_copy(root)
+            dockerfile = root / "docker/Dockerfile"
+            dockerfile.write_text(
+                dockerfile.read_text(encoding="utf-8").replace(
+                    "COPY --from=mint-builder /workspace/runtime-root/ /\n",
+                    "COPY --from=mint-builder /workspace/runtime-root/ /\n"
+                    "RUN /bin/sh -c true\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            failures = POLICY.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "docker/Dockerfile" in failure
+                    and "Distroless runtime contains" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

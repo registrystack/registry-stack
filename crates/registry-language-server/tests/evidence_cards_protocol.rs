@@ -339,8 +339,8 @@ async fn non_file_schemes_are_declined_for_completion_and_hover() {
 
     for foreign in [
         "untitled:Untitled-1",
-        "zipfile:///archive.zip::/registry-stack.yaml",
-        "https://example.test/registry-stack.yaml",
+        "zipfile:///archive.zip::/registry.yaml",
+        "https://example.test/registry.yaml",
     ] {
         session
             .notify(

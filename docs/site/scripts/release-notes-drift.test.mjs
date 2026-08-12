@@ -13,11 +13,6 @@ const repoRoot = resolve(here, '../../..');
 
 const productReleaseNotes = [
   {
-    name: 'Registry Relay',
-    changelog: 'crates/registry-relay/CHANGELOG.md',
-    releaseNotes: 'crates/registry-relay/docs/release-notes.md',
-  },
-  {
     name: 'Registry Manifest',
     changelog: 'products/manifest/CHANGELOG.md',
     releaseNotes: 'products/manifest/docs/release-notes.md',

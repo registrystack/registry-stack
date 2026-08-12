@@ -61,6 +61,10 @@ jobs:
             echo "tag must be an exact published vMAJOR.MINOR.PATCH tag" >&2
             exit 1
           fi
+          if (( BASH_REMATCH[1] == 0 && BASH_REMATCH[2] < 19 )); then
+            echo "pre-v0.19 releases are immutable historical evidence; use the corresponding ${tag} Git tag and archived assets" >&2
+            exit 1
+          fi
           gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" \
             --json isDraft,tagName \
             | jq -e --arg tag "${tag}" \
@@ -96,7 +100,6 @@ jobs:
             "${source_sha}" refs/remotes/origin/main
           mkdir -p published
           release_manifest="registry-stack-${TAG}-release-manifest.json"
-          image_lock="registryctl-${TAG}-image-lock.json"
           release_assets="$(
             gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" \
               --json assets --jq '.assets[].name'
@@ -107,17 +110,8 @@ jobs:
             image_metadata="${release_manifest}"
             image_metadata_kind="release-manifest"
           else
-            IFS=. read -r major minor patch <<<"${TAG#v}"
-            if ((major > 0 || minor > 16 || (minor == 16 && patch >= 3))); then
-              echo "${TAG} requires release asset ${release_manifest}" >&2
-              exit 1
-            fi
-            if ! grep -Fqx -- "${image_lock}" <<<"${release_assets}"; then
-              echo "${TAG} has neither ${release_manifest} nor ${image_lock}" >&2
-              exit 1
-            fi
-            image_metadata="${image_lock}"
-            image_metadata_kind="registryctl-image-lock"
+            echo "${TAG} requires release asset ${release_manifest}" >&2
+            exit 1
           fi
           gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" \
             --dir published \
@@ -182,11 +176,6 @@ jobs:
               "mint": "mint",
               "registry-manifest": "registry-manifest",
               "registry-manifest-cli": "registry-manifest",
-              "registry-notary": "registry-notary",
-              "registry-notary-cel-worker": "registry-notary-cel-worker",
-              "registry-relay": "registry-relay",
-              "registry-relay-rhai-worker": "registry-relay-rhai-worker",
-              "registryctl": "registryctl",
               "relay": "relay",
               "relayctl": "relayctl",
           }
@@ -241,11 +230,6 @@ jobs:
           case "${IMAGE_METADATA_KIND}" in
             release-manifest)
               jq -er '.images[] | [.name,.final_ref,.digest] | @tsv' \
-                "${IMAGE_METADATA}" > "${image_rows}"
-              ;;
-            registryctl-image-lock)
-              jq -er \
-                '.images | to_entries[] | select(.key | startswith("registry-")) | [.key,.value,(.value | split("@")[1])] | @tsv' \
                 "${IMAGE_METADATA}" > "${image_rows}"
               ;;
             *)

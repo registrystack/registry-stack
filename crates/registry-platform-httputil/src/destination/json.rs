@@ -15,10 +15,9 @@ mod contract;
 mod decode;
 mod preflight;
 mod script_response;
-mod typed_envelope;
 
 /// Maximum encoded bytes accepted by the closed JSON decoder.
-/// Code-owned ceiling shared with Relay's v1 reviewed source-response bound.
+/// Code-owned ceiling for bounded source responses.
 pub const MAX_CLOSED_JSON_ENCODED_BODY_BYTES: usize = 8 * 1_024 * 1_024;
 
 pub use contract::{
@@ -38,10 +37,5 @@ pub use script_response::{
     MAX_SCRIPT_JSON_DEPTH, MAX_SCRIPT_JSON_NODES, MAX_SCRIPT_JSON_OBJECT_MEMBERS,
     MAX_SCRIPT_JSON_STRING_BYTES,
 };
-pub use typed_envelope::{
-    decode_typed_hash_envelope, decode_typed_hash_envelope_as, DecodedTypedHashEnvelope,
-    TypedHashEnvelope, TypedHashEnvelopeError,
-};
-
 #[cfg(test)]
 mod tests;

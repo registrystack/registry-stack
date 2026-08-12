@@ -190,8 +190,8 @@ This applies to every page that touches a standard or a contract.
 - When you cannot find evidence for an existing claim, mark it inline with a TODO and propose a demotion:
 
   ```mdx
-  Registry Relay emits SD-JWT VC credentials.
-  {/* TODO[evidence]: no SD-JWT issuer found in crates/registry-relay/.
+  Registry Evidence implements Example Credential Profile.
+  {/* TODO[evidence]: no conformance fixture found in crates/registry-evidence/.
        Suggest demoting to `aligns_with` until a fixture lands. */}
   ```
 

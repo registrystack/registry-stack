@@ -22,8 +22,6 @@ SHARDS = {
         "registry-platform-httpsec",
         "registry-platform-httputil",
         "registry-platform-oidc",
-        "registry-platform-ops",
-        "registry-platform-pdp",
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
         "registry-platform-testing",
@@ -32,7 +30,6 @@ SHARDS = {
         "registry-manifest-cli",
         "registry-manifest-core",
     ),
-    "relay": ("registry-relay",),
     "relay-client": (
         "registry-relay-http-contract",
         "registry-relay-client",
@@ -53,10 +50,8 @@ SHARDS = {
     "mint": ("registry-mint",),
     "developer-tools": (
         "registry-cli-docs",
-        "registry-config-report",
         "registry-language-server",
     ),
-    "registryctl": ("registryctl",),
 }
 
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
@@ -399,7 +394,6 @@ def classify(
     platform = complete or any(
         matches(
             path,
-            "crates/registry-config-report/*",
             "crates/registry-platform-*",
             "products/platform/*",
         )
@@ -409,14 +403,6 @@ def classify(
     platform_hygiene = complete or any(
         matches(
             path,
-            "crates/registry-relay/clippy.toml",
-            "crates/registry-relay/config/*",
-            "crates/registry-relay/demo/config/*",
-            "crates/registry-relay/deny.toml",
-            "crates/registry-relay/perf/config/*",
-            "crates/registry-relay/profiles/*",
-            "crates/registry-relay/rustfmt.toml",
-            "crates/registry-relay/tests/fixtures/config/*",
             "products/platform/clippy.toml",
             "products/platform/deny.toml",
             "products/platform/rustfmt.toml",
@@ -450,7 +436,6 @@ def classify(
     docs = complete or any(
         matches(
             path,
-            "crates/registry-platform-ops/src/lib.rs",
             "docs/site/*",
             "products/manifest/docs/*",
             # The Evidence configuration reference page is generated from the
@@ -541,7 +526,7 @@ def classify(
                 {
                     "name": shard_name,
                     "packages": selected,
-                    "all_features": shard_name in {"relay", "relay-v2"},
+                    "all_features": shard_name == "relay-v2",
                 }
             )
 
@@ -551,11 +536,9 @@ def classify(
         "rust_packages": sorted(affected),
         "platform": platform,
         "platform_hygiene": platform_hygiene,
-        "relay_contracts": "registry-relay" in affected,
         "relay_v2_contracts": bool(affected & RELAY_V2_PACKAGES),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
-        "project_authoring": "registryctl" in affected,
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,

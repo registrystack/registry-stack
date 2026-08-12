@@ -39,7 +39,7 @@ the same fixtures with `evidence evaluate` before deployment, and can add
 - [`opencrvs-family-evidence/`](opencrvs-family-evidence/) resolves one
   registered birth event and supports adult status, exact registered-parent
   confirmation, and bounded registered-parent identification.
-- [`relay-protected-read-evidence/`](relay-protected-read-evidence/) resolves
+- [`protected-read-evidence/`](protected-read-evidence/) resolves
   one record through a protected, scoped, read-only registry API of the shape
   Registry Relay presents, and supports residence region as a coarse
   controlled code mapped from the register's own code.

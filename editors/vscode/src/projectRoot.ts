@@ -3,9 +3,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-// Relay project root: a single manifest file.
-export const RELAY_MARKER_FILE = 'registry-stack.yaml';
-// Relay V2 is an additive project family with its own governed contract marker.
+// Relay V2 is a governed project family with its own contract marker.
 export const RELAY_V2_MARKER_FILE = 'registry.yaml';
 // Evidence project root: the marker written by newer projects, or the
 // pre-marker pair of an OpenAPI description and a questions directory. This
@@ -15,9 +13,6 @@ export const EVIDENCE_OPENAPI_FILE = 'source.openapi.yaml';
 export const EVIDENCE_QUESTIONS_DIRECTORY = 'questions';
 
 export function isProjectRoot(directory: string): boolean {
-  if (isFile(path.join(directory, RELAY_MARKER_FILE))) {
-    return true;
-  }
   if (isFile(path.join(directory, RELAY_V2_MARKER_FILE))) {
     return true;
   }

@@ -46,15 +46,15 @@ class ReleaseWorkflowGuardTests(unittest.TestCase):
     def test_public_image_destination_is_closed_and_exact(self) -> None:
         self.assertEqual(
             self.module.public_image_destination(
-                "ghcr.io/registrystack/registry-relay:v1.2.3",
+                "ghcr.io/registrystack/relay:v1.2.3",
                 "registrystack",
             ),
-            ("registry-relay", "v1.2.3"),
+            ("relay", "v1.2.3"),
         )
         for value in [
-            "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64,
-            "ghcr.io/other/registry-relay:v1.2.3",
-            "ghcr.io/registrystack/registry-relay:latest",
+            "ghcr.io/registrystack/relay@sha256:" + "a" * 64,
+            "ghcr.io/other/relay:v1.2.3",
+            "ghcr.io/registrystack/relay:latest",
         ]:
             with self.subTest(value=value):
                 with self.assertRaises(self.module.GuardError):

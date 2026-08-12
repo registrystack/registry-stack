@@ -22,7 +22,7 @@ Evidence Version 1 is one `registry-evidence` crate, one `evidence` binary, one
 process, and one operator-controlled trust domain. It is independent from
 Registry Notary and must not depend on or copy abstractions from
 `registry-notary*`. It also does not depend on Registry Manifest,
-`registry-platform-pdp`, `registry-platform-oid4vci`,
+`registry-platform-oid4vci`,
 `registry-platform-replay`, or `registry-platform-sts`.
 
 The runtime depends on the portable `registry-evidence-verifier` library, which

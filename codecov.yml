@@ -8,19 +8,11 @@ coverage:
         flags:
           - platform
         informational: true
-      relay-postgres:
-        flags:
-          - relay-postgres
-        informational: true
     patch:
       default: off
       platform:
         flags:
           - platform
-        informational: true
-      relay-postgres:
-        flags:
-          - relay-postgres
         informational: true
 
 flags:
@@ -32,22 +24,9 @@ flags:
     paths:
       - "crates/registry-manifest-*/**"
     carryforward: true
-  relay-unit:
-    paths:
-      - "crates/registry-relay/**"
-    carryforward: true
-  relay-postgres:
-    paths:
-      - "crates/registry-relay/**"
-    carryforward: true
   developer-tools:
     paths:
-      - "crates/registry-config-report/**"
       - "crates/registry-language-server/**"
-    carryforward: true
-  registryctl-unit:
-    paths:
-      - "crates/registryctl/**"
     carryforward: true
 
 comment:

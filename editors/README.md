@@ -62,7 +62,7 @@ A folder is an Evidence project root when it contains the `evidence-project.yaml
 a project created before the marker existed, the legacy pair of a `source.openapi.yaml` file and a
 `questions` directory. Either form gets the same cross-file definitions, references,
 workspace/document symbols, and reference diagnostics over its authoring documents (selectors,
-questions, sources, access policies, and the schemas they cite) that a `registry-stack.yaml` root
+questions, sources, access policies, and the schemas they cite) that a `registry.yaml` root
 gets for Relay.
 
 Project setup and schema refresh use `evidencectl`:

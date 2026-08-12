@@ -25,11 +25,6 @@
   ],
   "referenceExclusions": [
     {
-      "glob": "crates/registry-config-report/**",
-      "classification": "legacy-source",
-      "reason": "Configuration-report schemas are not current public Registry Stack identifier contracts."
-    },
-    {
       "glob": "crates/registry-manifest-core/tests/**",
       "classification": "fixture",
       "reason": "Manifest test shapes are local conformance fixtures, not Registry Stack identifier contracts."
@@ -40,24 +35,9 @@
       "reason": "The legacy body-limit problem helper is not wired into a current product route."
     },
     {
-      "glob": "crates/registry-platform-ops/**",
-      "classification": "legacy-source",
-      "reason": "Legacy operations schemas remain source-local and are not current resolver contracts."
-    },
-    {
       "glob": "crates/registry-platform-testing/**",
       "classification": "fixture",
       "reason": "Cross-crate HTTP problem values are test fixtures for legacy helpers."
-    },
-    {
-      "glob": "crates/registry-relay/**",
-      "classification": "retired-product",
-      "reason": "Registry Relay V1 is retired and its identifiers are not published by the current resolver."
-    },
-    {
-      "glob": "crates/registryctl/**",
-      "classification": "retired-product",
-      "reason": "registryctl is retired and its identifiers are not published by the current resolver."
     },
     {
       "glob": "docs/site/scripts/ops-posture-spec.test.mjs",
@@ -86,11 +66,6 @@
     },
     {
       "glob": "release/*.schema.json",
-      "classification": "retired-product",
-      "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
-    },
-    {
-      "glob": "release/scripts/registry_release_lock.py",
       "classification": "retired-product",
       "reason": "RegistryReleaseLockV1 identifiers belong to retired registryctl release tooling."
     },

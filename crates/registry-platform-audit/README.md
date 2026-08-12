@@ -9,10 +9,6 @@ helpers for registry services.
 - `AuditEnvelope` records with ULID ids, timestamps, previous hashes, payloads,
   and record hashes.
 - `AuditSink` for pluggable persistence.
-- `DurableAuditSink` for atomic, idempotent governed-operation writes keyed by
-  stream, operation ULID, and phase.
-- A `cfg(test)` in-memory conformance sink plus a public-API integration test.
-  No in-memory sink exists in production builds.
 - Built-in `JsonlFileSink`, `DurableSegmentedJsonlSink`, `JsonlStdoutSink`, and
   `SyslogSink`.
 - `DurableSegmentedAuditLog` for keyed chain-head ownership, concurrent
@@ -25,9 +21,6 @@ helpers for registry services.
   handles whose service-owned canonical input stays outside the platform domain.
 - `AuditKeyHasher::sensitive_value_hash` for generic field-bound audit lookup
   values used by redaction helpers.
-- `pseudonym_keyring` pure metadata and lifecycle contracts plus a
-  bounded-domain, zeroizing audit-pseudonym cryptographic primitive. PostgreSQL
-  authority capabilities remain deliberately withheld pending integration.
 
 ## Typical Use
 
@@ -37,7 +30,7 @@ use serde_json::json;
 
 async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> {
     let sink = JsonlFileSink::new("audit.jsonl");
-    let profile = AuditProfile::registry_relay_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
+    let profile = AuditProfile::production_from_env("REGISTRY_AUDIT_HASH_SECRET")?;
     let chain = profile.bootstrap_or_start_empty(&sink).await?;
 
     let envelope = chain
@@ -51,153 +44,6 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
     Ok(())
 }
 ```
-
-## Durable Phase Contract
-
-Access-capable consultation and materialization flows use
-`DurableAuditSink::write_phase`, not `AuditSink::write`. Each
-`DurableAuditWrite` carries:
-
-- a closed stream kind;
-- a canonical operation ULID whose server-minted provenance is enforced by the
-  consumer;
-- a closed phase accepted for that stream; and
-- one non-empty top-level JSON object containing the consumer-owned safe event
-  payload.
-
-The stream/phase matrix is closed:
-
-- `consultation` and `materialization` accept `attempt` and `completion`;
-- `denial` accepts only `denial_decision`; and
-- `startup_credential_probe` and `readiness_credential_probe` each accept
-  `attempt` and `completion`.
-
-`DurableAuditWrite` canonicalizes the safe payload with the shared RFC 8785
-implementation and derives its SHA-256 digest internally, so payload and digest
-cannot disagree. Integer values that are not exactly representable as IEEE 754
-binary64 are rejected rather than rounded into a colliding digest; encode such
-values as strings under a reviewed schema. Raw JSON parsers must reject
-duplicate property names before constructing the `serde_json::Value`, because
-the parsed value no longer retains that ambiguity. The write carries no
-predecessor, envelope, or event identity. The sink first resolves duplicate
-state, then builds the `AuditEnvelope` from the current durable chain head while
-holding the same transaction or equivalent critical section that performs
-insertion.
-
-The sink-built envelope uses this stable record shape:
-
-```json
-{
-  "schema": "registry.durable-audit/v1",
-  "stream_kind": "consultation",
-  "operation_id": "01J5K8M0000000000000000000",
-  "phase": "attempt",
-  "payload_digest": "sha256:<64 lowercase hex characters>",
-  "payload": { "event": "consultation.attempt" }
-}
-```
-
-The chained record therefore binds the schema, durable row key, phase, digest,
-and payload. Reassociating an envelope with another row key is detectable.
-
-The sink atomically inserts by `(stream_kind, operation_id, phase)`. The first
-write returns `Inserted`. A retry with the same digest returns
-`IdenticalDuplicate` and the identity of the envelope originally stored. A
-retry with a different digest returns the deterministic `ConflictingDuplicate`
-outcome with the original identity and must be treated as an integrity failure.
-Only store availability or internal failure uses the error channel.
-
-`DurableAuditSink` is deliberately independent of the append-only `AuditSink`.
-There is no blanket adapter or fallback because stdout, syslog, and ordinary
-JSONL appends cannot provide crash-safe or replica-safe phase idempotency. The
-in-memory implementation is a conformance harness only. A fail-closed runtime
-must use a durable implementation, with PostgreSQL as the initial state-plane
-target.
-
-## Pseudonym Key Epochs
-
-The public API exposes pure, hash-covered key-epoch metadata, lifecycle
-validation, closed consultation commitment domains, audit-safe handles,
-zeroizing transient canonical input, and `AuditPseudonymKeyMaterial`. The key
-material type derives a dedicated sub-key from an owned zeroizing secret, is
-neither cloneable nor serializable, exposes no raw-key accessor, and permits
-only the four frozen Relay consultation commitments. It deliberately exposes
-no production write-key or historical-lookup capability. A caller-supplied
-metadata copy, timestamp, key, or used-key-id set cannot prove that it is the
-current authoritative state, even when its generation and digest are
-internally consistent.
-
-The production wrapper remains a PostgreSQL state-plane integration
-prerequisite. For every write or lookup it must obtain PostgreSQL current time,
-the persisted current metadata generation and digest, and the complete
-never-reusable key-id history through the authority boundary. Rotation must
-validate and persist the successor and used-id history transactionally. The
-wrapper must fail closed on stale generations, expired lookup epochs, state
-unavailability, rollback, or a reached active-write deadline. Only that
-wrapper may bind active or retained key material to an authority decision. The
-standalone key-material constructors are not configuration loaders, keyrings,
-or evidence of runtime activation. The serving runtime receives one active
-write capability; an authorized investigation receives only its declared,
-unexpired lookup subset.
-
-The existing general-purpose `AuditKeyHasher` remains available for legacy
-audit redaction and chain-adjacent surfaces. It is not a keyring authority and
-must not be injected into governed consultation pseudonymization or
-investigation code as a substitute for the PostgreSQL-issued wrapper.
-
-Internal test-only scaffolding preserves the intended preflight invariants: the
-serving source set must be exactly active plus retained, duplicate ids and
-duplicate derived key material are rejected, retained key material is
-discarded, lookup subsets are declared and unexpired, every use rechecks the
-supplied binding and expiry, and lookup ordering is canonical key-id order.
-These tests are not a production authority path.
-
-Relay consultation commitments have a separate closed framing contract. The
-only v1 domains are `registry.relay.consultation-subject.v1`,
-`registry.relay.consultation-input.v1`,
-`registry.relay.consultation-predicate.v1`, and
-`registry.relay.consultation-consent.v1`. Their exact HMAC preimage is the ASCII
-domain, one NUL byte, and the RFC 8785 JCS input. They do not use the legacy
-`AuditKeyHasher::audit_reference_hash` class/scope/length framing. Tenant,
-registry instance, profile, operation, and related semantics remain fields of
-the domain-specific JCS value. The frozen v1 framing vectors treat their fixed
-32-byte fixture as an already-derived HMAC domain key, preserving the
-established four outputs. Separate end-to-end vectors treat the same fixture as
-deployment master material and pin the production HKDF-Expand plus commitment
-path. These are distinct contract layers, not a silent v1 output migration;
-production constructors always derive the dedicated sub-key from master
-material.
-
-Metadata binding assumes SHA-256 collision resistance. Key-material equality
-compares domain-separated HMAC-SHA-256 probe outputs in constant time and
-scrubs both transient outputs; it detects equal derived keys under the standard
-HMAC collision-resistance assumption rather than proving equality of the
-original environment strings.
-
-Selector-bearing inputs use `TransientPseudonymInput::from_jcs_value`. It
-consumes a `serde_json::Value`, produces at most 8 KiB of shared RFC 8785
-canonical JSON, recursively scrubs owned string keys and values on every path,
-and retains only zeroizing canonical bytes. It is not cloneable or serializable
-and redacts `Debug`. Raw parsers must reject duplicate object names before
-constructing the value because parsed JSON cannot recover that ambiguity.
-Domain-specific semantic fields remain inside the bounded JCS value. The HMAC
-framing buffer and temporary key-equivalence fingerprints are scrubbed.
-
-Keyring metadata is non-secret, generation-numbered, hash-coverable, and has no
-default retention. Every generation carries an explicit exclusive active-write
-deadline; lifecycle validity is `active_since <= now < active_write_deadline`.
-Its validation functions are pure checks, not proof that a metadata snapshot,
-timestamp, or history set is authoritative. Rotation requires a strictly newer
-active id, activation no later than the prior deadline, exact retirement of the
-prior active key, a later new deadline, and continuity of every unexpired
-retained epoch without shortened destruction. A separate same-active
-maintenance transition may only prune epochs at or after their destruction
-deadline; it cannot add, mutate, extend, or resurrect retained epochs or alter
-the active id, activation, or deadline. Expired epochs cannot be reintroduced
-when the supplied history is complete. PostgreSQL-backed authorization,
-persisted key-id uniqueness, investigation audit, key-provider access,
-destruction, and signed deployment configuration remain required before
-production use.
 
 ## Operational Notes
 
@@ -232,33 +78,11 @@ production use.
   shorter chain, and they do not detect deletion of leading retained records
   or a self-consistent full rewrite by an actor who can replace all retained
   logs.
-- Off-host audit shipping is the completeness guarantee. Evidence-grade Relay
-  and Notary deployments refuse startup when a local `file` or `jsonl` sink is
-  used without declaring off-host shipping. Every evidence-grade shipping
-  target, including `stdout` and `syslog`, also requires a
-  `registry.audit.ack_cursor.v1` cursor. A cursor is healthy only when its
-  `acked_at` is fresh and its `last_acked_hash` equals the live keyed chain
-  tail. Equality establishes zero local backlog for the trusted shipper's
-  claim. The unsigned local cursor is not cryptographic proof that a remote
-  system received or retained the records.
-- Shippers must replace the cursor atomically after a successful hand-off.
-  Mount the cursor read-only for the Registry runtime. Cursor reads reject
-  symbolic links and non-regular files and are limited to 16 KiB. Relay and
-  Notary readiness handlers run the read through one 500 ms bounded worker so
-  a stalled filesystem fails readiness without accumulating blocked workers.
 - The chain does not replace durable storage, retention policy, clock integrity,
   or off-host log shipping.
-- Safe payload objects passed to `DurableAuditWrite::new` must already exclude
-  raw selectors, credentials, tokens, source URLs, and secret-derived
-  fingerprints. Durable-write diagnostics include neither rejected input,
-  payload contents, nor digests.
-- `DurableAuditOperationId` validates canonical ULID syntax only. The consumer
-  must enforce that the id is server-minted and is not derived from a subject
-  selector, token, source identifier, or other sensitive input.
-- Use `AuditProfile::production_from_env` or
-  `AuditProfile::registry_relay_from_env` in production. `unkeyed_dev_only` is
+- Use `AuditProfile::production_from_env` in production. `unkeyed_dev_only` is
   for tests and local development.
-- Use `AuditKeyHasher::audit_reference_hash` for durable audit references
+- Use `AuditKeyHasher::audit_reference_hash` for audit references
   instead of concatenating ad hoc hash inputs in each service. Keep service
   semantics and canonicalization in the consuming service.
 - Redaction helpers intentionally avoid preserving email local parts, phone

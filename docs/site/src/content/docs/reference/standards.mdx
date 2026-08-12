@@ -141,8 +141,8 @@ What these levels mean for integrators:
   `compares_against` with no user.
 - ODRL is still emitted by Registry Manifest as policy metadata, and that metadata is descriptive
   rather than an access grant. No maintained runtime enforces an ODRL constraint. The governed
-  evaluation path belonged to Relay V1, and `registry-platform-pdp` keeps the enforcement profile
-  vocabulary with no maintained consumer.
+  evaluation path belonged to Relay V1. Its `registry-platform-pdp` crate was
+  removed; Registry Manifest retains the descriptive vocabulary it validates.
 - The Verifiable Credentials Data Model (W3C VC) is listed as `aligns_with` (`referenced`).
   The retired product that issued SD-JWT VC credentials under this alignment never emitted a full
   W3C VC Data Model envelope. Relay does not emit or host VC artifacts either.

@@ -33,8 +33,6 @@ DOCKERFILE_FRONTEND = (
 DISTROLESS_REPOSITORY = DISTROLESS_RUNTIME.split("@", 1)[0]
 
 DOCKERFILES = (
-    Path("crates/registry-relay/Dockerfile"),
-    Path("crates/registry-relay/Dockerfile.demo"),
     Path("release/docker/Dockerfile.relay"),
 )
 
@@ -53,17 +51,10 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + ADOPTER_DOCKERFILES + (
     Path(".github/workflows/release-candidate.yml"),
     Path(".github/workflows/release.yml"),
     Path("release/scripts/build-release-binaries.sh"),
-    Path("crates/registry-relay/docs/ops.md"),
-    Path("crates/registry-relay/docs/security-assurance.md"),
-    Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
 )
 
-RUST_BUILDER_DOCKERFILES = DOCKERFILES[:2]
-PREPARATION_DOCKERFILES = DOCKERFILES[2:]
-RELAY_DOCKERFILES = (
-    Path("crates/registry-relay/Dockerfile"),
-    Path("crates/registry-relay/Dockerfile.demo"),
-)
+RUST_BUILDER_DOCKERFILES = ()
+PREPARATION_DOCKERFILES = DOCKERFILES
 RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
 
 FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
@@ -102,21 +93,12 @@ def runtime_stage(text: str) -> str:
 
 
 def distroless_stages(text: str) -> list[tuple[str, str]]:
-    """Every stage built on the Distroless runtime, as (base, stage text).
-
-    Release images name that stage `runtime`, so `runtime_stage` can find it by
-    name. An image that builds more than one binary names one stage per binary,
-    so these are found by their base instead. Matching the repository rather
-    than the full pinned reference keeps an unpinned base visible here, where it
-    is reported, instead of silently dropping the stage from the scan.
-    """
+    """Return each stage built on the Distroless runtime."""
     stages = []
     for segment in re.split(r"^FROM ", text, flags=re.MULTILINE)[1:]:
         base = segment.split(maxsplit=1)[0] if segment.split() else ""
         if not base.startswith(DISTROLESS_REPOSITORY):
             continue
-        # Comments are scanned out so that a stage may say in prose why it has
-        # no shell or curl without the words themselves reading as a violation.
         instructions = "\n".join(
             line for line in segment.splitlines() if not line.lstrip().startswith("#")
         )
@@ -223,9 +205,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
         bases = FROM_RE.findall(text)
         if not bases:
             failures.append(f"{relative}: no FROM instruction found")
-        # A multi-target image builds most of its stages on earlier stages of the
-        # same file. Only the bases that come from outside the file are upstream
-        # images, and only those can carry a digest.
         local_stages = set(STAGE_NAME_RE.findall(text))
         for base in bases:
             if base in local_stages:
@@ -263,23 +242,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
                     failures.append(
                         f"{relative}: Distroless runtime contains {forbidden.strip()!r}"
                     )
-
-    for relative in RELAY_DOCKERFILES:
-        text = texts[relative]
-        require(
-            text,
-            "/usr/local/bin/registry-relay-rhai-worker",
-            relative,
-            "Relay worker binary",
-            failures,
-        )
-        require(
-            runtime_stage(text),
-            'ENTRYPOINT ["/usr/local/bin/registry-relay"]',
-            relative,
-            "absolute Relay entrypoint",
-            failures,
-        )
 
     for relative in RELAY_V2_DOCKERFILES:
         text = texts[relative]

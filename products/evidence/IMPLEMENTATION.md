@@ -124,9 +124,8 @@ Reuse selected shared primitives without inheriting another product model:
 | `registry-platform-httputil` | Bounded source-response body reads |
 | `registry-platform-sdjwt` | Compact SD-JWT VC serialization for the SD-JWT VC response format |
 
-Evidence must not depend on `registry-notary*`, `registry-platform-pdp`,
-`registry-platform-oid4vci`, `registry-platform-replay`,
-`registry-platform-sts`, or Registry Manifest.
+Evidence must not depend on `registry-notary*`, `registry-platform-oid4vci`,
+`registry-platform-replay`, `registry-platform-sts`, or Registry Manifest.
 
 The governed bundle and closed operator runtime file are trusted and
 startup-only. Use typed YAML and explicit secret references. Runtime

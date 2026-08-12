@@ -21,22 +21,6 @@ FIXTURE_IDENTIFIER_CATALOG = {
 FIXTURE_IDENTIFIER_CATALOG_SHA256 = hashlib.sha256(
     (json.dumps(FIXTURE_IDENTIFIER_CATALOG, indent=2) + "\n").encode()
 ).hexdigest()
-LEGACY_ARTIFACT_INVENTORY = (
-    "evidence",
-    "evidence-client-node",
-    "evidence-client-python",
-    "evidence-oid4vci",
-    "evidencectl",
-    "evidencectl-installer",
-    "mint",
-    "registry-docs",
-    "registry-manifest-cli",
-    "registry-relay",
-    "registry-relay-rhai-worker",
-    "registryctl",
-    "registryctl-image-lock",
-    "registryctl-installer",
-)
 RELAY_V2_ARTIFACT_INVENTORY = (
     "evidence",
     "evidence-client-node",
@@ -88,14 +72,10 @@ def git(repo: Path, *args: str) -> str:
 
 def manifest(version: str, release_id: str, source_ref: str, status: str) -> dict:
     version_tuple = tuple(int(part) for part in version.split("."))
-    inventory = (
-        tuple(
-            artifact
-            for artifact in RELAY_V2_ARTIFACT_INVENTORY
-            if artifact != "relay-installer" or version_tuple >= (0, 19, 1)
-        )
-        if version_tuple >= (0, 19, 0)
-        else LEGACY_ARTIFACT_INVENTORY
+    inventory = tuple(
+        artifact
+        for artifact in RELAY_V2_ARTIFACT_INVENTORY
+        if artifact != "relay-installer" or version_tuple >= (0, 19, 1)
     )
     if version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
         inventory += ("relay-client-node", "relay-client-python")
@@ -167,14 +147,13 @@ class FixtureRepo:
         write(
             root / "Cargo.toml",
             f'''[workspace]
-members = ["crates/registry-core", "crates/registryctl"]
+members = ["crates/registry-core", "crates/registry-evidence"]
 
 [workspace.package]
 version = "1.1.0"
 
 [workspace.dependencies]
 registry-core = {{ path = "crates/registry-core", version = "1.1.0" }}
-crosswalk-core = {{ git = "https://github.com/PublicSchema/crosswalk", rev = "{CROSSWALK_REF}", version = "0.2.0" }}
 ''',
         )
         write(
@@ -186,13 +165,9 @@ name = "registry-core"
 version = "1.1.0"
 
 [[package]]
-name = "registryctl"
+name = "registry-evidence"
 version = "1.1.0"
 
-[[package]]
-name = "crosswalk-core"
-version = "0.2.0"
-source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CROSSWALK_REF}"
 ''',
         )
         write_yaml(
@@ -241,7 +216,7 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
                             "version": "v1.1.0",
                             "ref": self.candidate,
                         },
-                        "registry-relay": {
+                        "registry-relay-v2": {
                             "version": "v1.1.0",
                             "ref": self.candidate,
                         },
@@ -282,7 +257,7 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
                         "ref": "HEAD",
                         "version": "main source (unreleased)",
                     },
-                    "registry-relay": {
+                    "registry-relay-v2": {
                         "ref": "HEAD",
                         "version": "main source (unreleased)",
                         "docs": [
@@ -351,27 +326,6 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
                 "info": {"title": "Evidence", "version": "1.1.0"},
             },
         )
-        # Retired release surfaces stay in the monorepo but must not be selected
-        # for the Relay V2 release train.
-        write(
-            root / "crates/registry-relay/CHANGELOG.md",
-            "# Changelog\n\n## [0.18.0]\n\n- Historical.\n",
-        )
-        write(
-            root / "crates/registry-relay/docs/release-notes.md",
-            "# Release Notes\n\n## 0.18.0\n\n- Historical.\n",
-        )
-        write_json(
-            root / "crates/registry-relay/openapi/registry-relay.openapi.json",
-            {
-                "openapi": "3.1.0",
-                "info": {"title": "Legacy Relay", "version": "0.18.0"},
-            },
-        )
-        write(
-            root / "crates/registryctl/CHANGELOG.md",
-            "# Changelog\n\n## [0.18.0]\n\n- Historical.\n",
-        )
 
     def snapshot(self) -> dict[str, str]:
         return {
@@ -432,6 +386,24 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 self.assertEqual("", result.stdout)
                 self.assertIn(f"the following arguments are required: {missing}", result.stderr)
 
+    def test_prepare_rejects_pre_v0_19_before_manifest_discovery(self) -> None:
+        result = run(
+            "prepare",
+            "--version",
+            "0.18.0",
+            "--release-id",
+            "historical",
+            "--repo",
+            str(self.repo.root),
+        )
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn(
+            "pre-v0.19 releases are immutable historical evidence; use the "
+            "corresponding v0.18.0 Git tag and archived assets",
+            result.stderr,
+        )
+
     def test_prepare_emits_stable_json_plan_without_mutating_repo(self) -> None:
         before = self.repo.snapshot()
         result = self.prepare()
@@ -447,7 +419,6 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 "requested",
                 "previous",
                 "selected",
-                "crosswalk",
                 "checks",
                 "changes",
             },
@@ -471,7 +442,6 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 "repo-docs",
                 "release-documents",
                 "openapi-versions",
-                "crosswalk-pin",
                 "generated-docset-mirror",
             },
             {check["name"] for check in plan["checks"]},
@@ -564,16 +534,6 @@ class RegistryReleasePlanTest(unittest.TestCase):
                 self.assertEqual("", result.stdout)
                 self.assertIn(expected, result.stderr)
 
-    def test_prepare_rejects_crosswalk_lock_drift(self) -> None:
-        lock = self.repo.root / "Cargo.lock"
-        lock.write_text(lock.read_text().replace(CROSSWALK_REF, "2" * 40), encoding="utf-8")
-
-        result = self.prepare()
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertEqual("", result.stdout)
-        self.assertIn("Crosswalk", result.stderr)
-
     def test_prepare_binds_crosswalk_manifest_and_docset(self) -> None:
         target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
         data = yaml.safe_load(target.read_text(encoding="utf-8"))
@@ -588,19 +548,6 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "docset v1.1.0 external crosswalk ref must match the selected manifest",
             result.stderr,
         )
-
-    def test_prepare_binds_crosswalk_release_note_without_a_docset(self) -> None:
-        note = self.repo.root / "release/notes/v1.1.0.md"
-        note.write_text(
-            "# Registry Stack v1.1.0\n\nThe beta-9 release uses Crosswalk.\n",
-            encoding="utf-8",
-        )
-
-        result = self.prepare()
-
-        self.assertEqual(1, result.returncode)
-        self.assertEqual("", result.stdout)
-        self.assertIn("release note must record the exact Crosswalk ref", result.stderr)
 
     def test_prepare_selects_evidence_openapi_and_ignores_retired_surfaces(
         self,
@@ -631,7 +578,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         selected = next(
             item for item in docsets["docsets"] if item["id"] == "v1.1.0"
         )
-        selected["products"]["registry-registryctl"] = {
+        selected["products"]["archived-example"] = {
             "version": "v1.1.0",
             "ref": self.repo.candidate,
         }
@@ -660,7 +607,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(1, incomplete_inventory.returncode)
         self.assertEqual("", incomplete_inventory.stdout)
         self.assertIn(
-            "artifact inventory for version 0.10.0 or later must be exactly",
+            "artifact inventory for version 0.19.0 or later must be exactly",
             incomplete_inventory.stderr,
         )
         self.assertIn("unexpected registryctl", incomplete_inventory.stderr)
@@ -705,24 +652,6 @@ class RegistryReleasePlanTest(unittest.TestCase):
             result.stderr,
         )
 
-    def test_prepare_rejects_stale_registryctl_lock_version(self) -> None:
-        lock = self.repo.root / "Cargo.lock"
-        lock.write_text(
-            lock.read_text(encoding="utf-8").replace(
-                'name = "registryctl"\nversion = "1.1.0"',
-                'name = "registryctl"\nversion = "1.0.0"',
-            ),
-            encoding="utf-8",
-        )
-
-        result = self.prepare()
-
-        self.assertEqual(1, result.returncode)
-        self.assertEqual("", result.stdout)
-        self.assertIn(
-            "Cargo.lock workspace package registryctl version must be '1.1.0'",
-            result.stderr,
-        )
 
     def test_prepare_rejects_dangling_candidate_source_ref(self) -> None:
         target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"

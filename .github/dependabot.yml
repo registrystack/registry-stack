@@ -49,7 +49,6 @@ updates:
   - package-ecosystem: docker
     directories:
       - "/release/docker"
-      - "/crates/registry-relay"
     schedule:
       interval: weekly
       day: wednesday

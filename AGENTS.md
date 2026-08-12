@@ -14,7 +14,7 @@ The two patterns compose without merging their product boundaries: Evidence
 may use a Relay-protected API as a fixed HTTP source.
 
 Registry Manifest describes sources portably; Relay is its consumer in code
-and `registry-platform-*` crates are shared primitives. `registryctl` is Relay
+and `registry-platform-*` crates are shared primitives. `relayctl` is Relay
 adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
 
 Registry Mint is a supporting service, not a third pattern: it issues the
@@ -37,7 +37,6 @@ dependency runs one way only in production: no Evidence crate depends on
 
 | Area | Owns |
 |---|---|
-| `crates/registry-relay` | Protected read APIs (Relay) |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
 | `crates/registry-evidence-verifier` | Portable Evidence response verification, shared by the runtime and client tooling |
 | `crates/registry-evidence-client` | Evidence relying-party SDK: requests assertions and verifies them via `registry-evidence-verifier` |
@@ -49,20 +48,18 @@ dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
 | `crates/registry-platform-sqlite` | Shared bounded read-only SQLite security boundary used by Relay V2 and Evidence |
-| `crates/registryctl` | Relay adopter tooling |
-| `crates/registry-relay-v2` | Contract-compiled Relay V2 runtime and the `relay` binary; additive beside legacy Relay |
-| `crates/registry-relayctl` | Relay V2 adopter tooling and the `relayctl` binary; it does not replace `registryctl` |
+| `crates/registry-relay-v2` | Contract-compiled Relay V2 runtime and the `relay` binary |
+| `crates/registry-relayctl` | Relay V2 adopter tooling and the `relayctl` binary |
 | `crates/registry-evidence-oid4vci` | Wallet-facing OID4VCI delivery front end for Evidence credentials, and the `evidence-oid4vci` binary |
-| `crates/registry-language-server` | Editor language server for legacy Relay, Relay V2, and Evidence authoring documents, hosted for adopters by `evidencectl` and `relayctl` |
+| `crates/registry-language-server` | Editor language server for Relay V2 and Evidence authoring documents, hosted for adopters by `evidencectl` and `relayctl` |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
 | `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
-| `external/` | Notes on inputs that intentionally stay out of this tree (e.g. Crosswalk stays a pinned git dependency) |
+| `external/` | Historical external-input records and policy for reviewing any reintroduction |
 
-Relay V2 is developed additively under `registry-relay-v2` and
-`registry-relayctl`. It must not change the behavior or configuration contract
-of `registry-relay` or `registryctl`. Its approved contracts, coequal acceptance
-projects, and gates live under `products/relay-v2`.
+Relay V2 is implemented by `registry-relay-v2` and `registry-relayctl`. Its
+approved contracts, coequal acceptance projects, and gates live under
+`products/relay-v2`.
 
 Relay V2 editor support uses the shared in-memory authoring compiler in
 `registry-relay-v2`; the language server must not observe SQLite or source
@@ -107,7 +104,7 @@ are covered by the same source-product and domain neutrality checks as the
 runtime.
 
 `registry-evidencectl` (`evidencectl`) is adopter tooling beside the runtime,
-like `registryctl` is for the rest of the stack. It sits outside the frozen
+like `relayctl` is for the rest of the stack. It sits outside the frozen
 Version 1 runtime contract: it generates key material, starts incomplete
 OpenAPI authoring workspaces, writes the project-local editor schema mappings
 an adopter's YAML tooling reads, and drives fixture runs for complete
@@ -192,8 +189,8 @@ Root CI's `rust` job runs `cargo fmt --check`, `cargo check --locked
 --workspace --all-targets`, `cargo clippy --workspace --all-targets --
 -D warnings`, `cargo test --locked --workspace`, the full `cargo deny check`
 (advisories included; unresolvable RUSTSEC advisories carry scoped ignores in
-`deny.toml` with review triggers), and the Relay OpenAPI drift check
-(`just openapi-contract` from `crates/registry-relay`). cargo-deny needs v0.19+
+`deny.toml` with review triggers), and the Relay V2 product contract check
+(`products/relay-v2/scripts/check-contracts.sh`). cargo-deny needs v0.19+
 to parse this `deny.toml`; CI pins 0.19.8.
 
 Evidence-specific contracts, source neutrality, and verifier portability:

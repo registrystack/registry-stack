@@ -13,8 +13,8 @@ Public issues remain the source of truth for work selection:
 ## Now To September 2026
 
 - Keep the root monorepo release train reproducible enough for public review:
-  pinned release source refs, release capsules, checksums, keyless cosign
-  signatures for GitHub Release assets, SBOMs, and Grype reports.
+  pinned release source refs, candidate manifests, checksums, keyless Sigstore
+  bundles for GitHub Release assets, SBOMs, provenance, and Grype reports.
 - Close documentation gaps needed by adopters: installation, verification,
   security posture, release verification, and support expectations.
 - Tighten contribution hygiene around DCO sign-offs, test expectations, and

@@ -15,7 +15,7 @@ use crate::{
         document_diagnostic, document_rule_diagnostic, IndexedDiagnostic, IndexedProject,
         ProjectIndex, DOCUMENT_CEILING_RULE, PROJECT_CEILING_RULE,
     },
-    relay, relay_v2,
+    relay_v2,
     safety::{secure_regular_file, SecureFileRead},
     yaml::ParsedDocument,
 };
@@ -94,7 +94,6 @@ impl DocumentCeiling {
 /// own diagnostics, and never for another family's.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum ProjectFamily {
-    Relay,
     RelayV2,
     Evidence,
 }
@@ -103,12 +102,11 @@ impl ProjectFamily {
     /// Every family discovery tests, in the order it tests them. The order decides a directory that
     /// somehow answers for two families, so it is fixed here rather than left to whichever test
     /// runs first.
-    const ALL: &'static [Self] = &[Self::Relay, Self::RelayV2, Self::Evidence];
+    const ALL: &'static [Self] = &[Self::RelayV2, Self::Evidence];
 
     /// Whether this family claims a directory as one of its roots.
     fn declares_root(self, directory: &Path) -> bool {
         match self {
-            Self::Relay => relay::declares_root(directory),
             Self::RelayV2 => relay_v2::declares_root(directory),
             Self::Evidence => evidence::declares_root(directory),
         }
@@ -116,7 +114,6 @@ impl ProjectFamily {
 
     fn load_documents(self, root: &Path) -> Result<LoadedProjectDocuments> {
         match self {
-            Self::Relay => relay::load_project_documents(root),
             Self::RelayV2 => relay_v2::load_project_documents(root),
             Self::Evidence => evidence::load_project_documents(root),
         }
@@ -124,7 +121,6 @@ impl ProjectFamily {
 
     fn owns_document(self, root: &Path, path: &Path) -> bool {
         match self {
-            Self::Relay => relay::is_project_document(root, path),
             Self::RelayV2 => relay_v2::is_project_document(root, path),
             Self::Evidence => evidence::is_project_document(root, path),
         }
@@ -139,7 +135,6 @@ impl ProjectFamily {
     /// documents it holds and nothing else.
     fn is_read_by_a_build(self, root: &Path, path: &Path) -> bool {
         match self {
-            Self::Relay => false,
             // A saved governed reference can change the closure the compiler
             // reads, so Relay V2 settles the complete project after any save.
             Self::RelayV2 => true,
@@ -149,7 +144,6 @@ impl ProjectFamily {
 
     fn is_safe_authored_file(self, root: &Path, path: &Path) -> bool {
         match self {
-            Self::Relay => relay::is_safe_authored_file(root, path),
             Self::RelayV2 => relay_v2::is_safe_authored_file(root, path),
             Self::Evidence => evidence::is_safe_authored_file(root, path),
         }
@@ -162,7 +156,6 @@ impl ProjectFamily {
     /// refuses for its size is a document the editor refuses for the same size.
     fn document_ceiling(self, root: &Path, path: &Path) -> DocumentCeiling {
         match self {
-            Self::Relay => DocumentCeiling::project_document(),
             Self::RelayV2 => DocumentCeiling::project_document(),
             Self::Evidence => evidence::document_ceiling(root, path),
         }
@@ -176,12 +169,10 @@ impl ProjectFamily {
     /// The directory holding this path, when this family bounds how many documents it indexes from
     /// it, and `None` for every other path.
     ///
-    /// Relay bounds none of its directories. Evidence bounds the ones the authoring form bounds and
-    /// no others, so a definition the compiler resolves cannot become an unresolved reference on
-    /// screen.
+    /// Evidence bounds the directories its authoring form bounds, so a definition the compiler
+    /// resolves cannot become an unresolved reference on screen.
     fn bounded_directory_of(self, root: &Path, path: &Path) -> Option<PathBuf> {
         match self {
-            Self::Relay => None,
             Self::RelayV2 => None,
             Self::Evidence => evidence::bounded_directory_of(root, path),
         }
@@ -195,7 +186,6 @@ impl ProjectFamily {
         path: &Path,
     ) -> Result<Option<evidence::ScannedDirectory>> {
         match self {
-            Self::Relay => Ok(None),
             Self::RelayV2 => Ok(None),
             Self::Evidence => evidence::scan_bounded_directory(root, path),
         }
@@ -211,8 +201,7 @@ impl ProjectFamily {
     /// `dropped` names the project's own documents this root holds no text for, each one already
     /// reported for its own reason. A family whose documents are named by where they sit can still
     /// answer for those names, so one unreadable file stays one sentence instead of one sentence per
-    /// document that spells it. Relay is not such a family: a Relay name is written inside the
-    /// document, so a path there declares nothing on its own.
+    /// document that spells it.
     pub(crate) fn build_index(
         self,
         root: &Path,
@@ -221,17 +210,6 @@ impl ProjectFamily {
         dropped: &BTreeSet<PathBuf>,
     ) -> IndexedProject {
         match self {
-            // Relay records no choices: every name it offers is a name some document declares, so
-            // the symbol table is the whole of what a list there could hold.
-            Self::Relay => {
-                let (symbols, references, diagnostics) = relay::build_index(root, parsed);
-                IndexedProject {
-                    symbols,
-                    references,
-                    diagnostics,
-                    choices: Vec::new(),
-                }
-            }
             Self::RelayV2 => relay_v2::build_index(root, documents, parsed),
             Self::Evidence => evidence::build_index(root, documents, parsed, dropped),
         }
@@ -244,17 +222,15 @@ impl ProjectFamily {
     /// list, so each family says who it is.
     pub(crate) fn diagnostic_source(self) -> &'static str {
         match self {
-            Self::Relay => "registry-stack",
             Self::RelayV2 => "relay-v2",
             Self::Evidence => "evidence",
         }
     }
 
     /// The code a diagnostic of this family carries for `rule`, for the rules that belong to no one
-    /// symbol kind. See [`crate::refs::SymbolKind::diagnostic_code`] for why Relay publishes none.
+    /// symbol kind.
     pub(crate) fn diagnostic_code(self, rule: &str) -> Option<String> {
         match self {
-            Self::Relay => None,
             Self::RelayV2 => Some(format!("{}/{rule}", self.diagnostic_source())),
             Self::Evidence => Some(format!("{}/{rule}", self.diagnostic_source())),
         }
@@ -265,7 +241,7 @@ impl ProjectFamily {
     /// are project inputs but not YAML documents.
     pub(crate) fn parses_as_yaml(self, path: &Path) -> bool {
         match self {
-            Self::Relay | Self::Evidence => true,
+            Self::Evidence => true,
             Self::RelayV2 => path.extension().is_some_and(|extension| {
                 matches!(extension.to_str(), Some("yaml" | "yml" | "json"))
             }),
@@ -935,6 +911,8 @@ fn canonical_path(path: &Path) -> PathBuf {
 mod tests {
     use std::fs;
 
+    use super::*;
+    use crate::refs::DOCUMENT_START;
     use registry_evidence_authoring::{
         layout::{
             ACCESS_DIRECTORY, ACCESS_POLICIES_DIRECTORY, MAX_QUESTIONS, MAX_QUESTION_BYTES,
@@ -943,20 +921,10 @@ mod tests {
         marker::{default_project_marker_document, PROJECT_MARKER_FILE},
     };
     use tempfile::TempDir;
-    use tower_lsp_server::ls_types::Position;
 
-    use super::*;
-    use crate::refs::DOCUMENT_START;
-
-    const MANIFEST: &str = "version: 1\nregistry: { id: demo }\nservices: {}\n";
     /// Enough of a question for the tests here, which are about which root owns which file. What a
     /// whole question has to say for itself is `crates/registry-language-server/tests/`.
     const QUESTION: &str = "version: 1\nid: adult-status\n";
-
-    fn project_in(directory: &Path) {
-        fs::create_dir_all(directory).unwrap();
-        fs::write(directory.join("registry-stack.yaml"), MANIFEST).unwrap();
-    }
 
     fn relay_v2_project_in(directory: &Path) {
         fs::create_dir_all(directory).unwrap();
@@ -998,54 +966,6 @@ mod tests {
         workspace
     }
 
-    #[test]
-    fn finds_project_from_nested_directory() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let nested = temp.path().join("integrations/people");
-        fs::create_dir_all(&nested).unwrap();
-
-        let workspace = Workspace::default();
-        assert_eq!(
-            workspace.root_above(&nested),
-            Some((temp.path().canonicalize().unwrap(), ProjectFamily::Relay))
-        );
-    }
-
-    #[test]
-    fn a_workspace_folder_that_is_a_project_is_indexed_at_initialize() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-
-        let workspace = workspace_over(&[temp.path()]);
-
-        assert_eq!(workspace.roots().count(), 1);
-        assert!(workspace.roots().any(|state| state
-            .index()
-            .workspace_symbols("demo")
-            .iter()
-            .any(|symbol| symbol.name == "demo")));
-    }
-
-    #[test]
-    fn a_root_below_a_workspace_folder_is_indexed_when_a_document_opens() {
-        let temp = TempDir::new().unwrap();
-        let nested = temp.path().join("projects/registry");
-        project_in(&nested);
-
-        let mut workspace = workspace_over(&[temp.path()]);
-        assert_eq!(workspace.roots().count(), 0);
-
-        workspace
-            .ensure_root_for(&nested.join("registry-stack.yaml").canonicalize().unwrap())
-            .unwrap();
-
-        assert_eq!(workspace.roots().count(), 1);
-        assert!(workspace
-            .root_for(&nested.canonicalize().unwrap().join("registry-stack.yaml"))
-            .is_some());
-    }
-
     /// A project marked inside an already indexed root stays undiscovered, and says nothing about
     /// itself.
     ///
@@ -1068,116 +988,6 @@ mod tests {
     /// The control below is the other half of the property. The same project on disk, opened as
     /// the root it is, is indexed and reports the sentence its question earns, so what is pinned
     /// above is a project left undiscovered and not a project nothing can read.
-    #[test]
-    fn a_project_marked_inside_an_indexed_root_is_left_undiscovered() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let inner = temp.path().join("evidence");
-        evidence_project_in(&inner);
-        let manifest = temp
-            .path()
-            .join("registry-stack.yaml")
-            .canonicalize()
-            .unwrap();
-        let question = inner
-            .join(QUESTIONS_DIRECTORY)
-            .join("adult-status.yaml")
-            .canonicalize()
-            .unwrap();
-
-        let mut workspace = workspace_over(&[temp.path()]);
-        workspace.ensure_root_for(&question).unwrap();
-        workspace.update(question.clone(), QUESTION.to_owned(), 1);
-
-        assert_eq!(
-            workspace
-                .roots()
-                .flat_map(|state| state.index().diagnostics())
-                .map(|diagnostic| (diagnostic.path.as_path(), diagnostic.message.as_str()))
-                .collect::<Vec<_>>(),
-            Vec::new(),
-            "nothing is reported on the inner document, and the root above it reports what it \
-             reports with no project nested inside it"
-        );
-        assert_eq!(workspace.roots().count(), 1);
-        let containing = workspace
-            .root_for(&question)
-            .expect("the root above the inner project answers for its documents");
-        assert_eq!(containing.root, temp.path().canonicalize().unwrap());
-        assert_eq!(containing.family, ProjectFamily::Relay);
-        assert_eq!(
-            containing.index().document_paths().collect::<Vec<_>>(),
-            vec![manifest.as_path()],
-            "the inner project's documents belong to no family this root reads"
-        );
-
-        let discovered = workspace_over(&[&inner]);
-
-        assert_eq!(discovered.roots().count(), 1);
-        let own = discovered
-            .root_for(&question)
-            .expect("the inner project is a root when it is the one the client opened");
-        assert_eq!(own.family, ProjectFamily::Evidence);
-        assert!(own.index().document_paths().any(|path| path == question));
-        assert_eq!(
-            own.index()
-                .diagnostics()
-                .iter()
-                .map(|diagnostic| diagnostic.code.as_deref())
-                .collect::<Vec<_>>(),
-            vec![Some("evidence/question-shape")],
-            "the stub question is a question this project reads and reports on"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_root_reached_through_a_symlinked_ancestor_is_rejected() {
-        let temp = TempDir::new().unwrap();
-        let folder = temp.path().join("workspace");
-        let outside = temp.path().join("outside");
-        fs::create_dir_all(&folder).unwrap();
-        project_in(&outside);
-        std::os::unix::fs::symlink(&outside, folder.join("link")).unwrap();
-
-        let mut workspace = workspace_over(&[&folder]);
-        let through_link = folder.join("link/registry-stack.yaml");
-        assert!(
-            fs::symlink_metadata(&through_link)
-                .is_ok_and(|metadata| metadata.file_type().is_file()),
-            "the fixture must place a real project file behind the link"
-        );
-
-        assert_eq!(workspace.root_above(&through_link), None);
-        workspace.ensure_root_for(&through_link).unwrap();
-        assert_eq!(workspace.roots().count(), 0);
-
-        // The same project is reachable once the client opens the folder that really holds it.
-        let unconstrained = Workspace::default();
-        assert_eq!(
-            unconstrained.root_above(&through_link),
-            Some((outside.canonicalize().unwrap(), ProjectFamily::Relay))
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_symlinked_project_file_does_not_declare_a_root() {
-        let temp = TempDir::new().unwrap();
-        let real = temp.path().join("real");
-        let decoy = temp.path().join("decoy");
-        project_in(&real);
-        fs::create_dir_all(&decoy).unwrap();
-        std::os::unix::fs::symlink(
-            real.join("registry-stack.yaml"),
-            decoy.join("registry-stack.yaml"),
-        )
-        .unwrap();
-
-        let workspace = workspace_over(&[&decoy]);
-
-        assert_eq!(workspace.roots().count(), 0);
-    }
 
     #[test]
     fn an_evidence_marker_declares_an_evidence_root() {
@@ -1324,61 +1134,6 @@ mod tests {
     }
 
     #[test]
-    fn sibling_roots_of_two_families_each_answer_for_their_own_documents() {
-        let temp = TempDir::new().unwrap();
-        let relay = temp.path().join("relay");
-        let evidence = temp.path().join("evidence");
-        project_in(&relay);
-        evidence_project_in(&evidence);
-
-        let workspace = workspace_over(&[&relay, &evidence]);
-        assert_eq!(workspace.roots().count(), 2);
-
-        let manifest = relay.join("registry-stack.yaml").canonicalize().unwrap();
-        let question = evidence
-            .join(QUESTIONS_DIRECTORY)
-            .join("adult-status.yaml")
-            .canonicalize()
-            .unwrap();
-        let relay_root = workspace.root_for(&manifest).unwrap();
-        let evidence_root = workspace.root_for(&question).unwrap();
-
-        assert_eq!(relay_root.family, ProjectFamily::Relay);
-        assert_eq!(evidence_root.family, ProjectFamily::Evidence);
-        assert_eq!(relay_root.diagnostic_source(), "registry-stack");
-        assert_eq!(evidence_root.diagnostic_source(), "evidence");
-        assert!(relay_root
-            .index()
-            .document_paths()
-            .any(|path| path == manifest));
-        assert!(!relay_root
-            .index()
-            .document_paths()
-            .any(|path| path == question));
-        assert!(evidence_root
-            .index()
-            .document_paths()
-            .any(|path| path == question));
-        assert!(!evidence_root
-            .index()
-            .document_paths()
-            .any(|path| path == manifest));
-    }
-
-    #[test]
-    fn declared_folders_that_do_not_resolve_contain_nothing() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-
-        let mut workspace = workspace_over(&[&temp.path().join("does-not-exist")]);
-        workspace
-            .ensure_root_for(&temp.path().join("registry-stack.yaml"))
-            .unwrap();
-
-        assert_eq!(workspace.roots().count(), 0);
-    }
-
-    #[test]
     fn a_document_outside_every_root_is_served_without_an_index() {
         let temp = TempDir::new().unwrap();
         let loose = temp.path().join("notes.yaml");
@@ -1399,180 +1154,6 @@ mod tests {
                 .count(),
             0
         );
-    }
-
-    #[test]
-    fn indexed_roots_stop_at_the_cap() {
-        let temp = TempDir::new().unwrap();
-        let mut workspace = Workspace::default();
-        for index in 0..MAX_INDEXED_ROOTS + 4 {
-            let root = temp.path().join(format!("project-{index}"));
-            project_in(&root);
-            workspace
-                .ensure_root_for(&root.join("registry-stack.yaml").canonicalize().unwrap())
-                .unwrap();
-        }
-
-        assert_eq!(workspace.roots().count(), MAX_INDEXED_ROOTS);
-    }
-
-    #[test]
-    fn each_root_answers_for_its_own_documents() {
-        let temp = TempDir::new().unwrap();
-        let first = temp.path().join("first");
-        let second = temp.path().join("second");
-        fs::create_dir_all(&first).unwrap();
-        fs::create_dir_all(&second).unwrap();
-        fs::write(
-            first.join("registry-stack.yaml"),
-            "version: 1\nregistry: { id: first-registry }\nservices: {}\n",
-        )
-        .unwrap();
-        fs::write(
-            second.join("registry-stack.yaml"),
-            "version: 1\nregistry: { id: second-registry }\nservices: {}\n",
-        )
-        .unwrap();
-
-        let mut workspace = workspace_over(&[&first, &second]);
-        assert_eq!(workspace.roots().count(), 2);
-
-        let first_manifest = first.join("registry-stack.yaml").canonicalize().unwrap();
-        let second_manifest = second.join("registry-stack.yaml").canonicalize().unwrap();
-        assert!(workspace
-            .root_for(&first_manifest)
-            .unwrap()
-            .index()
-            .workspace_symbols("second-registry")
-            .is_empty());
-        assert!(workspace
-            .root_for(&second_manifest)
-            .unwrap()
-            .index()
-            .workspace_symbols("second-registry")
-            .iter()
-            .any(|symbol| symbol.name == "second-registry"));
-
-        workspace.update(
-            second_manifest.clone(),
-            "version: 1\nregistry: { id: renamed }\nservices: {}\n".to_owned(),
-            2,
-        );
-        assert!(workspace
-            .root_for(&first_manifest)
-            .unwrap()
-            .index()
-            .workspace_symbols("first-registry")
-            .iter()
-            .any(|symbol| symbol.name == "first-registry"));
-        assert!(workspace
-            .root_for(&second_manifest)
-            .unwrap()
-            .index()
-            .workspace_symbols("renamed")
-            .iter()
-            .any(|symbol| symbol.name == "renamed"));
-    }
-
-    #[test]
-    fn invalid_edits_index_what_still_parses_and_report_one_syntax_error() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let mut state = RootState::load(temp.path(), ProjectFamily::Relay).unwrap();
-        let manifest = temp
-            .path()
-            .join("registry-stack.yaml")
-            .canonicalize()
-            .unwrap();
-        state.update(
-            manifest.clone(),
-            "version: 1\nregistry: { id: current }\nservices: {}\n".to_owned(),
-            2,
-        );
-        assert!(state
-            .index
-            .workspace_symbols("current")
-            .iter()
-            .any(|symbol| symbol.name == "current"));
-
-        state.update(
-            manifest.clone(),
-            "version: 1\nregistry: { id: current }\nservices: {}\nbroken: [\n".to_owned(),
-            3,
-        );
-        assert_eq!(state.open_versions.get(&manifest), Some(&3));
-        assert!(state
-            .index
-            .workspace_symbols("current")
-            .iter()
-            .any(|symbol| symbol.name == "current"));
-        assert_eq!(
-            state
-                .index
-                .definitions_at(&manifest, Position::new(1, 20))
-                .len(),
-            1
-        );
-        let diagnostics = state.index.diagnostics();
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(diagnostics[0].message.starts_with("Invalid YAML syntax"));
-        assert_eq!(diagnostics[0].range.start, Position::new(3, 8));
-
-        state.update(manifest.clone(), "registry: [\n".to_owned(), 4);
-        assert!(state.index.workspace_symbols("current").is_empty());
-        assert_eq!(state.index.diagnostics().len(), 1);
-    }
-
-    #[test]
-    fn reloads_external_changes_from_disk() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let manifest = temp
-            .path()
-            .join("registry-stack.yaml")
-            .canonicalize()
-            .unwrap();
-        let mut state = RootState::load(temp.path(), ProjectFamily::Relay).unwrap();
-
-        fs::write(
-            &manifest,
-            "version: 1\nregistry: { id: external }\nservices: {}\n",
-        )
-        .unwrap();
-        state.reload_from_disk(&manifest);
-
-        assert!(state
-            .index
-            .workspace_symbols("external")
-            .iter()
-            .any(|symbol| symbol.name == "external"));
-    }
-
-    #[test]
-    fn adds_and_removes_external_project_documents() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let mut state = RootState::load(temp.path(), ProjectFamily::Relay).unwrap();
-        let entities = temp.path().join("entities");
-        fs::create_dir(&entities).unwrap();
-        let entity = entities.join("person.yaml");
-        fs::write(&entity, "version: 1\nid: person\n").unwrap();
-        let entity = entity.canonicalize().unwrap();
-
-        state
-            .reload_watched_batch(std::slice::from_ref(&entity))
-            .unwrap();
-        assert!(state
-            .index
-            .workspace_symbols("person")
-            .iter()
-            .any(|symbol| symbol.name == "person"));
-
-        fs::remove_file(&entity).unwrap();
-        state
-            .reload_watched_batch(std::slice::from_ref(&entity))
-            .unwrap();
-        assert!(state.index.workspace_symbols("person").is_empty());
     }
 
     /// The role ceilings are the authoring form's, so the fixtures below build a question past
@@ -2103,38 +1684,6 @@ governance:
         );
     }
 
-    /// Relay's ceiling keeps reporting without a code, which is how every Relay diagnostic reports.
-    ///
-    /// A client filtering Relay's diagnostics today filters on the message. Naming this one rule
-    /// would be the only named rule in that family, and which codes Relay publishes is a decision
-    /// about the Relay surface rather than a side effect of naming Evidence's.
-    #[test]
-    fn a_relay_document_past_the_ceiling_is_reported_without_a_code() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let manifest = temp
-            .path()
-            .join("registry-stack.yaml")
-            .canonicalize()
-            .unwrap();
-        let mut state = RootState::load(temp.path(), ProjectFamily::Relay).unwrap();
-
-        let mut oversized = String::from("version: 1\nregistry: { id: current }\nservices: {}\n#");
-        oversized.push_str(&" ".repeat(MAX_DOCUMENT_BYTES as usize));
-        state.update(manifest, oversized, 2);
-
-        let reported = state
-            .index
-            .diagnostics()
-            .iter()
-            .map(|diagnostic| (diagnostic.code.as_deref(), diagnostic.message.as_str()))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            reported,
-            vec![(None, "Project document exceeds the 1 MiB indexing limit")]
-        );
-    }
-
     /// A buffer left open over a file the project no longer holds says nothing about the project.
     ///
     /// A client keeps a tab open on a document that has been deleted, and the author goes on seeing
@@ -2311,43 +1860,5 @@ governance:
                 .any(|symbol| symbol.name == "unsaved-concept"),
             "the file is still on disk, so the buffer is still what the root answers from"
         );
-    }
-
-    #[test]
-    fn external_changes_do_not_replace_an_open_document() {
-        let temp = TempDir::new().unwrap();
-        project_in(temp.path());
-        let manifest = temp
-            .path()
-            .join("registry-stack.yaml")
-            .canonicalize()
-            .unwrap();
-        let mut state = RootState::load(temp.path(), ProjectFamily::Relay).unwrap();
-        state.update(
-            manifest.clone(),
-            "version: 1\nregistry: { id: unsaved }\nservices: {}\n".to_owned(),
-            7,
-        );
-
-        fs::write(
-            &manifest,
-            "version: 1\nregistry: { id: on-disk }\nservices: {}\n",
-        )
-        .unwrap();
-        state.reload_from_disk(&manifest);
-
-        assert!(state
-            .index
-            .workspace_symbols("unsaved")
-            .iter()
-            .any(|symbol| symbol.name == "unsaved"));
-        assert!(state.index.workspace_symbols("on-disk").is_empty());
-
-        state.close(&manifest);
-        assert!(state
-            .index
-            .workspace_symbols("on-disk")
-            .iter()
-            .any(|symbol| symbol.name == "on-disk"));
     }
 }

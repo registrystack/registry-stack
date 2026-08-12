@@ -484,12 +484,6 @@ class GateInventoryTest(unittest.TestCase):
             ),
         )
 
-    def test_missing_relay_exposure_gate_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "name: Relay exposure check", "name: Relay exposure"
-        )
-        self.assertIn("Relay exposure check", self.module.missing_gates(text))
-
     def test_missing_relay_v2_product_gates_are_reported(self) -> None:
         for snippet, replacement, gate in (
             (
@@ -570,16 +564,28 @@ class GateInventoryTest(unittest.TestCase):
             "run: true",
         )
         self.assertIn(
-            "Release candidate receipt and promotion verifier tests",
+            "Release candidate manifest and promotion verifier tests",
             self.module.missing_gates(text),
         )
 
-    def test_missing_new_release_security_tests_are_reported(self) -> None:
+    def test_missing_release_image_oci_label_checks_are_reported(self) -> None:
         tests = (
             (
-                "release/scripts/test_select_release_proof_level.py",
-                "Release proof-level selection tests",
+                "release/scripts/test_check_release_image_oci_labels.py",
+                "Release image OCI label checker tests",
             ),
+            (
+                "release/scripts/smoke-release-image-oci-labels.sh",
+                "Release image OCI label smoke",
+            ),
+        )
+        for path, gate in tests:
+            with self.subTest(path=path):
+                text = self.workflow.replace(path, "release/scripts/disabled-gate")
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_new_release_security_tests_are_reported(self) -> None:
+        tests = (
             (
                 "release/scripts/test_check_release_storage.py",
                 "Release storage preflight tests",
@@ -598,23 +604,7 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(path, path.replace("test_", "skip_"))
                 self.assertIn(gate, self.module.missing_gates(text))
 
-    def test_missing_release_image_oci_checker_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",
-            "run: true",
-        )
-        self.assertIn(
-            "Release image OCI label checker tests", self.module.missing_gates(text)
-        )
 
-    def test_missing_executable_release_image_oci_smoke_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "run: release/scripts/smoke-release-image-oci-labels.sh",
-            "run: true",
-        )
-        self.assertIn(
-            "Executable release image OCI label smoke", self.module.missing_gates(text)
-        )
 
     def test_missing_release_workflow_classification_is_reported(self) -> None:
         workflows = (
@@ -674,36 +664,8 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
-    def test_missing_relay_advisory_checker_tests_are_reported(self) -> None:
-        path = "crates/registry-relay/tests/advisory_baseline_check_test.py"
-        text = self.workflow.replace(
-            path,
-            path.replace(
-                "advisory_baseline_check_test.py",
-                "disabled_advisory_test.py",
-            ),
-        )
-        self.assertIn("Relay advisory checker tests", self.module.missing_gates(text))
 
-    def test_missing_relay_all_features_shard_is_reported(self) -> None:
-        classifier = self.classifier.replace(
-            '"all_features": shard_name in {"relay", "relay-v2"}',
-            '"all_features": False',
-        )
-        self.assertIn(
-            "Relay all-features shard",
-            self.module.missing_gates(self.workflow, classifier),
-        )
 
-    def test_missing_config_report_platform_path_is_reported(self) -> None:
-        classifier = self.classifier.replace(
-            '"crates/registry-config-report/*",',
-            '"crates/removed-config-report/*",',
-        )
-        self.assertIn(
-            "Config report platform path",
-            self.module.missing_gates(self.workflow, classifier),
-        )
 
     def test_missing_affected_package_test_is_reported(self) -> None:
         text = self.workflow.replace(
@@ -712,25 +674,11 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Affected package tests", self.module.missing_gates(text))
 
-    def test_missing_config_report_platform_clippy_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings",
-            "cargo clippy --locked -p 'registry-platform-*' --all-targets --all-features -- -D warnings",
-        )
-        self.assertIn("Platform all-features clippy", self.module.missing_gates(text))
 
     def test_missing_platform_coverage_threshold_is_reported(self) -> None:
         text = self.workflow.replace("--fail-under-lines 80", "--summary-only")
         self.assertIn("Platform coverage threshold", self.module.missing_gates(text))
 
-    def test_missing_config_report_platform_coverage_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "cargo llvm-cov --locked\n          -p registry-config-report\n          -p 'registry-platform-*'",
-            "cargo llvm-cov --locked\n          -p 'registry-platform-*'",
-        )
-        self.assertIn(
-            "Config report platform coverage", self.module.missing_gates(text)
-        )
 
     def test_missing_secret_scan_redaction_is_reported(self) -> None:
         text = self.workflow.replace("--redact", "--verbose")
@@ -793,190 +741,37 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Release docset validation", self.module.missing_gates(text))
 
-    def test_missing_openid_conformance_runner_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "python3 -m unittest release/scripts/test_openid_conformance_runner.py",
-            "python3 release/scripts/openid-conformance-runner.py list",
+    def test_release_manifest_validation_uses_only_the_maintained_manifest(self) -> None:
+        command = (
+            "release/scripts/registry-release validate "
+            "release/manifests/registry-stack-beta-29.yaml"
         )
-        self.assertIn(
-            "OpenID conformance runner tests", self.module.missing_gates(text)
-        )
-
-    def test_release_tool_runs_conformance_candidate_binding_tests(self) -> None:
-        release_tool = self.workflow[
-            self.workflow.index("  release-tool:\n") : self.workflow.index(
-                "  release-tool-required:\n"
-            )
-        ]
-        self.assertIn(
-            "run: python3 -m unittest release/scripts/test_conformance_candidate.py",
-            release_tool,
+        self.assertIn(command, self.workflow)
+        self.assertNotIn(
+            "for manifest in release/manifests/registry-stack-*.yaml",
+            self.workflow,
         )
 
-    def test_missing_first_country_release_form_runner_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "python3 -m unittest release/scripts/test_first_country_release_form.py",
-            "python3 release/scripts/first-country-release-form.py --help",
-        )
-        self.assertIn(
-            "First-country release-form runner tests",
-            self.module.missing_gates(text),
-        )
+        text = self.workflow.replace(command, "release/scripts/registry-release skip")
+        self.assertIn("Release manifest validation", self.module.missing_gates(text))
 
-    def test_missing_relay_oidc_smoke_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "python3 -m unittest release/scripts/test_relay_oidc_smoke.py",
-            "python3 release/scripts/relay-oidc-smoke.py plan",
-        )
-        self.assertIn("Relay OIDC smoke tests", self.module.missing_gates(text))
 
-    def test_missing_relay_oidc_offline_validation_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "run: python3 release/scripts/relay-oidc-smoke.py validate",
-            "run: python3 release/scripts/relay-oidc-smoke.py skip-validation",
-        )
-        self.assertIn(
-            "Relay OIDC smoke offline validation", self.module.missing_gates(text)
-        )
 
-    def test_missing_stable_surface_gate_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "run: python3 release/scripts/check-stable-surface-compatibility.py",
-            "run: python3 release/scripts/skip-stable-surface-compatibility.py",
-        )
-        self.assertIn("Stable surface compatibility", self.module.missing_gates(text))
 
-    def test_missing_relay_openapi_stability_filter_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "run: python3 -m unittest release/scripts/test_filter_relay_openapi_stability.py",
-            "run: python3 -m unittest release/scripts/skip_filter_relay_openapi_stability.py",
-        )
-        self.assertIn(
-            "Relay OpenAPI stability filter tests", self.module.missing_gates(text)
-        )
 
-    def test_missing_openapi_base_reference_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
-            "OPENAPI_CONTRACT_BASE_REF: disabled",
-        )
-        self.assertIn("OpenAPI base-reference input", self.module.missing_gates(text))
 
-    def test_missing_upgrade_exercise_record_discovery_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "python3 release/scripts/validate-upgrade-exercise.py",
-            "python3 release/scripts/validate-upgrade-exercise.py --skip-discovery",
-        )
-        self.assertIn(
-            "Upgrade exercise record discovery", self.module.missing_gates(text)
-        )
 
-    def test_missing_product_input_lifecycle_validator_tests_are_reported(
-        self,
-    ) -> None:
-        text = self.workflow.replace(
-            "python3 -m unittest release/scripts/test_validate_product_input_lifecycle.py",
-            "python3 -m unittest release/scripts/skip_validate_product_input_lifecycle.py",
-        )
-        self.assertIn(
-            "Product-input lifecycle validator tests",
-            self.module.missing_gates(text),
-        )
 
-    def test_missing_product_input_lifecycle_record_discovery_is_reported(
-        self,
-    ) -> None:
-        text = self.workflow.replace(
-            "--candidate-asset-root target/candidate-release-assets",
-            "--candidate-asset-root target/unauthenticated-assets",
-            1,
-        )
-        self.assertIn(
-            "Product-input lifecycle record discovery",
-            self.module.missing_gates(text),
-        )
 
-    def test_missing_first_country_acceptance_validator_tests_are_reported(
-        self,
-    ) -> None:
-        text = self.workflow.replace(
-            "python3 -m unittest release/scripts/test_validate_first_country_acceptance.py",
-            "python3 -m unittest release/scripts/skip_validate_first_country_acceptance.py",
-        )
-        self.assertIn(
-            "First-country acceptance validator tests",
-            self.module.missing_gates(text),
-        )
 
-    def test_missing_first_country_acceptance_source_packet_is_reported(
-        self,
-    ) -> None:
-        text = self.workflow.replace(
-            "python3 release/scripts/validate-first-country-acceptance.py check-packet",
-            "python3 release/scripts/validate-first-country-acceptance.py skip-packet",
-        )
-        self.assertIn(
-            "First-country acceptance source packet",
-            self.module.missing_gates(text),
-        )
 
-    def test_missing_upgrade_exercise_asset_preparation_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "python3 release/scripts/prepare-upgrade-exercise-assets.py",
-            "python3 release/scripts/skip-upgrade-exercise-assets.py",
-        )
-        self.assertIn(
-            "Candidate evidence asset preparation",
-            self.module.missing_gates(text),
-        )
 
-    def test_product_input_candidates_enable_cosign_installation(self) -> None:
-        text = self.workflow.replace(
-            "if: steps.candidate-assets.outputs.has_candidates == 'true'",
-            "if: steps.upgrade-assets.outputs.has_candidates == 'true'",
-            1,
-        )
-        self.assertIn(
-            "Candidate evidence Cosign installation",
-            self.module.missing_gates(text),
-        )
 
-    def test_product_input_candidates_enable_slsa_verifier_installation(
-        self,
-    ) -> None:
-        marker = "if: steps.candidate-assets.outputs.has_candidates == 'true'"
-        first = self.workflow.index(marker)
-        second = self.workflow.index(marker, first + len(marker))
-        text = self.workflow[:second] + self.workflow[second:].replace(
-            marker,
-            "if: steps.upgrade-assets.outputs.has_candidates == 'true'",
-            1,
-        )
-        self.assertIn(
-            "Candidate evidence SLSA verifier installation",
-            self.module.missing_gates(text),
-        )
 
-    def test_missing_upgrade_exercise_asset_root_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "--candidate-asset-root target/candidate-release-assets",
-            "--candidate-asset-root target/unauthenticated-assets",
-        )
-        self.assertIn(
-            "Upgrade exercise record discovery", self.module.missing_gates(text)
-        )
 
-    def test_missing_product_input_lifecycle_asset_preparation_is_reported(
-        self,
-    ) -> None:
-        text = self.workflow.replace(
-            "--product-input-records release/exercises/product-input-lifecycle",
-            "--product-input-records release/exercises/removed-lifecycle",
-        )
-        self.assertIn(
-            "Candidate evidence asset preparation",
-            self.module.missing_gates(text),
-        )
+
+
+
 
     def test_missing_stable_error_registry_path_filter_is_reported(self) -> None:
         classifier = self.classifier.replace(

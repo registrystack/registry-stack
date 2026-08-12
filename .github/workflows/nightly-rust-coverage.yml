@@ -57,15 +57,13 @@ jobs:
           flags = {
               "platform": "platform",
               "manifest": "manifest-unit",
-              "relay": "relay-unit",
               "developer-tools": "developer-tools",
-              "registryctl": "registryctl-unit",
           }
           matrix = [
               {
                   "name": name,
                   "packages": " ".join(packages),
-                  "all_features": str(name in {"platform", "relay"}).lower(),
+                  "all_features": str(name in {"platform", "relay-v2"}).lower(),
                   "features": "",
                   "flag": flags[name],
               }
@@ -171,104 +169,6 @@ jobs:
           files: target/nightly-rust-coverage/coverage/${{ matrix.name }}.lcov
           flags: ${{ matrix.flag }}
           name: nightly-${{ matrix.name }}
-          plugins: noop
-          use_oidc: true
-          version: v11.3.1
-
-      - name: Report disk usage
-        if: always()
-        run: |
-          df -h /
-          du -sh "${CARGO_TARGET_DIR}" 2>/dev/null || true
-
-  relay-postgres:
-    name: Relay PostgreSQL coverage (${{ matrix.postgresql }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        postgresql:
-          - "16"
-          - "17"
-          - "18"
-    services:
-      postgres:
-        image: postgres:${{ matrix.postgresql }}-alpine
-        env:
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready --username postgres --dbname postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    env:
-      CARGO_TARGET_DIR: target/nightly-relay-postgres-coverage
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          submodules: false
-
-      - name: Cache Cargo registry
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-        with:
-          shared-key: workspace-registry
-          cache-targets: false
-          save-if: false
-
-      - name: Install pinned coverage tool
-        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
-        with:
-          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
-
-      - name: Run Relay PostgreSQL conformance with coverage
-        env:
-          REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
-        run: >-
-          cargo llvm-cov test --locked
-          -p registry-relay
-          --lib
-          --no-report
-          state_plane::postgres_tests::postgres_state_plane_enforces_role_catalog_and_chain_contract
-          --
-          --ignored
-          --exact
-
-      - name: Export Relay PostgreSQL coverage
-        run: |
-          set -euo pipefail
-          coverage_dir="${CARGO_TARGET_DIR}/coverage"
-          mkdir -p "${coverage_dir}"
-          cargo llvm-cov report --locked -p registry-relay
-          cargo llvm-cov report --locked \
-            -p registry-relay \
-            --lcov \
-            --output-path "${coverage_dir}/relay-postgresql-${{ matrix.postgresql }}.lcov"
-
-      - name: Upload Relay PostgreSQL coverage artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: nightly-relay-postgresql-${{ matrix.postgresql }}-coverage
-          path: target/nightly-relay-postgres-coverage/coverage/relay-postgresql-${{ matrix.postgresql }}.lcov
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload Relay PostgreSQL coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          disable_search: true
-          fail_ci_if_error: true
-          files: target/nightly-relay-postgres-coverage/coverage/relay-postgresql-${{ matrix.postgresql }}.lcov
-          flags: relay-postgres
-          name: nightly-relay-postgresql-${{ matrix.postgresql }}
           plugins: noop
           use_oidc: true
           version: v11.3.1
