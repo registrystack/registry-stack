@@ -32,6 +32,35 @@
       }
     },
     {
+      "id": "v0.20.0",
+      "label": "v0.20.0",
+      "path": "/v/0.20.0/",
+      "status": "archived",
+      "availability": "candidate",
+      "source": "registry-stack-v0.20.0",
+      "repo_docs_source": "monorepo",
+      "published_at": "2026-08-12",
+      "description": "Registry Stack v0.20.0 beta-30 candidate documentation set with Relay clients, wallet delivery, and local source mocks.",
+      "products": {
+        "registry-stack": {
+          "version": "v0.20.0",
+          "ref": "v0.20.0"
+        },
+        "registry-relay": {
+          "version": "v0.20.0",
+          "ref": "v0.20.0"
+        },
+        "registry-manifest": {
+          "version": "v0.20.0",
+          "ref": "v0.20.0"
+        },
+        "registry-evidence": {
+          "version": "v0.20.0",
+          "ref": "v0.20.0"
+        }
+      }
+    },
+    {
       "id": "v0.18.0",
       "label": "v0.18.0",
       "path": "/v/0.18.0/",

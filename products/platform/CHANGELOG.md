@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## v0.20.0 - 2026-08-12
+
+- Shared HTTP utilities now separate client and server boundaries. Evidence,
+  Relay, and Registry Mint reuse the bounded outbound HTTP, private-key-JWT,
+  token, destination, and transport checks without importing a retired product
+  configuration model.
+- Removed unused Relay V1 configuration, audit, operations, and policy
+  primitives from the current workspace. Current products keep the smaller
+  shared authentication, cryptography, HTTP, SD-JWT, SQLite, and testing
+  foundations they exercise.
+
 ## v0.19.0 - 2026-08-11
 
 - The shared SQLite boundary now applies one end-to-end deadline to admission,

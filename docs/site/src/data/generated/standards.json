@@ -133,7 +133,7 @@
       },
       {
         "label": "Relay V2 standards alignment, intentional gaps",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/products/relay-v2/STANDARDS-ALIGNMENT.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/relay-v2/STANDARDS-ALIGNMENT.md"
       }
     ],
     "last_checked": "2026-08-11",
@@ -159,7 +159,7 @@
       },
       {
         "label": "Relay V2 standards alignment, intentional gaps",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/products/relay-v2/STANDARDS-ALIGNMENT.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/relay-v2/STANDARDS-ALIGNMENT.md"
       }
     ],
     "last_checked": "2026-08-11",
@@ -241,11 +241,11 @@
     "evidence_docs": [
       {
         "label": "Relay V2 OpenAPI generation",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/artifacts.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/artifacts.rs"
       },
       {
         "label": "Relay V2 OpenAPI route",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/api.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/api.rs"
       },
       {
         "label": "Registry Notary generated OpenAPI document (pinned)",
@@ -275,11 +275,11 @@
     "evidence_docs": [
       {
         "label": "Relay V2 SHACL shape generation",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/semantics.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/semantics.rs"
       },
       {
         "label": "Relay V2 generated artifact inventory",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/artifacts.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/artifacts.rs"
       },
       {
         "label": "Registry Manifest README",
@@ -339,11 +339,11 @@
     "evidence_docs": [
       {
         "label": "Relay V2 JSON Schema generation",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/semantics.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/semantics.rs"
       },
       {
         "label": "Relay V2 generated artifact inventory",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/artifacts.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/artifacts.rs"
       },
       {
         "label": "Registry Manifest form schema fixture (Draft 2020-12)",
@@ -376,11 +376,11 @@
     "evidence_docs": [
       {
         "label": "Relay V2 JSON-LD context and vocabulary generation",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/semantics.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/semantics.rs"
       },
       {
         "label": "Relay V2 JSON-LD response representation",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/api.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/api.rs"
       },
       {
         "label": "Registry Notary CCCEV renderer",
@@ -588,11 +588,11 @@
     "evidence_docs": [
       {
         "label": "Relay V2 SDMX read routes",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/sdmx_http.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/sdmx_http.rs"
       },
       {
         "label": "Relay V2 SDMX representation profile",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/sdmx/representation.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/sdmx/representation.rs"
       },
       {
         "label": "Relay V2 authoring guide",
@@ -675,11 +675,11 @@
     "evidence_docs": [
       {
         "label": "Relay V2 alignment target declaration",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/contract.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/contract.rs"
       },
       {
         "label": "Relay V2 alignment target validation",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/compiler.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/compiler.rs"
       }
     ],
     "last_checked": "2026-08-11",

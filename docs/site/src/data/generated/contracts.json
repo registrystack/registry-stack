@@ -31,7 +31,7 @@
     "surface": "Closed YAML grammar `relay.registrystack.org/v2alpha1` for the two documents an adopter authors: `registry.yaml` (`kind: RegistryContract`), declaring registry identity, resources, operations, access profiles, and disclosure; and `runtime.yaml` (`kind: RelayRuntime`), binding one deployment's package, SQLite source, authentication, audit, secrets, and listener.",
     "source_of_truth": {
       "label": "Relay V2 contract and runtime types",
-      "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/contract.rs"
+      "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/contract.rs"
     },
     "consumer_note": "Both documents are closed shapes: an unrecognized key is a parse failure, not an ignored field, so a document that compiles today cannot silently change meaning under a later runtime. The grammar is pre-1.0 and can change with a documented migration in a release note. A deployment's HTTP surface is compiled from its own `registry.yaml`, so no product-level OpenAPI document describes Relay; fetch `GET /openapi.json` from the deployment."
   },
@@ -43,7 +43,7 @@
     "surface": "Versioned sealed directory `relay.registrystack.org/package/v1alpha3`: the `relay-package.json` manifest with its governed-file digests, media types, and artifact visibility, alongside the compiled registry, the governed inputs, and the generated artifacts a Relay process verifies before it activates.",
     "source_of_truth": {
       "label": "Relay V2 package manifest",
-      "url": "https://github.com/registrystack/registry-stack/blob/v0.19.0/crates/registry-relay-v2/src/package.rs"
+      "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/package.rs"
     },
     "consumer_note": "`relayctl package` produces the directory and Relay verifies it before it opens the database, audit file, token issuer, or listener. Its `packageRevision` is an integrity digest over canonical JSON, not an authenticity proof: packages are unsigned, so the operator's own transport and storage are what bind a package to its author."
   },

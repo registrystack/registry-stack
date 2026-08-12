@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.20.0
+
+- BREAKING: `registry-manifest/v1` no longer reserves or expands the
+  `registry_relay` vocabulary prefix. Replace affected compact identifiers
+  with absolute IRIs, or declare `vocabularies.registry_relay` with an
+  institution-owned active HTTP(S) namespace, then validate and republish the
+  rendered metadata.
+
 ## 0.19.0
 
 - Registry Manifest has no user-visible format changes in this release.
