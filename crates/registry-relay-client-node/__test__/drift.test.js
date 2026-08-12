@@ -52,6 +52,18 @@ test('continuation format literals match the core wire projection', () => {
   assert.doesNotMatch(continuation[0], /'geo-json-rfc7946'/);
 });
 
+test('public input literals match the canonical Python vocabulary', () => {
+  const declaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
+  const recordFormat = declaration.match(/export type RecordFormat = ([^\n]+)/);
+  const structure = declaration.match(/export interface SdmxStructureRequest[\s\S]*?\n}/);
+  assert.ok(recordFormat);
+  assert.ok(structure);
+  assert.match(recordFormat[1], /'geojson'/);
+  assert.doesNotMatch(recordFormat[1], /'geo-json-rfc7946'/);
+  assert.match(structure[0], /'datastructure'/);
+  assert.doesNotMatch(structure[0], /'data-structure'/);
+});
+
 test('list and search declarations expose distinct closed option shapes', () => {
   const declaration = fs.readFileSync(path.join(__dirname, '..', 'client.d.ts'), 'utf8');
   const list = declaration.match(/export interface ListOptions[\s\S]*?\n}/);

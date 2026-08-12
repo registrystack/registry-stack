@@ -115,19 +115,25 @@ Authentication is optional. Probes and OpenAPI never ask a configured token prov
 and never send authorization. Other methods attach a bearer when a provider is configured and
 Relay accepts credentials for that operation.
 
-| Mode | Rust | Python | Node |
-| --- | --- | --- | --- |
-| No bearer | Omit `with_token_provider` | Omit `authorization` | Omit `authorization` |
-| Static bearer | `Arc::new(StaticToken::new(token)?)` passed to `with_token_provider` | `authorization=token` | `authorization: { static: token }` |
-| Private-key JWT | `PrivateKeyJwt` passed as a `TokenProvider` | `authorization={"private_key_jwt": config}` | `authorization: { privateKeyJwt: config }` |
-| Custom provider | Implement the public `TokenProvider` trait | Not exposed | Not exposed |
+The supported modes are:
+
+- **No bearer:** omit `with_token_provider` in Rust or `authorization` in Python and Node.
+- **Static bearer:** pass `Arc::new(StaticToken::new(token)?)` to `with_token_provider` in
+  Rust, `authorization={"static": token}` in Python, or
+  `authorization: { static: token }` in Node.
+- **Private-key JWT:** pass `PrivateKeyJwt` as a `TokenProvider` in Rust,
+  `authorization={"private_key_jwt": config}` in Python, or
+  `authorization: { privateKeyJwt: config }` in Node.
+- **Custom provider:** implement the public `TokenProvider` trait in Rust. Python and Node do not
+  expose custom token providers.
 
 The built-in private-key-JWT configuration requires a token endpoint, client identifier, and
 private signing JWK. It also accepts audience, assertion lifetime, refresh margin, token request
 and connection timeouts, user agent, and a PEM certificate bundle for the token endpoint. Relay
 and token-endpoint certificate bundles are independent.
 
-Python wraps the configuration as `{"private_key_jwt": {...}}` and names its required members
+Python uses an exactly-one-member authorization mapping: `{"static": token}` or
+`{"private_key_jwt": {...}}`. The private-key-JWT configuration names its required members
 `token_endpoint`, `client_id`, and `client_key`. Its optional members are `audience`,
 `assertion_lifetime_seconds`, `refresh_margin_seconds`, `request_timeout_seconds`,
 `connect_timeout_seconds`, `user_agent`, and byte-valued `trusted_root_certificates`. Node wraps
@@ -190,9 +196,8 @@ ordered as `[west, south, east, north]` and can add a positive page size. Python
 filters to `list_records` and requires the bbox keyword on `search`. Node uses `ListOptions` for
 `listRecords` and `SearchOptions`, whose `bbox` member is required, for `search`.
 
-Input record formats are `json`, `json-ld`, `geojson`, and `json-fg` in Python. Node also accepts
-`geo-json-rfc7946` as an alias for `geojson`. Rust uses `RecordFormat::Json`, `JsonLd`,
-`GeoJsonRfc7946`, or `JsonFg`.
+Input record formats are `json`, `json-ld`, `geojson`, and `json-fg` in Python and Node. Rust uses
+`RecordFormat::Json`, `JsonLd`, `GeoJsonRfc7946`, or `JsonFg`.
 
 A lookup selector mapping must contain at least one named string, signed integer, or boolean
 value. Python supplies it as `selectors` and Node as the third `lookup` argument. Rust builds it
@@ -201,9 +206,9 @@ with one or more `LookupRequest::selector` calls.
 SDMX data format is `json` or `csv`. The optional constraints are a string-to-string component
 mapping. Python passes all SDMX data facts as arguments to `sdmx_data`; Node passes one
 `SdmxDataRequest` object; Rust constructs `SdmxDataRequest::new(agency, resource, version)` and
-uses its builders. SDMX structure kind is `dataflow` or `datastructure` in Python,
-`dataflow`, `datastructure`, or `data-structure` in Node, and `SdmxStructureKind::Dataflow` or
-`DataStructure` in Rust. Every SDMX version has the exact `x.y.z` form.
+uses its builders. SDMX structure kind is `dataflow` or `datastructure` in Python and Node, and
+`SdmxStructureKind::Dataflow` or `DataStructure` in Rust. Every SDMX version has the exact `x.y.z`
+form.
 
 Every conditional Rust method takes an optional final `&StrongEtag`. Python exposes `etag` as the
 last optional keyword. Node exposes it as the final optional argument after any options or request
@@ -220,10 +225,10 @@ Process probes return complete responses only. Cacheable operations return one o
 - Node returns an object with `kind: 'complete'`, `value`, `traceId`, and optional `etag`, or
   `kind: 'notModified'`, `etag`, and `traceId`.
 
-Deployment-defined records and collections stay dynamic. Python returns nested mappings, lists,
-and scalars. Node returns plain JSON values. Rust exposes fixed envelopes around a dynamic JSON
-record body. Fixed service metadata, resource metadata, page, trace, and ETag envelopes remain
-typed.
+Deployment-defined `domainData` stays dynamic. Python returns nested mappings, lists, and scalars,
+and Node returns plain JSON values for that field. Both binding declarations type the fixed service,
+capability, resource, Record envelope, page, trace, and ETag structures that surround it. Rust owns
+the matching fixed models around the dynamic JSON field.
 
 ## Continuations
 

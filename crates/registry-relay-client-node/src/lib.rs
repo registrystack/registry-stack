@@ -626,7 +626,7 @@ fn record_format(value: Option<String>) -> Result<RecordFormat> {
     match value.as_deref().unwrap_or("json") {
         "json" => Ok(RecordFormat::Json),
         "json-ld" => Ok(RecordFormat::JsonLd),
-        "geojson" | "geo-json-rfc7946" => Ok(RecordFormat::GeoJsonRfc7946),
+        "geojson" => Ok(RecordFormat::GeoJsonRfc7946),
         "json-fg" => Ok(RecordFormat::JsonFg),
         _ => Err(binding_error(
             "invalid_request",
@@ -1173,7 +1173,7 @@ impl RelayClient {
                 .as_str()
             {
                 "dataflow" => SdmxStructureKind::Dataflow,
-                "datastructure" | "data-structure" => SdmxStructureKind::DataStructure,
+                "datastructure" => SdmxStructureKind::DataStructure,
                 _ => {
                     return Err(binding_error(
                         "invalid_request",

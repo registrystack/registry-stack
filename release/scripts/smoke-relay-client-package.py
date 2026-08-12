@@ -9,7 +9,7 @@ def main() -> None:
     # closed if a future constructor accidentally performs I/O.
     client = client_module.RelayClient(
         base_url="https://relay.invalid",
-        authorization="placeholder-token",
+        authorization={"static": "placeholder-token"},
     )
     if client is None:
         raise SystemExit("Relay client construction returned no client")

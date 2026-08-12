@@ -26,7 +26,8 @@ class ConstructionTest(unittest.TestCase):
         self.assertIsNotNone(relay.RelayClient("http://127.0.0.1:9/prefix"))
         self.assertIsNotNone(
             relay.RelayClient(
-                "http://127.0.0.1:9/prefix", authorization="placeholder-token"
+                "http://127.0.0.1:9/prefix",
+                authorization={"static": "placeholder-token"},
             )
         )
         self.assertIsNotNone(
@@ -46,6 +47,21 @@ class ConstructionTest(unittest.TestCase):
                 max_response_bytes=4096,
             )
         )
+
+    def test_static_authorization_requires_the_closed_discriminated_shape(self):
+        for authorization in (
+            "placeholder-token",
+            {"bearer": "placeholder-token"},
+            {"static": "placeholder-token", "private_key_jwt": {}},
+        ):
+            with self.subTest(authorization=authorization):
+                with self.assertRaises(relay.RelayClientError) as raised:
+                    relay.RelayClient(
+                        "http://127.0.0.1:9/prefix",
+                        authorization=authorization,
+                    )
+                self.assertEqual(raised.exception.kind, "configuration")
+                self.assertNotIn("placeholder-token", str(raised.exception))
 
     def test_configuration_errors_are_structured_and_redacted(self):
         secret = "canary-secret-that-must-not-render"
