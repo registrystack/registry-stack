@@ -78,3 +78,7 @@ archives:
     bundle_sha256: 1e429d2167358c950b531021ff70b77b251ec4a73cb3b34bb718b07bd558f047
     root_tree_sha256: 3e9a0a6447b121884a7318a6a560491094aa2f5c345fdbe160833da1877ecc86
     version_tree_sha256: 82ff1ab0c7155847c3f11e4558d7d8a9329fa6d1ed7ee8cc61248cd9a402538f
+  v0.20.0:
+    bundle_sha256: dfedecd58a4b70aacec2d94fac2c3b72a116eaa7aeca305939febe4b4dccd942
+    root_tree_sha256: 04e905fd1f0085335eceeeb6268f5cab5fefdb24b6b1abe4d538bb86c69dc2aa
+    version_tree_sha256: 45e38037b944b8c14fac84befc8fd9ef18cbdbb7dabccc882cc9c19a3f31da41
