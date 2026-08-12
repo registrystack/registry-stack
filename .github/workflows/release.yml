@@ -47,7 +47,7 @@ jobs:
       manifest_sha256: ${{ steps.binding.outputs.manifest_sha256 }}
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -296,7 +296,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.promotion_revision }}
           fetch-depth: 1
@@ -304,7 +304,7 @@ jobs:
           submodules: false
 
       - name: Checkout exact tagged product source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.source_sha }}
           path: product-source
@@ -516,7 +516,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.promotion_revision }}
           fetch-depth: 1
@@ -611,7 +611,7 @@ jobs:
           fi
 
       - name: Log in for exact candidate promotion
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v3.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -678,7 +678,7 @@ jobs:
       packages: read
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.promotion_revision }}
           fetch-depth: 1
@@ -1125,7 +1125,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.promotion_revision }}
           fetch-depth: 1
@@ -1152,7 +1152,7 @@ jobs:
           fi
 
       - name: Setup trusted npm publisher runtime
-        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.8.0
           registry-url: https://registry.npmjs.org
@@ -1246,7 +1246,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout protected promotion workflow
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
         with:
           ref: ${{ needs.verify.outputs.promotion_revision }}
           fetch-depth: 1
