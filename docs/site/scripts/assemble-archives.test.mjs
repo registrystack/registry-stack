@@ -181,12 +181,14 @@ test('only bootstraps missing bundles when explicitly allowed', async (t) => {
 test('bootstraps candidate-era archives with the indexable canonical root', async (t) => {
   const { targetRoot } = await fixture(t, { singleTree: false });
   let indexable;
+  let allowUnpublishedCandidate;
   const result = await assembleArchives({
     docsRoot: targetRoot,
     bootstrap: true,
     fetchImpl: async () => new Response(null, { status: 404 }),
     buildArchive: async (_docset, options) => {
       indexable = options.indexable;
+      allowUnpublishedCandidate = options.allowUnpublishedCandidate;
       const output = resolve(options.docsRoot, 'dist/v/1.2.3');
       await mkdir(output, { recursive: true });
       await writeFile(resolve(output, 'index.html'), '<h1>Frozen</h1>\n');
@@ -198,6 +200,7 @@ test('bootstraps candidate-era archives with the indexable canonical root', asyn
   });
 
   assert.equal(indexable, true);
+  assert.equal(allowUnpublishedCandidate, true);
   assert.equal(result.bootstrapped, 1);
 });
 
