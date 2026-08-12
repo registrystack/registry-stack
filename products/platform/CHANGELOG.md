@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.20.1 - 2026-08-12
+
+- No separately versioned Registry Platform API changes. This patch release
+  carries the Evidence source-outcome contract needed for governed Relay V2
+  unresolved consultations.
+
 ## v0.20.0 - 2026-08-12
 
 - Shared HTTP utilities now separate client and server boundaries. Evidence,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.20.1
+
+- Registry Manifest has no user-visible format changes in this release.
+
 ## 0.20.0
 
 - BREAKING: `registry-manifest/v1` no longer reserves or expands the
