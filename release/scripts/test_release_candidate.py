@@ -41,7 +41,7 @@ def json_bytes(value: object) -> bytes:
 
 
 def security_evidence_members(
-    image_names: tuple[str, ...] = ("relay",),
+    image_names: tuple[str, ...] = ("evidence", "mint", "relay"),
 ) -> dict[str, bytes]:
     refs = {
         name: f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
@@ -346,24 +346,32 @@ class ReleaseCandidateTest(TestCase):
 
     def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
         bundle_root = self.root / "v2-bundle"
-        evidence_members = security_evidence_members(("relay",))
+        image_names = ("evidence", "mint", "relay")
+        evidence_members = security_evidence_members(image_names)
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
         payload_inventory = self.module._relay_v2_payload_inventory("1.2.3")
         files = {
             name: f"candidate payload: {name}\n".encode()
             for name in payload_inventory
         }
-        files.update({
-            "security/relay.grype.json": evidence_members[
-                "grype/relay.grype.json"
-            ],
-            "security/advisory-verdict.json": evidence_members[
-                "advisory-verdict.json"
-            ],
-            evidence_name: security_evidence_tar(
-                sorted(evidence_members.items())
-            ),
-        })
+        files.update(
+            {
+                f"security/{name}.grype.json": evidence_members[
+                    f"grype/{name}.grype.json"
+                ]
+                for name in image_names
+            }
+        )
+        files.update(
+            {
+                "security/advisory-verdict.json": evidence_members[
+                    "advisory-verdict.json"
+                ],
+                evidence_name: security_evidence_tar(
+                    sorted(evidence_members.items())
+                ),
+            }
+        )
         for name, payload in files.items():
             path = bundle_root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -413,7 +421,7 @@ class ReleaseCandidateTest(TestCase):
                     "digest": IMAGE_DIGEST,
                     "final_ref": f"ghcr.io/registrystack/{name}:v1.2.3",
                 }
-                for name in ("relay",)
+                for name in image_names
             ],
             "sbom": {
                 "name": "registry-stack-v1.2.3.sbom.spdx.json",
@@ -432,7 +440,7 @@ class ReleaseCandidateTest(TestCase):
                     "sha256": sha256(files[f"security/{name}.grype.json"]),
                     "status": "passed",
                 }
-                for name in ("relay",)
+                for name in image_names
             ],
             "advisory": {
                 "name": "security/advisory-verdict.json",
@@ -633,6 +641,33 @@ class ReleaseCandidateTest(TestCase):
                 ),
             )
 
+    def test_official_runtime_image_roster_begins_at_v0_21(self) -> None:
+        for version in ("0.19.0", "0.20.0", "0.20.1"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    {"relay"},
+                    self.module._candidate_image_names(version),
+                )
+        self.assertEqual(
+            {"evidence", "mint", "relay"},
+            self.module._candidate_image_names("0.21.0"),
+        )
+
+    def test_image_names_cli_emits_the_version_appropriate_roster(self) -> None:
+        cases = (
+            ("0.20.2", "relay\n"),
+            ("0.21.0", "evidence mint relay\n"),
+        )
+        for version, expected in cases:
+            with self.subTest(version=version):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                    result = self.module.main(
+                        ["image-names", "--version", version]
+                    )
+                self.assertEqual(0, result)
+                self.assertEqual(expected, stdout.getvalue())
+
     def test_v2_candidate_allows_only_current_in_progress_run_before_oidc(
         self,
     ) -> None:
@@ -791,8 +826,10 @@ class ReleaseCandidateTest(TestCase):
         self,
     ) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
-        members = security_evidence_members(("relay",))
-        required = self.module._security_evidence_required_files({"relay"})
+        members = security_evidence_members()
+        required = self.module._security_evidence_required_files(
+            self.module.OFFICIAL_RUNTIME_IMAGE_NAMES
+        )
         for missing in sorted(required):
             with self.subTest(missing=missing):
                 incomplete = [
@@ -820,7 +857,7 @@ class ReleaseCandidateTest(TestCase):
     ) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
         members = sorted(
-            security_evidence_members(("relay",)).items()
+            security_evidence_members().items()
         )
         cases = (
             (
@@ -882,7 +919,7 @@ class ReleaseCandidateTest(TestCase):
 
     def test_v2_security_evidence_archive_rejects_unbound_contents(self) -> None:
         candidate, _, bundle_root, _ = self.make_v2_candidate()
-        base = security_evidence_members(("relay",))
+        base = security_evidence_members()
 
         unbound_syft = dict(base)
         syft = json.loads(unbound_syft["syft/relay.syft.json"])

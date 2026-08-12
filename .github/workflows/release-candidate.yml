@@ -44,6 +44,7 @@ jobs:
       release_id: ${{ steps.request.outputs.release_id }}
       tag: ${{ steps.request.outputs.tag }}
       manifest: ${{ steps.request.outputs.manifest }}
+      image_names: ${{ steps.request.outputs.image_names }}
     steps:
       - name: Checkout protected workflow revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
@@ -79,6 +80,10 @@ jobs:
             echo "pre-v0.19 releases are immutable historical evidence; use the corresponding v${REQUEST_VERSION} Git tag and archived assets" >&2
             exit 1
           fi
+          release_image_names="$(
+            python3 release/scripts/release_candidate.py image-names \
+              --version "${REQUEST_VERSION}"
+          )"
           if [[ ! "${REQUEST_RELEASE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
             echo "release_id is invalid" >&2
             exit 1
@@ -142,43 +147,44 @@ jobs:
             echo "GitHub Release destination is not absent" >&2
             exit 1
           fi
-          package=relay
-          package_metadata="${RUNNER_TEMP}/${package}-package.json"
-          if ! gh api \
-              "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
-              > "${package_metadata}"; then
-            echo "GHCR package ${package} must be provisioned before release" >&2
-            exit 1
-          fi
-          python3 release/scripts/release_workflow_guard.py \
-            require-package-visibility \
-            --metadata "${package_metadata}" \
-            --package "${package}" \
-            --visibility public
-          candidate_package_response="${RUNNER_TEMP}/relay-candidate-response"
-          if gh api --include --silent \
-              "/orgs/${IMAGE_NAMESPACE}/packages/container/relay-candidate" \
-              >"${candidate_package_response}" 2>&1; then
-            candidate_package_status=200
-          else
-            candidate_package_status="$(
-              python3 release/scripts/release_workflow_guard.py http-status \
-                --response "${candidate_package_response}"
-            )"
-          fi
-          if [[ "${candidate_package_status}" == 200 ]]; then
-            gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/relay-candidate" \
-              > "${RUNNER_TEMP}/relay-candidate-package.json"
+          for package in ${release_image_names}; do
+            package_metadata="${RUNNER_TEMP}/${package}-package.json"
+            if ! gh api \
+                "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
+                > "${package_metadata}"; then
+              echo "GHCR package ${package} must be provisioned before release" >&2
+              exit 1
+            fi
             python3 release/scripts/release_workflow_guard.py \
               require-package-visibility \
-              --metadata "${RUNNER_TEMP}/relay-candidate-package.json" \
-              --package relay-candidate \
-              --visibility private
-          elif [[ "${candidate_package_status}" != 404 ]]; then
-            echo "Cannot prove relay-candidate is absent or private" >&2
-            exit 1
-          fi
-          for package in relay; do
+              --metadata "${package_metadata}" \
+              --package "${package}" \
+              --visibility public
+            candidate_package="${package}-candidate"
+            candidate_package_response="${RUNNER_TEMP}/${candidate_package}-response"
+            if gh api --include --silent \
+                "/orgs/${IMAGE_NAMESPACE}/packages/container/${candidate_package}" \
+                >"${candidate_package_response}" 2>&1; then
+              candidate_package_status=200
+            else
+              candidate_package_status="$(
+                python3 release/scripts/release_workflow_guard.py http-status \
+                  --response "${candidate_package_response}"
+              )"
+            fi
+            if [[ "${candidate_package_status}" == 200 ]]; then
+              candidate_package_metadata="${RUNNER_TEMP}/${candidate_package}-package.json"
+              gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${candidate_package}" \
+                > "${candidate_package_metadata}"
+              python3 release/scripts/release_workflow_guard.py \
+                require-package-visibility \
+                --metadata "${candidate_package_metadata}" \
+                --package "${candidate_package}" \
+                --visibility private
+            elif [[ "${candidate_package_status}" != 404 ]]; then
+              echo "Cannot prove ${candidate_package} is absent or private" >&2
+              exit 1
+            fi
             versions="${RUNNER_TEMP}/${package}-versions.json"
             gh api --paginate --slurp \
               "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
@@ -216,6 +222,7 @@ jobs:
             echo "release_id=${REQUEST_RELEASE_ID}"
             echo "tag=${tag}"
             echo "manifest=${manifest}"
+            echo "image_names=${release_image_names}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Validate manifests, pins, recipes, and scanner policy fixtures
@@ -239,6 +246,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+    env:
+      RELEASE_IMAGE_NAMES: ${{ needs.validate.outputs.image_names }}
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
@@ -281,7 +290,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/images
-          for name in relay; do
+          for name in ${RELEASE_IMAGE_NAMES}; do
             package="${name}-candidate"
             candidate="${REGISTRY}/${IMAGE_NAMESPACE}/${package}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             metadata="dist/images/${name}.metadata.json"
@@ -584,6 +593,8 @@ jobs:
       actions: read
       contents: read
       packages: write
+    env:
+      RELEASE_IMAGE_NAMES: ${{ needs.validate.outputs.image_names }}
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
@@ -651,7 +662,7 @@ jobs:
         run: |
           set -euo pipefail
           canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          for name in relay; do
+          for name in ${RELEASE_IMAGE_NAMES}; do
             python3 release/scripts/check-release-image-oci-labels.py \
               "oci-layout://${canonical}/dist/images/${name}.oci" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
@@ -669,7 +680,7 @@ jobs:
           printf '%s' "${GH_TOKEN}" \
             | oras login "${REGISTRY}" \
                 --username "${GITHUB_ACTOR}" --password-stdin
-          for name in relay; do
+          for name in ${RELEASE_IMAGE_NAMES}; do
             package="${name}-candidate"
             package_metadata="${RUNNER_TEMP}/${package}-package.json"
             package_response="${RUNNER_TEMP}/${package}-response"
@@ -785,7 +796,7 @@ jobs:
               exit 1
             fi
           }
-          for name in relay; do
+          for name in ${RELEASE_IMAGE_NAMES}; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             test "$(crane digest "${candidate_ref}")" = "${digest}"
@@ -796,6 +807,15 @@ jobs:
               --source "https://github.com/${GITHUB_REPOSITORY}" \
               --revision "${{ needs.validate.outputs.source_sha }}" \
               --version "${{ needs.validate.outputs.version }}"
+            observed="$(
+              docker run --rm \
+                --network none \
+                --read-only \
+                --cap-drop ALL \
+                --security-opt no-new-privileges \
+                "${candidate_ref}" --version
+            )"
+            test "${observed}" = "${name} ${{ needs.validate.outputs.version }}"
             syft "${candidate_ref}" \
               -o "spdx-json=candidate/security/image-sbom/${name}.spdx.json" \
               -o "syft-json=candidate/security/syft/${name}.syft.json"
@@ -803,17 +823,27 @@ jobs:
               "${candidate_ref}" \
               "candidate/security/grype/${name}.grype.json"
           done
-          python3 release/scripts/check-advisory-baselines.py \
-            grype candidate/security/grype/relay.grype.json \
-            --baseline products/relay-v2/security/advisory-baseline.json \
-            --syft-report candidate/security/syft/relay.syft.json \
-            --subject relay-image
-          jq -n '{
+          for name in ${RELEASE_IMAGE_NAMES}; do
+            if [[ "${name}" == "relay" ]]; then
+              baseline=products/relay-v2/security/advisory-baseline.json
+            else
+              baseline="release/security/${name}-advisory-baseline.json"
+            fi
+            python3 release/scripts/check-advisory-baselines.py \
+              grype "candidate/security/grype/${name}.grype.json" \
+              --baseline "${baseline}" \
+              --syft-report "candidate/security/syft/${name}.syft.json" \
+              --subject "${name}-image"
+          done
+          advisory_subjects="$(
+            for name in ${RELEASE_IMAGE_NAMES}; do
+              printf '%s-image\n' "${name}"
+            done | jq -R . | jq -s .
+          )"
+          jq -n --argjson subjects "${advisory_subjects}" '{
             schema_version: "registry-stack.advisory-verdict.v2",
             verdict: "passed",
-            subjects: [
-              "relay-image"
-            ]
+            subjects: $subjects
           }' > candidate/security/advisory-verdict.json
 
       - name: Assemble public payload and validate version-appropriate install inputs
@@ -937,7 +967,7 @@ jobs:
               "${binary} ${{ needs.validate.outputs.version }}"
           done
           rm candidate/bundle-root/SHA256SUMS
-          for name in relay; do
+          for name in ${RELEASE_IMAGE_NAMES}; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
             printf '%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}" \
@@ -950,7 +980,7 @@ jobs:
             "candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}-security-evidence.tar.gz" \
             -C candidate/security \
               image-sbom syft grype advisory-verdict.json
-          for name in relay; do
+          for name in ${RELEASE_IMAGE_NAMES}; do
             cp "candidate/security/grype/${name}.grype.json" \
               candidate/bundle-root/
           done
@@ -992,7 +1022,7 @@ jobs:
                 done | jq -s .
           )"
           images="$(
-            for name in relay; do
+            for name in ${RELEASE_IMAGE_NAMES}; do
               candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
               digest="${candidate_ref##*@}"
               jq -n \
@@ -1004,7 +1034,7 @@ jobs:
             done | jq -s .
           )"
           scans="$(
-            for name in relay; do
+            for name in ${RELEASE_IMAGE_NAMES}; do
               file="candidate/bundle-root/${name}.grype.json"
               jq -n \
                 --arg image "${name}" \

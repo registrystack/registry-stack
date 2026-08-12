@@ -69,7 +69,7 @@ jobs:
           PY
           printf '{"spdxVersion":"SPDX-2.3","name":"release-canary"}\n' \
             > canary/bundle-root/registry-stack-${tag}.sbom.spdx.json
-          relay_ref="ghcr.io/registrystack/relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          image_names=(relay evidence mint)
 
           write_image_reports() {
             local name="$1"
@@ -93,18 +93,23 @@ jobs:
                 }
               }' > "${evidence_root}/grype/${name}.grype.json"
           }
-          write_image_reports relay "${relay_ref}"
+          for name in "${image_names[@]}"; do
+            image_ref="ghcr.io/registrystack/${name}-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            write_image_reports "${name}" "${image_ref}"
+            cp "${evidence_root}/grype/${name}.grype.json" \
+              "canary/bundle-root/security/${name}.grype.json"
+          done
           jq -n '{status:"valid"}' \
             > "${evidence_root}/grype/grype-db-status.json"
           jq -n '{
             schema_version:"registry-stack.advisory-verdict.v2",
             verdict:"passed",
             subjects:[
+              "evidence-image",
+              "mint-image",
               "relay-image"
             ]
           }' > "${evidence_root}/advisory-verdict.json"
-          cp "${evidence_root}/grype/relay.grype.json" \
-            canary/bundle-root/security/relay.grype.json
           cp "${evidence_root}/advisory-verdict.json" \
             canary/bundle-root/security/advisory-verdict.json
           evidence_name="registry-stack-${tag}-security-evidence.tar.gz"
@@ -115,7 +120,6 @@ jobs:
           sbom_sha="$(sha256sum canary/bundle-root/registry-stack-${tag}.sbom.spdx.json | awk '{print $1}')"
           docs_sha="$(sha256sum canary/bundle-root/registry-docs-${tag}.tar.gz | awk '{print $1}')"
           evidence_sha="$(sha256sum "canary/bundle-root/${evidence_name}" | awk '{print $1}')"
-          relay_scan_sha="$(sha256sum canary/bundle-root/security/relay.grype.json | awk '{print $1}')"
           advisory_sha="$(sha256sum canary/bundle-root/security/advisory-verdict.json | awk '{print $1}')"
           sbom_size="$(stat -c %s canary/bundle-root/registry-stack-${tag}.sbom.spdx.json)"
           evidence_size="$(stat -c %s "canary/bundle-root/${evidence_name}")"
@@ -147,6 +151,28 @@ jobs:
               encoding="utf-8",
           )
           PY
+          for name in "${image_names[@]}"; do
+            jq -n \
+              --arg name "${name}" \
+              --arg tag "${tag}" \
+              '{
+                name:$name,
+                candidate_ref:(
+                  "ghcr.io/registrystack/" + $name +
+                  "-candidate@sha256:" + ("a" * 64)
+                ),
+                digest:("sha256:" + ("a" * 64)),
+                final_ref:("ghcr.io/registrystack/" + $name + ":" + $tag)
+              }'
+          done | jq -s . > canary/images.json
+          for name in "${image_names[@]}"; do
+            scan="canary/bundle-root/security/${name}.grype.json"
+            jq -n \
+              --arg image "${name}" \
+              --arg name "security/${name}.grype.json" \
+              --arg sha256 "$(sha256sum "${scan}" | awk '{print $1}')" \
+              '{image:$image,name:$name,sha256:$sha256,status:"passed"}'
+          done | jq -s . > canary/scans.json
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
             --numeric-owner -czf canary/registry-stack-${tag}-candidate.tar.gz \
             -C canary/bundle-root .
@@ -169,11 +195,12 @@ jobs:
             --arg evidence_name "${evidence_name}" \
             --arg evidence_sha "${evidence_sha}" \
             --argjson evidence_size "${evidence_size}" \
-            --arg relay_scan_sha "${relay_scan_sha}" \
             --arg advisory_sha "${advisory_sha}" \
             --arg bundle_sha "${bundle_sha}" \
             --argjson bundle_size "${bundle_size}" \
             --slurpfile payloads canary/payloads.json \
+            --slurpfile images canary/images.json \
+            --slurpfile scans canary/scans.json \
             '{
               schema_version: "registry-stack.release-candidate.v2",
               repository: $repository,
@@ -194,16 +221,7 @@ jobs:
                 expires_at: $expires_at
               },
               payloads: $payloads[0],
-              images: [
-                {
-                  name: "relay",
-                  candidate_ref:
-                    "ghcr.io/registrystack/relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                  digest:
-                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                  final_ref: ("ghcr.io/registrystack/relay:" + $tag)
-                }
-              ],
+              images: $images[0],
               docs: {
                 name: ("registry-docs-" + $tag + ".tar.gz"),
                 sha256: $docs_sha
@@ -212,14 +230,7 @@ jobs:
                 name: ("registry-stack-" + $tag + ".sbom.spdx.json"),
                 sha256: $sbom_sha
               },
-              scans: [
-                {
-                  image: "relay",
-                  name: "security/relay.grype.json",
-                  sha256: $relay_scan_sha,
-                  status: "passed"
-                }
-              ],
+              scans: $scans[0],
               advisory: {
                 name: "security/advisory-verdict.json",
                 sha256: $advisory_sha,

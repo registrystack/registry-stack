@@ -6,7 +6,7 @@ repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 checker="${script_dir}/check-release-image-oci-labels.py"
 image_builder="${script_dir}/build-release-image.sh"
 layout_comparator="${script_dir}/compare-release-image-layouts.py"
-images=(relay)
+images=(relay evidence mint)
 relay_dockerfile="${repo_root}/release/docker/Dockerfile.relay"
 
 source_label="https://github.com/registrystack/registry-stack"
@@ -26,7 +26,9 @@ true_binary=/bin/true
 if [[ ! -x "${true_binary}" ]]; then
   true_binary="$(type -P true)"
 fi
-cp "${true_binary}" "${context_dir}/dist/image-bin/relay"
+for image in "${images[@]}"; do
+  cp "${true_binary}" "${context_dir}/dist/image-bin/${image}"
+done
 cp "${repo_root}/LICENSE" "${context_dir}/LICENSE"
 
 docker buildx create \
@@ -93,7 +95,7 @@ for image in "${images[@]}"; do
   first_layout="${tmp_root}/correct-${image}-first"
   second_layout="${tmp_root}/correct-${image}-second"
   touch -t 200001010101 \
-    "${context_dir}/dist/image-bin/relay" \
+    "${context_dir}/dist/image-bin/${image}" \
     "${context_dir}/LICENSE"
   build_layout "${image}" "${first_layout}" "${revision_label}" "${version_label}"
   python3 "${checker}" "oci-layout://${first_layout}" \
@@ -104,7 +106,7 @@ for image in "${images[@]}"; do
   # Source mtimes and uncached RUN timestamps must not affect release-owned
   # layers. The exporter also normalizes inherited layers to the fixed epoch.
   touch -t 203001010101 \
-    "${context_dir}/dist/image-bin/relay" \
+    "${context_dir}/dist/image-bin/${image}" \
     "${context_dir}/LICENSE"
   build_layout "${image}" "${second_layout}" "${revision_label}" "${version_label}"
   python3 "${layout_comparator}" "${first_layout}" "${second_layout}"

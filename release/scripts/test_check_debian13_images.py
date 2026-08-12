@@ -16,7 +16,7 @@ POLICY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(POLICY)
 
 
-class RelayV2ImagePolicyTests(unittest.TestCase):
+class ReleaseImagePolicyTests(unittest.TestCase):
     def repository_copy(self, root: Path) -> None:
         for relative in POLICY.MAINTAINED_TEXT_PATHS:
             target = root / relative
@@ -50,6 +50,47 @@ class RelayV2ImagePolicyTests(unittest.TestCase):
                 ),
                 failures,
             )
+
+    def test_official_runtime_images_are_required_maintained_surfaces(self) -> None:
+        self.assertEqual(
+            {
+                Path("release/docker/Dockerfile.evidence"),
+                Path("release/docker/Dockerfile.mint"),
+                Path("release/docker/Dockerfile.relay"),
+            },
+            set(POLICY.DOCKERFILES),
+        )
+        self.assertEqual(
+            {
+                Path("release/docker/Dockerfile.evidence"),
+                Path("release/docker/Dockerfile.mint"),
+            },
+            set(POLICY.HTTP_PROBE_DOCKERFILES),
+        )
+
+    def test_http_probed_images_bind_fixed_config_and_entrypoint(self) -> None:
+        for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items():
+            with self.subTest(relative=relative):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    self.repository_copy(root)
+                    dockerfile = root / relative
+                    dockerfile.write_text(
+                        dockerfile.read_text(encoding="utf-8").replace(
+                            contract["environment"],
+                            "ENV WRONG_CONFIG=/tmp/config.yaml",
+                        ),
+                        encoding="utf-8",
+                    )
+                    failures = POLICY.check_repository(root)
+                    self.assertTrue(
+                        any(
+                            str(relative) in failure
+                            and f"fixed {contract['binary']} environment" in failure
+                            for failure in failures
+                        ),
+                        failures,
+                    )
 
     def test_relay_v2_image_binds_the_runtime_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -128,11 +128,19 @@ jobs:
           # The adopter image is scanned beside the release ones: it is built from
           # the same tree by anyone following the local-run docs, so baking key or
           # credential material into it would leak just as widely.
-          paths = sorted(Path("release/docker").glob("Dockerfile.registry-*"))
-          paths += sorted(Path("docker").glob("Dockerfile"))
-          if not paths:
-              print("security assurance check failed: no release Dockerfiles found", file=sys.stderr)
+          release_paths = [
+              Path("release/docker/Dockerfile.evidence"),
+              Path("release/docker/Dockerfile.mint"),
+              Path("release/docker/Dockerfile.relay"),
+          ]
+          missing = [str(path) for path in release_paths if not path.is_file()]
+          if missing:
+              print(
+                  f"security assurance check failed: missing release Dockerfiles: {missing}",
+                  file=sys.stderr,
+              )
               sys.exit(1)
+          paths = release_paths + sorted(Path("docker").glob("Dockerfile"))
           for path in paths:
               for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                   if secret_copy_re.search(line):

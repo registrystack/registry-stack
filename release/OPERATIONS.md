@@ -32,8 +32,14 @@ container package as private, so publish a clearly non-release bootstrap
 artifact without putting a token on the command line:
 
 ```sh
+package="${PACKAGE:?set PACKAGE to relay, evidence, or mint}"
+case "${package}" in
+  relay|evidence|mint) ;;
+  *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
+esac
+
 bootstrap_dir="$(mktemp -d)"
-printf 'Registry Stack Relay package bootstrap\n' \
+printf 'Registry Stack %s package bootstrap\n' "${package}" \
   > "${bootstrap_dir}/bootstrap.txt"
 printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
   | oras login ghcr.io \
@@ -43,22 +49,26 @@ oras push \
   --artifact-type application/vnd.registrystack.package-bootstrap.v1 \
   --annotation \
     org.opencontainers.image.source=https://github.com/registrystack/registry-stack \
-  ghcr.io/registrystack/relay:bootstrap \
+  "ghcr.io/registrystack/${package}:bootstrap" \
   "${bootstrap_dir}/bootstrap.txt:text/plain"
 ```
 
-In the organization package settings, change only `relay` to public and grant
-`registrystack/registry-stack` Actions access with Write. Verify the resulting
-metadata before candidate dispatch:
+In the organization package settings, change only the selected package to
+public and grant `registrystack/registry-stack` Actions access with Write.
+Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
+`mint` packages. Verify all three before candidate dispatch:
 
 ```sh
-gh api /orgs/registrystack/packages/container/relay \
-  --jq '[.name,.package_type,.visibility]'
+for package in relay evidence mint; do
+  gh api "/orgs/registrystack/packages/container/${package}" \
+    --jq '[.name,.package_type,.visibility]'
+done
 ```
 
-The result must be `["relay","container","public"]`. Keep the bootstrap
-version until the first real version is public, then remove only that bootstrap
-version. This is a package-identity setup step, not part of later releases.
+Each result must name the requested package and report `container` and
+`public`. Keep each bootstrap version until the first real version is public,
+then remove only that bootstrap version. This is a package-identity setup step,
+not part of later releases.
 
 ## Prepare one release PR
 
@@ -163,11 +173,13 @@ the workflow already accepted and bound to its exact source. The candidate
 workflow then:
 
 - Validates the release identity, manifests, pins, recipes, and destinations.
-- Builds the release payloads and OCI image once.
+- Builds the release payloads and OCI images once. Starting with `v0.21.0`, the
+  image set is Relay, Evidence Gateway, and Registry Mint.
 - Builds the exact locked release documentation archive once and includes it in
   the candidate payload closure.
 - Publishes images only to private candidate packages.
-- Scans the exact candidate image digests and enforces the advisory decision.
+- Generates image-specific SPDX and Syft reports, scans each exact candidate
+  image digest, and enforces the advisory decision for every image.
 - Runs the release payload checks.
 - Seals a candidate manifest and bundle that remain promotable for seven days.
 - Attests the manifest and bundle after re-verifying their bytes.

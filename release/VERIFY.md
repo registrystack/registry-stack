@@ -71,6 +71,8 @@ Inspect the compact public release manifest:
 manifest="registry-stack-${tag}-release-manifest.json"
 
 jq -e --arg tag "${tag}" '
+  (if ($tag | test("^v0\\.(19|20)\\."))
+   then ["relay"] else ["evidence", "mint", "relay"] end) as $image_names |
   .schema_version == "registry-stack.release-candidate.v2" and
   .repository == "registrystack/registry-stack" and
   .release.tag == $tag and
@@ -79,17 +81,27 @@ jq -e --arg tag "${tag}" '
   (.workflow.revision | test("^[0-9a-f]{40}$")) and
   (.workflow.run_id | type == "number") and
   (.workflow.run_attempt | type == "number") and
+  (.images | map(.name) | sort == $image_names) and
+  all(.images[];
+    .final_ref == ("ghcr.io/registrystack/" + .name + ":" + $tag) and
+    .candidate_ref ==
+      ("ghcr.io/registrystack/" + .name + "-candidate@" + .digest)) and
   .advisory.verdict == "passed"
 ' "${manifest}"
 ```
 
-The final release tags recorded in the manifest must resolve to the same
-digests as their candidate bindings:
+Starting with `v0.21.0`, the exact image set is Evidence Gateway, Registry
+Mint, and Registry Relay. The final release tags recorded in the manifest
+must resolve to the same digests as their candidate bindings:
 
 ```sh
-while IFS=$'\t' read -r digest final_ref; do
+while IFS=$'\t' read -r name digest final_ref; do
+  case "${name}" in
+    evidence|mint|relay) ;;
+    *) echo "unexpected release image: ${name}" >&2; exit 1 ;;
+  esac
   test "$(crane digest "${final_ref}")" = "${digest}"
-done < <(jq -r '.images[] | [.digest,.final_ref] | @tsv' "${manifest}")
+done < <(jq -r '.images[] | [.name,.digest,.final_ref] | @tsv' "${manifest}")
 ```
 
 ## Verify SBOM and security evidence
@@ -114,9 +126,12 @@ evidence="registry-stack-${tag}-security-evidence.tar.gz"
 tar -tzf "${evidence}"
 ```
 
-The archive contains image-specific SPDX and Syft reports, Grype reports, and
-the advisory verdict used for candidate acceptance. Its archive hash is
-covered by the authenticated checksum chain.
+Starting with `v0.21.0`, the archive contains image-specific SPDX and Syft
+reports and Grype reports for `evidence`, `mint`, and `relay`; `v0.19.x` and
+`v0.20.x` archives contain those reports for `relay` only. The archive also
+contains the advisory verdict used for candidate acceptance. Each report names
+the exact candidate digest that was promoted. The archive hash is covered by
+the authenticated checksum chain.
 
 ## Provenance boundary
 

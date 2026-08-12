@@ -39,6 +39,21 @@ the keyed audit boundary in `crates/registry-mint/src/audit.rs`. The public erro
 `crates/registry-mint/src/error.rs`. `crates/registry-mint/README.md` covers the same surface in
 prose. Where this page and the crate disagree, the crate wins.
 
+## Official container image
+
+Starting with `v0.21.0`, Registry Stack publishes Registry Mint as
+`ghcr.io/registrystack/mint:v0.21.0`. The image uses the distroless nonroot
+runtime identity, UID and GID 65532, with no shell or package tools. Pin the
+digest recorded in the release manifest.
+
+The image reads `MINT_CONFIG`, which defaults to
+`/etc/registry-mint/config.yaml`. Mount that configuration and every relative
+path it names read-only under `/etc/registry-mint`. Put `audit.path` under the
+writable `/var/lib/registry-mint/audit` directory and attach persistent storage
+owned by UID and GID 65532. The image exposes port `8081` and serves
+`GET /health` for an external HTTP probe; it does not include a Docker
+`HEALTHCHECK`.
+
 ## Configuration reference
 
 One YAML document, loaded by `MintConfig::load`. Fields use `camelCase` keys, reject unknown
