@@ -220,7 +220,6 @@ jobs:
               --deny-self-hosted-runners
           done
           docs_sha256=
-          client_registries=false
           IFS=. read -r major minor patch <<<"${{ steps.identity.outputs.version }}"
           if ((
             major > 0 ||
@@ -231,11 +230,16 @@ jobs:
                 "${manifest}"
             )"
           fi
-          if ((
-            major > 0 || minor >= 21
-          )); then
-            client_registries=true
-          fi
+          client_registries="$(
+            PYTHONPATH=release/scripts python3 - \
+              "${{ steps.identity.outputs.version }}" <<'PY'
+          import sys
+          from release_candidate import CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION
+
+          version = tuple(int(part) for part in sys.argv[1].split("."))
+          print("true" if version >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION else "false")
+          PY
+          )"
           {
             echo "release_id=${release_id}"
             echo "workflow_revision=${workflow_revision}"

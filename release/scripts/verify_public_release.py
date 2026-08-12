@@ -37,6 +37,13 @@ class PublicReleaseError(RuntimeError):
     """The public release does not satisfy its minimum contract."""
 
 
+def version_uses_client_registries(version: str) -> bool:
+    return (
+        tuple(int(part) for part in version.split("."))
+        >= release_candidate.CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION
+    )
+
+
 def run_text(command: list[str], *, cwd: Path | None = None) -> str:
     try:
         result = subprocess.run(
@@ -481,7 +488,7 @@ def verify(
                 f"{smoke_name} reports {observed_version!r}, not {expected_version!r}"
             )
         version = tag.removeprefix("v")
-        if tuple(int(part) for part in version.split(".")) >= (0, 21, 0):
+        if version_uses_client_registries(version):
             client_registry_package_count = verify_client_registries(
                 directory,
                 version,
