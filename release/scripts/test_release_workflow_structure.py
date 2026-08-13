@@ -563,6 +563,84 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         node = step_run(document, "clients", "Build Node client packages")
         self.assertIn("--use-napi-cross", node)
         self.assertIn('--target "${{ matrix.target }}"', node)
+        self.assertIn(
+            'export HOST_CC="${{ matrix.target }}-gcc"\n'
+            '    export HOST_CXX="${{ matrix.target }}-g++"\n'
+            "    napi_args+=(--use-napi-cross)",
+            node,
+        )
+        napi_build = (
+            '(cd "${client_dir}" && ./node_modules/.bin/napi build '
+            '"${napi_args[@]}")'
+        )
+        self.assertLess(node.index("export HOST_CC="), node.index(napi_build))
+        self.assertLess(node.index("export HOST_CXX="), node.index(napi_build))
+        self.assertIn(
+            'unversioned_imports="$(\n'
+            '      readelf --wide --dyn-syms "${addon}" \\\n'
+            "        | awk '$7 == \"UND\" && $5 != \"WEAK\" && "
+            "$8 !~ /@/ && $8 !~ /^(napi_|node_api_)/ { print $8 }' \\\n"
+            "        | sort -u\n"
+            "    )\"",
+            node,
+        )
+        self.assertIn(
+            'if [[ -n "${unversioned_imports}" ]]; then\n'
+            "      printf 'native addon has strong unversioned imports:"
+            "\\n%s\\n' \\\n"
+            '        "${unversioned_imports}" >&2\n'
+            "      exit 1",
+            node,
+        )
+        guard_start = node.index('unversioned_imports="$(')
+        self.assertLess(node.index(napi_build), guard_start)
+        self.assertLess(
+            guard_start,
+            node.index('(cd "${client_dir}" && npm pack'),
+        )
+        predicate_marker = "| awk '"
+        predicate_start = node.index(predicate_marker, guard_start) + len(
+            predicate_marker
+        )
+        predicate_end = node.index("' \\", predicate_start)
+        predicate = node[predicate_start:predicate_end]
+        dynsym_fixtures = {
+            "observed ISO C23 import": (
+                "  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND "
+                "__isoc23_sscanf\n",
+                ["__isoc23_sscanf"],
+            ),
+            "generic strong unversioned import": (
+                "  2: 0000000000000000 0 FUNC GLOBAL DEFAULT UND malloc\n",
+                ["malloc"],
+            ),
+            "intentional Node-API imports": (
+                "  3: 0000000000000000 0 FUNC GLOBAL DEFAULT UND "
+                "napi_create_function\n"
+                "  4: 0000000000000000 0 FUNC GLOBAL DEFAULT UND "
+                "node_api_get_module_file_name\n",
+                [],
+            ),
+            "versioned import": (
+                "  5: 0000000000000000 0 FUNC GLOBAL DEFAULT UND "
+                "malloc@GLIBC_2.2.5\n",
+                [],
+            ),
+            "weak import": (
+                "  6: 0000000000000000 0 FUNC WEAK DEFAULT UND getrandom\n",
+                [],
+            ),
+        }
+        for fixture_name, (dynsym, expected) in dynsym_fixtures.items():
+            with self.subTest(fixture=fixture_name):
+                guard = subprocess.run(
+                    ["awk", predicate],
+                    input=dynsym,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                self.assertEqual(guard.stdout.splitlines(), expected)
         self.assertIn("readelf --version-info", node)
         self.assertIn("GLIBC_2.17", node)
         self.assertIn(

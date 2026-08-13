@@ -575,13 +575,32 @@ jobs:
             napi_args=(--platform --release --target "${{ matrix.target }}")
             if [[ "${RUNNER_OS}" == Linux ]]; then
               # The published linux-*-gnu package names carry no distro floor.
-              # Link the addons with napi-rs' locked glibc 2.17 toolchain rather
-              # than inheriting the Ubuntu 24.04 runner's glibc 2.39 ABI.
+              # aws-lc-sys treats a same-architecture target as a native build,
+              # so route its host C and C++ compilers through napi-rs' locked
+              # glibc 2.17 toolchain too. Otherwise it inherits the Ubuntu 24.04
+              # headers even though Rust links with the older toolchain.
+              export HOST_CC="${{ matrix.target }}-gcc"
+              export HOST_CXX="${{ matrix.target }}-g++"
               napi_args+=(--use-napi-cross)
             fi
             (cd "${client_dir}" && ./node_modules/.bin/napi build "${napi_args[@]}")
             addon="${client_dir}/${client}-client.${{ matrix.napi_platform }}.node"
             if [[ "${RUNNER_OS}" == Linux ]]; then
+              # The version table misses unversioned imports. Candidate
+              # packaging rejects strong ones except the Node-API imports that
+              # the host intentionally resolves; weak imports remain optional.
+              # Rebuild with the pinned compilers is recovery, until the build
+              # host itself enforces the ABI floor.
+              unversioned_imports="$(
+                readelf --wide --dyn-syms "${addon}" \
+                  | awk '$7 == "UND" && $5 != "WEAK" && $8 !~ /@/ && $8 !~ /^(napi_|node_api_)/ { print $8 }' \
+                  | sort -u
+              )"
+              if [[ -n "${unversioned_imports}" ]]; then
+                printf 'native addon has strong unversioned imports:\n%s\n' \
+                  "${unversioned_imports}" >&2
+                exit 1
+              fi
               highest_glibc="$(
                 readelf --version-info "${addon}" \
                   | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
