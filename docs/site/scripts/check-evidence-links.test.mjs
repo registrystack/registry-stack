@@ -208,6 +208,41 @@ test('current-source evidence path must still exist at the selected source', (t)
   assert.match(result.errors[0], /absent from selected current source/);
 });
 
+test('current-source evidence contents must match the selected source', (t) => {
+  const { root } = createRepository(t);
+  writeFileSync(resolve(root, 'source/file.md'), '# Changed source\n');
+  git(root, 'add', 'source/file.md');
+  git(root, 'commit', '--quiet', '-m', 'change current source contents');
+  const sourceRef = git(root, 'rev-parse', 'HEAD');
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+    contractStatus: 'current-source',
+  });
+
+  const result = checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef });
+  assert.match(result.errors[0], /contents differ from selected current source/);
+});
+
+test('pinned snapshots may differ from the selected source', (t) => {
+  const { root } = createRepository(t);
+  writeFileSync(resolve(root, 'source/file.md'), '# Changed source\n');
+  git(root, 'add', 'source/file.md');
+  git(root, 'commit', '--quiet', '-m', 'change source after pinned snapshot');
+  const sourceRef = git(root, 'rev-parse', 'HEAD');
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+  });
+
+  assert.deepEqual(checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef }), {
+    checked: 1,
+    errors: [],
+  });
+});
+
 test('pinned snapshots need not retain their path at the selected source', (t) => {
   const { root } = createRepository(t);
   rmSync(resolve(root, 'source/file.md'));

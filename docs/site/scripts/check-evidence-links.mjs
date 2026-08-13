@@ -157,6 +157,20 @@ function gitObjectExists(repoRoot, object, gitCommand) {
   return gitCommandSucceeds(repoRoot, ['cat-file', '-e', object], gitCommand);
 }
 
+function gitObjectId(repoRoot, object, gitCommand) {
+  const result = spawnSync(gitCommand, ['rev-parse', '--verify', object], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_NO_LAZY_FETCH: '1' },
+    stdio: 'pipe',
+  });
+  if (result.status !== 0) {
+    return undefined;
+  }
+  const objectId = result.stdout.trim();
+  return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(objectId) ? objectId : undefined;
+}
+
 function gitCommitIsAncestor(repoRoot, ancestor, descendant, gitCommand) {
   return gitCommandSucceeds(
     repoRoot,
@@ -305,6 +319,14 @@ function checkRepositoryEvidence(
     }
     if (!gitObjectExists(repoRoot, `${sourceRef}^{commit}:${path}`, gitCommand)) {
       return `references path ${path}, which is absent from selected current source ${sourceRef}`;
+    }
+    const evidenceObject = gitObjectId(repoRoot, `${commitish}^{commit}:${path}`, gitCommand);
+    const currentObject = gitObjectId(repoRoot, `${sourceRef}^{commit}:${path}`, gitCommand);
+    if (!evidenceObject || !currentObject) {
+      return `cannot compare path ${path} with selected current source ${sourceRef}`;
+    }
+    if (evidenceObject !== currentObject) {
+      return `references ${ref}:${path}, whose contents differ from selected current source ${sourceRef}`;
     }
   }
   return undefined;
