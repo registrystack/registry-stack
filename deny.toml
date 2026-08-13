@@ -14,8 +14,9 @@ ignore = [
     # RUSTSEC-2026-0249: `smartstring` 1.0.1 is unmaintained and has no patched
     # release. Its safe `From<String>` conversion has reported undefined
     # behavior (bodil/smartstring#49), also reproduced through Rhai's
-    # `ImmutableString` (rhaiscript/rhai#816). Rhai 1.25.1 pulls it into Evidence
-    # and its authoring tools, where the affected owned-string conversion is
+    # `ImmutableString` (rhaiscript/rhai#816). Rhai 1.25.1 pulls it into
+    # Evidence, its authoring tools, and the shared language server exposed
+    # through `relayctl`, where the affected owned-string conversion is
     # reachable. This ignore records accepted residual risk, not a fix.
     # Reviewed 2026-08-13. Review when Rhai replaces `smartstring`, if a
     # maintained patched release appears, after changes to Evidence's Rhai
