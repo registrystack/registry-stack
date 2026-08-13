@@ -227,6 +227,7 @@ load_spec() {
 			"evidencectl verify assertion.sd-jwt"
 			"evidencectl audit show --last-operation"
 			"evidencectl dev clean"
+			"umask 077"
 			"cp -R .evidence/requests/first-assertion ../adult-status/.evidence/requests/"
 		)
 		SPEC_OUTPUTS=(
