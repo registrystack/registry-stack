@@ -2224,6 +2224,38 @@
           "subcommands": []
         },
         {
+          "name": "healthcheck",
+          "invocation": "mint healthcheck",
+          "about": "Probe a numeric private readiness endpoint without ambient proxy use",
+          "long_about": null,
+          "usage": "mint healthcheck [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--url <URL>",
+              "description": "Exact loopback or private-address readiness URL",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "http://127.0.0.1:8081/ready"
+              ],
+              "possible_values": [],
+              "environment": "MINT_HEALTHCHECK_URL"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "verify-audit",
           "invocation": "mint verify-audit",
           "about": "Verify the retained keyed Mint audit chain named by the configuration",
