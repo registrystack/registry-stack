@@ -267,6 +267,10 @@ pub struct FixtureReport<'a> {
 const FIXTURE_SCOPE: &str = "(fixture)";
 
 impl FixtureTrace {
+    pub fn case_count(&self) -> usize {
+        self.cases.len()
+    }
+
     /// Declare what this trace must never contain.
     ///
     /// Declared as soon as the fixture is read, before any case runs, so the
