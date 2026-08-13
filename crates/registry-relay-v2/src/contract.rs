@@ -1350,7 +1350,17 @@ pub struct AuthenticationRuntime {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct IssuerRuntime {
     pub id: String,
-    pub discovery_url: String,
+    /// Exact issuer accepted in access-token `iss` claims.
+    ///
+    /// Existing runtimes may omit this when `discoveryUrl` uses the canonical
+    /// issuer origin. A distinct discovery transport or direct JWKS transport
+    /// requires this field so network routing never changes token identity.
+    #[serde(default)]
+    pub trusted_issuer: Option<String>,
+    #[serde(default)]
+    pub discovery_url: Option<String>,
+    #[serde(default)]
+    pub jwks_url: Option<String>,
     pub audience: String,
     pub token_types: Vec<String>,
     pub algorithms: Vec<String>,
@@ -1359,6 +1369,13 @@ pub struct IssuerRuntime {
 pub(crate) struct IssuerProfile {
     pub(crate) issuer_identifier: String,
     pub(crate) algorithm: IssuerAlgorithm,
+    pub(crate) key_transport: IssuerKeyTransport,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum IssuerKeyTransport {
+    Discovery(String),
+    Jwks(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1395,37 +1412,96 @@ impl IssuerRuntime {
             [algorithm] if algorithm == "RS256" => IssuerAlgorithm::Rs256,
             _ => return None,
         };
-        let discovery_url = Url::parse(&self.discovery_url).ok()?;
-        let production_https = discovery_url.scheme() == "https";
-        let supervised_loopback = allow_supervised_loopback
-            && discovery_url.scheme() == "http"
-            && discovery_url.host_str() == Some("127.0.0.1")
-            && discovery_url.port().is_some_and(|port| port != 0);
-        if (!production_https && !supervised_loopback)
-            || discovery_url.host_str().is_none()
-            || !discovery_url.username().is_empty()
-            || discovery_url.password().is_some()
-            || discovery_url.query().is_some()
-            || discovery_url.fragment().is_some()
-            || !discovery_url.path().ends_with(OIDC_DISCOVERY_SUFFIX)
-        {
-            return None;
-        }
-        let canonical_discovery_url = discovery_url.to_string();
-        if canonical_discovery_url != self.discovery_url {
-            return None;
-        }
-        let issuer_identifier = canonical_discovery_url
-            .strip_suffix(OIDC_DISCOVERY_SUFFIX)?
-            .to_owned();
-        if issuer_identifier.is_empty() || issuer_identifier.ends_with('/') {
-            return None;
-        }
+        let (issuer_identifier, key_transport) =
+            match (self.discovery_url.as_deref(), self.jwks_url.as_deref()) {
+                (Some(discovery_url), None) => {
+                    let discovery_url =
+                        canonical_issuer_transport_url(discovery_url, allow_supervised_loopback)?;
+                    if !discovery_url.path().ends_with(OIDC_DISCOVERY_SUFFIX) {
+                        return None;
+                    }
+                    let discovery_url = discovery_url.to_string();
+                    let issuer_identifier = match self.trusted_issuer.as_deref() {
+                        Some(issuer) => {
+                            canonical_trusted_issuer(issuer, allow_supervised_loopback)?
+                        }
+                        None => discovery_url
+                            .strip_suffix(OIDC_DISCOVERY_SUFFIX)?
+                            .to_owned(),
+                    };
+                    (
+                        issuer_identifier,
+                        IssuerKeyTransport::Discovery(discovery_url),
+                    )
+                }
+                (None, Some(jwks_url)) => {
+                    let issuer_identifier = canonical_trusted_issuer(
+                        self.trusted_issuer.as_deref()?,
+                        allow_supervised_loopback,
+                    )?;
+                    let jwks_url =
+                        canonical_issuer_transport_url(jwks_url, allow_supervised_loopback)?;
+                    if jwks_url.path() == "/" {
+                        return None;
+                    }
+                    (
+                        issuer_identifier,
+                        IssuerKeyTransport::Jwks(jwks_url.to_string()),
+                    )
+                }
+                _ => return None,
+            };
         Some(IssuerProfile {
             issuer_identifier,
             algorithm,
+            key_transport,
         })
     }
+}
+
+fn canonical_issuer_transport_url(raw: &str, allow_supervised_loopback: bool) -> Option<Url> {
+    let url = Url::parse(raw).ok()?;
+    let production_https = url.scheme() == "https";
+    let supervised_loopback = allow_supervised_loopback
+        && url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port().is_some_and(|port| port != 0);
+    if (!production_https && !supervised_loopback)
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.to_string() != raw
+    {
+        return None;
+    }
+    Some(url)
+}
+
+fn canonical_trusted_issuer(raw: &str, allow_supervised_loopback: bool) -> Option<String> {
+    if raw.is_empty() {
+        return None;
+    }
+    let url = Url::parse(raw).ok()?;
+    let production_https = url.scheme() == "https";
+    let supervised_loopback = allow_supervised_loopback
+        && url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port().is_some_and(|port| port != 0);
+    if (!production_https && !supervised_loopback)
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let canonical = url.as_str();
+    let canonical_root_without_slash =
+        url.path() == "/" && canonical.strip_suffix('/') == Some(raw);
+    (canonical == raw || canonical_root_without_slash).then(|| raw.to_owned())
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1635,6 +1711,88 @@ disclosureProfiles: {}
                 "{invalid}"
             );
         }
+    }
+
+    #[test]
+    fn runtime_separates_trusted_issuer_from_one_key_transport() {
+        let runtime = |transport: &str| {
+            format!(
+                "apiVersion: relay.registrystack.org/v2alpha1\nkind: RelayRuntime\nserver: {{bind: '127.0.0.1:8080'}}\npackagePath: /srv/relay/package\nsources: {{db: {{path: /srv/registry.sqlite}}}}\nauthentication:\n  issuer:\n    id: issuer\n    trustedIssuer: https://issuer.example.invalid\n{transport}    audience: registry\n    tokenTypes: [at+jwt]\n    algorithms: [EdDSA]\naudit: {{sink: /var/log/relay.jsonl, integrityKeyRef: secret:env/RELAY_KEY}}\nlimits: {{requestTimeoutMilliseconds: 1000, concurrentQueries: 4}}\n"
+            )
+        };
+
+        let discovery = RelayRuntime::parse_yaml(
+            &runtime(
+                "    discoveryUrl: https://discovery.example.invalid/.well-known/openid-configuration\n",
+            ),
+        )
+        .expect("distinct discovery transport parses");
+        let profile = discovery
+            .authentication
+            .issuer
+            .as_ref()
+            .and_then(IssuerRuntime::profile)
+            .expect("distinct discovery transport validates");
+        assert_eq!(profile.issuer_identifier, "https://issuer.example.invalid");
+        assert_eq!(
+            profile.key_transport,
+            IssuerKeyTransport::Discovery(
+                "https://discovery.example.invalid/.well-known/openid-configuration".to_owned()
+            )
+        );
+
+        let jwks = RelayRuntime::parse_yaml(&runtime(
+            "    jwksUrl: https://keys.example.invalid/issuer.jwks.json\n",
+        ))
+        .expect("direct JWKS transport parses");
+        let profile = jwks
+            .authentication
+            .issuer
+            .as_ref()
+            .and_then(IssuerRuntime::profile)
+            .expect("direct JWKS transport validates");
+        assert_eq!(profile.issuer_identifier, "https://issuer.example.invalid");
+        assert_eq!(
+            profile.key_transport,
+            IssuerKeyTransport::Jwks("https://keys.example.invalid/issuer.jwks.json".to_owned())
+        );
+
+        for trusted_issuer in [
+            "https://issuer.example.invalid/",
+            "https://issuer.example.invalid/tenant/",
+        ] {
+            let trailing_slash =
+                runtime("    jwksUrl: https://keys.example.invalid/issuer.jwks.json\n").replace(
+                    "trustedIssuer: https://issuer.example.invalid",
+                    &format!("trustedIssuer: {trusted_issuer}"),
+                );
+            let profile = RelayRuntime::parse_yaml(&trailing_slash)
+                .expect("canonical trailing-slash issuer parses")
+                .authentication
+                .issuer
+                .as_ref()
+                .and_then(IssuerRuntime::profile)
+                .expect("canonical trailing-slash issuer validates");
+            assert_eq!(profile.issuer_identifier, trusted_issuer);
+        }
+
+        for invalid in [
+            runtime(""),
+            runtime(
+                "    discoveryUrl: https://discovery.example.invalid/.well-known/openid-configuration\n    jwksUrl: https://keys.example.invalid/issuer.jwks.json\n",
+            ),
+            runtime("    jwksUrl: http://keys.example.invalid/issuer.jwks.json\n"),
+        ] {
+            assert!(
+                RelayRuntime::parse_yaml(&invalid).is_err(),
+                "runtime accepted an invalid issuer transport contract"
+            );
+        }
+
+        let missing_trusted_issuer =
+            runtime("    jwksUrl: https://keys.example.invalid/issuer.jwks.json\n")
+                .replace("    trustedIssuer: https://issuer.example.invalid\n", "");
+        assert!(RelayRuntime::parse_yaml(&missing_trusted_issuer).is_err());
     }
 
     #[test]

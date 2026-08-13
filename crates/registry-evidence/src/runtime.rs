@@ -381,6 +381,8 @@ pub(crate) trait RuntimeAuthenticator: Send + Sync {
     async fn probe_key_source(&self);
 
     async fn announce_key_source(&self);
+
+    async fn key_source_ready(&self) -> bool;
 }
 
 #[async_trait]
@@ -398,6 +400,10 @@ impl RuntimeAuthenticator for Authenticator {
 
     async fn announce_key_source(&self) {
         Authenticator::announce_key_source(self).await;
+    }
+
+    async fn key_source_ready(&self) -> bool {
+        Authenticator::key_source_ready(self).await
     }
 }
 
@@ -590,6 +596,12 @@ impl EvidenceRuntime {
             }
         }
         true
+    }
+
+    /// Fail-closed key-source check used only by an explicit deployment
+    /// preflight. Normal serving readiness retains its bounded outage policy.
+    pub async fn key_source_ready(&self) -> bool {
+        self.authenticator.key_source_ready().await
     }
 
     /// Attempt the access-token issuer's key set once, so a `jwksUri` this

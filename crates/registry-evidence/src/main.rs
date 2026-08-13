@@ -158,7 +158,9 @@ async fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
-        Command::Check => {
+        Command::Check {
+            require_runtime_dependencies,
+        } => {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
             let runtime = deployment.runtime;
             let bundle = Arc::new(deployment.bundle);
@@ -185,6 +187,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             validate_secret_material(&bundle, &runtime.config, &secrets)
                 .await
                 .map_err(runtime_initialization_error)?;
+            if require_runtime_dependencies {
+                let serving = EvidenceRuntime::initialize(&cli.runtime)
+                    .await
+                    .map_err(runtime_initialization_error)?;
+                if !serving.key_source_ready().await || !serving.ready().await {
+                    return Err(CliError("a required runtime dependency is unavailable").into());
+                }
+            }
             println!(
                 "Evidence deployment {} / {} passed check ({} requirements)",
                 bundle.revision(),

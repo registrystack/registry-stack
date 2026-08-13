@@ -63,21 +63,39 @@
           "type": "string"
         },
         "discoveryUrl": {
-          "type": "string"
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "id": {
           "type": "string"
+        },
+        "jwksUrl": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "tokenTypes": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "trustedIssuer": {
+          "default": null,
+          "description": "Exact issuer accepted in access-token `iss` claims.\n\nExisting runtimes may omit this when `discoveryUrl` uses the canonical\nissuer origin. A distinct discovery transport or direct JWKS transport\nrequires this field so network routing never changes token identity.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
         "id",
-        "discoveryUrl",
         "audience",
         "tokenTypes",
         "algorithms"

@@ -82,7 +82,29 @@ pub async fn fetch_discovery_with_policy(
     }
     let mut issuer = cfg.issuer.trim_end_matches('/').to_string();
     issuer.push_str("/.well-known/openid-configuration");
-    let url = Url::parse(&issuer).map_err(|_| OidcError::InvalidUrl)?;
+    fetch_discovery_at_with_policy(cfg, &issuer, fetch_url_policy).await
+}
+
+/// Fetch discovery metadata from an operator-bound transport URL while
+/// retaining `cfg.issuer` as the canonical JWT issuer.
+///
+/// This is useful when a resource server reaches an issuer through a distinct
+/// deployment hostname. The returned discovery document must still declare
+/// the exact trusted issuer, and token verification remains bound to that
+/// value. A direct JWKS override and an explicit discovery transport are
+/// mutually exclusive so one configuration cannot contain two key sources.
+pub async fn fetch_discovery_at_with_policy(
+    cfg: &OidcDiscoveryConfig,
+    discovery_url: &str,
+    fetch_url_policy: &FetchUrlPolicy,
+) -> Result<DiscoveryDocument, OidcError> {
+    if cfg.jwks_uri_override.is_some() {
+        return Err(OidcError::ConflictingEndpointConfiguration);
+    }
+    if cfg.issuer.trim().is_empty() {
+        return Err(OidcError::MissingIssuer);
+    }
+    let url = Url::parse(discovery_url).map_err(|_| OidcError::InvalidUrl)?;
     let validated_url = fetch_url_policy
         .validate_for_immediate_fetch_with_timeout(&url, cfg.discovery_timeout)
         .await?;
@@ -1440,8 +1462,10 @@ pub enum OidcError {
     InvalidToken,
     #[error("client is not allowed")]
     ClientNotAllowed,
-    #[error("issuer must not be empty when jwks_uri_override is set")]
+    #[error("issuer must not be empty when an endpoint override is configured")]
     MissingIssuer,
+    #[error("OIDC discovery and JWKS endpoint overrides are mutually exclusive")]
+    ConflictingEndpointConfiguration,
 }
 
 #[cfg(test)]
@@ -1476,6 +1500,32 @@ mod tests {
             axum::serve(listener, app).await.expect("serve test app");
         });
         issuer
+    }
+
+    async fn serve_discovery_document(declared_issuer: &str) -> (String, String) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let addr = listener.local_addr().expect("read listener addr");
+        let transport = format!("http://{addr}/metadata");
+        let jwks_uri = format!("http://{addr}/jwks");
+        let document = json!({
+            "issuer": declared_issuer,
+            "jwks_uri": jwks_uri,
+        });
+        let app = Router::new().route(
+            "/metadata",
+            get(move || {
+                let document = document.clone();
+                async move { Json(document) }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve test metadata");
+        });
+        (transport, jwks_uri)
     }
 
     async fn serve_jwks(document: Arc<RwLock<Value>>, requests: Arc<AtomicUsize>) -> String {
@@ -2970,6 +3020,78 @@ mod tests {
         assert!(matches!(
             err,
             OidcError::FetchUrl(FetchUrlError::PrivateRangeDenied { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_discovery_transport_preserves_the_canonical_issuer() {
+        let canonical_issuer = "https://issuer.example";
+        let (transport, jwks_uri) = serve_discovery_document(canonical_issuer).await;
+        let cfg = OidcDiscoveryConfig {
+            issuer: canonical_issuer.to_owned(),
+            jwks_uri_override: None,
+            discovery_timeout: Duration::from_secs(1),
+            max_doc_bytes: DEFAULT_DOC_BYTES,
+        };
+
+        let document = fetch_discovery_at_with_policy(&cfg, &transport, &FetchUrlPolicy::dev())
+            .await
+            .expect("distinct discovery transport accepts exact issuer metadata");
+        assert_eq!(document.issuer, canonical_issuer);
+        assert_eq!(document.jwks_uri, jwks_uri);
+
+        let (mismatched_transport, _) =
+            serve_discovery_document("https://other-issuer.example").await;
+        assert!(matches!(
+            fetch_discovery_at_with_policy(&cfg, &mismatched_transport, &FetchUrlPolicy::dev())
+                .await,
+            Err(OidcError::IssuerMismatch { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_discovery_transport_refuses_a_second_key_source() {
+        let cfg = OidcDiscoveryConfig {
+            issuer: "https://issuer.example".to_owned(),
+            jwks_uri_override: Some("http://127.0.0.1/jwks".to_owned()),
+            discovery_timeout: Duration::from_secs(1),
+            max_doc_bytes: DEFAULT_DOC_BYTES,
+        };
+        assert!(matches!(
+            fetch_discovery_at_with_policy(
+                &cfg,
+                "http://127.0.0.1/metadata",
+                &FetchUrlPolicy::dev()
+            )
+            .await,
+            Err(OidcError::ConflictingEndpointConfiguration)
+        ));
+
+        let empty_issuer = OidcDiscoveryConfig {
+            issuer: "   ".to_owned(),
+            jwks_uri_override: None,
+            discovery_timeout: Duration::from_secs(1),
+            max_doc_bytes: DEFAULT_DOC_BYTES,
+        };
+        assert!(matches!(
+            fetch_discovery_at_with_policy(
+                &empty_issuer,
+                "http://127.0.0.1/metadata",
+                &FetchUrlPolicy::dev()
+            )
+            .await,
+            Err(OidcError::MissingIssuer)
+        ));
+
+        let cfg = OidcDiscoveryConfig {
+            issuer: "https://issuer.example".to_owned(),
+            jwks_uri_override: None,
+            discovery_timeout: Duration::from_secs(1),
+            max_doc_bytes: DEFAULT_DOC_BYTES,
+        };
+        assert!(matches!(
+            fetch_discovery_at_with_policy(&cfg, "not a URL", &FetchUrlPolicy::dev()).await,
+            Err(OidcError::InvalidUrl)
         ));
     }
 

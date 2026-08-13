@@ -10,6 +10,7 @@ use registry_relay_v2::cli::{Cli, Command};
 async fn main() -> ExitCode {
     install_operational_logging();
     let result = match Cli::parse().command {
+        Command::Check { runtime } => registry_relay_v2::startup::check(&runtime).await,
         Command::Serve { runtime } => registry_relay_v2::startup::serve(&runtime).await,
         Command::Healthcheck { url } => registry_relay_v2::startup::healthcheck(&url).await,
     };

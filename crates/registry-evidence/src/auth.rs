@@ -317,6 +317,16 @@ impl Authenticator {
         }
     }
 
+    /// Require the configured JWKS endpoint to provide a usable key set now.
+    ///
+    /// Serving readiness deliberately tolerates a bounded issuer outage. A
+    /// deployment preflight has different semantics: before first traffic, an
+    /// operator needs a fail-closed answer that the configured key transport
+    /// is reachable and usable.
+    pub async fn key_source_ready(&self) -> bool {
+        self.verifier.key_source().ensure_key_set().await.is_ok()
+    }
+
     /// Attempt the issuer's key set once at startup, and name it if it cannot
     /// be had.
     ///

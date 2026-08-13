@@ -389,6 +389,10 @@ impl RuntimeAuthenticator for CountingAuthenticator {
     async fn announce_key_source(&self) {
         self.delegate.announce_key_source().await;
     }
+
+    async fn key_source_ready(&self) -> bool {
+        true
+    }
 }
 
 #[async_trait]
