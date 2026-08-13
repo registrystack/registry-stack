@@ -876,21 +876,30 @@ mod tests {
         }
 
         let mock_generate = find_command(&catalog.binaries, "evidencectl source mock generate");
-        for option in [
-            "--operation <OPERATION>",
-            "--case <CASE>",
-            "--path-parameter <PATH_PARAMETERS>",
-            "--seed <SEED>",
-            "--as-of <AS_OF>",
-        ] {
+        for option in ["--seed <SEED>", "--as-of <AS_OF>"] {
             assert!(
                 has_conflict(mock_generate, "--config <CONFIG>", option),
                 "stored mock generation did not conflict with {option}"
             );
         }
+        for option in [
+            "--operation <OPERATION>",
+            "--case <CASE>",
+            "--path-parameter <PATH_PARAMETERS>",
+        ] {
+            assert!(
+                !has_conflict(mock_generate, "--config <CONFIG>", option),
+                "stored mock generation unexpectedly conflicted with {option}"
+            );
+        }
 
         let request_prepare = find_command(&catalog.binaries, "evidencectl request prepare");
-        assert!(request_prepare.constraints.iter().any(|constraint| {
+        assert!(has_conflict(
+            request_prepare,
+            "--subject <SUBJECT>",
+            "--subjects-file <PATH>"
+        ));
+        assert!(!request_prepare.constraints.iter().any(|constraint| {
             constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.arguments == ["--subject <SUBJECT>", "--subjects-file <PATH>"]
         }));
