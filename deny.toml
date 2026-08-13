@@ -19,7 +19,8 @@ ignore = [
     # reachable. This ignore records accepted residual risk, not a fix.
     # Reviewed 2026-08-13. Review when Rhai replaces `smartstring`, if a
     # maintained patched release appears, after changes to Evidence's Rhai
-    # string flow, or if upstream publishes further security findings.
+    # string flow, before accepting untrusted scripts, or if upstream publishes
+    # further security findings.
     "RUSTSEC-2026-0249",
 ]
 
