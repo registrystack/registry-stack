@@ -14,9 +14,10 @@ Set the following absolute paths before starting Compose:
 - `EVIDENCE_TRANSIT_SOCKET_DIR`, the dedicated directory containing `transit-proxy.sock`.
 - `EVIDENCE_IMAGE`, a reviewed, digest-pinned Evidence image.
 
-The maintained Evidence image runs as UID and GID `65532`; the Compose service pins
+The maintained Evidence image declares `org.registrystack.runtime.uid` and
+`org.registrystack.runtime.gid` as `65532`; the Compose service pins
 `user: "65532:65532"`. Secret directories and files must be owned for that identity and retain the
-owner-only modes Evidence requires. If you select another reviewed image, record its service UID
+owner-only mode `0400` or `0600`. If you select another reviewed image, record its service UID
 and update the ownership and `user` setting together.
 
 The Transit socket directory must be searchable but not writable by the Evidence service identity.
@@ -26,8 +27,9 @@ identity.
 The service mounts the approved bundle, runtime, and secrets read-only. It also mounts the dedicated
 Transit socket directory created by an operator-managed host proxy or sidecar. Evidence receives no
 provider token or auto-auth credential. Its named audit volume is the only writable Evidence
-storage. The runtime uses container paths and binds Evidence to the static private address assigned
-in `docker-compose.yaml`.
+storage. The runtime uses container paths and explicitly binds the wildcard
+address under `listener.networkExposure: container-private`; the Compose
+network and upstream TLS proxy are the exposure boundary.
 Provision the named volume so UID and GID `65532` can create and append the configured audit file
 before the first start. Do not widen the Evidence process to root to compensate for a root-owned
 volume.
@@ -46,7 +48,19 @@ target-context check before starting the service:
 
 ```sh
 docker compose -f docker-compose.yaml run --rm evidence \
-  --runtime /etc/registry-evidence/runtime.yaml check
+  --runtime /etc/registry-evidence/runtime.yaml check --require-runtime-dependencies
+```
+
+Or run the supported container preflight from the repository root. It first
+checks the digest-pinned image, nonroot/read-only posture, secret declaration,
+explicit persistent audit mount, capability set, entrypoint, network mode, and
+published ports. It then invokes the native Evidence dependency check without
+printing Compose output or secret values:
+
+```sh
+python3 docker/runtime-preflight.py \
+  --compose-file docker/compose/docker-compose.yaml \
+  --service evidence=evidence
 ```
 
 The bundle revision remains unchanged when only the container runtime changes. Run fixtures again

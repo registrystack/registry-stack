@@ -32,7 +32,9 @@ The builder and runtime base images are pinned to the same digests the rest
 of the repository uses: `rust:1.95-trixie` and
 `gcr.io/distroless/cc-debian13:nonroot`. Both final images run as the
 distroless `nonroot` user (UID and GID 65532) with no shell or package tools.
-The official images have the same nonroot runtime identity.
+The official images have the same nonroot runtime identity and publish it as
+the machine-readable `org.registrystack.runtime.uid` and
+`org.registrystack.runtime.gid` OCI labels.
 
 ## Running Mint locally
 
@@ -70,29 +72,45 @@ them must resolve to a mount. Point the audit destination under
 give it a named volume; the audit chain is append-only state that must
 outlive the container.
 
-The evidence and metrics listeners deliberately refuse wildcard and public
-bind addresses: `bindHost` must be loopback, RFC 1918 private IPv4, or IPv6
-unique-local. `0.0.0.0` will not start, and `127.0.0.1` is unreachable
-through Docker port publishing. Give the container a static private address
-on a user-defined network and bind that:
+The default Evidence listener accepts only loopback, RFC 1918 private IPv4,
+or IPv6 unique-local addresses. A container deployment may instead declare
+`listener.networkExposure: container-private` and bind `0.0.0.0` or `::`.
+That explicit mode treats the container network and upstream TLS proxy as the
+operator-owned exposure boundary. It still rejects concrete public addresses,
+hostnames, and multicast addresses. The metrics listener remains private-only.
+
+For example:
 
 ```sh
-docker network create --subnet 172.28.0.0/24 registry-evidence-net
+docker network create registry-evidence-net
 docker run --rm \
-  --network registry-evidence-net --ip 172.28.0.10 \
+  --network registry-evidence-net \
   -v "$PWD/deploy/evidence:/etc/registry-evidence:ro" \
   -v evidence-audit:/var/lib/registry-evidence \
   registry-evidence
 ```
 
-with `listener.bindHost: 172.28.0.10` in `runtime.yaml`. TLS and public
-exposure are upstream concerns by design; front this listener with your
-operator-network proxy. `evidence check` validates the bundle without
-serving:
+with `listener.bindHost: 0.0.0.0` and
+`listener.networkExposure: container-private` in `runtime.yaml`. TLS and
+public exposure are upstream concerns by design; front this listener with your
+operator-network proxy. `evidence check` validates the bundle without serving.
+Add `--require-runtime-dependencies` in the target container to prove audit
+writability, signer readiness, source credentials, and JWKS reachability:
 
 ```sh
-docker run --rm -v "$PWD/deploy/evidence:/etc/registry-evidence:ro" registry-evidence check
+docker run --rm -v "$PWD/deploy/evidence:/etc/registry-evidence:ro" \
+  registry-evidence check --require-runtime-dependencies
 ```
+
+Relay provides the equivalent `relay check --runtime
+/etc/relay/runtime.yaml`; Mint provides `mint check
+--require-runtime-dependencies`. For a Compose deployment containing any
+combination of the three official products, use
+`docker/runtime-preflight.py` to verify the common container posture first and
+then run each product's native check in its actual mounts and network. The
+preflight rejects host networking, entrypoint overrides, added capabilities,
+writable configuration or secret trees, and anonymous audit volumes. Audit
+storage must be an explicit named volume or bind mount.
 
 ## Health probes
 

@@ -5,14 +5,16 @@
 #
 # Every path below is a container path: the approved bundle lives under
 # /etc/registry-evidence, secrets under /run/secrets/registry-evidence, and
-# writable audit state under /var/lib/registry-evidence. The bindHost must stay
-# equal to the static address docker-compose.yaml assigns the service.
+# writable audit state under /var/lib/registry-evidence. The explicit
+# container-private mode permits the wildcard bind inside the isolated Compose
+# network; it does not authorize public or direct-TLS exposure.
 version: 1
 
 bundleDirectory: /etc/registry-evidence/bundle
 
 listener:
-  bindHost: 172.28.0.10
+  bindHost: 0.0.0.0
+  networkExposure: container-private
   port: 8080
   tlsTermination: operator-controlled-upstream
   trustProxyIdentityHeaders: false
