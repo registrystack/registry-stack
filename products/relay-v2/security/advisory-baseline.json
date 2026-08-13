@@ -1,6 +1,59 @@
 {
-  "version": 3,
+  "version": 4,
   "service": "relay",
+  "runtime": {
+    "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775",
+    "layer_ids": [
+      "sha256:50abe06dfc0957e14cb8332ed242e8b884ef2563a9eb202e5172f243f62792f7",
+      "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+      "sha256:c8b007d0206e4b10ed4d3b3d99dfeab47c2648e82011989fd78a5731baf33fc3",
+      "sha256:bec7e6bb35e05d1284f28b10d2150c259717d91c658c4c10c08424bb9466caba",
+      "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+      "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+      "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+      "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+      "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+      "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+      "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+      "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+      "sha256:5fd2536c39c0700be8b7b4344e375196da2f126842fd8ede66996a18860a3890",
+      "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+      "sha256:80bb2aedf42cbf9911cb9073be23406c0e7f799f8083bf13a1cd2d460a25e383",
+      "sha256:c0e409312adc366898967307565f692bb33d43a439d3de48e27d14b742389725",
+      "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
+      "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
+      "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
+      "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
+      "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
+    ],
+    "application_layer_ids": [
+      "sha256:595ce1178134b3b30b0f17ae2af5d5340dec1402357815446ca25767486000be",
+      "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+    ],
+    "config": {
+      "user": "65532",
+      "entrypoint": ["/usr/local/bin/relay"],
+      "command": ["serve", "--runtime", "/etc/relay/runtime.yaml"],
+      "working_dir": "/var/lib/relay",
+      "environment": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
+        "RELAY_HEALTHCHECK_URL=http://127.0.0.1:8080/health"
+      ],
+      "healthcheck": {
+        "test": ["CMD", "/usr/local/bin/relay", "healthcheck"],
+        "interval": 30000000000,
+        "timeout": 5000000000,
+        "start_period": 10000000000,
+        "start_interval": 0,
+        "retries": 3
+      },
+      "args_escaped": true,
+      "exposed_ports": ["8080/tcp"],
+      "stop_signal": ""
+    },
+    "definition_digest": "sha256:e44871ab38a4e76b10c843d6cfef3b4b2f0f01a0f1f9254e13b6bc3f2c7a2443"
+  },
   "policies": [
     {
       "tool": "zizmor",
@@ -22,15 +75,56 @@
       "severity": "Critical",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The exact Relay V2 production binary imports sscanf only through reviewed AWS-LC CPU-capability parsing with fixed-width integer formats and contains no effective vulnerable %mc format.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.20.1 Linux AMD64 Relay candidate had no effective vulnerable allocating-character scanf path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
       "reviewed_at": "2026-08-10",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
         "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
         "fix_available",
         "material_finding_changed",
-        "package_version_changed"
-      ]
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_config_changed",
+        "runtime_base_changed"
+      ],
+      "runtime_definition_digest": "sha256:e44871ab38a4e76b10c843d6cfef3b4b2f0f01a0f1f9254e13b6bc3f2c7a2443",
+      "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:0727843669569ad8816d9863d695f9450c0507894d859bfacb1b5b98354c76c2",
+        "reference_source_revision": "b9f6d12d7d4b62199558351087487550eedb2bdc",
+        "reference_provenance": "official_candidate",
+        "runtime_definition_digest": "sha256:e44871ab38a4e76b10c843d6cfef3b4b2f0f01a0f1f9254e13b6bc3f2c7a2443",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:438c546d8e8cc48496bf3a95f753051afd9db66a629a74e31a9ded71586b56e0"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/local/bin/relay",
+            "sha256": "sha256:dc7c20db177a67ac474b61bdbb4e4de39f966955bb5b61a408c180fbb762ae6e"
+          }
+        ],
+        "definition_digest": "sha256:829d2dad5b71c3e41c15e3bc413741714cab30d72d0ed03431731e0ba5d79f13"
+      }
     },
     {
       "vulnerability_id": "CVE-2026-5928",
@@ -39,15 +133,56 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The exact Relay V2 production binary does not import ungetwc and Relay V2 has no wide-character input path.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.20.1 Linux AMD64 Relay candidate had no effective wide-character input path in the reviewed bytes; libc exporting ungetwc is expected. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
       "reviewed_at": "2026-08-10",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
         "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
         "fix_available",
         "material_finding_changed",
-        "package_version_changed"
-      ]
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_config_changed",
+        "runtime_base_changed"
+      ],
+      "runtime_definition_digest": "sha256:e44871ab38a4e76b10c843d6cfef3b4b2f0f01a0f1f9254e13b6bc3f2c7a2443",
+      "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:0727843669569ad8816d9863d695f9450c0507894d859bfacb1b5b98354c76c2",
+        "reference_source_revision": "b9f6d12d7d4b62199558351087487550eedb2bdc",
+        "reference_provenance": "official_candidate",
+        "runtime_definition_digest": "sha256:e44871ab38a4e76b10c843d6cfef3b4b2f0f01a0f1f9254e13b6bc3f2c7a2443",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:438c546d8e8cc48496bf3a95f753051afd9db66a629a74e31a9ded71586b56e0"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/local/bin/relay",
+            "sha256": "sha256:dc7c20db177a67ac474b61bdbb4e4de39f966955bb5b61a408c180fbb762ae6e"
+          }
+        ],
+        "definition_digest": "sha256:829d2dad5b71c3e41c15e3bc413741714cab30d72d0ed03431731e0ba5d79f13"
+      }
     },
     {
       "vulnerability_id": "CVE-2026-5435",
@@ -56,15 +191,56 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The exact Relay V2 production binary does not import ns_printrrf, ns_printrr, or fp_nquery and Relay V2 has no DNS-printing path.",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The official v0.20.1 Linux AMD64 Relay candidate had no effective vulnerable DNS-printing path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
       "reviewed_at": "2026-08-10",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
+        "candidate_image_identity_mismatch",
+        "candidate_rootfs_changed",
+        "component_layer_changed",
         "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
         "fix_available",
         "material_finding_changed",
-        "package_version_changed"
-      ]
+        "package_version_changed",
+        "rootfs_evidence_mismatch",
+        "runtime_config_changed",
+        "runtime_base_changed"
+      ],
+      "runtime_definition_digest": "sha256:e44871ab38a4e76b10c843d6cfef3b4b2f0f01a0f1f9254e13b6bc3f2c7a2443",
+      "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+      "exposure_assertion": {
+        "kind": "whole_image_fingerprint_equals",
+        "reference_image_digest": "sha256:0727843669569ad8816d9863d695f9450c0507894d859bfacb1b5b98354c76c2",
+        "reference_source_revision": "b9f6d12d7d4b62199558351087487550eedb2bdc",
+        "reference_provenance": "official_candidate",
+        "runtime_definition_digest": "sha256:e44871ab38a4e76b10c843d6cfef3b4b2f0f01a0f1f9254e13b6bc3f2c7a2443",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:438c546d8e8cc48496bf3a95f753051afd9db66a629a74e31a9ded71586b56e0"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/local/bin/relay",
+            "sha256": "sha256:dc7c20db177a67ac474b61bdbb4e4de39f966955bb5b61a408c180fbb762ae6e"
+          }
+        ],
+        "definition_digest": "sha256:829d2dad5b71c3e41c15e3bc413741714cab30d72d0ed03431731e0ba5d79f13"
+      }
     }
   ]
 }

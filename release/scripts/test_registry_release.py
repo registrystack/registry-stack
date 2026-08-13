@@ -708,6 +708,27 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn("candidate/security/syft/${name}.syft.json", scan_body)
         self.assertIn("candidate/security/grype/${name}.grype.json", scan_body)
+        self.assertIn("SYFT_FILE_METADATA_SELECTION=all", scan_body)
+        self.assertIn("SYFT_FILE_METADATA_DIGESTS=sha256", scan_body)
+        self.assertIn('crane export "${candidate_ref}" -', scan_body)
+        self.assertIn(
+            'candidate/security/oci-config/${name}.json',
+            scan_body,
+        )
+        self.assertIn('crane config "${candidate_ref}"', scan_body)
+        self.assertIn(
+            '.architecture == "amd64"',
+            scan_body,
+        )
+        self.assertIn('.os == "linux"', scan_body)
+        self.assertIn('(.config | type == "object")', scan_body)
+        self.assertIn('(.rootfs.type == "layers")', scan_body)
+        self.assertIn('((.rootfs.diff_ids | type) == "array")', scan_body)
+        self.assertIn('(.rootfs.diff_ids | length > 0)', scan_body)
+        self.assertIn(
+            '--directory="candidate/security/rootfs/${name}"', scan_body
+        )
+        self.assertIn("contains a forbidden special file", scan_body)
         self.assertIn(
             "python3 release/scripts/check-advisory-baselines.py",
             scan_body,
@@ -718,6 +739,22 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn(
             '--syft-report "candidate/security/syft/${name}.syft.json"',
+            scan_body,
+        )
+        self.assertIn(
+            '--rootfs "candidate/security/rootfs/${name}"',
+            scan_body,
+        )
+        self.assertIn(
+            '--candidate-image-digest "${digest}"',
+            scan_body,
+        )
+        self.assertIn(
+            '--source-revision "${{ needs.validate.outputs.source_sha }}"',
+            scan_body,
+        )
+        self.assertIn(
+            '--oci-config "candidate/security/oci-config/${name}.json"',
             scan_body,
         )
         self.assertIn(
@@ -733,6 +770,7 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("--read-only", scan_body)
         self.assertIn("--cap-drop ALL", scan_body)
         self.assertIn("--security-opt no-new-privileges", scan_body)
+        self.assertIn("rm -rf candidate/security/rootfs", scan_body)
         self.assertNotIn("postgresql", scan_body.lower())
         self.assertNotIn("registry-relay", scan_body)
         package_body = assemble[package_step:]

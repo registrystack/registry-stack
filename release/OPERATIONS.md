@@ -227,11 +227,141 @@ workflow then:
 - Builds the exact locked release documentation archive once and includes it in
   the candidate payload closure.
 - Publishes images only to private candidate packages.
-- Generates image-specific SPDX and Syft reports, scans each exact candidate
-  image digest, and enforces the advisory decision for every image.
+- Generates image-specific SPDX and Syft reports, exports each exact candidate
+  rootfs, and scans every image digest. A version-4 advisory exception passes
+  only when the independently resolved candidate digest agrees with both scan
+  reports, its OCI labels name the protected source revision, and the candidate
+  retains the complete ordered reference OCI `.rootfs.diff_ids`, component
+  layer, and
+  exact safe production process configuration. Its definition-digested exposure
+  assertion must also match each reviewed file in native Syft evidence and the
+  exported rootfs. The full `crane config` document independently confirms that
+  Grype and Syft reported the authoritative ordered uncompressed DiffIDs.
+  Ordered DiffIDs cover every filesystem input, including
+  libraries, interpreters, loader inputs, and symlinks. The Relay reference is an
+  official v0.20.1 candidate. Evidence and Mint use explicitly identified local
+  v0.20.1 reproductions because official v0.20.x image reports were retained only
+  for Relay. Ordered rootfs DiffIDs, rather than the manifest digest, are stored
+  in-tree so renewal does not self-reference the revision-bearing config.
 - Runs the release payload checks.
 - Seals a candidate manifest and bundle that remain promotable for seven days.
 - Attests the manifest and bundle after re-verifying their bytes.
+
+### Renew an image advisory fingerprint
+
+Treat a fingerprint failure as a stopped candidate, not as a mechanical digest
+update. The failed job does not publish renewal evidence. The exact image stays
+in its private candidate package, so an authorized operator can regenerate the
+evidence with the scanner versions pinned in the candidate workflow:
+
+```sh
+run_id=<failed-run-id>
+run_attempt=<failed-run-attempt>
+name=relay # or evidence or mint
+candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
+digest="$(crane digest "${candidate_tag}")"
+candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"
+evidence_dir="advisory-renewal-${name}-${run_id}-${run_attempt}"
+mkdir -p "${evidence_dir}/rootfs"
+crane config "${candidate_ref}" > "${evidence_dir}/oci-config.json"
+SYFT_FILE_METADATA_SELECTION=all SYFT_FILE_METADATA_DIGESTS=sha256 \
+  syft "${candidate_ref}" -o syft-json="${evidence_dir}/syft.json"
+grype "${candidate_ref}" -o json > "${evidence_dir}/grype.json"
+crane export "${candidate_ref}" - | tar --extract --file=- \
+  --directory="${evidence_dir}/rootfs" \
+  --no-same-owner --no-same-permissions
+```
+
+Select the matching baseline and confirm its pinned base is still the exact
+prefix of the candidate's authoritative uncompressed DiffIDs:
+
+```sh
+baseline=products/relay-v2/security/advisory-baseline.json
+# Evidence and Mint use release/security/<name>-advisory-baseline.json.
+jq --slurpfile baseline "${baseline}" -e '
+  .rootfs.diff_ids[0:($baseline[0].runtime.layer_ids | length)]
+    == $baseline[0].runtime.layer_ids
+' "${evidence_dir}/oci-config.json"
+jq --slurpfile baseline "${baseline}" '
+  .rootfs.diff_ids[($baseline[0].runtime.layer_ids | length):]
+' "${evidence_dir}/oci-config.json"
+```
+
+These are `.rootfs.diff_ids`, not the compressed digests in a manifest's
+`.layers` descriptors. Then:
+
+1. Copy the authoritative ordered DiffID suffix into
+   `runtime.application_layer_ids` only after confirming the intended base and
+   application boundary.
+2. Review the candidate OCI process configuration and update `runtime.config`
+   only when `User`, `Entrypoint`, `Cmd`, `WorkingDir`, `Env`, `Healthcheck`,
+   `ArgsEscaped`, `ExposedPorts`, and `StopSignal` are the intended production
+   contract and `Labels` contains exactly the three current OCI identity labels
+   plus the fixed `org.registrystack.runtime.uid=65532` and
+   `org.registrystack.runtime.gid=65532` labels.
+3. Review every assertion file and copy its native Syft SHA-256 only after it
+   matches the same path in the exported rootfs. If the verified package model
+   moved, update `component_layer_id` from the matching Grype/Syft location.
+4. Set every assertion's `reference_image_digest` to the reviewed `${digest}`,
+   `reference_source_revision` to the independently copied protected source SHA,
+   and `reference_provenance` to the truthful `official_candidate` or
+   `local_reproduction` kind. Update each exception rationale to describe that
+   same evidence. Then compute the runtime digest with the checker's canonical
+   JSON rule and set it in `runtime.definition_digest`, every exception's
+   `runtime_definition_digest`, and every assertion's
+   `runtime_definition_digest`:
+
+   ```sh
+   python3 - "${baseline}" <<'PY'
+   import hashlib, json, sys
+   data = json.load(open(sys.argv[1], encoding="utf-8"))
+   def digest(value):
+       payload = {key: item for key, item in value.items() if key != "definition_digest"}
+       encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+       return "sha256:" + hashlib.sha256(encoded).hexdigest()
+   print(digest(data["runtime"]))
+   PY
+   ```
+
+   Only after those bindings are saved, recompute each assertion digest. This
+   second read-only command prints one line per shared assertion definition:
+
+   ```sh
+   python3 - "${baseline}" <<'PY'
+   import hashlib, json, sys
+   data = json.load(open(sys.argv[1], encoding="utf-8"))
+   def digest(value):
+       payload = {key: item for key, item in value.items() if key != "definition_digest"}
+       encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+       return "sha256:" + hashlib.sha256(encoded).hexdigest()
+   seen = set()
+   for exception in data["exceptions"]:
+       assertion = exception["exposure_assertion"]
+       key = digest(assertion)
+       if key not in seen:
+           print("assertion", key)
+           seen.add(key)
+   PY
+   ```
+
+5. Check the edited baseline against the regenerated candidate evidence, then
+   rerun the focused advisory tests and candidate workflow. Never invent a
+   digest or reuse evidence from a different candidate.
+
+   ```sh
+   # Copy this independently from the failed run's protected source_sha.
+   source_revision=<protected-source-sha>
+   python3 release/scripts/check-advisory-baselines.py \
+     grype "${evidence_dir}/grype.json" \
+     --baseline "${baseline}" \
+     --syft-report "${evidence_dir}/syft.json" \
+     --rootfs "${evidence_dir}/rootfs" \
+     --candidate-image-digest "${digest}" \
+     --source-revision "${source_revision}" \
+     --oci-config "${evidence_dir}/oci-config.json" \
+     --subject "${name}-image"
+   python3 -m unittest release/scripts/test_check_advisory_baselines.py
+   ```
 
 Use the successful candidate run ID for local verification:
 
