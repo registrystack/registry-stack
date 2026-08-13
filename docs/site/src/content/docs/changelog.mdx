@@ -18,11 +18,34 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
-- Added Registry Mint's opt-in client-secret compatibility profile for managed
-  standard OAuth clients, while retaining `private_key_jwt` as the default and
-  sole method for Evidence and delegated authority.
-- Added owner-only secret provisioning, per-installation registration,
-  rotation and revocation guidance, and a QGIS Client Credentials walkthrough.
+## 2026-08-14
+
+Documentation prepared for the v0.22.0 beta-33 release:
+
+- Documented the explicit container-private Evidence listener mode, native
+  Evidence, Mint, and Relay deployment checks, and the common Compose runtime
+  preflight.
+- Documented Relay issuer identity independently from OIDC discovery or direct
+  JWKS transport while preserving canonical discovery compatibility.
+- Added Registry Mint's opt-in client-secret profile for managed standard OAuth
+  clients, while retaining `private_key_jwt` as the default and sole method
+  for Evidence and delegated authority.
+- Added owner-only client-secret provisioning, per-installation registration,
+  bounded rotation and revocation guidance, and a QGIS Client Credentials
+  walkthrough. The walkthrough is configuration guidance, not release-gate
+  interoperability evidence.
+- Documented the npm and PyPI distribution transaction for the exact
+  checksum-covered Evidence and Relay client packages. Registry publication is
+  accepted only when registry digests match the candidate bytes.
+- Documented that the Relay installer verifies and installs matching `relay`
+  and `relayctl` binaries together on Linux amd64 and preserves the previous
+  pair on failure.
+- Documented eager Evidence trusted-key validation, Mint's reserved `scope`
+  authority boundary, categorical Relay editor diagnostics, and governed-only
+  Relay project indexing.
+- Hardened synchronized product documentation so it is compiled as inert
+  Markdown and refuses active raw HTML or unsafe rendered destinations.
+- Added the v0.22.0 beta-33 candidate documentation archive.
 
 ## 2026-08-13
 

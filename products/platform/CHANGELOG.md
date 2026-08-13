@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.22.0 - 2026-08-14
+
+- Shared file-secret validation accepts owner-only mode `0400` for read-only
+  mounts and mode `0600` for read-write files. It continues to reject linked,
+  non-regular, executable, group-readable, and world-readable secret files.
+- No separately versioned Registry Platform API changes.
+
 ## v0.21.0 - 2026-08-13
 
 - No separately versioned Registry Platform API changes. This release adds

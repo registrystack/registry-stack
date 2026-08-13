@@ -74,7 +74,7 @@ not part of later releases.
 
 ### Provision client registries
 
-Registry Stack v0.21.1 and later promote the exact candidate Evidence and Relay client
+Registry Stack v0.22.0 and later promote the exact candidate Evidence and Relay client
 packages to npm and PyPI before the GitHub Release becomes public. The two
 publication jobs use GitHub-hosted runners and OpenID Connect trusted
 publishing. Do not add npm or PyPI write tokens to the repository.
@@ -438,7 +438,7 @@ It verifies the annotated tag target, latest published non-prerelease state,
 every downloadable asset against GitHub's digest metadata, the exact
 `SHA256SUMS` closure and its protected-main Sigstore identity, the release-body
 manifest binding, every final OCI digest, and one maintained binary version
-smoke. For v0.21.1 and later, the publication workflow also verifies the npm
+smoke. For v0.22.0 and later, the publication workflow also verifies the npm
 SHA-512 integrity and PyPI SHA-256 digest of every client package before
 docs promotion. The public verifier is read-only and can be rerun
 independently.

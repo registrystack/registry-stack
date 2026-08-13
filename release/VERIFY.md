@@ -156,7 +156,7 @@ private-candidate recovery and evidence-regeneration procedure for a failed gate
 
 ## Verify client registries
 
-Registry Stack v0.21.1 and later publish the checksum-covered Evidence and Relay client
+Registry Stack v0.22.0 and later publish the checksum-covered Evidence and Relay client
 packages to npm and PyPI. With the release assets still in the current
 directory, compare every registry version with its release tarball or wheel:
 
