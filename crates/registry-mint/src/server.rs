@@ -319,7 +319,17 @@ fn check_client_profiles(
         // The claims Mint writes itself. A subject minted over one of these
         // would replace authority the registry, not the caller, is supposed to
         // decide.
-        let mut reserved = vec!["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "sub"];
+        let mut reserved = vec![
+            "iss",
+            "aud",
+            "exp",
+            "iat",
+            "nbf",
+            "jti",
+            "client_id",
+            "sub",
+            "scope",
+        ];
         reserved.push(claims.principal.as_str());
         reserved.push(claims.requester_tags.as_str());
         reserved.push(claims.evidence_audience.as_str());
@@ -711,23 +721,34 @@ mod tests {
         let mut claims = claim_names();
         claims.actor = Some("evidence_actor".to_owned());
 
-        for root in [
-            "iss",
-            "sub",
-            "jti",
-            "client_id",
-            claims.requester_tags.as_str(),
-            claims.evidence_audience.as_str(),
-            claims.grant_id.as_str(),
-            claims.grant_authority.as_str(),
-            "evidence_actor",
-        ] {
+        let mut paths = vec!["scope".to_owned(), "scope.value".to_owned()];
+        paths.extend(
+            [
+                "iss",
+                "sub",
+                "jti",
+                "client_id",
+                claims.requester_tags.as_str(),
+                claims.evidence_audience.as_str(),
+                claims.grant_id.as_str(),
+                claims.grant_authority.as_str(),
+                "evidence_actor",
+            ]
+            .into_iter()
+            .map(|root| format!("{root}.given_name")),
+        );
+        for path in paths {
             let registry = registry_with(&format!(
-                "delegation:\n  subjectClaims:\n    given_name: {root}.given_name\n"
+                "delegation:\n  subjectClaims:\n    given_name: {path}\n"
             ));
             assert!(
-                check_profiles(&registry, Some(&claims), 1).is_err(),
-                "a subject path rooted at {root} must be refused"
+                matches!(
+                    check_profiles(&registry, Some(&claims), 1),
+                    Err(ServiceError::Registration(client, reason))
+                        if client == "client-a"
+                            && reason == "a subject claim path would overwrite an authority claim"
+                ),
+                "a subject path at {path} must be refused as an authority collision"
             );
         }
     }
