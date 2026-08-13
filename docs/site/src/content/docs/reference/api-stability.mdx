@@ -67,12 +67,12 @@ publishes a family through it.
 Registry Mint and `evidence-oid4vci` service surfaces are deliberately absent from the table. Both
 are supporting services rather than patterns of their own, and their configuration fields, route
 shapes, and CLI flags may still change without a major release. Registry Mint's released image name
-and digest-verification interface remain covered release artifacts. What Registry Mint does hold
-steady is structural rather than versioned: the `client_credentials` grant with registered
-authentication, `private_key_jwt` (RFC 7523) by default or an explicitly selected standard
-client-secret method, the collapse of every client authentication failure to `invalid_client`,
-and authority written from the client registry rather than from the caller's request. The
-[Registry Mint reference](../mint/) defines these surfaces.
+and digest-verification interface remain covered release artifacts. The current implementation
+enforces the `client_credentials` grant with registered authentication, `private_key_jwt` (RFC 7523)
+by default or an explicitly selected standard client-secret method, the collapse of every client
+authentication failure to `invalid_client`, and authority written from the client registry rather
+than from the caller's request. These are current properties, not compatibility promises. The
+[Registry Mint reference](../mint/) defines the surfaces.
 
 ## What counts as a breaking change
 

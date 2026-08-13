@@ -23,12 +23,11 @@ CLI surfaces do not appear among the covered surfaces in
 release until Mint is added to that table. The released Mint image name and digest-verification
 interface are covered release artifacts.
 
-What is stable in practice: the `client_credentials` grant, registered client authentication
-with `private_key_jwt` (RFC 7523) as the default or an explicitly selected client-secret
-compatibility profile, the collapse of every client-authentication failure to `invalid_client`,
-and the rule that authority is written from the client registry and never from the caller's own
-request. Those are structural properties this crate exists to hold, not incidental
-implementation choices.
+The current implementation enforces the `client_credentials` grant, registered client
+authentication with `private_key_jwt` (RFC 7523) as the default or an explicitly selected
+client-secret compatibility profile, the collapse of every client-authentication failure to
+`invalid_client`, and the rule that authority is written from the client registry and never from
+the caller's own request. These are current properties, not compatibility promises.
 
 ## Source of truth
 

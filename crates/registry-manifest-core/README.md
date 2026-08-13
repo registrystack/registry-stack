@@ -2,8 +2,7 @@
 
 Portable metadata contracts, validators, compilers, and renderers for registry
 catalogs. This crate is the commons contract/schema kernel used by Registry
-Relay, Registry Notary metadata workflows, and external adopter fixtures such
-as Solmara Lab.
+Stack metadata workflows and external adopter fixtures such as Solmara Lab.
 
 This crate is the source of truth for metadata manifests. It stays independent
 of Registry Relay runtime concerns so static publishers, CLIs, and services can
@@ -12,8 +11,8 @@ share the same metadata model.
 ## What It Provides
 
 - Manifest structs for catalogs, datasets, entities, fields, policies,
-  codelists, requirements, profiles, evidence offerings, federation metadata,
-  and evaluation profiles.
+  codelists, requirements, profiles, evidence offerings, and evaluation
+  profiles.
 - Strict validation with unknown-field rejection through Serde.
 - Manifest compilation into lookup-friendly metadata models.
 - Pure renderers for catalog JSON, DCAT JSON-LD, BRegDCAT-AP JSON-LD, CPSV-AP JSON-LD, SHACL,
@@ -37,9 +36,8 @@ This crate must remain portable. It must not depend on Registry Relay, Axum,
 DataFusion, Postgres, auth, audit, observability, runtime row access, secret
 handling, `utoipa`, or `clap`.
 
-Federation fields are metadata only. Runtime peer policy, request verification,
-replay storage, audit emission, and source reads remain Registry Notary
-responsibilities.
+Runtime source access, authentication, authorization, audit, and secret handling
+remain responsibilities of the consuming service.
 
 ## Testing
 

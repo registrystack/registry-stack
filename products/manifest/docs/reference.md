@@ -1,6 +1,6 @@
 # Registry Manifest reference
 
-Look up CLI subcommand flags, manifest key definitions, federation metadata, publish output paths, and the runtime-only key list.
+Look up CLI subcommand flags, manifest key definitions, evidence and evaluation metadata, publish output paths, and the runtime-only key list.
 
 ## CLI subcommands
 

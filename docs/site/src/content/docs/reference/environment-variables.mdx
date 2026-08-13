@@ -14,8 +14,8 @@ standards_referenced: []
 ---
 
 This page lists Registry Stack's supported fixed environment-variable interfaces for runtimes,
-adopter tooling, and installers. It also distinguishes product configuration from a host
-temporary-directory facility used during Relayctl fixture execution.
+adopter tooling, and installers. It also records how Relayctl keeps fixture scratch state independent
+of host temporary-directory configuration.
 
 The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay is the product that works that way, and the reference grammar is closed rather than free-form. Evidence Gateway and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
 
@@ -29,7 +29,7 @@ The `relay` binary reads the variables below.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `RELAY_RUNTIME` | Path to the deployment binding that names the sealed package, the local sources, authentication, audit, and limits. Equivalent to the `--runtime` flag on `relay serve`. | Required for `relay serve`, by flag or by variable. |
+| `RELAY_RUNTIME` | Path to the deployment binding that names the sealed package, the local sources, authentication, audit, and limits. Equivalent to `--runtime` on `relay check` and `relay serve`. | Required for `relay serve`, by flag or by variable. `relay check` defaults to `/etc/relay/runtime.yaml`. |
 | `RELAY_HEALTHCHECK_URL` | Complete HTTP or HTTPS URL of the unauthenticated `/health` endpoint to probe. Equivalent to the `--url` flag on `relay healthcheck`. | Defaults to `http://127.0.0.1:8080/health`. |
 | `RELAY_LOG` | Level for the JSON operational records the process writes on standard error. | Defaults to `info`. |
 
@@ -62,14 +62,16 @@ preserves the previous pair. It does not verify release authenticity.
 
 ## Relayctl
 
-`relayctl` defines no product-specific environment-variable configuration. Workflow registries and
-projects arrive through positional paths, explicit flags, or authored files. `tooling editor` may
-use its documented current-directory default, and the language server receives authoring documents
-through its protocol session. Secret references remain inside the project's `runtime.yaml` for
-`relay` to resolve at startup. `relayctl test` currently uses the platform temporary-directory
-helper, which can consult the host's temporary-directory environment. That host facility is
-permitted by `REQ-PR-RELAYCTL-003` only for internal fixture materialization. It cannot select a
-Registry, project, deployment environment, credential, or governed behavior.
+`relayctl` reads no environment variable. Workflow registries and projects arrive through positional
+paths, explicit flags, or authored files. `tooling editor` may use its documented current-directory
+default, and the language server receives authoring documents through its protocol session. Secret
+references remain inside the project's `runtime.yaml` for `relay` to resolve at startup.
+
+`relayctl test` ignores host temporary-directory variables. It validates the canonical project's
+parent hierarchy, creates an owner-only transient workspace beside the project, and removes that
+workspace after the fixture run. The project itself may be read-only, but its parent must be trusted
+and writable. Scratch placement cannot select a Registry, deployment environment, credential, or
+governed behavior.
 
 ## Evidence Gateway
 
