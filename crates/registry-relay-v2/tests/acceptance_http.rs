@@ -2084,9 +2084,7 @@ async fn real_jwt_path_uses_trusted_issuer_not_the_jwks_transport_host() {
         fixture_id,
         fixture,
         json!(audience),
-        now,
-        now,
-        now.saturating_add(900),
+        [now, now, now.saturating_add(900)],
     );
     let accepted = harness
         .app
@@ -2106,9 +2104,7 @@ async fn real_jwt_path_uses_trusted_issuer_not_the_jwks_transport_host() {
         fixture_id,
         fixture,
         json!(audience),
-        now,
-        now,
-        now.saturating_add(900),
+        [now, now, now.saturating_add(900)],
     );
     assert_problem_code(
         harness
@@ -3803,7 +3799,11 @@ impl ProjectHarness {
             .expect("protected project has an IdP")
             .issuer();
         self.signed_token_with_issuer(
-            &issuer, fixture, definition, audience, issued_at, not_before, expires_at,
+            &issuer,
+            fixture,
+            definition,
+            audience,
+            [issued_at, not_before, expires_at],
         )
     }
 
@@ -3813,10 +3813,9 @@ impl ProjectHarness {
         fixture: &str,
         definition: &AuthorizationFixture,
         audience: Value,
-        issued_at: u64,
-        not_before: u64,
-        expires_at: u64,
+        validity: [u64; 3],
     ) -> String {
+        let [issued_at, not_before, expires_at] = validity;
         let mut claims = serde_json::Map::new();
         claims.insert("iss".into(), json!(issuer));
         claims.insert("aud".into(), audience);
