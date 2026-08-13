@@ -27,6 +27,11 @@ services:
       - ${EVIDENCE_TRANSIT_SOCKET_DIR:?set EVIDENCE_TRANSIT_SOCKET_DIR to the Transit socket directory}:/run/registry-evidence:ro
       # The append-only audit chain must outlive the container.
       - evidence-audit:/var/lib/registry-evidence
+      # Docker otherwise provides an implicit writable /dev/shm tmpfs. Keep it
+      # read-only so the audit root is the only regular-file write lane.
+      - type: tmpfs
+        target: /dev/shm
+        read_only: true
     networks: [evidence-net]
     # To reach the listener from the host, publish it explicitly; TLS and
     # public exposure stay upstream concerns for the operator's proxy:
