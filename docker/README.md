@@ -110,9 +110,29 @@ combination of the three official products, use
 then run each product's native check in its actual mounts and network. The
 preflight rejects host or shared network namespaces, entrypoint or command
 overrides, alternate Evidence or Mint configuration paths, privileged mode,
-added capabilities, inherited mounts, writable configuration or secret trees,
-anonymous audit volumes, and named volumes backed by tmpfs. Audit storage must
-be an explicit durable named volume or bind mount.
+replacement builds, added capabilities or supplementary groups, host devices,
+any security option other than one `no-new-privileges` entry, multiple
+replicas, inherited mounts, executable-shadowing mounts, writable configuration
+or secret trees, anonymous audit volumes, service-level tmpfs, any long-form
+tmpfs except the required read-only mount at `/dev/shm`, and
+driver-option-backed named volumes. Docker's
+implicit writable `/dev/shm` would otherwise let an unused durable audit
+volume hide an ephemeral configured sink. With `/dev/shm` read-only, the fixed
+nonroot identity, and the read-only root filesystem, the audit root is the only
+usable regular-file write lane. It may be a Docker-managed local named volume
+with no driver options or an explicit bind outside known ephemeral host paths.
+The native check then proves that the configured audit sink can open and lock
+through that lane, rather than through an unused durable mount beside ephemeral
+storage.
+
+Native checks have no wrapper deadline by default because validating a retained
+audit chain can legitimately take longer than a fixed deployment timeout. Use
+`--native-check-timeout-seconds SECONDS` when the operator requires a positive
+deadline. Compose dependencies are honored, so a cold Evidence check can start
+a declared Mint dependency; services started for that dependency remain under
+the operator's Compose lifecycle. Native checks consume the exact rendered
+Compose JSON already validated by the static pass, rather than re-reading
+mutable Compose or environment files.
 
 ## Health probes
 

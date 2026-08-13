@@ -17,8 +17,9 @@ Set the following absolute paths before starting Compose:
 The maintained Evidence image declares `org.registrystack.runtime.uid` and
 `org.registrystack.runtime.gid` as `65532`; the Compose service pins
 `user: "65532:65532"`. Secret directories and files must be owned for that identity and retain the
-owner-only mode `0400` or `0600`. If you select another reviewed image, record its service UID
-and update the ownership and `user` setting together.
+required owner-only posture: files use mode `0400` or `0600`, while
+directories remain owner-searchable. If you select another reviewed image,
+record its service UID and update the ownership and `user` setting together.
 
 The Transit socket directory must be searchable but not writable by the Evidence service identity.
 The proxy owns the directory and creates a mode `0660` socket whose group admits only that Evidence
@@ -27,9 +28,11 @@ identity.
 The service mounts the approved bundle, runtime, and secrets read-only. It also mounts the dedicated
 Transit socket directory created by an operator-managed host proxy or sidecar. Evidence receives no
 provider token or auto-auth credential. Its named audit volume is the only writable Evidence
-storage. The runtime uses container paths and explicitly binds the wildcard
-address under `listener.networkExposure: container-private`; the Compose
-network and upstream TLS proxy are the exposure boundary.
+storage. A separate long-form read-only tmpfs replaces Docker's otherwise
+writable `/dev/shm`; do not remove or widen it. The runtime uses container
+paths and explicitly binds the wildcard address under
+`listener.networkExposure: container-private`; the Compose network and
+upstream TLS proxy are the exposure boundary.
 Provision the named volume so UID and GID `65532` can create and append the configured audit file
 before the first start. Do not widen the Evidence process to root to compensate for a root-owned
 volume.
@@ -55,14 +58,32 @@ Or run the supported container preflight from the repository root. It first
 checks the digest-pinned image, nonroot/read-only posture, secret declaration,
 explicit persistent audit mount and backend, capability and privilege posture,
 entrypoint and command, configuration path, inherited mounts, network mode,
-and published ports. It then invokes the native Evidence dependency check without
-printing Compose output or secret values:
+and published ports. It requires the fixed audit root to be the only writable
+declared mount, requires the explicit read-only `/dev/shm` hardening mount,
+accepts exactly one `no-new-privileges` security option, and rejects mounts
+over the official executable or any ancestor. It then invokes the native
+Evidence dependency check without printing Compose output or secret values:
 
 ```sh
 python3 docker/runtime-preflight.py \
   --compose-file docker/compose/docker-compose.yaml \
   --service evidence=evidence
 ```
+
+The native check has no wrapper deadline by default. Add
+`--native-check-timeout-seconds SECONDS` only when the deployment requires an
+operator-selected positive deadline. The preflight honors `depends_on`; if an
+Evidence overlay declares Mint as a dependency, Compose may start Mint for a
+cold dependency check and leaves it under the operator's Compose lifecycle.
+The preflight accepts only Docker-managed local named audit volumes without
+driver options, or explicit bind mounts outside known ephemeral host paths. It
+rejects service-level tmpfs and every long-form tmpfs other than exactly one
+read-only `/dev/shm`. This closes the implicit ephemeral file lane before the
+native check opens and locks the configured audit sink.
+It passes the already validated rendered Compose JSON to every native check, so
+changes to the source Compose or environment files cannot change the checked
+containers between phases. Host storage durability, daemon state, and changes
+made after preflight remain operator responsibilities.
 
 The bundle revision remains unchanged when only the container runtime changes. Run fixtures again
 only when the governed bundle changes. The runtime and bundle being read-only does not waive secret

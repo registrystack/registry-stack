@@ -57,6 +57,11 @@ def service(product: str) -> dict[str, object]:
                 "target": audit,
                 "read_only": False,
             },
+            {
+                "type": "tmpfs",
+                "target": "/dev/shm",
+                "read_only": True,
+            },
         ],
     }
 
@@ -85,7 +90,11 @@ class RuntimePreflightTest(unittest.TestCase):
         ]
 
     def run_main(
-        self, document: dict[str, object], *, native_returncode: int = 0
+        self,
+        document: dict[str, object],
+        *,
+        native_returncode: int = 0,
+        argv: list[str] | None = None,
     ) -> tuple[int, str, str, unittest.mock.Mock]:
         render = subprocess.CompletedProcess(
             args=[], returncode=0, stdout=json.dumps(document), stderr=""
@@ -104,7 +113,7 @@ class RuntimePreflightTest(unittest.TestCase):
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
-            result = self.module.main(self.argv)
+            result = self.module.main(self.argv if argv is None else argv)
         return result, stdout.getvalue(), stderr.getvalue(), run
 
     def test_all_products_use_native_checks_after_complete_static_preflight(
@@ -117,6 +126,9 @@ class RuntimePreflightTest(unittest.TestCase):
                 "relay": service("relay"),
             }
         )
+        document["services"]["evidence"]["depends_on"] = {  # type: ignore[index]
+            "mint": {"condition": "service_healthy", "required": True}
+        }
         result, stdout, stderr, run = self.run_main(document)
         self.assertEqual(0, result, stderr)
         self.assertEqual("runtime preflight passed for 3 service(s)\n", stdout)
@@ -139,22 +151,56 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertIn("--require-runtime-dependencies", calls[1])
         self.assertIn("--require-runtime-dependencies", calls[2])
         self.assertEqual("check", calls[3][-3])
+        self.assertEqual("mint", calls[1][calls[1].index("--rm") + 1])
+        self.assertEqual("evidence", calls[2][calls[2].index("--rm") + 1])
+        self.assertEqual("relay", calls[3][calls[3].index("--rm") + 1])
         for call in run.call_args_list[1:]:
+            self.assertNotIn("--no-deps", call.args[0])
+            self.assertEqual(["docker", "compose", "--file", "-"], call.args[0][:4])
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stdout"])
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stderr"])
             self.assertNotIn("capture_output", call.kwargs)
+            self.assertIsNone(call.kwargs["timeout"])
+            self.assertEqual(document, json.loads(call.kwargs["input"]))
 
     def test_every_static_posture_failure_precedes_native_execution(self) -> None:
         mutations = {
             "tagged image": lambda item: item.update(
                 image="ghcr.io/registrystack/evidence:v1"
             ),
+            "replacement build": lambda item: item.update(build={"context": "."}),
             "root user": lambda item: item.update(user="0:0"),
+            "supplementary group": lambda item: item.update(group_add=["0"]),
+            "host device": lambda item: item.update(devices=["/dev/kvm:/dev/kvm"]),
+            "two deploy replicas": lambda item: item.update(deploy={"replicas": 2}),
+            "boolean deploy replicas": lambda item: item.update(
+                deploy={"replicas": True}
+            ),
+            "two scaled replicas": lambda item: item.update(scale=2),
+            "boolean scale": lambda item: item.update(scale=True),
             "writable root": lambda item: item.update(read_only=False),
             "privileged container": lambda item: item.update(privileged=True),
             "capabilities": lambda item: item.update(cap_drop=[]),
             "added capability": lambda item: item.update(cap_add=["SYS_ADMIN"]),
             "privilege escalation": lambda item: item.update(security_opt=[]),
+            "unconfined seccomp": lambda item: item.update(
+                security_opt=["no-new-privileges:true", "seccomp=unconfined"]
+            ),
+            "unconfined AppArmor": lambda item: item.update(
+                security_opt=["no-new-privileges:true", "apparmor=unconfined"]
+            ),
+            "unconfined system paths": lambda item: item.update(
+                security_opt=["no-new-privileges:true", "systempaths=unconfined"]
+            ),
+            "duplicate security option": lambda item: item.update(
+                security_opt=[
+                    "no-new-privileges:true",
+                    "no-new-privileges:true",
+                ]
+            ),
+            "unrelated security option": lambda item: item.update(
+                security_opt=["no-new-privileges:true", "label=disable"]
+            ),
             "entrypoint override": lambda item: item.update(entrypoint=["/bin/true"]),
             "command override": lambda item: item.update(command=["serve"]),
             "host network": lambda item: item.update(network_mode="host"),
@@ -244,6 +290,167 @@ class RuntimePreflightTest(unittest.TestCase):
                 self.module.ServiceSelection("evidence", "evidence"), ephemeral
             )
 
+    def test_audit_sink_can_only_succeed_on_the_one_durable_mount(self) -> None:
+        selected = service("evidence")
+        selected["volumes"][1] = {  # type: ignore[index]
+            "type": "bind",
+            "source": "/srv/registry-stack/evidence-audit",
+            "target": "/var/lib/registry-evidence",
+            "read_only": False,
+        }
+        selected["group_add"] = []
+        selected["devices"] = []
+        selected["deploy"] = {"replicas": 1}
+        selected["scale"] = 1
+        self.module.validate_service(
+            self.module.ServiceSelection("evidence", "evidence"),
+            deployment({"evidence": selected}),
+        )
+
+        for source in (
+            "/dev/shm/evidence-audit",
+            "/run/evidence-audit",
+            "/tmp/evidence-audit",
+            "/var/tmp/evidence-audit",
+            "/private/tmp/evidence-audit",
+            "/private/var/folders/cache/evidence-audit",
+            "/tmp/../srv/evidence-audit",
+            "/srv//evidence-audit",
+        ):
+            with self.subTest(source=source):
+                selected = service("evidence")
+                selected["volumes"][1] = {  # type: ignore[index]
+                    "type": "bind",
+                    "source": source,
+                    "target": "/var/lib/registry-evidence",
+                    "read_only": False,
+                }
+                with self.assertRaises(self.module.PreflightError):
+                    self.module.validate_service(
+                        self.module.ServiceSelection("evidence", "evidence"),
+                        deployment({"evidence": selected}),
+                    )
+
+        selected = service("evidence")
+        selected["volumes"].append(  # type: ignore[union-attr]
+            {
+                "type": "tmpfs",
+                "target": "/actual-audit",
+                "read_only": False,
+            }
+        )
+        with self.assertRaises(self.module.PreflightError):
+            self.module.validate_service(
+                self.module.ServiceSelection("evidence", "evidence"),
+                deployment({"evidence": selected}),
+            )
+
+        for name, mutate in {
+            "absent read-only shm": lambda item: item["volumes"].pop(),  # type: ignore[union-attr]
+            "writable shm": lambda item: item["volumes"][-1].update(  # type: ignore[index]
+                read_only=False
+            ),
+            "alternate tmpfs target": lambda item: item["volumes"][-1].update(  # type: ignore[index]
+                target="/tmp"
+            ),
+            "duplicate read-only shm": lambda item: item["volumes"].append(  # type: ignore[union-attr]
+                {
+                    "type": "tmpfs",
+                    "target": "/dev/shm",
+                    "read_only": True,
+                }
+            ),
+            "service-level tmpfs": lambda item: item.update(tmpfs=["/dev/shm:ro"]),
+        }.items():
+            with self.subTest(name=name):
+                selected = service("evidence")
+                mutate(selected)
+                with self.assertRaises(self.module.PreflightError):
+                    self.module.validate_service(
+                        self.module.ServiceSelection("evidence", "evidence"),
+                        deployment({"evidence": selected}),
+                    )
+
+        selected = service("evidence")
+        selected["volumes"][1]["target"] = (  # type: ignore[index]
+            "/var/lib/registry-evidence/alternate"
+        )
+        with self.assertRaises(self.module.PreflightError):
+            self.module.validate_service(
+                self.module.ServiceSelection("evidence", "evidence"),
+                deployment({"evidence": selected}),
+            )
+
+    def test_named_audit_volume_cannot_masquerade_as_a_bind(self) -> None:
+        declarations = (
+            {
+                "driver": "local",
+                "driver_opts": {
+                    "type": "none",
+                    "o": "bind",
+                    "device": "/srv/registry-stack/evidence-audit",
+                },
+            },
+            {"driver": "local", "external": True},
+            {"driver": "operator-storage"},
+        )
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                selected = service("evidence")
+                document = deployment({"evidence": selected})
+                document["volumes"]["evidence-audit"] = declaration  # type: ignore[index]
+                with self.assertRaises(self.module.PreflightError):
+                    self.module.validate_service(
+                        self.module.ServiceSelection("evidence", "evidence"),
+                        document,
+                    )
+
+    def test_mounts_cannot_shadow_the_official_executable(self) -> None:
+        for product in ("evidence", "mint", "relay"):
+            executable = f"/usr/local/bin/{product}"
+            for target in (
+                "/",
+                "/usr",
+                "/usr/local",
+                "/usr/local/bin",
+                executable,
+                f"//usr/local/bin/{product}",
+                f"/usr/local/bin/../bin/{product}",
+            ):
+                with self.subTest(product=product, target=target):
+                    selected = service(product)
+                    selected["volumes"].append(  # type: ignore[union-attr]
+                        {
+                            "type": "bind",
+                            "source": "/srv/replacement",
+                            "target": target,
+                            "read_only": True,
+                        }
+                    )
+                    with self.assertRaises(self.module.PreflightError):
+                        self.module.validate_service(
+                            self.module.ServiceSelection(product, product),
+                            deployment({product: selected}),
+                        )
+
+            selected = service(product)
+            selected["configs"] = [
+                {"source": "replacement", "target": executable, "mode": "0555"}
+            ]
+            with self.assertRaises(self.module.PreflightError):
+                self.module.validate_service(
+                    self.module.ServiceSelection(product, product),
+                    deployment({product: selected}),
+                )
+
+            selected = service(product)
+            selected["secrets"][0]["target"] = executable  # type: ignore[index]
+            with self.assertRaises(self.module.PreflightError):
+                self.module.validate_service(
+                    self.module.ServiceSelection(product, product),
+                    deployment({product: selected}),
+                )
+
     def test_writable_mounts_cannot_overlap_configuration_or_secrets(self) -> None:
         for target in ["/", "/etc", "/etc/registry-evidence", "/run", "/run/secrets"]:
             with self.subTest(target=target):
@@ -298,6 +505,46 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertEqual("", stdout)
         self.assertNotIn("sensitive", stderr)
         self.assertIn("native runtime check", stderr)
+
+    def test_native_check_timeout_is_optional_and_operator_bounded(self) -> None:
+        document = deployment(
+            {
+                "evidence": service("evidence"),
+                "mint": service("mint"),
+                "relay": service("relay"),
+            }
+        )
+        result, _, stderr, run = self.run_main(
+            document,
+            argv=[
+                *self.argv,
+                "--native-check-timeout-seconds",
+                "3600",
+            ],
+        )
+        self.assertEqual(0, result, stderr)
+        for call in run.call_args_list[1:]:
+            self.assertEqual(3600, call.kwargs["timeout"])
+        for raw in ("0", "-1", "1.5", "not-a-number"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(self.module.argparse.ArgumentTypeError):
+                    self.module.positive_integer(raw)
+
+    def test_selected_dependency_cycles_fail_before_native_checks(self) -> None:
+        selections = [
+            self.module.ServiceSelection("evidence", "evidence"),
+            self.module.ServiceSelection("mint", "mint"),
+        ]
+        document = deployment(
+            {
+                "evidence": service("evidence"),
+                "mint": service("mint"),
+            }
+        )
+        document["services"]["evidence"]["depends_on"] = ["mint"]  # type: ignore[index]
+        document["services"]["mint"]["depends_on"] = ["evidence"]  # type: ignore[index]
+        with self.assertRaises(self.module.PreflightError):
+            self.module.native_check_order(selections, document)
 
     def test_parser_rejects_duplicates_and_unsafe_service_names(self) -> None:
         with self.assertRaises(self.module.PreflightError):
