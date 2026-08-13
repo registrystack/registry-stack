@@ -398,8 +398,8 @@ python3 -m venv .venv
 
 VERSION=0.21.1
 case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) PLATFORM="linux_x86_64" ;;
-  Linux-aarch64|Linux-arm64) PLATFORM="linux_aarch64" ;;
+  Linux-x86_64) PLATFORM="manylinux_2_17_x86_64.manylinux2014_x86_64" ;;
+  Linux-aarch64|Linux-arm64) PLATFORM="manylinux_2_17_aarch64.manylinux2014_aarch64" ;;
   Darwin-arm64) PLATFORM="macosx_11_0_arm64" ;;
   *) echo "No prebuilt Evidence Python client for this platform" >&2; exit 1 ;;
 esac

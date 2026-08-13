@@ -229,7 +229,7 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
     .into_iter()
     .flatten()
     {
-        validate_bounded_identifier(value, 2_048, "expected identity")?;
+        validate_bounded_identifier(value, 512, "expected identity")?;
     }
     let expected =
         (expected.audience.is_some() || expected.issuer.is_some() || expected.provider.is_some())

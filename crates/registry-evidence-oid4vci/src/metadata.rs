@@ -12,6 +12,9 @@
 //! - a definition whose subject bindings are audience-scoped is dropped. Such a
 //!   credential names a relying party rather than a holder key, and offering it
 //!   to a wallet would launder an audience-scoped assertion into one;
+//! - a definition that does not permit the holder-bound batch response is
+//!   dropped. This service requests that exact response from Evidence for every
+//!   credential delivery;
 //! - a requirement carried by more than one definition is dropped, because the
 //!   protocol identifies a credential by one identifier and this service will
 //!   not choose between two shapes of it on a wallet's behalf.
@@ -19,8 +22,9 @@
 use std::collections::BTreeMap;
 
 use registry_evidence_client::{
-    AssuranceProfile, DefinitionSubject, EvidenceDefinition, EvidenceDefinitionsDocument,
-    ExpectedOutputDocument, SubjectBindingMode, MAXIMUM_EXPECTED_OUTPUTS, MAXIMUM_HOLDER_KEYS,
+    AssuranceProfile, DefinitionResponseFormat, DefinitionSubject, EvidenceDefinition,
+    EvidenceDefinitionsDocument, ExpectedOutputDocument, SubjectBindingMode,
+    MAXIMUM_EXPECTED_OUTPUTS, MAXIMUM_HOLDER_KEYS,
 };
 use serde_json::{json, Map, Value};
 
@@ -200,6 +204,12 @@ pub fn authorization_server_metadata(config: &DeliveryConfig) -> Value {
 /// declined rather than published: metadata describing a credential this
 /// service could never ask for is metadata a wallet would be misled by.
 fn configuration_for(definition: &EvidenceDefinition) -> Option<CredentialConfiguration> {
+    if !definition
+        .response_formats
+        .contains(&DefinitionResponseFormat::SdJwtVcBatch)
+    {
+        return None;
+    }
     let mut expected_outputs = Vec::with_capacity(definition.concepts.len());
     for concept in &definition.concepts {
         let expected = if concept.form.is_list() {
@@ -247,7 +257,7 @@ pub(crate) mod tests {
           "subjectBindingMode": "holder-bound",
           "evidenceType": "urn:example:evidence-type:holder-bound",
           "purpose": "urn:example:purpose:demonstration",
-          "responseFormats": ["sd-jwt-vc"],
+          "responseFormats": ["sd-jwt-vc", "sd-jwt-vc-batch"],
           "referenceFrameworks": [],
           "subjects": [
             {
@@ -320,6 +330,13 @@ pub(crate) mod tests {
         assert!(catalog()
             .get("urn:example:requirement:audience-scoped")
             .is_none());
+    }
+
+    #[test]
+    fn a_holder_bound_requirement_without_batch_issuance_is_never_published() {
+        let mut document = document();
+        document.definitions[0].response_formats = vec![DefinitionResponseFormat::SdJwtVc];
+        assert!(CredentialCatalog::derive(&document).is_empty());
     }
 
     #[test]

@@ -10,7 +10,7 @@ use std::{
 use registry_platform_crypto::PrivateJwk;
 use serde::{Deserialize, Serialize};
 
-use crate::{error::EvidenceClientError, JwksDocument};
+use crate::{error::EvidenceClientError, prepare::MAXIMUM_IDENTIFIER_BYTES, JwksDocument};
 
 pub const EVIDENCE_CLIENT_PROFILE_SCHEMA_V1: &str = "registry.evidence-client-profile/v1";
 pub const EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1: &str = "registry.evidence-client-contracts/v1";
@@ -70,6 +70,14 @@ impl EvidenceClientProfile {
         if self.schema != EVIDENCE_CLIENT_PROFILE_SCHEMA_V1
             || self.client_id.is_empty()
             || self.client_id.len() > 256
+            || [
+                self.expected.audience.as_deref(),
+                self.expected.issuer.as_deref(),
+                self.expected.provider.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| !valid_expected_identity(value))
             || self.maximum_metadata_cache_seconds == 0
             || self.maximum_metadata_cache_seconds > MAXIMUM_METADATA_CACHE_SECONDS
             || self.verification.maximum_assertion_lifetime_seconds == 0
@@ -144,6 +152,12 @@ impl EvidenceClientProfile {
         }
         Ok(catalog.into_definitions())
     }
+}
+
+fn valid_expected_identity(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAXIMUM_IDENTIFIER_BYTES
+        && url::Url::parse(value).is_ok_and(|url| !url.scheme().is_empty())
 }
 
 fn read_bounded_file(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>, EvidenceClientError> {
@@ -369,6 +383,51 @@ mod tests {
             "https://evidence.example.org/",
         ] {
             assert!(profile(rejected).validate().is_err(), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn expected_service_identities_are_bounded_absolute_uris() {
+        let profile = |expected: ExpectedServiceProfile| EvidenceClientProfile {
+            schema: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+            base_url: "https://evidence.example.org".to_owned(),
+            client_id: "client".to_owned(),
+            private_key: PrivateKeyReference::Environment {
+                variable: "EVIDENCE_KEY".to_owned(),
+            },
+            trust: TrustProfile::HttpsDiscovery,
+            contracts: ContractsProfile::Published,
+            verification: VerificationProfile::default(),
+            maximum_metadata_cache_seconds: DEFAULT_METADATA_CACHE_SECONDS,
+            expected,
+            origin_directory: None,
+        };
+        profile(ExpectedServiceProfile {
+            audience: Some("urn:example:audience".to_owned()),
+            issuer: Some("https://issuer.example.org".to_owned()),
+            provider: Some("urn:example:provider".to_owned()),
+        })
+        .validate()
+        .expect("bounded expected identities");
+
+        for rejected in [
+            ExpectedServiceProfile {
+                audience: Some("not-a-uri".to_owned()),
+                ..ExpectedServiceProfile::default()
+            },
+            ExpectedServiceProfile {
+                issuer: Some(format!(
+                    "urn:{}",
+                    "a".repeat(MAXIMUM_IDENTIFIER_BYTES + 1 - "urn:".len())
+                )),
+                ..ExpectedServiceProfile::default()
+            },
+            ExpectedServiceProfile {
+                provider: Some(String::new()),
+                ..ExpectedServiceProfile::default()
+            },
+        ] {
+            assert!(profile(rejected).validate().is_err());
         }
     }
 

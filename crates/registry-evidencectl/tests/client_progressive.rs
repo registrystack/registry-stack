@@ -176,6 +176,42 @@ fn profile_creation_enforces_the_sdk_client_identifier_bound() {
 }
 
 #[test]
+fn profile_creation_refuses_invalid_expected_service_identities() {
+    let directory = tempfile::tempdir().unwrap();
+    for (name, option, value) in [
+        ("audience", "--expected-audience", "not-a-uri".to_owned()),
+        (
+            "issuer",
+            "--expected-issuer",
+            format!("urn:{}", "a".repeat(509)),
+        ),
+        ("provider", "--expected-provider", String::new()),
+    ] {
+        let output = directory.path().join(format!("{name}.json"));
+        let refused = command()
+            .args([
+                "client",
+                "profile",
+                "create",
+                "--base-url",
+                "https://evidence.example.test/",
+                "--client-id",
+                "client",
+                "--private-key-file",
+                "key.jwk",
+                option,
+                &value,
+                "--out",
+            ])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(!refused.status.success(), "{name} unexpectedly succeeded");
+        assert!(!output.exists());
+    }
+}
+
+#[test]
 fn the_progressive_client_help_is_complete() {
     for arguments in [
         &["client", "--help"][..],

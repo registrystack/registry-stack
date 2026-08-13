@@ -79,7 +79,7 @@ const DEFINITIONS: &str = r#"{
     "subjectBindingMode": "holder-bound",
     "evidenceType": "urn:example:evidence-type:holder-bound",
     "purpose": "urn:example:purpose:demonstration",
-    "responseFormats": ["sd-jwt-vc"],
+    "responseFormats": ["sd-jwt-vc", "sd-jwt-vc-batch"],
     "referenceFrameworks": [],
     "subjects": [{
       "role": "primary",
