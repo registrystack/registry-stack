@@ -972,7 +972,7 @@ if [ "$failure" = "fixture:$fixture" ]; then
 fi
 
 if [ -z "$fixture" ]; then
-  printf '%s\n' 'Evidence deployment sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa / sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb passed check'
+  printf '%s\n' 'Evidence bundle sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa passed check (2 requirements)'
 else
   printf '%s\n' 'Evidence fixture passed (1 evaluated cases)'
 fi
