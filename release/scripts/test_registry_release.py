@@ -1411,8 +1411,8 @@ class RegistryReleaseTest(TestCase):
             manifest_dir.mkdir()
             source_ref = git(ROOT, "rev-parse", "HEAD")
             for version, release_id in (
-                ("0.19.0", "beta-29"),
-                ("0.20.0", "beta-30"),
+                ("0.91.0", "beta-29"),
+                ("0.92.0", "beta-30"),
             ):
                 manifest = write_manifest(
                     manifest_dir,
@@ -1435,7 +1435,7 @@ class RegistryReleaseTest(TestCase):
             )
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("beta-30 0.20.0", result.stdout)
+        self.assertIn("beta-30 0.92.0", result.stdout)
         self.assertNotIn("beta-29", result.stdout)
 
     def test_validate_current_requires_a_release_manifest(self) -> None:
@@ -1624,6 +1624,73 @@ class RegistryReleaseTest(TestCase):
         self.assertEqual(0, accepted.returncode, accepted.stderr)
         self.assertNotEqual(0, mismatched.returncode)
         self.assertIn("does not match the committed catalog bytes", mismatched.stderr)
+
+    def test_validate_uses_identifier_catalog_from_existing_source_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = init_repo(Path(tmp))
+            catalog_path = root / "products/identifiers/generated/catalog.v1.json"
+            catalog_path.parent.mkdir(parents=True)
+            catalog_path.write_text(
+                json.dumps({"version": 1, "entries": [{"status": "active"}]})
+                + "\n",
+                encoding="utf-8",
+            )
+            git(root, "add", str(catalog_path.relative_to(root)))
+            git(root, "commit", "-m", "record tagged catalog")
+            tagged_source = git(root, "rev-parse", "HEAD")
+            git(root, "tag", "v0.19.1")
+            manifest = write_manifest(
+                root,
+                version="0.19.1",
+                source_ref=tagged_source,
+            )
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            del data["stack"]["source_ref"]
+            del data["stack"]["status"]
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "entries": [
+                            {"status": "active"},
+                            {"status": "active"},
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            git(root, "add", str(catalog_path.relative_to(root)))
+            git(root, "commit", "-m", "advance current catalog")
+            accepted = run_tool("validate", str(manifest))
+
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["identifier_catalog"]["sha256"] = hashlib.sha256(
+                catalog_path.read_bytes()
+            ).hexdigest()
+            data["identifier_catalog"]["entry_count"] = 2
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+            )
+            mismatched = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertNotEqual(0, mismatched.returncode)
+        self.assertIn("does not match the committed catalog bytes", mismatched.stderr)
+
+    def test_validate_copied_manifest_uses_tool_repository_source_tag(self) -> None:
+        source = ROOT / "release/manifests/registry-stack-beta-32.yaml"
+        with tempfile.TemporaryDirectory() as tmp:
+            copied = Path(tmp) / source.name
+            copied.write_bytes(source.read_bytes())
+            result = run_tool("validate", str(copied))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("validated", result.stdout)
 
     def test_relay_installer_joins_the_exact_inventory_after_v0_19_0(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
