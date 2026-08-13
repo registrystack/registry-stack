@@ -478,13 +478,16 @@ def syft_artifacts(report: Any) -> dict[str, dict[str, Any]]:
     return indexed
 
 
-def validate_image_path(value: Any, field: str) -> str:
+def validate_image_path(value: Any, field: str, *, allow_root: bool = False) -> str:
     if (
         not isinstance(value, str)
         or not value.startswith("/")
-        or value == "/"
+        or (value == "/" and not allow_root)
         or "\x00" in value
-        or any(part in {"", ".", ".."} for part in value.split("/")[1:])
+        or (
+            value != "/"
+            and any(part in {"", ".", ".."} for part in value.split("/")[1:])
+        )
     ):
         fail(f"{field} must be a normalized absolute image path")
     return value
@@ -501,6 +504,7 @@ def syft_files(report: Any) -> tuple[frozenset[str], tuple[tuple[str, str], ...]
         path = validate_image_path(
             location.get("path") if isinstance(location, dict) else None,
             "syft file location path",
+            allow_root=True,
         )
         if path in paths:
             fail(f"syft report contains duplicate file path: {path}")
