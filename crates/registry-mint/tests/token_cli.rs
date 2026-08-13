@@ -332,6 +332,53 @@ fn the_configuration_check_runs_against_a_deployment_that_is_already_serving() {
 }
 
 #[test]
+fn the_runtime_dependency_check_claims_the_audit_writer_before_startup() {
+    let server = server();
+    let output = Command::new(env!("CARGO_BIN_EXE_mint"))
+        .arg("check")
+        .arg("--config")
+        .arg(&server.config)
+        .arg("--require-runtime-dependencies")
+        .output()
+        .expect("the checker runs");
+
+    assert!(
+        !output.status.success(),
+        "a full dependency preflight must not claim a live writer's audit chain"
+    );
+    let diagnostics = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!diagnostics.contains("0123456789abcdef"));
+}
+
+#[test]
+fn the_runtime_dependency_check_rejects_an_empty_client_registry() {
+    let mut server = server();
+    server.child.kill().expect("stop the serving process");
+    server.child.wait().expect("reap the serving process");
+    fs::remove_file(server.root.join("clients/scheduler.yaml"))
+        .expect("remove scheduler registration");
+    fs::remove_file(server.root.join("clients/reporter.yaml"))
+        .expect("remove reporter registration");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mint"))
+        .arg("check")
+        .arg("--config")
+        .arg(&server.config)
+        .arg("--require-runtime-dependencies")
+        .output()
+        .expect("the checker runs");
+
+    assert!(
+        !output.status.success(),
+        "a Mint deployment with no registered clients must not pass runtime readiness"
+    );
+}
+
+#[test]
 fn a_delegated_token_carries_the_actor_and_the_subject_from_the_registry_paths() {
     let server = server();
     let subject = server.root.join("subject.json");

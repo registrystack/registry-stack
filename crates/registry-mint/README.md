@@ -414,6 +414,11 @@ server.
 mint check --config /etc/mint/mint.yaml
 ```
 
+The ordinary check can run while Mint is serving because it does not claim the
+audit writer. Before first startup or a replacement deployment, add
+`--require-runtime-dependencies` to prove the signer and writable audit chain
+through the same initialization path as `mint serve`.
+
 ```bash
 mint serve --config /etc/mint/mint.yaml
 ```

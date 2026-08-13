@@ -29,6 +29,7 @@ evidence check [OPTIONS]
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
+| `--require-runtime-dependencies` | No | n/a | n/a | n/a | Also prove audit writability, signer readiness, source credentials, and access-token JWKS reachability in the target runtime context |
 | `--runtime <RUNTIME>` | No | `/etc/registry-evidence/runtime.yaml` | n/a | `REGISTRY_EVIDENCE_RUNTIME` | One closed operator runtime file that binds the governed bundle |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 

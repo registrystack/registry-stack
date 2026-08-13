@@ -271,7 +271,8 @@ sources:
 authentication:
   issuer:
     id: institutional-authorization-server
-    discoveryUrl: https://identity.example.invalid/.well-known/openid-configuration
+    trustedIssuer: https://identity.example.invalid
+    discoveryUrl: https://identity-transport.example.invalid/.well-known/openid-configuration
     audience: relay-social-assistance
     tokenTypes: [at+jwt]
     algorithms: [ES256]
@@ -281,6 +282,18 @@ audit:
 limits: {requestTimeoutMilliseconds: 1500, concurrentQueries: 16}
 quotas: {requestsPerMinute: 120, burst: 20}
 ```
+
+`trustedIssuer` is the exact JWT `iss` value Relay accepts. `discoveryUrl` is
+the operator-selected metadata transport and may use a different hostname;
+the returned discovery document must still declare the exact trusted issuer.
+Existing runtimes may omit `trustedIssuer` only when `discoveryUrl` is the
+canonical issuer plus `/.well-known/openid-configuration`. As a controlled
+alternative, set `trustedIssuer` with `jwksUrl` and omit `discoveryUrl`; Relay
+then binds that exact key endpoint directly while preserving exact token issuer
+validation. Defining both transports or neither fails startup. Run `relay
+check --runtime <runtime.yaml>` before routing traffic to prove the sealed
+package, source, audit, secret, and issuer key transport without binding the
+listener.
 
 What this example must prove:
 
@@ -1160,8 +1173,10 @@ authentication.issuer.algorithms[]
 authentication.issuer.audience
 authentication.issuer.discoveryUrl
 authentication.issuer.id
+authentication.issuer.jwksUrl
 authentication.issuer.tokenTypes
 authentication.issuer.tokenTypes[]
+authentication.issuer.trustedIssuer
 cursor
 cursor.integrityKeyRef
 cursor.maximumAgeSeconds

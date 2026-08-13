@@ -30,7 +30,12 @@ pub struct Cli {
 pub enum Command {
     /// Validate and compile the complete immutable bundle, and validate the
     /// mounted secret material exactly as startup does.
-    Check,
+    Check {
+        /// Also prove audit writability, signer readiness, source credentials,
+        /// and access-token JWKS reachability in the target runtime context.
+        #[arg(long)]
+        require_runtime_dependencies: bool,
+    },
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
         /// Bundle-relative fixture path referenced by exactly one requirement.

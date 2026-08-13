@@ -1265,6 +1265,8 @@ impl SourceExtractBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListenerConfig {
     pub bind_host: String,
+    #[serde(default)]
+    pub network_exposure: ListenerNetworkExposure,
     pub port: u16,
     pub tls_termination: TlsTermination,
     pub trust_proxy_identity_headers: bool,
@@ -1276,7 +1278,14 @@ pub struct ListenerConfig {
 
 impl ListenerConfig {
     fn validate(&self) -> Result<(), ConfigError> {
-        validate_private_bind_host(&self.bind_host)?;
+        match self.network_exposure {
+            ListenerNetworkExposure::PrivateAddress => {
+                validate_private_bind_host(&self.bind_host)?;
+            }
+            ListenerNetworkExposure::ContainerPrivate => {
+                validate_container_private_bind_host(&self.bind_host)?;
+            }
+        }
         validate_listener_port(self.port)?;
         if self.trust_proxy_identity_headers {
             return invalid("proxy identity headers must not be trusted");
@@ -1308,6 +1317,19 @@ impl ListenerConfig {
     }
 }
 
+/// Operator-declared network placement for the Evidence API listener.
+///
+/// `ContainerPrivate` permits a wildcard bind only because the container
+/// network and upstream TLS boundary remain operator-owned deployment facts.
+/// It does not enable direct public exposure or change request authentication.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ListenerNetworkExposure {
+    #[default]
+    PrivateAddress,
+    ContainerPrivate,
+}
+
 /// Operator-only telemetry listener.
 ///
 /// It is a separate binding rather than a route on the evidence listener so
@@ -1328,7 +1350,26 @@ impl MetricsListenerConfig {
         // Sharing the evidence binding would publish the counters on the
         // listener the public contract describes, which is the separation this
         // block exists to enforce.
-        if self.bind_host == evidence_listener.bind_host && self.port == evidence_listener.port {
+        let metrics_ip: IpAddr = self
+            .bind_host
+            .parse()
+            .expect("validated metrics listener address is numeric");
+        let evidence_ip: IpAddr = evidence_listener
+            .bind_host
+            .parse()
+            .expect("validated evidence listener address is numeric");
+        // Linux commonly creates an IPv6 wildcard socket as dual-stack, so
+        // `[::]:port` can also occupy the corresponding IPv4 port. Evidence
+        // does not force IPV6_V6ONLY, and configuration validation must be
+        // portable across the hosts on which the process can run. Treat the
+        // IPv6 wildcard as covering both families; the IPv4 wildcard covers
+        // only IPv4.
+        let wildcard_covers_metrics = match evidence_ip {
+            IpAddr::V4(ip) => ip.is_unspecified() && metrics_ip.is_ipv4(),
+            IpAddr::V6(ip) => ip.is_unspecified(),
+        };
+        let binding_overlaps = metrics_ip == evidence_ip || wildcard_covers_metrics;
+        if binding_overlaps && self.port == evidence_listener.port {
             return invalid("metricsListener must not share the evidence listener binding");
         }
         Ok(())
@@ -1363,6 +1404,27 @@ fn validate_private_bind_host(bind_host: &str) -> Result<(), ConfigError> {
     };
     if !private || ip.is_unspecified() || ip.is_multicast() {
         return invalid("listener bindHost must be loopback or private");
+    }
+    Ok(())
+}
+
+/// Accept a wildcard or private numeric address only when the operator has
+/// explicitly placed the listener on a container-private network.
+fn validate_container_private_bind_host(bind_host: &str) -> Result<(), ConfigError> {
+    if bind_host.len() < 2 || bind_host.len() > 64 {
+        return invalid("listener bindHost length is invalid");
+    }
+    let ip: IpAddr = bind_host
+        .parse()
+        .map_err(|_| ConfigError::Invalid("listener bindHost must be a numeric IP"))?;
+    let private_or_unspecified = match ip {
+        IpAddr::V4(ip) => ip.is_unspecified() || ip.is_loopback() || ip.is_private(),
+        IpAddr::V6(ip) => ip.is_unspecified() || ip.is_loopback() || is_unique_local(ip),
+    };
+    if !private_or_unspecified || ip.is_multicast() {
+        return invalid(
+            "container-private listener bindHost must be unspecified, loopback, or private",
+        );
     }
     Ok(())
 }
@@ -7291,7 +7353,12 @@ outboundTls:
   trustProfiles:
     internal-pki: {caBundleFile: /etc/registry-evidence/ca/internal.pem}
 "#;
-        RuntimeConfig::parse_yaml(valid).expect("closed runtime parses");
+        let parsed = RuntimeConfig::parse_yaml(valid).expect("closed runtime parses");
+        assert_eq!(
+            parsed.listener.network_exposure,
+            ListenerNetworkExposure::PrivateAddress,
+            "existing runtime files retain the private-address listener contract"
+        );
         let validator = runtime_contract_validator();
         assert!(validator.is_valid(&bundle_contract_instance(valid)));
         for reference in [
@@ -7308,6 +7375,34 @@ outboundTls:
             assert!(
                 RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
                 "runtime accepted prohibited bindHost {rejected_host}"
+            );
+        }
+
+        for wildcard in ["0.0.0.0", "::"] {
+            let candidate = String::from_utf8(valid.to_vec())
+                .expect("runtime fixture is UTF-8")
+                .replace(
+                    "bindHost: 127.0.0.1",
+                    &format!("bindHost: '{wildcard}'\n  networkExposure: container-private"),
+                );
+            let parsed = RuntimeConfig::parse_yaml(candidate.as_bytes())
+                .expect("explicit container-private wildcard parses");
+            assert_eq!(
+                parsed.listener.network_exposure,
+                ListenerNetworkExposure::ContainerPrivate
+            );
+            assert!(validator.is_valid(&bundle_contract_instance(candidate.as_bytes())));
+        }
+        for rejected_host in ["8.8.8.8", "ff02::1", "evidence.internal"] {
+            let candidate = String::from_utf8(valid.to_vec())
+                .expect("runtime fixture is UTF-8")
+                .replace(
+                    "bindHost: 127.0.0.1",
+                    &format!("bindHost: '{rejected_host}'\n  networkExposure: container-private"),
+                );
+            assert!(
+                RuntimeConfig::parse_yaml(candidate.as_bytes()).is_err(),
+                "container-private mode accepted prohibited bindHost {rejected_host}"
             );
         }
         for governed_key in [
@@ -7411,6 +7506,33 @@ outboundTls:
         let shared = format!("{base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 8080\n");
         assert!(matches!(
             RuntimeConfig::parse_yaml(shared.as_bytes()),
+            Err(ConfigError::Invalid(
+                "metricsListener must not share the evidence listener binding"
+            ))
+        ));
+
+        for (wildcard, private) in [("0.0.0.0", "10.0.0.10"), ("::", "fd00::10")] {
+            let wildcard_base = base.replace(
+                "bindHost: 127.0.0.1",
+                &format!("bindHost: '{wildcard}'\n  networkExposure: container-private"),
+            );
+            let shared =
+                format!("{wildcard_base}metricsListener:\n  bindHost: {private}\n  port: 8080\n");
+            assert!(matches!(
+                RuntimeConfig::parse_yaml(shared.as_bytes()),
+                Err(ConfigError::Invalid(
+                    "metricsListener must not share the evidence listener binding"
+                ))
+            ));
+        }
+        let dual_stack_base = base.replace(
+            "bindHost: 127.0.0.1",
+            "bindHost: '::'\n  networkExposure: container-private",
+        );
+        let dual_stack_collision =
+            format!("{dual_stack_base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 8080\n");
+        assert!(matches!(
+            RuntimeConfig::parse_yaml(dual_stack_collision.as_bytes()),
             Err(ConfigError::Invalid(
                 "metricsListener must not share the evidence listener binding"
             ))

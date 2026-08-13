@@ -50,6 +50,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--require-runtime-dependencies",
+              "description": "Also prove audit writability, signer readiness, source credentials, and access-token JWKS reachability in the target runtime context",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--runtime <RUNTIME>",
               "description": "One closed operator runtime file that binds the governed bundle",
               "always_required": false,
@@ -2150,7 +2159,7 @@
           "invocation": "mint check",
           "about": "Load the configuration, keys, audit chain, and client registry, then exit",
           "long_about": null,
-          "usage": "mint check --config <CONFIG>",
+          "usage": "mint check [OPTIONS] --config <CONFIG>",
           "arguments": [],
           "options": [
             {
@@ -2161,6 +2170,15 @@
               "default_values": [],
               "possible_values": [],
               "environment": "MINT_CONFIG"
+            },
+            {
+              "display": "--require-runtime-dependencies",
+              "description": "Claim the audit writer and prove every serving dependency is ready. Use before startup, not against a Mint process that is already serving",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
             },
             {
               "display": "-h, --help",
@@ -2437,6 +2455,38 @@
       ],
       "constraints": [],
       "subcommands": [
+        {
+          "name": "check",
+          "invocation": "relay check",
+          "about": "Validate the sealed package and every deployment dependency without taking the listener socket",
+          "long_about": null,
+          "usage": "relay check [OPTIONS]",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--runtime <RUNTIME>",
+              "description": "Strict deployment binding for the sealed package and local resources",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "/etc/relay/runtime.yaml"
+              ],
+              "possible_values": [],
+              "environment": "RELAY_RUNTIME"
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
         {
           "name": "serve",
           "invocation": "relay serve",

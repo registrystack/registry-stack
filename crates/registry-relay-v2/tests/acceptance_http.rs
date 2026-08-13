@@ -975,7 +975,7 @@ async fn mint_registered_authority_drives_a_protected_relay_lookup() {
         .issuer
         .clone()
         .expect("social-assistance declares an issuer");
-    issuer.discovery_url = format!("{}/.well-known/openid-configuration", mint.issuer);
+    issuer.discovery_url = Some(format!("{}/.well-known/openid-configuration", mint.issuer));
     issuer.algorithms = vec!["ES256".into()];
     let authenticator = build_authenticator_for_supervised_local_development(&issuer)
         .await

@@ -189,9 +189,10 @@ fn validate_file_metadata(file: &File) -> Result<(), SecretError> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     let metadata = file.metadata().map_err(|_| SecretError::Read)?;
+    let mode = metadata.permissions().mode() & 0o7777;
     if !metadata.is_file()
         || metadata.uid() != rustix::process::geteuid().as_raw()
-        || metadata.permissions().mode() & 0o7777 != 0o600
+        || !matches!(mode, 0o400 | 0o600)
         || metadata.nlink() != 1
     {
         return Err(SecretError::UnsafeFile);
@@ -335,21 +336,30 @@ mod tests {
         }
 
         #[test]
-        fn file_secret_uses_open_file_owner_and_exact_mode_checks() {
+        fn file_secret_accepts_only_owner_read_and_optional_owner_write_modes() {
             let root = tempfile::tempdir().expect("temporary root");
-            write_secret(root.path(), "source-token", b"file-canary", 0o600);
             let resolver =
                 SecretResolver::new([SecretProvider::File], root.path()).expect("resolver builds");
-            let secret = resolver
-                .resolve("secret:file/source-token")
-                .expect("safe file resolves");
-            assert_eq!(secret.expose_secret(), b"file-canary");
+            for (name, mode) in [("read-only-token", 0o400), ("writable-token", 0o600)] {
+                write_secret(root.path(), name, b"file-canary", mode);
+                let secret = resolver
+                    .resolve(&format!("secret:file/{name}"))
+                    .expect("owner-only file resolves");
+                assert_eq!(secret.expose_secret(), b"file-canary");
+            }
 
-            write_secret(root.path(), "unsafe-token", b"unsafe-canary", 0o640);
-            assert!(matches!(
-                resolver.resolve("secret:file/unsafe-token"),
-                Err(SecretError::UnsafeFile)
-            ));
+            for (name, mode) in [
+                ("group-readable-token", 0o440),
+                ("world-readable-token", 0o404),
+                ("group-writable-token", 0o620),
+                ("executable-token", 0o500),
+            ] {
+                write_secret(root.path(), name, b"unsafe-canary", mode);
+                assert!(matches!(
+                    resolver.resolve(&format!("secret:file/{name}")),
+                    Err(SecretError::UnsafeFile)
+                ));
+            }
         }
 
         #[test]

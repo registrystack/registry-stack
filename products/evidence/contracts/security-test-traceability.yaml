@@ -231,7 +231,7 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: unsigned_envelope_is_exact_audited_and_never_a_signing_fallback}
   - id: sec-secret-file-identity
     tests:
-      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_uses_open_file_owner_and_exact_mode_checks}
+      - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_accepts_only_owner_read_and_optional_owner_write_modes}
       - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_rejects_symlinks_and_non_regular_files}
       - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_rejects_every_name_for_a_hard_link}
       - {file: crates/registry-platform-config/src/secrets.rs, name: file_secret_read_is_bounded}

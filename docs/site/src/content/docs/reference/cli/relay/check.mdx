@@ -1,6 +1,6 @@
 ---
-title: "relay command reference"
-description: "Generated syntax and options for relay."
+title: "relay check command reference"
+description: "Generated syntax and options for relay check."
 status: current
 owner: registry-docs
 source_repos:
@@ -13,7 +13,7 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Compiled read-only Registry Relay runtime.
+Validate the sealed package and every deployment dependency without taking the listener socket.
 
 ## Contract status
 
@@ -22,23 +22,15 @@ This page is generated from the public Clap command tree. Hidden implementation 
 ## Usage
 
 ```text
-relay <COMMAND>
+relay check [OPTIONS]
 ```
-
-## Commands
-
-| Command | Description |
-| --- | --- |
-| [`check`](./check/) | Validate the sealed package and every deployment dependency without taking the listener socket |
-| [`serve`](./serve/) | Verify and activate one sealed Registry package, then serve it |
-| [`healthcheck`](./healthcheck/) | Probe an unauthenticated Relay liveness endpoint |
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
+| `--runtime <RUNTIME>` | No | `/etc/relay/runtime.yaml` | n/a | `RELAY_RUNTIME` | Strict deployment binding for the sealed package and local resources |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
-| `-V, --version` | No | n/a | n/a | n/a | Print version |
 
 ## Generation contract
 

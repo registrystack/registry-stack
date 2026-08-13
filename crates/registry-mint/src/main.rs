@@ -61,19 +61,33 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
-        Command::Check { config } => {
+        Command::Check {
+            config,
+            require_runtime_dependencies,
+        } => {
             let config = MintConfig::load(&config)
                 .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
+            let issuer = config.issuer.clone();
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|error| format!("the async runtime could not start: {error}"))?;
-            let clients = runtime
-                .block_on(MintService::check(&config))
-                .map_err(|error| format!("the configuration cannot be served: {error}"))?;
+            let clients = if require_runtime_dependencies {
+                let service = runtime
+                    .block_on(MintService::load(config))
+                    .map_err(|error| format!("the runtime dependencies are not ready: {error}"))?;
+                if !runtime.block_on(service.ready()) {
+                    return Err("the runtime dependencies are not ready".to_owned());
+                }
+                service.client_count()
+            } else {
+                runtime
+                    .block_on(MintService::check(&config))
+                    .map_err(|error| format!("the configuration cannot be served: {error}"))?
+            };
             tracing::info!(
                 target: "registry_mint",
-                issuer = config.issuer,
+                issuer,
                 clients,
                 "configuration is valid"
             );

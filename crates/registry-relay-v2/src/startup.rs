@@ -18,8 +18,8 @@ use registry_platform_audit::{
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    TokenVerifier, TokenVerifierConfig,
+    fetch_discovery_at_with_policy, fetch_discovery_with_policy, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, TokenVerifier, TokenVerifierConfig,
 };
 use thiserror::Error;
 use tokio::net::TcpListener;
@@ -30,7 +30,8 @@ use crate::audit::RelayAudit;
 use crate::auth::RelayAuthenticator;
 use crate::contract::{
     contract_has_protected_access, runtime_cursor_configuration_is_valid, IssuerAlgorithm,
-    IssuerProfile, IssuerRuntime, RegistryContract, RelayRuntime, MAXIMUM_RUNTIME_BYTES,
+    IssuerKeyTransport, IssuerProfile, IssuerRuntime, RegistryContract, RelayRuntime,
+    MAXIMUM_RUNTIME_BYTES,
 };
 use crate::cursor::CursorKey;
 use crate::package::{load_package, VerifiedPackage};
@@ -163,6 +164,17 @@ pub async fn prepare(runtime_path: &Path) -> Result<PreparedRelay, StartupError>
         service,
         shutdown_grace,
     })
+}
+
+/// Validate the complete deployment exactly as startup does without binding a
+/// listener. This is the native container preflight used before traffic is
+/// routed to a new Relay instance.
+pub async fn check(runtime_path: &Path) -> Result<(), StartupError> {
+    let prepared = prepare(runtime_path).await?;
+    if !prepared.service.is_ready().await {
+        return Err(StartupError::NotReady);
+    }
+    Ok(())
 }
 
 /// Prepare atomically, bind only after readiness, and serve until SIGINT or
@@ -526,22 +538,29 @@ async fn build_authenticator_with_profile(
     let IssuerProfile {
         issuer_identifier,
         algorithm,
+        key_transport,
     } = profile;
     let algorithm = match algorithm {
         IssuerAlgorithm::EdDsa => Algorithm::EdDSA,
         IssuerAlgorithm::Es256 => Algorithm::ES256,
         IssuerAlgorithm::Rs256 => Algorithm::RS256,
     };
-    let discovery = fetch_discovery_with_policy(
-        &OidcDiscoveryConfig {
-            issuer: issuer_identifier.clone(),
-            jwks_uri_override: None,
-            discovery_timeout: ISSUER_NETWORK_TIMEOUT,
-            max_doc_bytes: 1024 * 1024,
-        },
-        fetch_url_policy,
-    )
-    .await
+    let mut discovery_config = OidcDiscoveryConfig {
+        issuer: issuer_identifier.clone(),
+        jwks_uri_override: None,
+        discovery_timeout: ISSUER_NETWORK_TIMEOUT,
+        max_doc_bytes: 1024 * 1024,
+    };
+    let discovery = match key_transport {
+        IssuerKeyTransport::Discovery(discovery_url) => {
+            fetch_discovery_at_with_policy(&discovery_config, &discovery_url, fetch_url_policy)
+                .await
+        }
+        IssuerKeyTransport::Jwks(jwks_url) => {
+            discovery_config.jwks_uri_override = Some(jwks_url);
+            fetch_discovery_with_policy(&discovery_config, fetch_url_policy).await
+        }
+    }
     .map_err(|_| StartupError::IssuerUnavailable)?;
     if discovery.issuer != issuer_identifier {
         return Err(StartupError::IssuerUnavailable);

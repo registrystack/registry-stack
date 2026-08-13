@@ -256,7 +256,9 @@ impl MintService {
     }
 
     #[must_use]
-    async fn ready(&self) -> bool {
+    /// Report whether this loaded service can satisfy the same readiness
+    /// contract used by the serving endpoint.
+    pub async fn ready(&self) -> bool {
         self.client_count() > 0 && self.minter.ready().await && self.audit.ready().await
     }
 }

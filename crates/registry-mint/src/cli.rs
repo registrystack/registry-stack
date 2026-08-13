@@ -21,6 +21,10 @@ pub enum Command {
     Check {
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
+        /// Claim the audit writer and prove every serving dependency is ready.
+        /// Use before startup, not against a Mint process that is already serving.
+        #[arg(long)]
+        require_runtime_dependencies: bool,
     },
     /// Serve the token endpoint until terminated.
     Serve {
@@ -149,5 +153,34 @@ mod tests {
         let error = Cli::try_parse_from(["mint", "client-secret", "generate"])
             .expect_err("the output path is required");
         assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn runtime_dependency_check_is_an_explicit_operator_choice() {
+        let ordinary = Cli::try_parse_from(["mint", "check", "--config", "mint.yaml"])
+            .expect("ordinary live-deployment check parses");
+        assert!(matches!(
+            ordinary.command,
+            Command::Check {
+                require_runtime_dependencies: false,
+                ..
+            }
+        ));
+
+        let preflight = Cli::try_parse_from([
+            "mint",
+            "check",
+            "--config",
+            "mint.yaml",
+            "--require-runtime-dependencies",
+        ])
+        .expect("full dependency preflight parses");
+        assert!(matches!(
+            preflight.command,
+            Command::Check {
+                require_runtime_dependencies: true,
+                ..
+            }
+        ));
     }
 }
