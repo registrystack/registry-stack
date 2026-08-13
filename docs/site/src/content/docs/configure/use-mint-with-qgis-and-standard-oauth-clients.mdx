@@ -112,9 +112,11 @@ After you enter the generated value, Registry Mint returns a standard token resp
 
 Registry Mint does not issue a refresh token for Client Credentials. The client obtains another
 short-lived access token with the same installation credential when the current token expires.
-QGIS's OAuth2 request hook detects the expiring token, discards a Client Credentials session that
-has no refresh token, and performs the Client Credentials exchange again before applying
-authentication to the next layer request.
+QGIS implements the [Client Credentials exchange as a form-body request](https://github.com/qgis/QGIS/blob/621ced71bd795bf3deb9a53505dabfca251a15d8/src/auth/oauth2/core/qgso2.cpp#L373-L395).
+Its [OAuth2 network request hook](https://github.com/qgis/QGIS/blob/621ced71bd795bf3deb9a53505dabfca251a15d8/src/auth/oauth2/core/qgsauthoauth2method.cpp#L232-L305)
+detects the expiring token, unlinks a session that has no refresh token, and links again before
+applying authentication to the next layer request. For this grant, linking again performs another
+Client Credentials exchange.
 
 ## Configure QGIS
 

@@ -60,16 +60,18 @@ fingerprints, never the raw secret:
 
 ```
 POST /token
-Authorization: Basic <base64(client-id:client-secret)>
+Authorization: Basic <base64(form-encode(client-id):form-encode(client-secret))>
 Content-Type: application/x-www-form-urlencoded
 
 grant_type=client_credentials
 ```
 
-The same request may carry `client_id` and `client_secret` in the form body for
-clients that implement `client_secret_post`. One request may use only one
-authentication method. Client-secret registrations are standard-authorization
-clients only; they cannot issue Evidence or delegated authority.
+Form-encode the client id and secret separately before joining them with the
+colon delimiter and Base64-encoding the result. The same request may carry
+`client_id` and `client_secret` in the form body for clients that implement
+`client_secret_post`. One request may use only one authentication method.
+Client-secret registrations are standard-authorization clients only; they
+cannot issue Evidence or delegated authority.
 
 The response is a signed `at+jwt` access token. Errors collapse to
 `invalid_client` so that the endpoint cannot be used to probe which client ids
@@ -230,9 +232,11 @@ Client-secret rotation uses the same registry reload boundary. Generate a new
 secret, add its fingerprint beside the old fingerprint, reload, update the
 managed client, then remove the old fingerprint and reload again. A
 registration accepts at most two fingerprints so this overlap cannot become an
-unbounded secret set. Remove every fingerprint, or remove the registration,
-and reload to revoke future token issuance immediately. Access tokens already
-released remain valid until their short configured expiry.
+unbounded secret set. Remove a revoked fingerprint only while another valid
+fingerprint remains. To revoke the last or only secret, remove the complete
+registration and reload. An empty fingerprint list is invalid and leaves the
+previous registry active after the failed reload. Access tokens already released
+remain valid until their short configured expiry.
 
 ## Registering clients
 

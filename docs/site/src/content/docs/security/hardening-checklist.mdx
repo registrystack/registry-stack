@@ -327,8 +327,9 @@ serve, and a startup that fails rather than degrades.
   around short assertion validity windows and service-key denylisting rather than recall.
 - Rotate a compromised source credential at its own source and restart the affected process.
   For a compromised Registry Mint client key, remove its public JWK; for a compromised client
-  secret, remove its fingerprint or the complete registration. Send `SIGHUP` to reload the client
-  registry immediately. Already issued bearer tokens remain valid until expiry.
+  secret, remove its fingerprint when another valid fingerprint remains, or remove the complete
+  registration when it is the last or only secret. Send `SIGHUP` to reload the client registry
+  immediately. Already issued bearer tokens remain valid until expiry.
 - Withdraw a Relay disclosure by publishing a new package and restarting. Relay has no admin
   endpoint, no reload signal, and no way to narrow a compiled operation at runtime, so the only
   levers during an incident are stopping the process and deploying a corrected package. Plan for
