@@ -319,6 +319,39 @@ fn render_report<T: Serialize>(
 mod tests {
     use super::*;
 
+    const SOURCE_CONTENT_CANARY: &str = "source-content-canary";
+
+    fn editor_project() -> tempfile::TempDir {
+        let project = tempfile::tempdir().expect("temporary project is created");
+        assert!(project.path().is_absolute());
+        std::fs::write(
+            project.path().join("registry.yaml"),
+            format!("kind: RegistryContract\nsummary: {SOURCE_CONTENT_CANARY}\n"),
+        )
+        .expect("project marker is written");
+        project
+    }
+
+    fn run_editor(project: &std::path::Path) -> (ExitCode, String, String) {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let status = run_from(
+            [
+                std::ffi::OsStr::new("relayctl"),
+                std::ffi::OsStr::new("tooling"),
+                std::ffi::OsStr::new("editor"),
+                project.as_os_str(),
+            ],
+            &mut stdout,
+            &mut stderr,
+        );
+        (
+            status,
+            String::from_utf8(stdout).expect("stdout is UTF-8"),
+            String::from_utf8(stderr).expect("stderr is UTF-8"),
+        )
+    }
+
     #[test]
     fn every_approved_command_is_present() {
         for command in [
@@ -459,6 +492,57 @@ mod tests {
         assert!(error.contains("--output"));
         assert!(!error.contains("selector"));
         assert!(!error.contains("record"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn editor_symlink_stderr_contains_neither_absolute_project_path_nor_source_content() {
+        let project = editor_project();
+        let outside = tempfile::tempdir().expect("outside directory is created");
+        std::os::unix::fs::symlink(outside.path(), project.path().join(".vscode"))
+            .expect("editor ancestor symlink is created");
+
+        let (status, stdout, stderr) = run_editor(project.path());
+
+        assert_eq!(status, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+        assert!(stdout.is_empty());
+        assert_eq!(
+            stderr,
+            "relayctl: editor setup refused a symbolic link in its managed file set\n"
+        );
+        assert!(!stderr.contains(project.path().to_string_lossy().as_ref()));
+        assert!(!stderr.contains(SOURCE_CONTENT_CANARY));
+        assert!(std::fs::read_dir(outside.path())
+            .expect("outside directory remains readable")
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn editor_recovery_stderr_contains_neither_absolute_project_path_nor_source_content() {
+        let project = editor_project();
+        tooling_editor::change_target_during_publication(
+            std::path::PathBuf::from(".zed/settings.json"),
+            SOURCE_CONTENT_CANARY.as_bytes().to_vec(),
+        );
+
+        let (status, stdout, stderr) = run_editor(project.path());
+
+        assert_eq!(status, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
+        assert!(stdout.is_empty());
+        assert_eq!(
+            stderr,
+            "relayctl: editor setup publication failed; recoverable transaction files remain in the project directory\n"
+        );
+        assert!(!stderr.contains(project.path().to_string_lossy().as_ref()));
+        assert!(!stderr.contains(SOURCE_CONTENT_CANARY));
+        assert!(std::fs::read_dir(project.path())
+            .expect("project remains readable")
+            .filter_map(Result::ok)
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".relay-v2-editor-transaction-")));
     }
 
     #[test]
