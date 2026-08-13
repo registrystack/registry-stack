@@ -203,6 +203,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",
     ),
     (
+        "Container runtime preflight tests",
+        "run: python3 -m unittest docker/test_runtime_preflight.py",
+    ),
+    (
         "Release image OCI label smoke",
         "run: release/scripts/smoke-release-image-oci-labels.sh",
     ),
