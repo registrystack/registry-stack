@@ -675,6 +675,16 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('grype "${image_ref}" -o json > "${report}"', scan_body)
         self.assertIn("set +e", scan_body)
         self.assertIn('status=$?', scan_body)
+        status_guard = scan_body.index("if (( status != 0 )); then")
+        failure = scan_body.index(
+            'echo "Grype failed (exit ${status}); refusing candidate scan" >&2',
+            status_guard,
+        )
+        failure_exit = scan_body.index("exit 1", failure)
+        report_validation = scan_body.index("if ! jq -e '", failure_exit)
+        self.assertLess(status_guard, failure)
+        self.assertLess(failure, failure_exit)
+        self.assertLess(failure_exit, report_validation)
         self.assertIn('(.matches | type == "array")', scan_body)
         self.assertIn('(.source.type == "image")', scan_body)
         self.assertIn(
@@ -689,10 +699,7 @@ class RegistryReleaseTest(TestCase):
             "Grype did not emit a complete scan report",
             scan_body,
         )
-        self.assertIn(
-            "enforcing its complete report through the reviewed advisory policy",
-            scan_body,
-        )
+        self.assertNotIn("::warning::Grype exited", scan_body)
         self.assertIn("now_epoch - db_built_epoch > 259200", scan_body)
         self.assertIn("for name in ${RELEASE_IMAGE_NAMES}; do", scan_body)
         self.assertIn(
@@ -841,6 +848,10 @@ class RegistryReleaseTest(TestCase):
         def assert_contract(text: str) -> None:
             for fragment in (
                 'grype "${image_ref}" -o json > "${report}"',
+                'if (( status != 0 )); then\n'
+                '              echo "Grype failed (exit ${status}); refusing candidate scan" >&2\n'
+                "              exit 1\n"
+                "            fi",
                 "Grype did not emit a complete scan report",
                 "now_epoch - db_built_epoch > 259200",
                 "products/relay-v2/security/advisory-baseline.json",
@@ -854,6 +865,10 @@ class RegistryReleaseTest(TestCase):
         assert_contract(assemble)
         for fragment in (
             'grype "${image_ref}" -o json > "${report}"',
+            'if (( status != 0 )); then\n'
+            '              echo "Grype failed (exit ${status}); refusing candidate scan" >&2\n'
+            "              exit 1\n"
+            "            fi",
             "Grype did not emit a complete scan report",
             "now_epoch - db_built_epoch > 259200",
             "products/relay-v2/security/advisory-baseline.json",
