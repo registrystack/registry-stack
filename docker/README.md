@@ -135,7 +135,9 @@ before checking Evidence. Only Mint may be started as a preflight dependency;
 Relay's existing healthcheck is liveness-only and is not accepted as readiness.
 Services started for dependency checking remain under the operator's Compose
 lifecycle. `--dependency-timeout-seconds` bounds both Mint startup and readiness
-polling. Native checks consume the exact rendered Compose JSON already
+polling under one shared deadline. Mint's `MINT_HEALTHCHECK_URL` selects a
+numeric private `/ready` listener when loopback is not the configured bind.
+Native checks consume the exact rendered Compose JSON already
 validated by the static pass, rather than re-reading mutable Compose or
 environment files.
 

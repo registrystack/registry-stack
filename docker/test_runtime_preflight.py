@@ -169,6 +169,10 @@ class RuntimePreflightTest(unittest.TestCase):
             "root user": lambda item: item.update(user="0:0"),
             "supplementary group": lambda item: item.update(group_add=["0"]),
             "host device": lambda item: item.update(devices=["/dev/kvm:/dev/kvm"]),
+            "host GPU": lambda item: item.update(gpus="all"),
+            "device cgroup rule": lambda item: item.update(
+                device_cgroup_rules=["c 1:3 rwm"]
+            ),
             "two deploy replicas": lambda item: item.update(deploy={"replicas": 2}),
             "boolean deploy replicas": lambda item: item.update(
                 deploy={"replicas": True}
@@ -426,6 +430,8 @@ class RuntimePreflightTest(unittest.TestCase):
                 "/lib/replacement",
                 "/usr/lib",
                 "/usr/local/lib/replacement",
+                "/etc/ld.so.preload",
+                "/etc/ld.so.cache",
             ):
                 with self.subTest(product=product, target=target):
                     selected = service(product)
@@ -454,7 +460,29 @@ class RuntimePreflightTest(unittest.TestCase):
                 )
 
             selected = service(product)
+            selected["configs"] = [
+                {
+                    "source": "replacement",
+                    "target": "/etc/ld.so.preload",
+                    "mode": "0444",
+                }
+            ]
+            with self.assertRaises(self.module.PreflightError):
+                self.module.validate_service(
+                    self.module.ServiceSelection(product, product),
+                    deployment({product: selected}),
+                )
+
+            selected = service(product)
             selected["secrets"][0]["target"] = executable  # type: ignore[index]
+            with self.assertRaises(self.module.PreflightError):
+                self.module.validate_service(
+                    self.module.ServiceSelection(product, product),
+                    deployment({product: selected}),
+                )
+
+            selected = service(product)
+            selected["secrets"][0]["target"] = "/etc/ld.so.preload"  # type: ignore[index]
             with self.assertRaises(self.module.PreflightError):
                 self.module.validate_service(
                     self.module.ServiceSelection(product, product),
@@ -591,10 +619,8 @@ class RuntimePreflightTest(unittest.TestCase):
                 "mint",
                 "/usr/local/bin/mint",
                 "healthcheck",
-                "--url",
-                "http://127.0.0.1:8081/ready",
             ],
-            calls[3][-7:],
+            calls[3][-5:],
         )
         self.assertEqual("evidence", calls[4][calls[4].index("--no-deps") + 1])
         self.assertEqual(600, run.call_args_list[1].kwargs["timeout"])
@@ -614,15 +640,21 @@ class RuntimePreflightTest(unittest.TestCase):
         render = subprocess.CompletedProcess(
             args=[], returncode=0, stdout=json.dumps(document), stderr=""
         )
-        complete = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+        complete = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        failed = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr=""
+        )
         run = unittest.mock.Mock(side_effect=[render, complete, complete, failed])
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
             unittest.mock.patch.object(self.module.subprocess, "run", run),
             unittest.mock.patch.object(
-                self.module.time, "monotonic", side_effect=[0.0, 0.0, 6.0]
+                self.module.time,
+                "monotonic",
+                side_effect=[0.0, 0.0, 0.0, 0.0, 6.0],
             ),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
@@ -650,6 +682,22 @@ class RuntimePreflightTest(unittest.TestCase):
                 for call in run.call_args_list
             )
         )
+
+    def test_probe_success_after_the_shared_deadline_is_rejected(self) -> None:
+        complete = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        selection = self.module.ServiceSelection("mint", "mint")
+        with (
+            unittest.mock.patch.object(
+                self.module, "run_compose", return_value=complete
+            ),
+            unittest.mock.patch.object(
+                self.module.time, "monotonic", side_effect=[0.0, 6.0]
+            ),
+        ):
+            with self.assertRaisesRegex(self.module.PreflightError, "ready"):
+                self.module.wait_for_dependency(selection, 5.0, "{}")
 
     def test_only_mint_may_be_started_as_a_dependency(self) -> None:
         selections = [

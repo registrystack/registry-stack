@@ -79,8 +79,9 @@ a dependency, it checks Mint, starts only that service with `--no-deps`,
 requires Mint's exact `/ready` response, and then checks Evidence. Relay cannot
 be started as a preflight dependency because its existing healthcheck is
 liveness-only. Add `--dependency-timeout-seconds SECONDS` to change the bounded
-Mint startup and readiness deadline. A started Mint remains under the
-operator's Compose lifecycle.
+shared Mint startup and readiness deadline. Set `MINT_HEALTHCHECK_URL` on the
+Mint service to its numeric private `/ready` listener when Mint does not bind
+loopback. A started Mint remains under the operator's Compose lifecycle.
 The preflight accepts only Docker-managed local named audit volumes without
 driver options, or explicit bind mounts outside known ephemeral host paths. It
 rejects service-level tmpfs and every long-form tmpfs other than exactly one

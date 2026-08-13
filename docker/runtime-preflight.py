@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import sys
@@ -44,6 +45,9 @@ IMAGE_OWNED_ROOTS = tuple(
         "/usr/sbin",
     )
 )
+DYNAMIC_LOADER_PATHS = tuple(
+    PurePosixPath(path) for path in ("/etc/ld.so.cache", "/etc/ld.so.preload")
+)
 KNOWN_EPHEMERAL_BIND_ROOTS = tuple(
     PurePosixPath(path)
     for path in (
@@ -73,14 +77,7 @@ NATIVE_CHECKS = {
     ],
     "relay": ["check", "--runtime", "/etc/relay/runtime.yaml"],
 }
-DEPENDENCY_HEALTHCHECKS = {
-    "mint": [
-        "/usr/local/bin/mint",
-        "healthcheck",
-        "--url",
-        "http://127.0.0.1:8081/ready",
-    ]
-}
+DEPENDENCY_HEALTHCHECKS = {"mint": ["/usr/local/bin/mint", "healthcheck"]}
 
 
 class PreflightError(RuntimeError):
@@ -211,7 +208,7 @@ def shadows_executable(target: PurePosixPath, executable: PurePosixPath) -> bool
 def shadows_image_content(target: PurePosixPath, executable: PurePosixPath) -> bool:
     return shadows_executable(target, executable) or any(
         target == root or target in root.parents or root in target.parents
-        for root in IMAGE_OWNED_ROOTS
+        for root in (*IMAGE_OWNED_ROOTS, *DYNAMIC_LOADER_PATHS)
     )
 
 
@@ -412,6 +409,12 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     devices = service.get("devices", [])
     if not isinstance(devices, list) or devices:
         raise PreflightError("service must not add host devices")
+    gpus = service.get("gpus", [])
+    if gpus not in (None, []) or isinstance(gpus, bool):
+        raise PreflightError("service must not add host GPUs")
+    device_cgroup_rules = service.get("device_cgroup_rules", [])
+    if not isinstance(device_cgroup_rules, list) or device_cgroup_rules:
+        raise PreflightError("service must not add device cgroup rules")
     deploy = service.get("deploy", {})
     if not isinstance(deploy, dict):
         raise PreflightError("service replica posture is invalid")
@@ -434,7 +437,9 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     environment = service.get("environment", {})
     if not isinstance(environment, dict):
         raise PreflightError("service environment posture is invalid")
-    if any(name in environment for name in ("LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD")):
+    if any(
+        name in environment for name in ("LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD")
+    ):
         raise PreflightError("service must not override dynamic-loader behavior")
     fixed_config = {
         "evidence": (
@@ -549,8 +554,11 @@ def native_check_plan(
 
 
 def start_dependency(
-    selection: ServiceSelection, timeout: int, frozen_compose: str
+    selection: ServiceSelection, deadline: float, frozen_compose: str
 ) -> None:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise PreflightError("a declared dependency service did not become ready")
     result = run_compose(
         [
             "docker",
@@ -562,7 +570,7 @@ def start_dependency(
             "--no-deps",
             selection.service,
         ],
-        timeout=timeout,
+        timeout=max(1, math.ceil(remaining)),
         capture_output=False,
         input_text=frozen_compose,
     )
@@ -571,12 +579,11 @@ def start_dependency(
 
 
 def wait_for_dependency(
-    selection: ServiceSelection, timeout: int, frozen_compose: str
+    selection: ServiceSelection, deadline: float, frozen_compose: str
 ) -> None:
     healthcheck = DEPENDENCY_HEALTHCHECKS.get(selection.product)
     if healthcheck is None:
         raise PreflightError("only Mint can be started as a preflight dependency")
-    deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -597,9 +604,9 @@ def wait_for_dependency(
             input_text=frozen_compose,
             timeout_is_failure=False,
         )
-        if result.returncode == 0:
-            return
         remaining = deadline - time.monotonic()
+        if result.returncode == 0 and remaining > 0:
+            return
         if remaining <= 0:
             raise PreflightError("a declared dependency service did not become ready")
         time.sleep(min(1.0, remaining))
@@ -683,14 +690,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 frozen_compose,
             )
             if selection.service in dependency_services:
+                deadline = time.monotonic() + args.dependency_timeout_seconds
                 start_dependency(
                     selection,
-                    args.dependency_timeout_seconds,
+                    deadline,
                     frozen_compose,
                 )
                 wait_for_dependency(
                     selection,
-                    args.dependency_timeout_seconds,
+                    deadline,
                     frozen_compose,
                 )
     except PreflightError as error:
