@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Deterministic reference data derived from released Clap command trees.
+//! Deterministic reference data derived from Registry Stack Clap command trees.
 
-use std::ffi::{OsStr, OsString};
+use std::{
+    collections::BTreeSet,
+    ffi::{OsStr, OsString},
+};
 
 use clap::{
     error::{ContextKind, ContextValue, ErrorKind},
@@ -9,11 +12,12 @@ use clap::{
 };
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: &str = "registry.cli-reference/v1";
+pub const SCHEMA_VERSION: &str = "registry.cli-reference/v2";
 
 #[derive(Debug, Serialize)]
 pub struct Catalog {
     pub schema_version: &'static str,
+    pub source_version: &'static str,
     pub binaries: Vec<CommandReference>,
 }
 
@@ -47,6 +51,7 @@ pub enum ConstraintKind {
     RequiredExactlyOne,
     RequiredOneOrMore,
     RequiresAll,
+    MutuallyExclusive,
 }
 
 #[derive(Debug, Serialize)]
@@ -56,7 +61,7 @@ pub struct ConstraintReference {
     pub arguments: Vec<String>,
 }
 
-/// Build reference data for every released Relay and Evidence command line.
+/// Build reference data for every Registry Stack Relay and Evidence command line.
 pub fn catalog() -> Catalog {
     let mut binaries = vec![
         command_reference(registry_evidence::command(), None),
@@ -69,6 +74,7 @@ pub fn catalog() -> Catalog {
     binaries.sort_by(|left, right| left.name.cmp(&right.name));
     Catalog {
         schema_version: SCHEMA_VERSION,
+        source_version: env!("CARGO_PKG_VERSION"),
         binaries,
     }
 }
@@ -144,14 +150,21 @@ fn argument_reference(command: &Command, argument: &Arg) -> ArgumentReference {
     } else {
         Vec::new()
     };
+    let description = argument
+        .get_long_help()
+        .or_else(|| argument.get_help())
+        .map(ToString::to_string)
+        .map(|value| normalized(&value))
+        .unwrap_or_default();
+    assert!(
+        !description.is_empty(),
+        "{} argument {} lacks public help",
+        command.get_name(),
+        argument_display(argument)
+    );
     ArgumentReference {
         display: argument_display(argument),
-        description: argument
-            .get_long_help()
-            .or_else(|| argument.get_help())
-            .map(ToString::to_string)
-            .map(|value| normalized(&value))
-            .unwrap_or_default(),
+        description,
         always_required: argument.is_required_set()
             && argument.get_env().is_none()
             && !(command.is_subcommand_negates_reqs_set()
@@ -217,7 +230,74 @@ fn command_constraints(command: &Command) -> Vec<ConstraintReference> {
                 }),
         );
     }
+    constraints.extend(conflict_constraints(command));
     constraints
+}
+
+fn conflict_constraints(command: &Command) -> Vec<ConstraintReference> {
+    let public_arguments = command
+        .get_arguments()
+        .filter(|argument| is_public_argument(argument))
+        .collect::<Vec<_>>();
+    let public_ids = public_arguments
+        .iter()
+        .map(|argument| argument.get_id().as_str())
+        .collect::<BTreeSet<_>>();
+    let mut pairs = BTreeSet::new();
+    for argument in &public_arguments {
+        for conflicting in command
+            .get_arg_conflicts_with(argument)
+            .into_iter()
+            .filter(|conflicting| public_ids.contains(conflicting.get_id().as_str()))
+        {
+            let mut pair = [argument_display(argument), argument_display(conflicting)];
+            pair.sort();
+            if pair[0] != pair[1] {
+                pairs.insert(pair);
+            }
+        }
+        if argument.is_exclusive_set() {
+            for other in &public_arguments {
+                let mut pair = [argument_display(argument), argument_display(other)];
+                pair.sort();
+                if pair[0] != pair[1] {
+                    pairs.insert(pair);
+                }
+            }
+        }
+    }
+    for group in command.get_groups() {
+        let mut group = group.clone();
+        if group.is_multiple() {
+            continue;
+        }
+        let arguments = group_arguments(command, &group)
+            .into_iter()
+            .filter(|argument| is_public_argument(argument))
+            .map(argument_display)
+            .collect::<Vec<_>>();
+        for (index, left) in arguments.iter().enumerate() {
+            for right in arguments.iter().skip(index + 1) {
+                let mut pair = [left.clone(), right.clone()];
+                pair.sort();
+                if pair[0] != pair[1] {
+                    pairs.insert(pair);
+                }
+            }
+        }
+    }
+    pairs
+        .into_iter()
+        .map(|arguments| ConstraintReference {
+            kind: ConstraintKind::MutuallyExclusive,
+            when: None,
+            arguments: arguments.into(),
+        })
+        .collect()
+}
+
+fn is_public_argument(argument: &Arg) -> bool {
+    !argument.is_hide_set() && argument.get_id() != "help" && argument.get_id() != "version"
 }
 
 fn group_arguments<'a>(command: &'a Command, group: &ArgGroup) -> Vec<&'a Arg> {
@@ -450,10 +530,22 @@ mod tests {
         panic!("missing command {invocation}");
     }
 
+    fn has_conflict(command: &CommandReference, left: &str, right: &str) -> bool {
+        let mut arguments = [left, right];
+        arguments.sort();
+        command.constraints.iter().any(|constraint| {
+            constraint.kind == ConstraintKind::MutuallyExclusive
+                && constraint.when.is_none()
+                && constraint.arguments == arguments
+        })
+    }
+
     #[test]
-    fn catalog_contains_every_released_evidence_and_relay_binary() {
+    fn catalog_contains_every_public_evidence_and_relay_binary() {
+        let catalog = catalog();
+        assert_eq!(catalog.source_version, env!("CARGO_PKG_VERSION"));
         assert_eq!(
-            catalog()
+            catalog
                 .binaries
                 .iter()
                 .map(|command| command.name.as_str())
@@ -499,6 +591,14 @@ mod tests {
                 "{} lacks usage",
                 command.invocation
             );
+            for argument in command.arguments.iter().chain(&command.options) {
+                assert!(
+                    !argument.description.is_empty(),
+                    "{} {} lacks help text",
+                    command.invocation,
+                    argument.display
+                );
+            }
             for subcommand in &command.subcommands {
                 check(subcommand);
             }
@@ -512,14 +612,25 @@ mod tests {
     fn parser_constraints_cover_groups_and_argument_requirements() {
         let reference = command_reference(
             Command::new("tool")
-                .arg(Arg::new("left").long("left").action(ArgAction::SetTrue))
+                .arg(
+                    Arg::new("left")
+                        .long("left")
+                        .help("Select the left mode")
+                        .action(ArgAction::SetTrue),
+                )
                 .arg(
                     Arg::new("right")
                         .long("right")
+                        .help("Select the right mode")
                         .action(ArgAction::SetTrue)
                         .requires("detail"),
                 )
-                .arg(Arg::new("detail").long("detail").action(ArgAction::SetTrue))
+                .arg(
+                    Arg::new("detail")
+                        .long("detail")
+                        .help("Supply mode details")
+                        .action(ArgAction::SetTrue),
+                )
                 .group(
                     ArgGroup::new("choice")
                         .required(true)
@@ -541,8 +652,18 @@ mod tests {
 
         let multiple = command_reference(
             Command::new("tool")
-                .arg(Arg::new("first").long("first").action(ArgAction::SetTrue))
-                .arg(Arg::new("second").long("second").action(ArgAction::SetTrue))
+                .arg(
+                    Arg::new("first")
+                        .long("first")
+                        .help("Select the first mode")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("second")
+                        .long("second")
+                        .help("Select the second mode")
+                        .action(ArgAction::SetTrue),
+                )
                 .group(
                     ArgGroup::new("choices")
                         .required(true)
@@ -563,6 +684,7 @@ mod tests {
             Command::new("tool").arg(
                 Arg::new("config")
                     .long("config")
+                    .help("Configuration file")
                     .env("TOOL_CONFIG")
                     .required(true),
             ),
@@ -576,6 +698,120 @@ mod tests {
             .expect("config option");
         assert!(!config.always_required);
         assert_eq!(config.environment.as_deref(), Some("TOOL_CONFIG"));
+    }
+
+    #[test]
+    fn conflicts_are_deduplicated_and_sorted() {
+        let reference = command_reference(
+            Command::new("tool")
+                .arg(
+                    Arg::new("gamma")
+                        .long("gamma")
+                        .help("Select gamma")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("beta")
+                        .long("beta")
+                        .help("Select beta")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with("alpha"),
+                )
+                .arg(
+                    Arg::new("alpha")
+                        .long("alpha")
+                        .help("Select alpha")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["gamma", "beta"]),
+                ),
+            None,
+        );
+
+        let conflicts = reference
+            .constraints
+            .iter()
+            .filter(|constraint| constraint.kind == ConstraintKind::MutuallyExclusive)
+            .map(|constraint| constraint.arguments.as_slice())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            conflicts,
+            [
+                ["--alpha", "--beta"].as_slice(),
+                ["--alpha", "--gamma"].as_slice(),
+            ]
+        );
+    }
+
+    #[test]
+    fn optional_groups_and_exclusive_arguments_publish_all_conflicts() {
+        let reference = command_reference(
+            Command::new("tool")
+                .arg(
+                    Arg::new("left")
+                        .long("left")
+                        .help("Select left")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("right")
+                        .long("right")
+                        .help("Select right")
+                        .action(ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("alone")
+                        .long("alone")
+                        .help("Run alone")
+                        .exclusive(true)
+                        .action(ArgAction::SetTrue),
+                )
+                .group(ArgGroup::new("side").args(["left", "right"])),
+            None,
+        );
+
+        assert!(has_conflict(&reference, "--left", "--right"));
+        assert!(has_conflict(&reference, "--alone", "--left"));
+        assert!(has_conflict(&reference, "--alone", "--right"));
+    }
+
+    #[test]
+    fn hidden_conflicts_do_not_enter_the_catalog() {
+        let reference = command_reference(
+            Command::new("tool")
+                .arg(
+                    Arg::new("public")
+                        .long("public")
+                        .help("Public mode")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with("internal"),
+                )
+                .arg(
+                    Arg::new("internal")
+                        .long("internal")
+                        .hide(true)
+                        .action(ArgAction::SetTrue),
+                ),
+            None,
+        );
+
+        assert!(reference.constraints.is_empty());
+        assert!(reference
+            .options
+            .iter()
+            .all(|argument| argument.display != "--internal"));
+    }
+
+    #[test]
+    #[should_panic(expected = "tool argument --undocumented lacks public help")]
+    fn a_public_argument_without_help_is_rejected() {
+        command_reference(
+            Command::new("tool").arg(
+                Arg::new("undocumented")
+                    .long("undocumented")
+                    .action(ArgAction::SetTrue),
+            ),
+            None,
+        );
     }
 
     #[test]
@@ -625,6 +861,33 @@ mod tests {
             constraint.kind == ConstraintKind::RequiredExactlyOne
                 && constraint.arguments == ["--openapi <OPENAPI>", "--project <PROJECT>"]
         }));
+
+        let mock_serve = find_command(&catalog.binaries, "evidencectl source mock serve");
+        for option in [
+            "--operation <OPERATION>",
+            "--seed <SEED>",
+            "--as-of <AS_OF>",
+            "--explain",
+        ] {
+            assert!(
+                has_conflict(mock_serve, "--config <CONFIG>", option),
+                "materialized mock serving did not conflict with {option}"
+            );
+        }
+
+        let mock_generate = find_command(&catalog.binaries, "evidencectl source mock generate");
+        for option in [
+            "--operation <OPERATION>",
+            "--case <CASE>",
+            "--path-parameter <PATH_PARAMETERS>",
+            "--seed <SEED>",
+            "--as-of <AS_OF>",
+        ] {
+            assert!(
+                has_conflict(mock_generate, "--config <CONFIG>", option),
+                "stored mock generation did not conflict with {option}"
+            );
+        }
 
         let request_prepare = find_command(&catalog.binaries, "evidencectl request prepare");
         assert!(request_prepare.constraints.iter().any(|constraint| {

@@ -28,4 +28,11 @@ test('pinned docsets expose CLI navigation only when they contain its index', as
       'reference/cli/evidence-oid4vci',
     ],
   );
+
+  await writeFile(index, '---\ntitle: CLI reference\ndraft: true\n---\n');
+  assert.deepEqual(
+    cliReferenceSidebar(index),
+    [],
+    'Starlight draft entries must not remain in the published sidebar',
+  );
 });

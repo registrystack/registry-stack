@@ -56,7 +56,10 @@ pub struct ServeArgs {
     openapi: Option<PathBuf>,
 
     /// Materialized mock configuration whose checked body bytes are authoritative.
-    #[arg(long, conflicts_with = "openapi")]
+    #[arg(
+        long,
+        conflicts_with_all = ["openapi", "project", "operation", "seed", "as_of", "explain"]
+    )]
     config: Option<PathBuf>,
 
     /// Explicit Evidence authoring project; the current directory is used when omitted.
@@ -91,7 +94,19 @@ pub struct GenerateArgs {
     openapi: Option<PathBuf>,
 
     /// Create only missing bodies from an existing editable configuration.
-    #[arg(long, conflicts_with = "openapi")]
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "openapi",
+            "output",
+            "project",
+            "operation",
+            "case",
+            "path_parameters",
+            "seed",
+            "as_of"
+        ]
+    )]
     config: Option<PathBuf>,
 
     /// Initial configuration path. Defaults to mocks/source.yaml.
