@@ -45,6 +45,7 @@ jobs:
       candidate_run: ${{ steps.binding.outputs.run_id }}
       candidate_attempt: ${{ steps.binding.outputs.run_attempt }}
       manifest_sha256: ${{ steps.binding.outputs.manifest_sha256 }}
+      destination_state: ${{ steps.release_destination.outputs.state }}
     steps:
       - name: Checkout protected promotion workflow
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -247,7 +248,8 @@ jobs:
             echo "client_registries=${client_registries}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Verify any existing draft is bound to the exact candidate
+      - name: Classify absent, draft, or exact published release destination
+        id: release_destination
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -269,13 +271,20 @@ jobs:
               --arg marker \
                 "registry-stack-release-candidate-v2 manifest_sha256:${{ steps.binding.outputs.manifest_sha256 }}" \
               '.id == $release_id and
-               .draft == true and
                .prerelease == false and
                .tag_name == $tag and
                .name == $title and
-               ((.body // "") | contains($marker))' \
+               ((.body // "") | contains($marker)) and
+               ((.draft == true and .published_at == null) or
+                (.draft == false and
+                 (.published_at | type == "string" and length > 0)))' \
               promotion/existing-release.json >/dev/null
+            state="$(jq -r 'if .draft then "draft" else "published" end' \
+              promotion/existing-release.json)"
+          else
+            state=absent
           fi
+          echo "state=${state}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload verified promotion input
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -288,6 +297,7 @@ jobs:
 
   stage-draft:
     name: Create or reconcile the bound draft
+    if: needs.verify.outputs.destination_state != 'published'
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -1106,9 +1116,57 @@ jobs:
              ((.body // "") | contains($marker))' \
             published-release.json >/dev/null
 
+  closeout-published:
+    name: Verify an exact already-published release
+    if: needs.verify.outputs.destination_state == 'published'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout protected promotion workflow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.promotion_revision }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Install pinned public-release verifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.local/bin"
+          curl -sSfL \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            -o "${RUNNER_TEMP}/crane.tar.gz"
+          echo "${CRANE_LINUX_AMD64_SHA256}  ${RUNNER_TEMP}/crane.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/crane.tar.gz" \
+            -C "${HOME}/.local/bin" crane
+          curl -sSfL \
+            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" \
+            -o "${RUNNER_TEMP}/cosign"
+          echo "${COSIGN_LINUX_AMD64_SHA256}  ${RUNNER_TEMP}/cosign" \
+            | sha256sum --check --strict
+          install -m 0755 "${RUNNER_TEMP}/cosign" "${HOME}/.local/bin/cosign"
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Verify the minimum immutable public contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release/scripts/registry-release verify-public \
+            --tag "${{ needs.verify.outputs.tag }}"
+
   publish_client_npm:
     name: Publish exact ${{ matrix.client }} client packages to npm
-    if: needs.verify.outputs.client_registries == 'true'
+    if: >-
+      needs.verify.outputs.client_registries == 'true' &&
+      needs.verify.outputs.destination_state != 'published'
     needs:
       - verify
       - finalize-assets
@@ -1225,7 +1283,9 @@ jobs:
 
   publish_client_pypi:
     name: Publish exact ${{ matrix.client }} client wheels to PyPI
-    if: needs.verify.outputs.client_registries == 'true'
+    if: >-
+      needs.verify.outputs.client_registries == 'true' &&
+      needs.verify.outputs.destination_state != 'published'
     needs:
       - verify
       - finalize-assets
@@ -1334,10 +1394,12 @@ jobs:
     if: >-
       always() &&
       needs.verify.outputs.docs_sha256 != '' &&
-      needs.publish.result == 'success'
+      (needs.publish.result == 'success' ||
+       needs.closeout-published.result == 'success')
     needs:
       - verify
       - publish
+      - closeout-published
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     permissions:

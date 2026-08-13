@@ -666,6 +666,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 "promote-images",
                 "finalize-assets",
                 "publish",
+                "closeout-published",
                 "publish_client_npm",
                 "publish_client_pypi",
                 "dispatch-docs",
@@ -766,6 +767,40 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn(
             'cp "product-source/release/notes/${tag}.md"',
             stage,
+        )
+
+    def test_fresh_retry_closes_out_only_an_exact_published_release(self) -> None:
+        _, document = workflow("release.yml")
+        classify = step_run(
+            document,
+            "verify",
+            "Classify absent, draft, or exact published release destination",
+        )
+        self.assertIn(".prerelease == false", classify)
+        self.assertIn(".tag_name == $tag", classify)
+        self.assertIn(".name == $title", classify)
+        self.assertIn("contains($marker)", classify)
+        self.assertIn(".draft == true and .published_at == null", classify)
+        self.assertIn(".draft == false", classify)
+        self.assertIn('state="$(jq -r', classify)
+        self.assertEqual(
+            document["jobs"]["stage-draft"]["if"],
+            "needs.verify.outputs.destination_state != 'published'",
+        )
+        closeout = document["jobs"]["closeout-published"]
+        self.assertEqual(
+            closeout["if"],
+            "needs.verify.outputs.destination_state == 'published'",
+        )
+        public_verify = step_run(
+            document,
+            "closeout-published",
+            "Verify the minimum immutable public contract",
+        )
+        self.assertIn("registry-release verify-public", public_verify)
+        self.assertIn(
+            "needs.closeout-published.result == 'success'",
+            document["jobs"]["dispatch-docs"]["if"],
         )
 
     def test_recovers_only_the_closed_final_asset_roster(self) -> None:
@@ -913,7 +948,12 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         dispatch = document["jobs"]["dispatch-docs"]
         self.assertIn("needs.verify.outputs.docs_sha256 != ''", dispatch["if"])
         self.assertIn("needs.publish.result == 'success'", dispatch["if"])
-        self.assertEqual(dispatch["needs"], ["verify", "publish"])
+        self.assertIn(
+            "needs.closeout-published.result == 'success'", dispatch["if"]
+        )
+        self.assertEqual(
+            dispatch["needs"], ["verify", "publish", "closeout-published"]
+        )
         dispatch_run = step_run(
             document,
             "dispatch-docs",
@@ -935,7 +975,12 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 job["permissions"],
                 {"actions": "read", "contents": "read", "id-token": "write"},
             )
-            self.assertEqual(job["if"], "needs.verify.outputs.client_registries == 'true'")
+            self.assertIn(
+                "needs.verify.outputs.client_registries == 'true'", job["if"]
+            )
+            self.assertIn(
+                "needs.verify.outputs.destination_state != 'published'", job["if"]
+            )
             self.assertEqual(
                 job["strategy"]["matrix"]["client"],
                 ["evidence", "relay"],
@@ -952,8 +997,11 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             pypi["permissions"],
             {"actions": "read", "contents": "read", "id-token": "write"},
         )
-        self.assertEqual(
-            pypi["if"], "needs.verify.outputs.client_registries == 'true'"
+        self.assertIn(
+            "needs.verify.outputs.client_registries == 'true'", pypi["if"]
+        )
+        self.assertIn(
+            "needs.verify.outputs.destination_state != 'published'", pypi["if"]
         )
         self.assertEqual(npm["needs"], ["verify", "finalize-assets"])
         self.assertEqual(pypi["needs"], ["verify", "finalize-assets"])
