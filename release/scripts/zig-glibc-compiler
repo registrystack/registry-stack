@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$(basename -- "$0")" in
+  zig-cc)
+    driver=cc
+    ;;
+  zig-cxx)
+    driver=c++
+    ;;
+  *)
+    printf 'zig-glibc-compiler must be invoked as zig-cc or zig-cxx\n' >&2
+    exit 2
+    ;;
+esac
+
+zig_python="${REGISTRY_ZIG_PYTHON:-}"
+zig_target="${REGISTRY_ZIG_TARGET:-}"
+if [[ "${zig_python}" != /* || ! -x "${zig_python}" ]]; then
+  printf 'REGISTRY_ZIG_PYTHON must name an absolute executable\n' >&2
+  exit 2
+fi
+case "${zig_target}" in
+  x86_64-linux-gnu.2.17|aarch64-linux-gnu.2.17) ;;
+  *)
+    printf 'REGISTRY_ZIG_TARGET must name an approved glibc 2.17 target\n' >&2
+    exit 2
+    ;;
+esac
+
+# cc-rs adds the Rust target even when the selected compiler is a wrapper.
+# Remove only its target selector so Zig receives exactly the approved target
+# above. Every other compiler and linker argument passes through unchanged.
+filtered=()
+while (( "$#" )); do
+  case "$1" in
+    --target=*)
+      shift
+      ;;
+    --target|-target)
+      if (( "$#" < 2 )); then
+        printf '%s requires a target argument\n' "$1" >&2
+        exit 2
+      fi
+      shift 2
+      ;;
+    -target=*)
+      printf 'unsupported target selector: %s\n' "$1" >&2
+      exit 2
+      ;;
+    *)
+      filtered+=("$1")
+      shift
+      ;;
+  esac
+done
+
+exec "${zig_python}" -m ziglang "${driver}" \
+  -target "${zig_target}" "${filtered[@]}"

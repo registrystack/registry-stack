@@ -7,6 +7,8 @@ import tomllib
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "check-gates-inventory.py"
@@ -712,6 +714,104 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
+    def test_linux_node_release_proof_is_two_runner_read_only_and_aggregated(
+        self,
+    ) -> None:
+        document = yaml.safe_load(self.workflow)
+        job = document["jobs"]["release-linux-node-clients"]
+        self.assertEqual(
+            "needs.changes.outputs.release_linux_node_clients == 'true'",
+            job["if"],
+        )
+        self.assertEqual({"contents": "read"}, job["permissions"])
+        self.assertEqual("1.95.0", job["env"]["RUSTUP_TOOLCHAIN"])
+        self.assertEqual(
+            {
+                (
+                    "ubuntu-24.04",
+                    "x86_64-unknown-linux-gnu",
+                    "linux-x64-gnu",
+                ),
+                (
+                    "ubuntu-24.04-arm",
+                    "aarch64-unknown-linux-gnu",
+                    "linux-arm64-gnu",
+                ),
+            },
+            {
+                (entry["runner"], entry["target"], entry["napi_platform"])
+                for entry in job["strategy"]["matrix"]["include"]
+            },
+        )
+        setup_node = next(
+            step for step in job["steps"] if step.get("name") == "Setup Node"
+        )
+        self.assertEqual("22.20.0", setup_node["with"]["node-version"])
+        install = next(
+            step["run"]
+            for step in job["steps"]
+            if step.get("name") == "Install pinned Linux client build tools"
+        )
+        self.assertIn("rustup toolchain install 1.95.0 --profile minimal", install)
+        self.assertIn("--require-hashes --only-binary=:all:", install)
+        self.assertIn("release/requirements/maturin-1.9.6.txt", install)
+        proof = next(
+            step["run"]
+            for step in job["steps"]
+            if step.get("name") == "Prove production Linux Node client recipe"
+        )
+        self.assertIn("for client in evidence relay", proof)
+        self.assertIn("release/scripts/build-linux-node-client", proof)
+        self.assertIn('--target "${{ matrix.target }}"', proof)
+        self.assertIn('--napi-platform "${{ matrix.napi_platform }}"', proof)
+        self.assertIn('--zig-python "${RUNNER_TEMP}/maturin/bin/python"', proof)
+        self.assertIn("smoke-${client}-client-package.js", proof)
+        self.assertIn('(cd "${smoke}" && node "smoke-${client}-client-package.js")', proof)
+        self.assertNotIn("napi build", proof)
+        self.assertNotIn("npm pack", proof)
+        self.assertNotIn("docker run", proof)
+        self.assertFalse(any("upload-artifact@" in str(step) for step in job["steps"]))
+        self.assertNotIn("contents: write", str(job))
+        for forbidden in ("npm publish", "gh release", "docker push"):
+            self.assertNotIn(forbidden, str(job))
+        self.assertIn(
+            "release-linux-node-clients",
+            document["jobs"]["ci-result"]["needs"],
+        )
+
+    def test_missing_linux_node_release_proof_gates_are_reported(self) -> None:
+        mutations = (
+            (
+                "release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}",
+                "release_linux_node_clients: false",
+                "Release Linux Node client path filter",
+            ),
+            (
+                "release-linux-node-clients:\n    name: Release Linux Node clients",
+                "release-linux-node-clients:\n    name: Disabled Linux Node clients",
+                "Release Linux Node client proof job",
+            ),
+            (
+                "release/scripts/build-linux-node-client \\",
+                "release/scripts/disabled-linux-node-client \\",
+                "Release Linux Node client helper invocation",
+            ),
+            (
+                '--requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"',
+                '--requirement "${GITHUB_WORKSPACE}/release/requirements/unpinned.txt"',
+                "Release Linux Node client pinned tools",
+            ),
+            (
+                "      - release-linux-node-clients",
+                "      - disabled-linux-node-clients",
+                "Release Linux Node client CI aggregate",
+            ),
+        )
+        for snippet, replacement, gate in mutations:
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement, 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
     def test_missing_debian13_image_contract_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: python3 release/scripts/check-debian13-images.py",
@@ -795,6 +895,14 @@ class GateInventoryTest(unittest.TestCase):
             (
                 "release/scripts/test_release_rehearsal.py",
                 "Release rehearsal workflow tests",
+            ),
+            (
+                "release/scripts/test_build_linux_node_client.py",
+                "Linux Node client release build helper tests",
+            ),
+            (
+                "release/scripts/test_zig_glibc_compiler.py",
+                "Zig glibc compiler wrapper tests",
             ),
             (
                 "release/scripts/test_verify_public_release.py",

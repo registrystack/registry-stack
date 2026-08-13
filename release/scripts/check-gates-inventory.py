@@ -164,6 +164,26 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: products/relay-v2/scripts/check-source-neutrality.sh",
     ),
     (
+        "Release Linux Node client path filter",
+        "release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}",
+    ),
+    (
+        "Release Linux Node client proof job",
+        "release-linux-node-clients:\n    name: Release Linux Node clients",
+    ),
+    (
+        "Release Linux Node client helper invocation",
+        "release/scripts/build-linux-node-client \\",
+    ),
+    (
+        "Release Linux Node client pinned tools",
+        '--requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"',
+    ),
+    (
+        "Release Linux Node client CI aggregate",
+        "      - release-linux-node-clients",
+    ),
+    (
         "Release helper tests",
         "run: python3 -m unittest release/scripts/test_registry_release.py",
     ),
@@ -198,6 +218,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Release rehearsal workflow tests",
         "run: python3 -m unittest release/scripts/test_release_rehearsal.py",
+    ),
+    (
+        "Linux Node client release build helper tests",
+        "run: python3 -m unittest release/scripts/test_build_linux_node_client.py",
+    ),
+    (
+        "Zig glibc compiler wrapper tests",
+        "run: python3 -m unittest release/scripts/test_zig_glibc_compiler.py",
     ),
     (
         "Release workflow structure tests",

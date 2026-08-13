@@ -67,3 +67,117 @@ jobs:
           --version "${REHEARSAL_VERSION}"
           --release-id "${REHEARSAL_RELEASE_ID}"
           --base-ref origin/main
+
+  node-clients:
+    name: Prove Linux Node clients for ${{ matrix.asset }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      CLIENT_VERSION: ${{ inputs.version }}
+      RUSTUP_TOOLCHAIN: "1.95.0"
+      NODE_GLIBC_BASELINE_IMAGE: node:22.12.0-bullseye-slim@sha256:52e4282a01d63eb4cfce7a395364d366cee488c278079110d3aa49dd21b2bf18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: linux-amd64-glibc
+            target: x86_64-unknown-linux-gnu
+            napi_platform: linux-x64-gnu
+          - runner: ubuntu-24.04-arm
+            asset: linux-arm64-glibc
+            target: aarch64-unknown-linux-gnu
+            napi_platform: linux-arm64-gnu
+    steps:
+      - name: Require a branch rehearsal
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/heads/* ]]; then
+            echo "release rehearsal must run from a prepared branch" >&2
+            exit 1
+          fi
+
+      - name: Checkout prepared branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.20.0
+          cache: npm
+          cache-dependency-path: |
+            crates/registry-evidence-client-node/package-lock.json
+            crates/registry-relay-client-node/package-lock.json
+
+      - name: Install exact Zig toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 --profile minimal
+          python3 -m venv "${RUNNER_TEMP}/maturin"
+          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
+            --require-hashes --only-binary=:all: \
+            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
+          test "$("${RUNNER_TEMP}/maturin/bin/python" -m ziglang version)" = 0.12.1
+
+      - name: Build, package, and smoke Linux Node clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          for client in evidence relay; do
+            client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
+            (cd "${client_dir}" && npm ci)
+            test "$(node -p "require('${client_dir}/package.json').version")" = \
+              "${CLIENT_VERSION}"
+            release/scripts/build-linux-node-client \
+              --client "${client}" \
+              --target "${{ matrix.target }}" \
+              --napi-platform "${{ matrix.napi_platform }}" \
+              --zig-python "${RUNNER_TEMP}/maturin/bin/python"
+
+            platform_dir="${client_dir}/npm/${{ matrix.napi_platform }}"
+            test -f "${platform_dir}/package.json"
+            cp "${client_dir}/LICENSE" "${platform_dir}/LICENSE"
+            cp "${client_dir}/${client}-client.${{ matrix.napi_platform }}.node" \
+              "${platform_dir}/"
+            (cd "${client_dir}" && npm pack \
+              "./npm/${{ matrix.napi_platform }}" \
+              --ignore-scripts --pack-destination "${RUNNER_TEMP}")
+            platform_package="${RUNNER_TEMP}/registrystack-${client}-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
+            test -f "${platform_package}"
+
+            smoke="${RUNNER_TEMP}/node-rehearsal-${client}"
+            mkdir -p "${smoke}"
+            root_stage="${RUNNER_TEMP}/node-root-${client}"
+            mkdir -p "${root_stage}"
+            for source in \
+              LICENSE README.md client.js client.d.ts index.js index.d.ts package.json; do
+              cp "${client_dir}/${source}" "${root_stage}/${source}"
+            done
+            (cd "${root_stage}" && npm pack \
+              --ignore-scripts --pack-destination "${smoke}")
+            root_package="${smoke}/registrystack-${client}-client-${CLIENT_VERSION}.tgz"
+            test -f "${root_package}"
+            (
+              cd "${smoke}"
+              npm init --yes >/dev/null
+              npm install --no-audit --no-fund --ignore-scripts \
+                "${root_package}" "${platform_package}"
+              test -z "$(find "node_modules/@registrystack/${client}-client" \
+                -maxdepth 1 -name '*.node' -print -quit)"
+              test -f \
+                "node_modules/@registrystack/${client}-client-${{ matrix.napi_platform }}/${client}-client.${{ matrix.napi_platform }}.node"
+              cp "${GITHUB_WORKSPACE}/release/scripts/smoke-${client}-client-package.js" .
+              node "smoke-${client}-client-package.js"
+              docker run --rm --network none \
+                --volume "${smoke}:${smoke}:ro" \
+                --workdir "${smoke}" \
+                "${NODE_GLIBC_BASELINE_IMAGE}" \
+                node "smoke-${client}-client-package.js"
+            )
+          done

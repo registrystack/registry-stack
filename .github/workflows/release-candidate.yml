@@ -475,9 +475,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-stack-release-clients-napi-cross-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json') }}
+          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json') }}
           restore-keys: |
-            registry-stack-release-clients-napi-cross-glibc-2.17-${{ matrix.asset }}-
+            registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
 
       - name: Build Python client wheels
         shell: bash
@@ -572,44 +572,15 @@ jobs:
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             test "$(node -p "require('${client_dir}/package.json').version")" = "${CLIENT_VERSION}"
-            napi_args=(--platform --release --target "${{ matrix.target }}")
             if [[ "${RUNNER_OS}" == Linux ]]; then
-              # The published linux-*-gnu package names carry no distro floor.
-              # aws-lc-sys treats a same-architecture target as a native build,
-              # so route its host C and C++ compilers through napi-rs' locked
-              # glibc 2.17 toolchain too. Otherwise it inherits the Ubuntu 24.04
-              # headers even though Rust links with the older toolchain.
-              export HOST_CC="${{ matrix.target }}-gcc"
-              export HOST_CXX="${{ matrix.target }}-g++"
-              napi_args+=(--use-napi-cross)
-            fi
-            (cd "${client_dir}" && ./node_modules/.bin/napi build "${napi_args[@]}")
-            addon="${client_dir}/${client}-client.${{ matrix.napi_platform }}.node"
-            if [[ "${RUNNER_OS}" == Linux ]]; then
-              # The version table misses unversioned imports. Candidate
-              # packaging rejects strong ones except the Node-API imports that
-              # the host intentionally resolves; weak imports remain optional.
-              # Rebuild with the pinned compilers is recovery, until the build
-              # host itself enforces the ABI floor.
-              unversioned_imports="$(
-                readelf --wide --dyn-syms "${addon}" \
-                  | awk '$7 == "UND" && $5 != "WEAK" && $8 !~ /@/ && $8 !~ /^(napi_|node_api_)/ { print $8 }' \
-                  | sort -u
-              )"
-              if [[ -n "${unversioned_imports}" ]]; then
-                printf 'native addon has strong unversioned imports:\n%s\n' \
-                  "${unversioned_imports}" >&2
-                exit 1
-              fi
-              highest_glibc="$(
-                readelf --version-info "${addon}" \
-                  | grep -oE 'GLIBC_[0-9]+\.[0-9]+(\.[0-9]+)?' \
-                  | sort -Vu \
-                  | tail -1
-              )"
-              test -n "${highest_glibc}"
-              test "$(printf '%s\n' GLIBC_2.17 "${highest_glibc}" | sort -V | tail -1)" = \
-                GLIBC_2.17
+              release/scripts/build-linux-node-client \
+                --client "${client}" \
+                --target "${{ matrix.target }}" \
+                --napi-platform "${{ matrix.napi_platform }}" \
+                --zig-python "${RUNNER_TEMP}/maturin/bin/python"
+            else
+              (cd "${client_dir}" && ./node_modules/.bin/napi build \
+                --platform --release --target "${{ matrix.target }}")
             fi
             (cd "${client_dir}" && npm pack --pack-destination "${RUNNER_TEMP}")
             packed="${RUNNER_TEMP}/registrystack-${client}-client-${CLIENT_VERSION}.tgz"

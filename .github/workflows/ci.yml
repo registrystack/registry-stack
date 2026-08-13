@@ -52,6 +52,7 @@ jobs:
       docs_archives: ${{ steps.filter.outputs.docs_archives }}
       editors: ${{ steps.filter.outputs.editors }}
       client_bindings: ${{ steps.filter.outputs.client_bindings }}
+      release_linux_node_clients: ${{ steps.filter.outputs.release_linux_node_clients }}
       evidence_tutorial: ${{ steps.filter.outputs.evidence_tutorial }}
       identifiers: ${{ steps.filter.outputs.identifiers }}
     steps:
@@ -646,6 +647,12 @@ jobs:
       - name: Test release rehearsal workflow
         run: python3 -m unittest release/scripts/test_release_rehearsal.py
 
+      - name: Test Linux Node client release build helper
+        run: python3 -m unittest release/scripts/test_build_linux_node_client.py
+
+      - name: Test Zig glibc compiler wrapper
+        run: python3 -m unittest release/scripts/test_zig_glibc_compiler.py
+
       - name: Test release workflow structure
         run: python3 -m unittest release/scripts/test_release_workflow_structure.py
 
@@ -1057,6 +1064,75 @@ jobs:
             )
           done
 
+  release-linux-node-clients:
+    name: Release Linux Node clients (${{ matrix.asset }})
+    needs: changes
+    if: needs.changes.outputs.release_linux_node_clients == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      RUSTUP_TOOLCHAIN: "1.95.0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: linux-amd64-glibc
+            target: x86_64-unknown-linux-gnu
+            napi_platform: linux-x64-gnu
+          - runner: ubuntu-24.04-arm
+            asset: linux-arm64-glibc
+            target: aarch64-unknown-linux-gnu
+            napi_platform: linux-arm64-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.20.0
+          cache: npm
+          cache-dependency-path: |
+            crates/registry-evidence-client-node/package-lock.json
+            crates/registry-relay-client-node/package-lock.json
+
+      - name: Install pinned Linux client build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.95.0 --profile minimal
+          python3 -m venv "${RUNNER_TEMP}/maturin"
+          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
+            --require-hashes --only-binary=:all: \
+            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
+
+      - name: Prove production Linux Node client recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          for client in evidence relay; do
+            client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
+            (cd "${client_dir}" && npm ci)
+            release/scripts/build-linux-node-client \
+              --client "${client}" \
+              --target "${{ matrix.target }}" \
+              --napi-platform "${{ matrix.napi_platform }}" \
+              --zig-python "${RUNNER_TEMP}/maturin/bin/python"
+            smoke="${RUNNER_TEMP}/node-smoke-${client}"
+            mkdir -p "${smoke}/node_modules/@registrystack"
+            ln -s "${client_dir}" \
+              "${smoke}/node_modules/@registrystack/${client}-client"
+            cp "${GITHUB_WORKSPACE}/release/scripts/smoke-${client}-client-package.js" \
+              "${smoke}/"
+            (cd "${smoke}" && node "smoke-${client}-client-package.js")
+          done
+
   ci-result:
     name: CI result
     if: always()
@@ -1075,6 +1151,7 @@ jobs:
       - docs
       - editor-extensions
       - client-bindings
+      - release-linux-node-clients
     runs-on: ubuntu-24.04
     env:
       CI_JOB_RESULTS: ${{ toJSON(needs) }}
