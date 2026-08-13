@@ -270,6 +270,20 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def local_tag_target(repo: Path, tag: str) -> str | None:
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/tags/{tag}^{{}}"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    target = resolved.stdout.strip()
+    if resolved.returncode == 0 and HEX40.fullmatch(target):
+        return target
+    return None
+
+
 def validate(manifest_path: Path) -> int:
     manifest = load_yaml(manifest_path)
     errors: list[str] = []
@@ -318,12 +332,15 @@ def validate(manifest_path: Path) -> int:
         if repository.returncode == 0 and repository.stdout.strip()
         else ROOT
     )
+    catalog_source_ref = source_ref if has_source_ref else None
+    if catalog_source_ref is None:
+        catalog_source_ref = local_tag_target(repo_root, source_tag)
     errors.extend(
         identifier_catalog_errors(
             version,
             identifier_catalog,
             repo_root,
-            source_ref if has_source_ref else None,
+            catalog_source_ref,
         )
     )
     for name, artifact_version in sorted(artifacts.items()):
