@@ -22,7 +22,7 @@ This page is generated from the public Clap command tree. Hidden implementation 
 ## Usage
 
 ```text
-mint check --config <CONFIG>
+mint check [OPTIONS] --config <CONFIG>
 ```
 
 ## Options
@@ -30,6 +30,7 @@ mint check --config <CONFIG>
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--config <CONFIG>` | No | n/a | n/a | `MINT_CONFIG` | n/a |
+| `--require-runtime-dependencies` | No | n/a | n/a | n/a | Claim the audit writer and prove every serving dependency is ready. Use before startup, not against a Mint process that is already serving |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract

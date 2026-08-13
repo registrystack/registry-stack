@@ -4316,7 +4316,7 @@
       "marker": "evidence-runtime-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 38,
+      "field_count": 39,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -4441,8 +4441,8 @@
             ]
           ],
           "conditional_constraints": [],
-          "description": "Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address. Unspecified, multicast, public, and hostname values are prohibited.",
-          "runtime_validation": "Parsed as an IP address and accepted only when Rust classifies it as loopback, private IPv4, or unique-local IPv6."
+          "description": "Numeric listener address. The default `private-address` exposure accepts loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6. The explicit `container-private` exposure additionally accepts the unspecified IPv4 or IPv6 wildcard for a container network confined by the operator. Multicast, public, and hostname values are prohibited in both modes.",
+          "runtime_validation": "Parsed as an IP address and checked together with listener.networkExposure. Wildcards require the explicit container-private value; public addresses remain prohibited."
         },
         {
           "key_path": "listener.maximumConcurrentRequests",
@@ -4476,6 +4476,21 @@
           ],
           "conditional_constraints": [],
           "description": "Caps accepted request body size; a request whose declared or actual length exceeds this bound is rejected as malformed before evidence evaluation begins.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "listener.networkExposure",
+          "kind": "property",
+          "type": "string",
+          "required": "no",
+          "values": [
+            "container-private",
+            "private-address"
+          ],
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Declares the operator-owned network boundary around the listener. Absent preserves the private-address contract used by existing runtime files. container-private permits a wildcard bind only for a container network whose ingress and TLS termination are controlled by the operator; it does not enable public or direct-TLS serving.",
           "runtime_validation": null
         },
         {
