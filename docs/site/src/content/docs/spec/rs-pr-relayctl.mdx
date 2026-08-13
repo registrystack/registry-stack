@@ -1,6 +1,6 @@
 ---
 title: "RS-PR-RELAYCTL: relayctl contract"
-description: "The normative contract for relayctl: seven commands, the schema-inspection boundary, compilation profiles, the sealed package output, exit statuses, and the process boundary that keeps relayctl out of the serving path."
+description: "The normative contract for relayctl: seven workflow commands, the bounded tooling namespace, compilation profiles, sealed packages, exit statuses, and the process boundary that keeps relayctl out of the serving path."
 status: draft
 owner: registry-docs
 source_repos:
@@ -21,16 +21,17 @@ audience:
 ---
 
 This document defines the contract for `relayctl`, the adopter command line for Relay V2: its seven
-commands, the schema-inspection boundary, the two compilation profiles, generated artifacts, offline
-fixtures, change classification, the sealed deployment package, process exit statuses, and the
-boundary that separates authoring from serving. The implementation meets these requirements, but the
-document remains `draft`; the compatibility promise takes effect with Registry Stack `v1.0.0`, not
-with a pre-1.0 release.
+workflow commands, bounded editor tooling, schema-inspection boundary, compilation profiles,
+generated artifacts, offline fixtures, change classification, sealed deployment package, process
+exit statuses, and boundary between authoring and serving. The implementation meets these
+requirements, but the document remains `draft`; the compatibility promise takes effect with Registry
+Stack `v1.0.0`, not with a pre-1.0 release.
 
 ## Version history
 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-08-13 | draft | Distinguished the seven project workflow commands from the bounded `tooling` namespace and specified the editor report and Language Server Protocol output separately from workflow reports. |
 | 1.0.0 | 2026-08-11 | draft | Replaced the retired `registryctl` compatibility contract with the `relayctl` contract. The identifier prefix changed from `REQ-PR-REGISTRYCTL-` to `REQ-PR-RELAYCTL-`, so no retired requirement carries a second meaning. REQ-PR-REGISTRYCTL-001 through REQ-PR-REGISTRYCTL-031 are retired in full and MUST NOT be reused. Requirements without a successor include the ten-root command surface, `registry-stack.yaml` project discovery, environment selection, the `http` and `spreadsheet` templates, the disposable development runtime, the trust and approved-set surfaces, the versioned report schemas, and the operator-owned deployment package. |
 | 0.2.0 | 2026-07-31 | draft | Aligned the retired contract with the 1.0 command and deployment design. |
 | 0.1.0 | 2026-07-20 | draft | Initial `registryctl` compatibility contract. |
@@ -43,7 +44,7 @@ The runtime this tooling produces input for is specified in [RS-PR-RELAY](../rs-
 
 This specification covers:
 
-- The seven public commands and their arguments.
+- The seven project workflow commands, their arguments, and the bounded `tooling` namespace.
 - The adopter-authored project and the closed schemas that define it.
 - The structural schema-inspection boundary over SQLite.
 - Authoring and production compilation profiles.
@@ -53,12 +54,12 @@ This specification covers:
 - Report presentation and process exit statuses.
 - The process boundary between `relayctl` and `relay`.
 
-Human-readable output text, the JSON report shape, diagnostic message wording, and any private
-path inside a generated or packaged directory are not compatibility surfaces.
+Human-readable output text, the project workflow JSON report shape, diagnostic message wording, and
+any private path inside a generated or packaged directory are not compatibility surfaces.
 
 ## 2. Command surface
 
-`relayctl` exposes exactly seven commands.
+`relayctl` exposes seven project workflow commands and one bounded `tooling` namespace.
 
 | Command | Contract |
 | --- | --- |
@@ -70,20 +71,29 @@ path inside a generated or packaged directory are not compatibility surfaces.
 | `diff` | Classify meaning, disclosure, and access changes between two projects |
 | `package` | Build a deterministic sealed deployment package |
 
+The `tooling` namespace exposes exactly `editor`, which writes project-local schema mappings, and
+`language-server`, which runs Relay V2 authoring support over the Language Server Protocol (LSP).
+
 REQ-PR-RELAYCTL-001: `relayctl` MUST expose exactly `init`, `inspect`, `check`, `generate`, `test`,
-`diff`, and `package` as public commands.
+`diff`, and `package` as project workflow commands, plus a `tooling` namespace containing exactly
+`editor` and `language-server`.
 It MUST NOT expose a command that starts, stops, deploys, activates, or monitors a running
 deployment.
 
-REQ-PR-RELAYCTL-002: Every command that operates on a project MUST take that project directory as a
-positional argument.
+REQ-PR-RELAYCTL-002: Every project workflow command that operates on an authoring project MUST take
+each project directory as a positional argument.
+`inspect` instead MUST take the SQLite database it examines as its positional argument.
 `relayctl` MUST NOT discover a project by walking parent directories, and MUST NOT accept a global
 project-selection or environment-selection option.
+`tooling editor` MAY omit its positional project argument to select the current directory.
+The language server MUST receive workspace roots through LSP rather than a command-line project
+selection.
 
 REQ-PR-RELAYCTL-003: `relayctl` MUST read no environment variable.
-Every input MUST arrive as a command-line argument.
-Consequently there is no ambient configuration, no credential file, and no profile that changes what
-a command does between two hosts given the same arguments.
+No environment variable, ambient configuration, credential file, or environment-selected profile
+may change what a command does.
+The current directory selected by an omitted `tooling editor` project argument is process context,
+not an environment-variable input.
 
 ## 3. Authored project
 
@@ -224,19 +234,28 @@ later packaging attempt MUST refuse it.
 
 ## 10. Reports and output
 
-REQ-PR-RELAYCTL-025: Every command MUST return one report carrying a status of `success` or
-`refused`, the diagnostics that produced that status, and command-specific details tagged by kind.
+REQ-PR-RELAYCTL-025: Every project workflow command MUST return one report carrying a status of
+`success` or `refused`, the diagnostics that produced that status, and command-specific details
+tagged by kind.
+`tooling editor` MUST return a versioned editor-setup report after a successful complete publication.
+`tooling language-server` MUST communicate only through LSP and MUST NOT emit a command report.
 
-REQ-PR-RELAYCTL-026: With `--json`, a command MUST write only that report to standard output.
-Without `--json`, it MUST write a `relayctl <command>` header followed by the same report content.
+REQ-PR-RELAYCTL-026: With `--json`, a project workflow command MUST write only its workflow report
+to standard output, and `tooling editor` MUST write only its editor-setup report.
+Without `--json`, a project workflow command MUST write a `relayctl <command>` header followed by
+the same report content, while `tooling editor` MUST write a human-readable summary derived from its
+editor-setup report.
 `--json` MUST be accepted before or after the command.
+For `tooling language-server`, `--json` MUST NOT change the LSP byte stream or introduce command
+output.
 
 REQ-PR-RELAYCTL-027: A diagnostic MUST identify a location by authored key path and MUST NOT contain
 a source value.
 An operational failure MUST be reported to standard error as `relayctl: <message>` using a
 categorical message that names neither a source value nor an absolute filesystem path.
 
-The JSON report carries no schema-version field and is not a versioned automation contract.
+The project workflow JSON report carries no schema-version field and is not a versioned automation
+contract.
 Automation that must survive a release upgrade uses the sealed package and its manifest, which are
 versioned, rather than the report shape.
 
@@ -244,8 +263,8 @@ versioned, rather than the report shape.
 
 | Status | Meaning |
 | --- | --- |
-| `0` | The command completed and its report status is `success`. |
-| `1` | The command ran and returned a domain refusal. |
+| `0` | The command completed successfully, or a project workflow report has status `success`. |
+| `1` | A project workflow command ran and returned a domain refusal. |
 | `2` | Usage is invalid. |
 | `3` | An operational dependency, file operation, or output write failed. |
 
@@ -275,8 +294,10 @@ environment of `relay`, never through `relayctl`.
 
 A `relayctl` release conforms to this specification when it:
 
-- Exposes exactly the seven commands, takes each project as a positional argument, and reads no
-  environment variable (REQ-PR-RELAYCTL-001 through REQ-PR-RELAYCTL-003).
+- Exposes exactly seven project workflow commands and the two-member `tooling` namespace, takes each
+  authoring project selected by a workflow command as a positional argument, uses only its bounded editor and LSP project-selection
+  rules, and reads no environment variable
+  (REQ-PR-RELAYCTL-001 through REQ-PR-RELAYCTL-003).
 - Initializes only into an empty destination, writes the complete unreviewed starter set, and
   enforces closed schemas and bounded paths (REQ-PR-RELAYCTL-004 through REQ-PR-RELAYCTL-006).
 - Inspects structure without a value-sampling surface and refuses an incomplete statistical starter
@@ -290,8 +311,8 @@ A `relayctl` release conforms to this specification when it:
   (REQ-PR-RELAYCTL-018 and REQ-PR-RELAYCTL-019).
 - Builds a re-derived, bounded, hardened sealed package with a complete manifest and no
   `runtime.yaml` (REQ-PR-RELAYCTL-020 through REQ-PR-RELAYCTL-024).
-- Emits value-free reports and diagnostics under both output modes (REQ-PR-RELAYCTL-025 through
-  REQ-PR-RELAYCTL-027).
+- Keeps workflow reports, editor reports, and LSP output distinct and emits value-free diagnostics
+  under both command output modes (REQ-PR-RELAYCTL-025 through REQ-PR-RELAYCTL-027).
 - Returns exact process statuses (REQ-PR-RELAYCTL-028).
 - Keeps authoring out of the serving path and reads no row value (REQ-PR-RELAYCTL-029 through
   REQ-PR-RELAYCTL-031).
@@ -301,13 +322,19 @@ A `relayctl` release conforms to this specification when it:
 This specification is `verified`: the requirements describe implemented behavior with automated
 tests.
 
-{/* Evidence: crates/registry-relayctl/src/lib.rs defines the seven-command parser, the global
-     --json flag, the required package --output, the exit-code constants, and report rendering. */}
+{/* Evidence: crates/registry-relayctl/src/lib.rs defines the seven workflow commands, bounded
+     tooling namespace, global --json flag, required package --output, exit-code constants, workflow
+     and editor report rendering, and language-server LSP dispatch. */}
 {/* Evidence: crates/registry-relayctl/src/shared.rs is the single dependency seam from the command
      line into the shared tooling facade. */}
-{/* Evidence: crates/registry-relayctl/tests/cli_contract.rs pins the one-binary workflow, the
-     absence of a row or value sampling surface, the refusal of an implicit package destination, and
-     that the commands link the shared library and never spawn relay. */}
+{/* Evidence: crates/registry-relayctl/tests/cli_contract.rs pins the one-binary workflow and tooling
+     inventory, the absence of a row or value sampling surface, the refusal of an implicit package
+     destination, and that the commands link the shared library and never spawn relay. */}
+{/* Evidence: crates/registry-relayctl/tests/editor.rs and language_server.rs pin the distinct editor
+     report and LSP output surfaces. */}
+{/* Evidence: crates/registry-relayctl/tests/fixture_environment.rs pins that fixture testing ignores
+     ambient temporary-directory configuration, supports a read-only project, and leaves no scratch
+     state behind. */}
 {/* Evidence: crates/registry-relayctl/Cargo.toml carries no process-spawning dependency. */}
 {/* Evidence: crates/registry-relay-v2/src/tooling.rs implements init, inspect, check, generate,
      test, diff, and package, and the report and diagnostic shapes. */}
@@ -322,8 +349,8 @@ tests.
 {/* Evidence: crates/registry-platform-sqlite/ owns the bounded read-only SQLite boundary the
      inspection and compilation paths use. */}
 
-- The command line, its flags, its exit codes, and the no-spawn boundary are pinned by the
-  `relayctl` crate and its command-line contract tests.
+- The command line, its workflow and tooling inventory, its output surfaces, its exit codes, and the
+  no-spawn boundary are pinned by the `relayctl` crate and its command-line contract tests.
 - Compilation profiles, generation, fixtures, change classification, and packaging are pinned by the
   Relay V2 tooling and package modules and their tests.
 - The read-only SQLite boundary is owned by the shared platform SQLite crate.

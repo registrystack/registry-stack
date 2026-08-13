@@ -740,7 +740,13 @@ pub fn test_project(options: &TestOptions) -> Result<ToolingReport, ToolingError
         ));
     };
     let fixture_sql = read_utf8(&options.project_root.join("fixture.sql"))?;
-    let temporary = tempfile::tempdir().map_err(|_| ToolingError::Write)?;
+    let project_root = options
+        .project_root
+        .canonicalize()
+        .map_err(|_| ToolingError::Read)?;
+    let project_parent = project_root.parent().ok_or(ToolingError::Write)?;
+    validate_fixture_workspace_parent(project_parent)?;
+    let temporary = fixture_workspace(project_parent)?;
     let database = temporary.path().join("fixture.sqlite");
     if materialize_fixture(&database, &fixture_sql).is_err() {
         return Ok(ToolingReport::refused(
@@ -885,6 +891,54 @@ pub fn test_project(options: &TestOptions) -> Result<ToolingReport, ToolingError
             details,
         ))
     }
+}
+
+#[cfg(unix)]
+fn validate_fixture_workspace_parent(parent: &Path) -> Result<(), ToolingError> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let effective_user = rustix::process::geteuid().as_raw();
+    for ancestor in parent.ancestors() {
+        let metadata = fs::symlink_metadata(ancestor).map_err(|_| ToolingError::Write)?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || !trusted_fixture_workspace_parent_mode(
+                metadata.uid(),
+                metadata.permissions().mode(),
+                effective_user,
+            )
+        {
+            return Err(ToolingError::Write);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_fixture_workspace_parent(_parent: &Path) -> Result<(), ToolingError> {
+    Err(ToolingError::Write)
+}
+
+#[cfg(unix)]
+fn trusted_fixture_workspace_parent_mode(owner: u32, mode: u32, effective_user: u32) -> bool {
+    let trusted_owner = owner == 0 || owner == effective_user;
+    let not_writable_by_others = mode & 0o022 == 0;
+    let protected_shared_parent = owner == 0 && mode & 0o1000 != 0;
+    trusted_owner && (not_writable_by_others || protected_shared_parent)
+}
+
+fn fixture_workspace(project_parent: &Path) -> Result<tempfile::TempDir, ToolingError> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".relayctl-test-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    builder
+        .tempdir_in(project_parent)
+        .map_err(|_| ToolingError::Write)
 }
 
 pub fn diff_projects(options: &DiffOptions) -> Result<ToolingReport, ToolingError> {
@@ -1572,6 +1626,59 @@ mod tests {
         ] {
             assert!(!error.safe_message().contains('/'));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_workspace_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().expect("workspace parent");
+        let project = parent.path().join("project");
+        fs::create_dir(&project).expect("project directory");
+        let workspace = fixture_workspace(parent.path()).expect("fixture workspace");
+
+        assert!(!workspace.path().starts_with(&project));
+        assert_eq!(workspace.path().parent(), Some(parent.path()));
+        assert_eq!(
+            fs::metadata(workspace.path())
+                .expect("workspace metadata")
+                .permissions()
+                .mode()
+                & 0o077,
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_workspace_parent_requires_trusted_ownership_and_mode() {
+        let effective_user = 1000;
+        assert!(trusted_fixture_workspace_parent_mode(
+            effective_user,
+            0o040755,
+            effective_user
+        ));
+        assert!(trusted_fixture_workspace_parent_mode(
+            0,
+            0o041777,
+            effective_user
+        ));
+        assert!(!trusted_fixture_workspace_parent_mode(
+            effective_user + 1,
+            0o040755,
+            effective_user
+        ));
+        assert!(!trusted_fixture_workspace_parent_mode(
+            effective_user,
+            0o040775,
+            effective_user
+        ));
+        assert!(!trusted_fixture_workspace_parent_mode(
+            effective_user + 1,
+            0o041777,
+            effective_user
+        ));
     }
 
     #[test]
