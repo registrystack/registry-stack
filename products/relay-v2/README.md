@@ -62,3 +62,10 @@ responses.
 `scripts/check-client-contract.sh` verifies the standalone fixed route and
 problem inventory used by `registry-relay-client`; it has no live deployment or
 fixture dependency.
+
+For an assembled deployment, `relay check --runtime <runtime.yaml>` performs
+the complete startup preparation without taking the listener socket. It
+verifies the sealed package, observed SQLite source, audit writer, secrets, and
+configured issuer discovery or JWKS transport. Exact token `iss` validation is
+bound to `authentication.issuer.trustedIssuer` when that explicit field is
+present, independent of the transport hostname.

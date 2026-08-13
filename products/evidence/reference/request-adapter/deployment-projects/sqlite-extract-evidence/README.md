@@ -120,7 +120,7 @@ projects but does not create, convert, approve, or publish extract files.
 ## Secrets
 
 Required secret files beneath `/run/secrets/registry-evidence`, each owned by
-the service identity with mode `0600`, are:
+the service identity with mode `0400` or `0600`, are:
 
 ```text
 audit-hmac-key

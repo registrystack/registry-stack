@@ -635,7 +635,11 @@ Protected operations accept only a registered JWT access-token profile:
 - one exact selected-access-profile scope plus any compiled purpose and row-binding claim.
 
 The deployment has at most one issuer verification configuration. Its exact
-issuer is checked before its keys can authorize the token. A missing bearer is
+trusted issuer is checked before its keys can authorize the token. The key
+transport is exactly one discovery URL or direct JWKS URL. Discovery metadata
+must declare the trusted issuer exactly; changing the transport hostname never
+changes token `iss` validation. The legacy discovery-only form derives the
+issuer only from the canonical discovery suffix. A missing bearer is
 allowed only for an explicitly public default access profile. An anonymous
 explicit request for a protected access profile is concealed like an unknown
 access profile; an invalid bearer is never treated as anonymous. Caller purpose
@@ -784,7 +788,8 @@ a Version one gate.
 
 ### 5. Security and release gates
 
-- Use one issuer through the existing supported OIDC discovery path. Add only
+- Use one trusted issuer through exactly one supported OIDC discovery or JWKS
+  transport. Add only
   the strict duplicate-member, exact issuer, algorithm, key, audience, token
   type, time, principal, and scope behavior Relay actually needs.
 - Complete exact scope confinement,

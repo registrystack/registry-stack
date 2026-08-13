@@ -877,6 +877,17 @@ appended to: its first record's `prev_hash` would no longer match the sealed
 tail, and the runtime refuses to start on the resulting fork rather than
 silently accepting it.
 
+## Listener placement
+
+The Evidence API listener defaults to `networkExposure: private-address`,
+which accepts only a numeric loopback, RFC 1918 private IPv4, or RFC 4193
+unique-local IPv6 binding. A container deployment may explicitly declare
+`networkExposure: container-private` and bind `0.0.0.0` or `::`. That mode is
+an operator assertion about the container network and upstream TLS boundary;
+it does not enable public serving. Concrete public addresses, hostnames, and
+multicast addresses remain invalid. The optional metrics listener does not
+inherit this exception and remains private-address-only.
+
 ## Metrics reference
 
 This section describes what a configured `metricsListener` serves. It is
@@ -1040,7 +1051,10 @@ local assurance profile.
 
 The reference file-secret provider reads only regular, non-symlink files below
 the configured `secretProviders.file.root`. The secret root is operator-only and
-each secret file must be owned by the service identity with mode `0600`.
+each secret file must be owned by the service identity with mode `0400` or
+`0600`. Group, world, executable, special, symlink, and multi-link forms remain
+refused. This accepts the read-only file projection used by container secret
+providers without weakening the service-owner boundary.
 Audit and subject-binding secret files contain independently generated raw key
 bytes, must each be at least 32 bytes, must use distinct references, and must
 resolve to distinct bytes. They are not decoded as base64 by the file provider.
@@ -1066,6 +1080,13 @@ resolved by check; readiness owns them. Fixture evaluation
 covers positive, negative, boundary, missing-data, source-failure,
 existence-disclosure, and anti-reconstruction behavior without a running
 source.
+
+`evidence check --require-runtime-dependencies` is the pre-routing container
+form. In addition to the checks above, it opens and verifies the audit writer,
+requires the signer self-test, resolves source credentials without sending an
+evidence-data request, and requires the configured access-token JWKS endpoint
+to provide a usable key set. This fail-closed preflight does not change normal
+serving readiness, which retains its bounded issuer-outage behavior.
 
 For `assuranceProfile: local`, supervised Mint may use the exact canonical
 issuer origin `http://127.0.0.1:<non-zero-port>` only when `jwksUri` is the
