@@ -79,6 +79,10 @@ pub enum Command {
         /// Print the same value-free per-stage trace as deployment evaluation.
         #[arg(long)]
         explain: bool,
+        /// Render the trace as the same single machine-readable document as
+        /// deployment evaluation.
+        #[arg(long, value_enum, requires = "explain")]
+        explain_format: Option<ExplainFormat>,
     },
     /// Internal Evidencectl seam for deterministic provider-publication compilation.
     #[command(hide = true)]

@@ -26,8 +26,9 @@ use registry_evidence::{
         ArtifactFault, Bundle, BundleError, DeploymentInputs, RuntimeDocument, SourceExtract,
     },
     config::{
-        AcquisitionConfig, ArtifactPath, AssuranceProfile, ConfigError, EvidenceConfig,
-        OutboundTlsConfig, SchemaFault, SelectorInput, StageRole,
+        AcquisitionConfig, ArtifactPath, AssuranceProfile, ConceptForm, ConfigError,
+        EvidenceConfig, OutboundTlsConfig, RequirementConfig, SchemaFault, SelectorInput,
+        StageRole,
     },
     kernel::{
         EvidenceConstruction, EvidenceScope, KernelError, KernelOutcome, OfflineKernel,
@@ -57,7 +58,10 @@ use registry_evidence::{
         StatementExtract, StatementInputs,
     },
     source_sqlite::{cause as sqlite_cause, check_statement_offline, materialize_seed_extract},
-    trace::{json_type, name_list, object_keys, FixtureReport, FixtureTrace, Stage, StageStatus},
+    trace::{
+        json_type, name_list, object_keys, CategoryClass, FindingCode, FixtureReport, FixtureTrace,
+        ReasonCode, ResultClass, ResultClassification, Stage, StageStatus, ValueClass,
+    },
     verifier::{
         verify_flattened_jws, verify_flattened_jws_report, verify_sd_jwt_vc_presentation_report,
         verify_sd_jwt_vc_report, EvidenceVerificationPolicy, EvidenceVerificationPolicyDocument,
@@ -280,6 +284,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             fixture,
             case,
             explain,
+            explain_format,
         } => {
             let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
             let kernel = OfflineKernel::compile(Arc::clone(&bundle)).map_err(|error| {
@@ -305,7 +310,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
                 if let Err(error) = &summary {
                     trace.fail(error.0);
                 }
-                print!("{}", trace.render());
+                match explain_format.unwrap_or_default() {
+                    ExplainFormat::Text => print!("{}", trace.render()),
+                    ExplainFormat::Json => {
+                        println!("{}", fixture_report_json(&trace, summary.as_ref())?);
+                        summary?;
+                        return Ok(ExitCode::SUCCESS);
+                    }
+                }
             }
             let summary = summary?;
             println!(
@@ -1240,6 +1252,12 @@ async fn evaluate_fixture(
                 StageStatus::Ok,
                 "the selector was refused before any source, as the case states",
             );
+            trace.diagnose(
+                ResultClassification::new(ResultClass::SelectorRefused, Vec::new()),
+                ResultClassification::new(ResultClass::SelectorRefused, Vec::new()),
+                ReasonCode::SelectorRefused,
+                None,
+            );
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -1315,7 +1333,8 @@ async fn evaluate_fixture(
                 observed_at,
                 trace,
             )?;
-            if let Some(values) = validate_case_outcome(case, outcome, trace)? {
+            let categories = category_diagnostic_catalog(bundle, requirement);
+            if let Some(values) = validate_case_outcome(case, outcome, trace, &categories)? {
                 successful_values.push(
                     sign_and_verify_fixture_evidence(
                         bundle,
@@ -1346,6 +1365,12 @@ async fn evaluate_fixture(
         if let Some(injected) = case.get("injected_derivation") {
             validate_injected_rejection(kernel, requirement, injected, trace)?;
             require_expected(case, "output-gate-rejection")?;
+            trace.diagnose(
+                ResultClassification::new(ResultClass::ServiceUnavailable, Vec::new()),
+                ResultClassification::new(ResultClass::ServiceUnavailable, Vec::new()),
+                ReasonCode::OutputRefused,
+                None,
+            );
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -1361,6 +1386,12 @@ async fn evaluate_fixture(
                     source_failure.as_str().unwrap_or("an unnamed category")
                 ),
             );
+            trace.diagnose(
+                ResultClassification::new(ResultClass::SourceUnavailable, Vec::new()),
+                ResultClassification::new(ResultClass::SourceUnavailable, Vec::new()),
+                ReasonCode::SourceFailureFixture,
+                None,
+            );
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -1375,6 +1406,12 @@ async fn evaluate_fixture(
                     "the companion bundle {:?} was refused, as the case states",
                     companion.as_str().unwrap_or_default()
                 ),
+            );
+            trace.diagnose(
+                ResultClassification::new(ResultClass::BundleRefused, Vec::new()),
+                ResultClassification::new(ResultClass::BundleRefused, Vec::new()),
+                ReasonCode::CompanionBundleRefused,
+                None,
             );
             summary.evaluated_cases += 1;
             trace.pass_case();
@@ -3773,7 +3810,10 @@ fn validate_case_outcome(
     case: &serde_json::Map<String, Value>,
     outcome: Result<KernelOutcome, registry_evidence::kernel::KernelError>,
     trace: &mut FixtureTrace,
+    categories: &[CategoryDiagnosticEntry],
 ) -> Result<Option<ValidatedValues>, CliError> {
+    let expected = classify_expected_result(case, categories)?;
+    let (observed, reason) = classify_observed_result(&outcome, categories);
     // What the case says it expects, beside what the pipeline just did. The
     // pipeline half of it is already recorded above this line.
     let declared = format!(
@@ -3784,6 +3824,12 @@ fn validate_case_outcome(
         stated_flag(optional_boolean(case, "signed_success")?)
     );
     let compared = compare_case_outcome(case, outcome);
+    trace.diagnose(
+        expected,
+        observed,
+        reason,
+        compared.as_ref().err().map(expectation_finding_code),
+    );
     trace.record(
         Stage::Expect,
         if compared.is_ok() {
@@ -3794,6 +3840,248 @@ fn validate_case_outcome(
         declared,
     );
     compared
+}
+
+/// Reduce one authored expectation to the same closed vocabulary used for an
+/// observed result. Values become only bounded shape classes. In particular,
+/// strings, integers, entity references, and structured values never reach the
+/// trace as authored material.
+fn classify_expected_result(
+    case: &serde_json::Map<String, Value>,
+    categories: &[CategoryDiagnosticEntry],
+) -> Result<ResultClassification, CliError> {
+    let expected_lookup = optional_string(case, "expected_lookup")?;
+    let expected_problem = optional_string(case, "expected_public_problem")?;
+    let class = match expected_lookup {
+        Some("no_match") => ResultClass::NoMatch,
+        Some("ambiguous") => ResultClass::Ambiguous,
+        Some("match") | None => match expected_problem {
+            Some("evidence.unavailable") => ResultClass::EvidenceUnavailable,
+            Some("source.unavailable") => ResultClass::SourceUnavailable,
+            Some("service.unavailable") => ResultClass::ServiceUnavailable,
+            Some(_) => return Err(CliError("fixture public problem expectation is invalid")),
+            None => ResultClass::Match,
+        },
+        Some(_) => return Err(CliError("fixture lookup expectation is invalid")),
+    };
+    let mut values = Vec::new();
+    let mut category_classes = Vec::new();
+    if class == ResultClass::Match {
+        if let Some(value) = case.get("expected_value") {
+            values.push(classify_json_value(value));
+            if categories.len() == 1 {
+                if let Some(category) = classify_expected_category(&categories[0], value) {
+                    category_classes.push(category);
+                }
+            }
+        }
+        if let Some(map) = case.get("expected_values").and_then(Value::as_object) {
+            values.extend(map.values().map(classify_json_value));
+            category_classes.extend(categories.iter().filter_map(|category| {
+                map.get(&category.concept_id)
+                    .and_then(|value| classify_expected_category(category, value))
+            }));
+        }
+    }
+    Ok(ResultClassification::new(class, values).with_category_classes(category_classes))
+}
+
+fn classify_observed_result(
+    outcome: &Result<KernelOutcome, registry_evidence::kernel::KernelError>,
+    categories: &[CategoryDiagnosticEntry],
+) -> (ResultClassification, ReasonCode) {
+    match outcome {
+        Ok(KernelOutcome::Match(values)) => (
+            ResultClassification::new(
+                ResultClass::Match,
+                values
+                    .as_slice()
+                    .iter()
+                    .map(|value| classify_public_value(&value.value))
+                    .collect(),
+            )
+            .with_category_classes(
+                values
+                    .as_slice()
+                    .iter()
+                    .filter_map(|value| {
+                        categories
+                            .iter()
+                            .find(|category| category.concept_id == value.provides_value_for)
+                            .and_then(|category| classify_observed_category(category, &value.value))
+                    })
+                    .collect(),
+            ),
+            ReasonCode::UniqueMatch,
+        ),
+        Ok(KernelOutcome::NoMatch) => (
+            ResultClassification::new(ResultClass::NoMatch, Vec::new()),
+            ReasonCode::NoMatch,
+        ),
+        Ok(KernelOutcome::Ambiguous) => (
+            ResultClassification::new(ResultClass::Ambiguous, Vec::new()),
+            ReasonCode::Ambiguous,
+        ),
+        Err(error) => {
+            let (class, reason) = match error {
+                KernelError::Extraction => (
+                    ResultClass::EvidenceUnavailable,
+                    ReasonCode::ExtractionRefused,
+                ),
+                KernelError::DerivationInput => (
+                    ResultClass::EvidenceUnavailable,
+                    ReasonCode::DerivationInputRefused,
+                ),
+                KernelError::SourceProtocol => (
+                    ResultClass::SourceUnavailable,
+                    ReasonCode::SourceProtocolRefused,
+                ),
+                KernelError::Script => (ResultClass::ServiceUnavailable, ReasonCode::ScriptRefused),
+                KernelError::Output => (ResultClass::ServiceUnavailable, ReasonCode::OutputRefused),
+                KernelError::Bundle | KernelError::Artifact(_) => {
+                    (ResultClass::ServiceUnavailable, ReasonCode::BundleRefused)
+                }
+                KernelError::Requirement => (
+                    ResultClass::ServiceUnavailable,
+                    ReasonCode::RequirementRefused,
+                ),
+                KernelError::Evidence => (
+                    ResultClass::ServiceUnavailable,
+                    ReasonCode::EvidenceConstructionRefused,
+                ),
+                KernelError::Preparation => {
+                    (ResultClass::ServiceUnavailable, ReasonCode::ScriptRefused)
+                }
+            };
+            (ResultClassification::new(class, Vec::new()), reason)
+        }
+    }
+}
+
+struct CategoryDiagnosticEntry {
+    concept_id: String,
+    concept_ordinal: usize,
+    allowed_outputs: Vec<String>,
+}
+
+fn category_diagnostic_catalog(
+    bundle: &Bundle,
+    requirement: &RequirementConfig,
+) -> Vec<CategoryDiagnosticEntry> {
+    requirement
+        .concepts
+        .iter()
+        .enumerate()
+        .filter(|(_, concept)| concept.form == ConceptForm::ControlledCategory)
+        .filter_map(|(concept_ordinal, concept)| {
+            let path = concept
+                .constraints
+                .get("codelist")
+                .and_then(serde_norway::Value::as_str)?;
+            let codelist = bundle.codelists.get(path)?;
+            let allowed_outputs = match codelist {
+                registry_evidence::bundle::Codelist::Codes { codes, .. } => codes.clone(),
+                registry_evidence::bundle::Codelist::Mapping {
+                    allowed_outputs, ..
+                } => allowed_outputs.clone(),
+            };
+            Some(CategoryDiagnosticEntry {
+                concept_id: concept.id.clone(),
+                concept_ordinal,
+                allowed_outputs,
+            })
+        })
+        .collect()
+}
+
+fn classify_expected_category(
+    category: &CategoryDiagnosticEntry,
+    value: &Value,
+) -> Option<CategoryClass> {
+    let value = value.as_str()?;
+    category
+        .allowed_outputs
+        .iter()
+        .position(|allowed| allowed == value)
+        .map(|value_ordinal| CategoryClass {
+            concept_ordinal: category.concept_ordinal,
+            value_ordinal,
+        })
+}
+
+fn classify_observed_category(
+    category: &CategoryDiagnosticEntry,
+    value: &PublicValue,
+) -> Option<CategoryClass> {
+    let PublicValue::String(value) = value else {
+        return None;
+    };
+    category
+        .allowed_outputs
+        .iter()
+        .position(|allowed| allowed == value)
+        .map(|value_ordinal| CategoryClass {
+            concept_ordinal: category.concept_ordinal,
+            value_ordinal,
+        })
+}
+
+fn classify_json_value(value: &Value) -> ValueClass {
+    match value {
+        Value::Bool(false) => ValueClass::BooleanFalse,
+        Value::Bool(true) => ValueClass::BooleanTrue,
+        Value::Number(_) => ValueClass::Integer,
+        Value::String(_) => ValueClass::String,
+        Value::Array(_) => ValueClass::List,
+        Value::Object(object) => match object.get("form").and_then(Value::as_str) {
+            Some("date-bucket" | "time-bucket") => ValueClass::Bucket,
+            Some("audience-scoped-entity-reference") => ValueClass::EntityReference,
+            _ => ValueClass::Structured,
+        },
+        Value::Null => ValueClass::Structured,
+    }
+}
+
+fn classify_public_value(value: &PublicValue) -> ValueClass {
+    match value {
+        PublicValue::Boolean(false) => ValueClass::BooleanFalse,
+        PublicValue::Boolean(true) => ValueClass::BooleanTrue,
+        PublicValue::Integer(_) => ValueClass::Integer,
+        PublicValue::String(_) => ValueClass::String,
+        PublicValue::Bucket(_) => ValueClass::Bucket,
+        PublicValue::EntityReference(_) => ValueClass::EntityReference,
+        PublicValue::Structured(_) => ValueClass::Structured,
+        PublicValue::List(_) => ValueClass::List,
+    }
+}
+
+/// Convert the fixed comparison error vocabulary into one closed repair code.
+/// The returned code, unlike the operator sentence, is a stable machine input.
+fn expectation_finding_code(error: &CliError) -> FindingCode {
+    match error.0 {
+        "fixture lookup outcome did not match its contract" | "fixture expected a unique match" => {
+            FindingCode::LookupOutcomeMismatch
+        }
+        "fixture kernel failure did not match its public problem"
+        | "unresolved fixture public problem is not exact"
+        | "fixture evaluation failed unexpectedly" => FindingCode::PublicProblemMismatch,
+        "unresolved fixture must deny derivation and signed success"
+        | "failing fixture execution expectations did not match"
+        | "matched fixture cannot deny derivation execution"
+        | "matched fixture must require derivation and signed success" => {
+            FindingCode::DerivationExpectationMismatch
+        }
+        "matched fixture cannot deny signed-success eligibility" => {
+            FindingCode::SigningExpectationMismatch
+        }
+        "fixture value did not match its contract" => FindingCode::ResultValueMismatch,
+        "fixture value set did not match its contract" => FindingCode::ResultShapeMismatch,
+        "fixture lookup expectation is invalid"
+        | "matched fixture must require an exact match"
+        | "matched fixture must declare exactly one value expectation"
+        | "fixture value-set expectation is invalid" => FindingCode::InvalidExpectation,
+        _ => FindingCode::UnexpectedToolOutcome,
+    }
 }
 
 /// Decide whether the outcome one case declared is the outcome it got.
@@ -4578,6 +4866,28 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_strings_never_become_category_diagnostic_identity() {
+        let category = CategoryDiagnosticEntry {
+            concept_id: "urn:example:concept:category".to_owned(),
+            concept_ordinal: 0,
+            allowed_outputs: vec!["allowed".to_owned()],
+        };
+        assert_eq!(
+            classify_expected_category(&category, &Value::String("arbitrary".to_owned())),
+            None
+        );
+        assert_eq!(
+            classify_observed_category(&category, &PublicValue::String("arbitrary".to_owned())),
+            None
+        );
+        let case = serde_json::json!({"expected_value": "arbitrary"});
+        let classified = classify_expected_result(case.as_object().expect("object"), &[])
+            .expect("a generic string remains classifiable");
+        assert_eq!(classified.value_classes, vec![ValueClass::String]);
+        assert!(classified.category_classes.is_empty());
+    }
+
+    #[test]
     fn public_unavailability_requires_an_extraction_failure() {
         let case = serde_json::json!({
             "expected_public_problem": "evidence.unavailable",
@@ -4588,13 +4898,15 @@ mod tests {
         assert!(validate_case_outcome(
             case,
             Ok(KernelOutcome::NoMatch),
-            &mut FixtureTrace::default()
+            &mut FixtureTrace::default(),
+            &[],
         )
         .is_err());
         assert!(validate_case_outcome(
             case,
             Err(registry_evidence::kernel::KernelError::Script),
             &mut FixtureTrace::default(),
+            &[],
         )
         .is_err());
         assert_eq!(
@@ -4602,6 +4914,7 @@ mod tests {
                 case,
                 Err(registry_evidence::kernel::KernelError::Extraction),
                 &mut FixtureTrace::default(),
+                &[],
             ),
             Ok(None)
         );
@@ -4620,6 +4933,7 @@ mod tests {
                 case,
                 Err(registry_evidence::kernel::KernelError::Script),
                 &mut FixtureTrace::default(),
+                &[],
             ),
             Ok(None)
         );
@@ -4627,6 +4941,7 @@ mod tests {
             case,
             Err(registry_evidence::kernel::KernelError::Extraction),
             &mut FixtureTrace::default(),
+            &[],
         )
         .is_err());
     }
@@ -4649,6 +4964,7 @@ mod tests {
                 declaration.as_object().expect("object"),
                 Ok(KernelOutcome::NoMatch),
                 &mut FixtureTrace::default(),
+                &[],
             )
             .is_err());
         }

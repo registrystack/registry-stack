@@ -60,12 +60,16 @@ printf '===\n' >> "$ARGV_LOG"
 
 fixture=""
 prev=""
+explain_json="false"
 for arg in "$@"; do
   if [ "$prev" = "--fixture" ]; then
     fixture="$arg"
   fi
   prev="$arg"
 done
+case " $* " in
+  *" --explain-format json "*) explain_json="true" ;;
+esac
 
 step="check"
 for arg in "$@"; do
@@ -80,6 +84,11 @@ fi
 if [ "$step" = "${FAIL_STEP:-}" ]; then
   printf 'stub failure for %s\n' "$step" >&2
   exit 1
+fi
+
+if [ "$explain_json" = "true" ]; then
+  printf '{"passed":true,"evaluatedCases":%s,"cases":[]}\n' "${CASES:-0}"
+  exit 0
 fi
 
 printf 'stub ok for %s\n' "$step"
@@ -532,7 +541,7 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
     assert!(output.status.success(), "{}", stderr_of(&output));
     let stdout = stdout_of(&output);
     assert!(
-        stdout.contains("stub ok for evaluate:fixtures/a.yaml"),
+        stdout.contains("\"cases\": []"),
         "the trace never reached the operator: {stdout}"
     );
     // Relaying the trace must not cost the count, which is read from the
@@ -555,7 +564,9 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
                 "evaluate",
                 "--fixture",
                 "fixtures/a.yaml",
-                "--explain"
+                "--explain",
+                "--explain-format",
+                "json"
             ],
             vec![
                 "--runtime",
@@ -563,7 +574,9 @@ fn explain_is_asked_of_every_evaluation_and_the_trace_is_relayed() {
                 "evaluate",
                 "--fixture",
                 "fixtures/b.yaml",
-                "--explain"
+                "--explain",
+                "--explain-format",
+                "json"
             ],
         ],
         "unexpected evidence invocations"
@@ -643,10 +656,7 @@ fn an_explained_json_run_carries_each_trace_in_its_report() {
         serde_json::from_str(stdout_lines[0]).expect("parse JSON report");
     let fixtures = report["fixtures"].as_array().expect("fixtures array");
     assert!(
-        fixtures[0]["trace"]
-            .as_str()
-            .expect("an explained fixture carries its trace")
-            .contains("stub ok for evaluate:fixtures/a.yaml"),
+        fixtures[0]["trace"]["cases"] == serde_json::json!([]),
         "{}",
         fixtures[0]
     );

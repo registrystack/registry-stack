@@ -15,6 +15,116 @@
 
 use serde::Serialize;
 
+/// The closed public-facing class of one fixture result.
+///
+/// These are deliberately coarser than runtime errors. They are sufficient to
+/// distinguish a unique result, an unresolved lookup, and the three public
+/// availability classes without exposing the values or implementation detail
+/// that produced one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResultClass {
+    Match,
+    NoMatch,
+    Ambiguous,
+    EvidenceUnavailable,
+    SourceUnavailable,
+    ServiceUnavailable,
+    BundleRefused,
+    SelectorRefused,
+}
+
+/// A bounded classification of a governed result value, never the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ValueClass {
+    BooleanFalse,
+    BooleanTrue,
+    Integer,
+    String,
+    Bucket,
+    EntityReference,
+    Structured,
+    List,
+}
+
+/// Why the observed result reached its closed class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasonCode {
+    UniqueMatch,
+    NoMatch,
+    Ambiguous,
+    ExtractionRefused,
+    DerivationInputRefused,
+    SourceProtocolRefused,
+    ScriptRefused,
+    OutputRefused,
+    BundleRefused,
+    RequirementRefused,
+    EvidenceConstructionRefused,
+    SelectorRefused,
+    SourceFailureFixture,
+    CompanionBundleRefused,
+}
+
+/// A closed repair finding. Absence means the expected and observed result
+/// classifications agreed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FindingCode {
+    LookupOutcomeMismatch,
+    PublicProblemMismatch,
+    DerivationExpectationMismatch,
+    SigningExpectationMismatch,
+    ResultValueMismatch,
+    ResultShapeMismatch,
+    InvalidExpectation,
+    UnexpectedToolOutcome,
+}
+
+/// A controlled-category identity expressed only as governed positions.
+///
+/// `concept_ordinal` is the concept's position in the requirement and
+/// `value_ordinal` is the value's position in that concept's captured
+/// codelist. Neither ordinal is derived from source or selector data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategoryClass {
+    pub concept_ordinal: usize,
+    pub value_ordinal: usize,
+}
+
+/// One expected or observed result with values reduced to a closed shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultClassification {
+    pub class: ResultClass,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub value_classes: Vec<ValueClass>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub category_classes: Vec<CategoryClass>,
+}
+
+impl ResultClassification {
+    pub fn new(class: ResultClass, mut value_classes: Vec<ValueClass>) -> Self {
+        value_classes.sort_unstable();
+        value_classes.dedup();
+        Self {
+            class,
+            value_classes,
+            category_classes: Vec::new(),
+        }
+    }
+
+    pub fn with_category_classes(mut self, mut category_classes: Vec<CategoryClass>) -> Self {
+        category_classes.sort_unstable();
+        category_classes.dedup();
+        self.category_classes = category_classes;
+        self
+    }
+}
+
 /// One step of the offline pipeline, named in generic pipeline vocabulary.
 ///
 /// The names describe what the runtime does, never what an acceptance
@@ -95,12 +205,26 @@ pub struct StageRecord {
 
 /// One fixture case: its identifier, the stages it reached, and its verdict.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CaseTrace {
     pub id: String,
     pub stages: Vec<StageRecord>,
     /// The fixed operator message that ended the case, when one did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    /// The case's authored result reduced to the closed diagnostic vocabulary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_result: Option<ResultClassification>,
+    /// What the authoritative evaluator produced, reduced the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_result: Option<ResultClassification>,
+    /// The value-free cause of the observed result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<ReasonCode>,
+    /// Closed repair findings. This list is bounded by the one comparison the
+    /// fixture harness performs for a case.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub finding_codes: Vec<FindingCode>,
     /// Whether the case reached a verdict. Not part of the rendered value; it
     /// only decides which case a later failure belongs to.
     #[serde(skip)]
@@ -162,8 +286,27 @@ impl FixtureTrace {
             id: id.to_owned(),
             stages: Vec::new(),
             failure: None,
+            expected_result: None,
+            observed_result: None,
+            reason_code: None,
+            finding_codes: Vec::new(),
             settled: false,
         });
+    }
+
+    /// Attach the closed expected-versus-observed comparison to the open case.
+    pub fn diagnose(
+        &mut self,
+        expected: ResultClassification,
+        observed: ResultClassification,
+        reason: ReasonCode,
+        finding: Option<FindingCode>,
+    ) {
+        let case = self.open_case();
+        case.expected_result = Some(expected);
+        case.observed_result = Some(observed);
+        case.reason_code = Some(reason);
+        case.finding_codes = finding.into_iter().collect();
     }
 
     /// Record a stage against the open case.
@@ -438,6 +581,65 @@ mod tests {
         // Flattened, not nested: the trace's own `cases` array stays the top
         // level key a reader walks.
         assert_eq!(serialized["cases"][0]["id"], serde_json::json!("positive"));
+    }
+
+    #[test]
+    fn a_result_diagnostic_is_closed_bounded_and_value_free() {
+        let mut trace = FixtureTrace::default();
+        trace.begin_case("wrong-governed-answer");
+        trace.diagnose(
+            ResultClassification::new(
+                ResultClass::Match,
+                vec![ValueClass::BooleanFalse, ValueClass::BooleanFalse],
+            )
+            .with_category_classes(vec![
+                CategoryClass {
+                    concept_ordinal: 1,
+                    value_ordinal: 2,
+                },
+                CategoryClass {
+                    concept_ordinal: 0,
+                    value_ordinal: 1,
+                },
+                CategoryClass {
+                    concept_ordinal: 1,
+                    value_ordinal: 2,
+                },
+            ]),
+            ResultClassification::new(ResultClass::Match, vec![ValueClass::BooleanTrue]),
+            ReasonCode::UniqueMatch,
+            Some(FindingCode::ResultValueMismatch),
+        );
+        trace.fail("fixture value did not match its contract");
+
+        let serialized = serde_json::to_value(&trace).expect("trace serializes");
+        let case = &serialized["cases"][0];
+        assert_eq!(case["expectedResult"]["class"], serde_json::json!("match"));
+        assert_eq!(
+            case["expectedResult"]["valueClasses"],
+            serde_json::json!(["boolean-false"])
+        );
+        assert_eq!(case["observedResult"]["class"], serde_json::json!("match"));
+        assert_eq!(
+            case["expectedResult"]["categoryClasses"],
+            serde_json::json!([
+                {"conceptOrdinal": 0, "valueOrdinal": 1},
+                {"conceptOrdinal": 1, "valueOrdinal": 2}
+            ])
+        );
+        assert_eq!(
+            case["observedResult"]["valueClasses"],
+            serde_json::json!(["boolean-true"])
+        );
+        assert_eq!(case["reasonCode"], serde_json::json!("unique-match"));
+        assert_eq!(
+            case["findingCodes"],
+            serde_json::json!(["result-value-mismatch"])
+        );
+        let rendered = serialized.to_string();
+        for prohibited in ["synthetic-person-001", "2000-01-01", "SELECT", "token-"] {
+            assert!(!rendered.contains(prohibited));
+        }
     }
 
     #[test]

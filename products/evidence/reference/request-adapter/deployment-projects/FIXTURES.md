@@ -435,6 +435,22 @@ summary line to strip, and the verdict and evaluated-case count that line
 carries move inside it as `passed` and `evaluatedCases`. The exit code and the
 operator message on standard error are the same in both forms.
 
+Each case can also carry a closed expected-versus-observed diagnosis. A result
+has one of `match`, `no-match`, `ambiguous`, `evidence-unavailable`,
+`source-unavailable`, `service-unavailable`, `bundle-refused`, or
+`selector-refused`. A matched value is reduced to a bounded classification such
+as `boolean-true`, `integer`, or `structured`. `reasonCode` says which closed
+evaluator outcome produced the observation, and `findingCodes` says which
+authored expectation disagreed. None of these fields carries a source,
+selector, SQL, credential, or governed result value.
+
+For a controlled-category concept only, `categoryClasses` identifies an
+allowed result by its zero-based concept position in the requirement and its
+zero-based value position in that concept's captured governed codelist. The
+field appears only after the output is proven to belong to that codelist. An
+arbitrary string remains only the shape `string`; the trace never substitutes
+raw category text or a concept identifier for an ordinal.
+
 ```sh
 evidence --runtime "<candidate>/runtime.yaml" \
   evaluate --fixture "<path>" --explain --explain-format json \
@@ -442,11 +458,11 @@ evidence --runtime "<candidate>/runtime.yaml" \
 ```
 
 `evidencectl fixtures run --project <candidate> --explain` asks the same of
-every fixture a project references and relays each trace verbatim: under the
-step line in the human report, and as that fixture's `trace` string under
-`--json`. The driver asks for the text form only, because the case count it
-totals is read from the summary line the structured form replaces. Run
-`evidence evaluate` against one fixture directly for the document itself.
+every fixture a project references using the JSON form. The human report
+pretty-prints each value-free document under its step line; `--json` places the
+same document at that fixture's `trace` field. The driver totals
+`evaluatedCases` from those documents and does not interpret Evidence
+semantics.
 
 A fixture's own `diagnosticsExclude` canaries are checked against both
 rendered forms of the trace on every run, including a run that stopped on an
