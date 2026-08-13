@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
+const DEFAULT_HEALTHCHECK_URL: &str = "http://127.0.0.1:8081/ready";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "mint",
@@ -30,6 +32,16 @@ pub enum Command {
     Serve {
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
+    },
+    /// Probe a numeric private readiness endpoint without ambient proxy use.
+    Healthcheck {
+        /// Exact loopback or private-address readiness URL.
+        #[arg(
+            long,
+            env = "MINT_HEALTHCHECK_URL",
+            default_value = DEFAULT_HEALTHCHECK_URL
+        )]
+        url: String,
     },
     /// Verify the retained keyed Mint audit chain named by the configuration.
     VerifyAudit {
@@ -182,5 +194,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn healthcheck_uses_the_process_local_readiness_endpoint() {
+        let command = command();
+        let healthcheck = command
+            .find_subcommand("healthcheck")
+            .expect("healthcheck subcommand exists");
+        let url = healthcheck
+            .get_arguments()
+            .find(|argument| argument.get_id() == "url")
+            .expect("healthcheck URL argument exists");
+        assert_eq!(
+            url.get_default_values(),
+            [std::ffi::OsStr::new(DEFAULT_HEALTHCHECK_URL)]
+        );
+        assert_eq!(
+            url.get_env(),
+            Some(std::ffi::OsStr::new("MINT_HEALTHCHECK_URL"))
+        );
     }
 }

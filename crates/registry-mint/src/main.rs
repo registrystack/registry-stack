@@ -21,7 +21,7 @@ use registry_mint::{
     client_secret,
     config::MintConfig,
     secretfile,
-    server::{serve, MintService},
+    server::{healthcheck, serve, MintService},
     CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS,
 };
 use registry_platform_audit::OptionalHashHex;
@@ -41,7 +41,7 @@ fn main() -> ExitCode {
         .json();
     if matches!(
         cli.command,
-        Command::Token { .. } | Command::ClientSecret { .. }
+        Command::Token { .. } | Command::ClientSecret { .. } | Command::Healthcheck { .. }
     ) {
         logs.with_writer(std::io::stderr).init();
     } else {
@@ -92,6 +92,15 @@ fn run(cli: Cli) -> Result<(), String> {
                 "configuration is valid"
             );
             Ok(())
+        }
+        Command::Healthcheck { url } => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "the readiness probe failed".to_owned())?;
+            runtime
+                .block_on(healthcheck(&url))
+                .map_err(|_| "the readiness probe failed".to_owned())
         }
         Command::Serve { config } => {
             let runtime = tokio::runtime::Builder::new_multi_thread()

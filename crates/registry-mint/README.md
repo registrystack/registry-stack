@@ -419,6 +419,12 @@ audit writer. Before first startup or a replacement deployment, add
 `--require-runtime-dependencies` to prove the signer and writable audit chain
 through the same initialization path as `mint serve`.
 
+`mint healthcheck` probes a numeric loopback or private-address `/ready`
+endpoint with a bounded, proxy-free HTTP client and accepts only Mint's exact
+minimal ready response. Set `MINT_HEALTHCHECK_URL` when the container binds a
+private address instead of the loopback default. The command is for container
+and process supervision; it prints no response body.
+
 ```bash
 mint serve --config /etc/mint/mint.yaml
 ```
