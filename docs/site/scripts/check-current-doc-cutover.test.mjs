@@ -60,6 +60,28 @@ test('rejects every removed command family in a current published page', async (
   });
 });
 
+test('checks generated Markdown pages alongside authored MDX pages', async () => {
+  await withSite(async (root) => {
+    await writePage(
+      root,
+      'products/registry-relay/generated.md',
+      'status: current',
+      ['```sh', 'registryctl start', '```'].join('\n'),
+    );
+    await writePage(root, 'reference/current.mdx', 'status: current', '`relayctl check`');
+
+    assert.deepEqual(
+      (await findRemovedSurfaces(root)).map(({ path, surface }) => ({ path, surface })),
+      [
+        {
+          path: 'src/content/docs/products/registry-relay/generated.md',
+          surface: 'removed adopter tool command',
+        },
+      ],
+    );
+  });
+});
+
 // The tool is retired, so a current page has to be able to say that it is. The
 // check exists to stop a page telling a reader to run it, not to stop a page
 // naming it.
@@ -111,7 +133,7 @@ test('allows removed names in draft, historical, and sealed history pages', asyn
     await writePage(root, 'changelog.mdx', 'status: current', command);
     await writePage(
       root,
-      'products/example/release-notes.mdx',
+      'products/example/release-notes.md',
       'status: current',
       ['```sh', 'registryctl preflight', '```'].join('\n'),
     );

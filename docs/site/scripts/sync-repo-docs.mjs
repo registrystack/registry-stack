@@ -6,9 +6,10 @@
 // src/content/docs/products/<repo>/. The output is a build artifact: it is
 // gitignored and regenerated on every `npm run generate`.
 //
-// The repos stay GitHub-native plain markdown. All Starlight adaptation
+// The repos stay GitHub-native plain Markdown. All Starlight adaptation
 // (frontmatter derivation, link rewriting, asset copying) happens here so a
-// developer editing a product repo never has to know Starlight exists.
+// developer editing a product repo never has to know Starlight exists. Synced
+// pages remain .md files, so source text is never compiled as executable MDX.
 //
 // No silent failures: a missing source file, a missing referenced asset, or an
 // intra-repo link to an allowlisted-but-missing target is reported as a warning
@@ -20,6 +21,11 @@ import { execFile } from 'node:child_process';
 import { dirname, join, normalize, posix, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { createMarkdownProcessor } from '@astrojs/markdown-remark';
+import { parseFragment } from 'parse5';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 import YAML from 'yaml';
 import {
   applyDocsetRefs,
@@ -36,6 +42,8 @@ const dataDir = resolve(root, 'src/data');
 const docsDir = resolve(root, 'src/content/docs');
 const outputRoot = resolve(docsDir, 'products');
 const cacheRoot = resolve(root, '.repo-docs-cache');
+
+export const GENERATED_PRODUCT_DOC_EXTENSION = '.md';
 
 const warnings = [];
 function warn(message) {
@@ -151,26 +159,104 @@ export function stripPageTypeBanner(md) {
   return lines.slice(end).join('\n');
 }
 
-// MDX does not accept Markdown's HTML comment syntax. Product references use
-// standalone comments as machine-owned block markers, so preserve those
-// markers as MDX comments without changing comments inside code fences.
-export function adaptCommentsForMdx(md) {
-  let fence = null;
-  return md
-    .split('\n')
-    .map((line) => {
-      const fenceMatch = line.match(/^\s*(```+|~~~+)/);
-      if (fenceMatch) {
-        const marker = fenceMatch[1][0];
-        fence = fence === marker ? null : marker;
-        return line;
-      }
-      if (fence) return line;
+const STANDALONE_HTML_COMMENT_RE = /^ {0,3}<!--[^<>`]*-->[\t ]*$/u;
+const syncedMarkdownParser = unified().use(remarkParse).use(remarkGfm);
 
-      const comment = line.match(/^(\s*)<!--\s*(.*?)\s*-->\s*$/);
-      return comment ? `${comment[1]}{/* ${comment[2]} */}` : line;
-    })
-    .join('\n');
+function* markdownNodes(root) {
+  const nodes = [root];
+  while (nodes.length > 0) {
+    const node = nodes.pop();
+    yield node;
+    if (node.children) {
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        nodes.push(node.children[index]);
+      }
+    }
+  }
+}
+
+// Plain Markdown still permits raw HTML. Refuse HTML tags outside code so a
+// source document cannot emit active markup into the built site. Parse the
+// source using Markdown's own grammar so indented and fenced examples remain
+// authorable. Complete standalone HTML comment lines remain inert source
+// markers.
+export function validateInertMarkdown(md, context = 'synced product Markdown') {
+  const lines = md.split(/\r?\n/u);
+  for (const node of markdownNodes(syncedMarkdownParser.parse(md))) {
+    if (node.type !== 'html') continue;
+    const line = node.position?.start.line ?? 1;
+    const isStandaloneComment = node.position?.end.line === line
+      && STANDALONE_HTML_COMMENT_RE.test(lines[line - 1]);
+    if (isStandaloneComment) continue;
+    throw new Error(
+      `${context}: raw HTML is not allowed outside code examples (line ${line})`,
+    );
+  }
+  return md;
+}
+
+const RENDER_BASE_URL = 'https://docs.registrystack.invalid/';
+const SAFE_RENDERED_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+const RENDERED_URL_ATTRIBUTES = new Set([
+  'action',
+  'formaction',
+  'href',
+  'poster',
+  'src',
+  'xlink:href',
+]);
+
+function renderedElements(node) {
+  const elements = [];
+  for (const child of node.childNodes ?? []) {
+    if (child.tagName) elements.push(child);
+    elements.push(...renderedElements(child));
+  }
+  if (node.content) elements.push(...renderedElements(node.content));
+  return elements;
+}
+
+function renderedUrlIsSafe(value) {
+  try {
+    const url = new URL(value, RENDER_BASE_URL);
+    return SAFE_RENDERED_PROTOCOLS.has(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
+// Markdown reference definitions, autolinks, and inline destinations follow
+// different parsing rules. Render with Astro's Markdown processor after link
+// rewriting, then inspect the decoded HTML attributes at the actual execution
+// boundary. This catches character-reference and control-character scheme
+// obfuscation without trying to reproduce the CommonMark destination grammar.
+export async function validateRenderedMarkdownLinks(
+  md,
+  context = 'synced product Markdown',
+  markdownProcessor,
+) {
+  const processor = markdownProcessor ?? await createSyncedMarkdownProcessor();
+  const rendered = await processor.render(md);
+  const fragment = parseFragment(rendered.code);
+
+  for (const element of renderedElements(fragment)) {
+    for (const attribute of element.attrs ?? []) {
+      if (!RENDERED_URL_ATTRIBUTES.has(attribute.name)) continue;
+      if (!renderedUrlIsSafe(attribute.value)) {
+        throw new Error(
+          `${context}: rendered Markdown contains an unsafe ${element.tagName} ${attribute.name} destination`,
+        );
+      }
+    }
+  }
+  return md;
+}
+
+export async function createSyncedMarkdownProcessor() {
+  return createMarkdownProcessor({
+    remarkPlugins: [remarkGfm],
+    syntaxHighlight: false,
+  });
 }
 
 // Product sources keep their implementation-era name, while the public docs
@@ -288,7 +374,7 @@ function splitTarget(target) {
 // become site routes; any other repo-relative link becomes an absolute GitHub
 // blob URL at the pinned ref so it never 404s. Local assets are collected for
 // copying and rewritten to repo-relative output paths.
-function rewriteLinks(md, ctx) {
+export function rewriteLinks(md, ctx) {
   const { repo, entry, destIndex, sourceFileDir, repoRoot, assetsToCopy } = ctx;
 
   return md.replace(LINK_RE, (whole, bang, text, target) => {
@@ -535,7 +621,15 @@ function deriveDescription(md, fallback) {
   return fallback;
 }
 
-async function syncEntry(repoId, repo, entry, source, destIndex, knownStandards) {
+async function syncEntry(
+  repoId,
+  repo,
+  entry,
+  source,
+  destIndex,
+  knownStandards,
+  markdownProcessor,
+) {
   const sourceFile = resolve(source.path, entry.src);
   if (!existsSync(sourceFile)) {
     fail(`${repoId}: allowlisted source ${entry.src} not found in ${source.mode} source`);
@@ -553,22 +647,21 @@ async function syncEntry(repoId, repo, entry, source, destIndex, knownStandards)
   // to avoid a duplicate page heading.
   const bodyBase = stripPageTypeBanner(entry.label ? dropLeadingH1(stripped) : stripped);
 
-  const outFile = resolve(docsDir, `${entry.dest}.mdx`);
+  const outFile = resolve(docsDir, `${entry.dest}${GENERATED_PRODUCT_DOC_EXTENSION}`);
   const assetsToCopy = [];
-  const body = adaptCommentsForMdx(
-    applyRepoDisplayName(
-      rewriteLinks(bodyBase, {
-        repo: { ...repo, id: repoId },
-        entry,
-        destIndex,
-        sourceFileDir: dirname(sourceFile),
-        repoRoot: source.path,
-        assetsToCopy,
-        outFile,
-      }),
-      repoId,
-    ),
+  const body = applyRepoDisplayName(
+    rewriteLinks(validateInertMarkdown(bodyBase, `${repoId}: ${entry.src}`), {
+      repo: { ...repo, id: repoId },
+      entry,
+      destIndex,
+      sourceFileDir: dirname(sourceFile),
+      repoRoot: source.path,
+      assetsToCopy,
+      outFile,
+    }),
+    repoId,
   );
+  await validateRenderedMarkdownLinks(body, `${repoId}: ${entry.src}`, markdownProcessor);
 
   const description = entry.description || deriveDescription(stripped, `${title} for ${repoId}.`);
   const standards_referenced = validateStandardsReferenced(
@@ -619,6 +712,7 @@ async function main() {
     fail('repo-docs.yaml must contain a top-level `repos` map');
   }
   const knownStandards = await loadKnownStandards();
+  const markdownProcessor = await createSyncedMarkdownProcessor();
   const docsets = await loadDocsets({ dataDir });
   validateRepoDocsMetadata(manifest, knownStandards, docsets);
   const docset = getDocset(docsets, selectedDocsetId(docsets));
@@ -650,7 +744,15 @@ async function main() {
 
     const destIndex = buildDestIndex(repo.docs);
     for (const entry of repo.docs) {
-      const result = await syncEntry(repoId, repo, entry, source, destIndex, knownStandards);
+      const result = await syncEntry(
+        repoId,
+        repo,
+        entry,
+        source,
+        destIndex,
+        knownStandards,
+        markdownProcessor,
+      );
       pageCount += 1;
       assetCount += result.assets;
     }

@@ -136,7 +136,7 @@ test('skips the marked past and unpublished pages', async () => {
     await writePage(root, 'unpublished.mdx', 'status: current\ndraft: true', claim);
     await writePage(root, 'old.mdx', 'status: historical', claim);
     await writePage(root, 'superseded.mdx', 'status: deprecated', claim);
-    await writePage(root, 'changelog.mdx', 'status: current', claim);
+    await writePage(root, 'changelog.md', 'status: current', claim);
     await writePage(root, 'decisions/rename-2026-05-23.mdx', 'status: current', claim);
 
     assert.deepEqual(await findNotaryMentions(root), []);
@@ -150,14 +150,14 @@ test('holds a page mirrored from a crate doc to the same rule', async () => {
   await withSite(async (root) => {
     await writePage(
       root,
-      'products/registry-relay/ops.mdx',
+      'products/registry-relay/ops.md',
       'status: current',
       'Use Registry Notary for credential issuance and signing-key operations.',
     );
 
     assert.deepEqual(
       (await findNotaryMentions(root)).map(({ path }) => path),
-      ['src/content/docs/products/registry-relay/ops.mdx'],
+      ['src/content/docs/products/registry-relay/ops.md'],
     );
   });
 });
@@ -168,7 +168,7 @@ test('skips a page mirrored from a frozen Evidence Version 1 contract', async ()
   await withSite(async (root) => {
     await writePage(
       root,
-      'products/registry-evidence/concept.mdx',
+      'products/registry-evidence/concept.md',
       [
         'status: draft',
         'editUrl: https://github.com/registrystack/registry-stack/blob/HEAD/products/evidence/CONCEPT.md',
