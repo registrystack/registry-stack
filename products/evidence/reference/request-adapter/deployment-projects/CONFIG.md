@@ -1096,7 +1096,8 @@ sourceExtracts:
 |---|---|---|
 | `version` | yes | Literal integer `1`. |
 | `bundleDirectory` | yes | Absolute path to the single governed bundle directory. No alternate, overlay, or fallback bundle exists. |
-| `listener.bindHost` | yes | Numeric loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 address, 2 through 64 bytes. Hostnames, public, unspecified, and multicast addresses are rejected. Production TLS terminates at the operator-controlled upstream. |
+| `listener.bindHost` | yes | Numeric listener address, 2 through 64 bytes. Under the default `private-address` exposure, only loopback, RFC 1918 private IPv4, or RFC 4193 unique-local IPv6 is accepted. Under explicit `container-private`, unspecified IPv4 or IPv6 wildcard is also accepted. Hostnames, concrete public addresses, and multicast are always rejected. |
+| `listener.networkExposure` | no | `private-address` by default. `container-private` permits a wildcard bind only when the operator confines the container network and terminates TLS upstream. It does not enable direct public exposure. |
 | `listener.port` | yes | TCP port 1 through 65535. |
 | `listener.tlsTermination` | yes | Literal `operator-controlled-upstream`. |
 | `listener.trustProxyIdentityHeaders` | yes | Literal `false`; proxy headers never supply authenticated identity or authority. |
@@ -1104,7 +1105,7 @@ sourceExtracts:
 | `listener.maximumConcurrentRequests` | yes | 1 through 4,096. |
 | `listener.requestTimeoutMilliseconds` | yes | 1 through 30,000 milliseconds for admission, concurrency queueing, and request-body collection. Once protected evaluation starts, this timer does not cancel it; source and OIDC boundaries have their own bounds, and the runtime preserves fail-closed audit and release ordering. |
 | `listener.shutdownGraceMilliseconds` | yes | 1 through 120,000 milliseconds. |
-| `secretProviders.file.root` | yes | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, owner-only files below this root are accepted. |
+| `secretProviders.file.root` | yes | Absolute root for logical `secret:file/...` references. Only regular, non-symlink, single-link files owned by the service identity with exact mode `0400` or `0600` are accepted. |
 | `signer` | yes | Closed runtime signer union. `production` and `evidence-grade` require a pinned Transit signer over a workload-local Unix socket. `local` requires `kind: local-jwk` with `privateKeyRef: secret:file/evidence-signing`. Startup validates provider controls and exact public-key agreement, then signs and verifies a challenge. |
 | `auditStorage.path` | yes | Absolute keyed-JSONL audit path on operator-owned durable storage. |
 | `auditStorage.maximumFileBytes` | yes | 1,048,576 through 1,099,511,627,776 bytes. Reaching the closed bound fails audit writes and therefore fails closed. |
@@ -1600,6 +1601,7 @@ listener
 listener.bindHost
 listener.maximumConcurrentRequests
 listener.maximumRequestBytes
+listener.networkExposure
 listener.port
 listener.requestTimeoutMilliseconds
 listener.shutdownGraceMilliseconds

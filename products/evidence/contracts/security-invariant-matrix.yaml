@@ -289,7 +289,7 @@ cross_cutting:
     negative_test: sec-secret-values-rejected-from-bundle
   transport_identity:
     threat: Public binding or proxy-provided identity bypasses Evidence token validation.
-    enforcement: Loopback or private HTTP listener behind operator-controlled HTTPS termination; Evidence validates strict OIDC bearer tokens and never trusts proxy identity headers.
+    enforcement: Private-address mode accepts only loopback or private HTTP bindings. Explicit container-private mode additionally accepts a wildcard only as an operator assertion about the confined container network and upstream TLS boundary. Concrete public addresses remain refused; Evidence validates strict OIDC bearer tokens and never trusts proxy identity headers.
     negative_test: sec-proxy-identity-header-rejected
   trace_context:
     threat: Caller-controlled tracing metadata is reflected as an unbounded response channel or becomes the durable audit identity, allowing correlation injection or collapsing distinct requests into one accountable operation.
@@ -325,7 +325,7 @@ cross_cutting:
     negative_test: sec-unsigned-envelope-not-jws
   secret_file_identity:
     threat: A group- or world-accessible, symlinked, multi-link, or oversized secret file exposes or substitutes key material.
-    enforcement: File secrets must be regular owner-only files opened without following symlinks, with exact ownership, mode, single-hard-link, and size checks before use.
+    enforcement: File secrets must be regular owner-only files opened without following symlinks, with exact service ownership, exact mode 0400 or 0600, single-hard-link, and size checks before use.
     negative_test: sec-secret-file-identity
   transport_pinning:
     threat: Workspace dependency feature unification silently changes the TLS backend or introduces transport retries, breaking the per-stage request ceiling and TLS contracts.
