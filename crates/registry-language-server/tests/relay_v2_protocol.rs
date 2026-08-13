@@ -138,8 +138,11 @@ async fn an_unsaved_reference_loads_a_governed_file_outside_the_prior_closure() 
     let mut session = LspSession::start();
     session.initialize(&root).await;
 
-    session.open(&unsaved_governed, &governed, 1).await;
+    // The contract revision establishes ownership before the server accepts bytes for the new
+    // governed path. Retaining the buffer first would make an arbitrary in-root file
+    // indistinguishable from a future governed document.
     session.open(&registry, &unsaved, 1).await;
+    session.open(&unsaved_governed, &governed, 1).await;
 
     assert_eq!(
         session.published_diagnostics(&registry),
