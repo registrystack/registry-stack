@@ -126,9 +126,6 @@ class RuntimePreflightTest(unittest.TestCase):
                 "relay": service("relay"),
             }
         )
-        document["services"]["evidence"]["depends_on"] = {  # type: ignore[index]
-            "mint": {"condition": "service_healthy", "required": True}
-        }
         result, stdout, stderr, run = self.run_main(document)
         self.assertEqual(0, result, stderr)
         self.assertEqual("runtime preflight passed for 3 service(s)\n", stdout)
@@ -151,11 +148,11 @@ class RuntimePreflightTest(unittest.TestCase):
         self.assertIn("--require-runtime-dependencies", calls[1])
         self.assertIn("--require-runtime-dependencies", calls[2])
         self.assertEqual("check", calls[3][-3])
-        self.assertEqual("mint", calls[1][calls[1].index("--rm") + 1])
-        self.assertEqual("evidence", calls[2][calls[2].index("--rm") + 1])
-        self.assertEqual("relay", calls[3][calls[3].index("--rm") + 1])
+        self.assertEqual("evidence", calls[1][calls[1].index("--no-deps") + 1])
+        self.assertEqual("mint", calls[2][calls[2].index("--no-deps") + 1])
+        self.assertEqual("relay", calls[3][calls[3].index("--no-deps") + 1])
         for call in run.call_args_list[1:]:
-            self.assertNotIn("--no-deps", call.args[0])
+            self.assertIn("--no-deps", call.args[0])
             self.assertEqual(["docker", "compose", "--file", "-"], call.args[0][:4])
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stdout"])
             self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stderr"])
@@ -180,6 +177,12 @@ class RuntimePreflightTest(unittest.TestCase):
             "boolean scale": lambda item: item.update(scale=True),
             "writable root": lambda item: item.update(read_only=False),
             "privileged container": lambda item: item.update(privileged=True),
+            "post-start hook": lambda item: item.update(
+                post_start=[{"command": "/usr/local/bin/evidence", "privileged": True}]
+            ),
+            "pre-stop hook": lambda item: item.update(
+                pre_stop=[{"command": "/usr/local/bin/evidence", "user": "0"}]
+            ),
             "capabilities": lambda item: item.update(cap_drop=[]),
             "added capability": lambda item: item.update(cap_add=["SYS_ADMIN"]),
             "privilege escalation": lambda item: item.update(security_opt=[]),
@@ -213,6 +216,9 @@ class RuntimePreflightTest(unittest.TestCase):
             "inherited mounts": lambda item: item.update(volumes_from=["proxy"]),
             "runtime path override": lambda item: item.update(
                 environment={"REGISTRY_EVIDENCE_RUNTIME": "/tmp/runtime.yaml"}
+            ),
+            "dynamic loader override": lambda item: item.update(
+                environment={"LD_PRELOAD": "/run/secrets/replacement.so"}
             ),
             "public port": lambda item: item.update(
                 ports=[{"target": 8080, "published": 8080}]
@@ -405,7 +411,7 @@ class RuntimePreflightTest(unittest.TestCase):
                         document,
                     )
 
-    def test_mounts_cannot_shadow_the_official_executable(self) -> None:
+    def test_mounts_cannot_shadow_official_executables_or_libraries(self) -> None:
         for product in ("evidence", "mint", "relay"):
             executable = f"/usr/local/bin/{product}"
             for target in (
@@ -416,6 +422,10 @@ class RuntimePreflightTest(unittest.TestCase):
                 executable,
                 f"//usr/local/bin/{product}",
                 f"/usr/local/bin/../bin/{product}",
+                "/lib",
+                "/lib/replacement",
+                "/usr/lib",
+                "/usr/local/lib/replacement",
             ):
                 with self.subTest(product=product, target=target):
                     selected = service(product)
@@ -530,6 +540,129 @@ class RuntimePreflightTest(unittest.TestCase):
                 with self.assertRaises(self.module.argparse.ArgumentTypeError):
                     self.module.positive_integer(raw)
 
+    def test_cold_mint_dependency_is_checked_started_probed_then_consumed(self) -> None:
+        document = deployment(
+            {
+                "evidence": service("evidence"),
+                "mint": service("mint"),
+                "unrelated": {"image": "example.invalid/unrelated:latest"},
+            }
+        )
+        document["services"]["evidence"]["depends_on"] = {  # type: ignore[index]
+            "mint": {"condition": "service_healthy", "required": True}
+        }
+        complete = lambda returncode=0: subprocess.CompletedProcess(  # noqa: E731
+            args=[], returncode=returncode, stdout="sensitive", stderr="sensitive"
+        )
+        render = complete()
+        render.stdout = json.dumps(document)
+        run = unittest.mock.Mock(
+            side_effect=[render, complete(), complete(), complete(), complete()]
+        )
+        argv = [
+            "--compose-file",
+            "compose.yaml",
+            "--service",
+            "evidence=evidence",
+            "--service",
+            "mint=mint",
+            "--native-check-timeout-seconds",
+            "600",
+            "--dependency-timeout-seconds",
+            "240",
+        ]
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            unittest.mock.patch.object(self.module.subprocess, "run", run),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.module.main(argv)
+
+        self.assertEqual(0, result, stderr.getvalue())
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertEqual("mint", calls[1][calls[1].index("--no-deps") + 1])
+        self.assertEqual(["up", "--detach", "--no-deps", "mint"], calls[2][-4:])
+        self.assertEqual(
+            [
+                "exec",
+                "--no-TTY",
+                "mint",
+                "/usr/local/bin/mint",
+                "healthcheck",
+                "--url",
+                "http://127.0.0.1:8081/ready",
+            ],
+            calls[3][-7:],
+        )
+        self.assertEqual("evidence", calls[4][calls[4].index("--no-deps") + 1])
+        self.assertEqual(600, run.call_args_list[1].kwargs["timeout"])
+        self.assertEqual(240, run.call_args_list[2].kwargs["timeout"])
+        self.assertEqual(600, run.call_args_list[4].kwargs["timeout"])
+        self.assertFalse(any("unrelated" in call for call in calls))
+        for call in run.call_args_list[1:]:
+            self.assertEqual(document, json.loads(call.kwargs["input"]))
+            self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stdout"])
+            self.assertEqual(self.module.subprocess.DEVNULL, call.kwargs["stderr"])
+
+    def test_unhealthy_mint_blocks_the_dependent_native_check(self) -> None:
+        document = deployment(
+            {"evidence": service("evidence"), "mint": service("mint")}
+        )
+        document["services"]["evidence"]["depends_on"] = ["mint"]  # type: ignore[index]
+        render = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(document), stderr=""
+        )
+        complete = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="")
+        run = unittest.mock.Mock(side_effect=[render, complete, complete, failed])
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            unittest.mock.patch.object(self.module.subprocess, "run", run),
+            unittest.mock.patch.object(
+                self.module.time, "monotonic", side_effect=[0.0, 0.0, 6.0]
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = self.module.main(
+                [
+                    "--compose-file",
+                    "compose.yaml",
+                    "--service",
+                    "evidence=evidence",
+                    "--service",
+                    "mint=mint",
+                    "--dependency-timeout-seconds",
+                    "5",
+                ]
+            )
+
+        self.assertEqual(1, result)
+        self.assertEqual("", stdout.getvalue())
+        self.assertIn("did not become ready", stderr.getvalue())
+        self.assertEqual(4, run.call_count)
+        self.assertFalse(
+            any(
+                "evidence" in call.args[0] and "run" in call.args[0]
+                for call in run.call_args_list
+            )
+        )
+
+    def test_only_mint_may_be_started_as_a_dependency(self) -> None:
+        selections = [
+            self.module.ServiceSelection("evidence", "evidence"),
+            self.module.ServiceSelection("relay", "relay"),
+        ]
+        document = deployment(
+            {"evidence": service("evidence"), "relay": service("relay")}
+        )
+        document["services"]["evidence"]["depends_on"] = ["relay"]  # type: ignore[index]
+        with self.assertRaisesRegex(self.module.PreflightError, "only Mint"):
+            self.module.native_check_plan(selections, document)
+
     def test_selected_dependency_cycles_fail_before_native_checks(self) -> None:
         selections = [
             self.module.ServiceSelection("evidence", "evidence"),
@@ -544,7 +677,7 @@ class RuntimePreflightTest(unittest.TestCase):
         document["services"]["evidence"]["depends_on"] = ["mint"]  # type: ignore[index]
         document["services"]["mint"]["depends_on"] = ["evidence"]  # type: ignore[index]
         with self.assertRaises(self.module.PreflightError):
-            self.module.native_check_order(selections, document)
+            self.module.native_check_plan(selections, document)
 
     def test_parser_rejects_duplicates_and_unsafe_service_names(self) -> None:
         with self.assertRaises(self.module.PreflightError):
@@ -552,6 +685,12 @@ class RuntimePreflightTest(unittest.TestCase):
         for value in ["other=service", "relay=../service", "relay=", "relay=a b"]:
             with self.assertRaises(self.module.PreflightError):
                 self.module.parse_service(value)
+        with self.assertRaises(self.module.argparse.ArgumentTypeError):
+            self.module.bounded_seconds("4", minimum=5, maximum=600)
+        self.assertEqual(
+            600,
+            self.module.bounded_seconds("600", minimum=5, maximum=600),
+        )
 
 
 if __name__ == "__main__":

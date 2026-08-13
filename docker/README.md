@@ -112,8 +112,9 @@ preflight rejects host or shared network namespaces, entrypoint or command
 overrides, alternate Evidence or Mint configuration paths, privileged mode,
 replacement builds, added capabilities or supplementary groups, host devices,
 any security option other than one `no-new-privileges` entry, multiple
-replicas, inherited mounts, executable-shadowing mounts, writable configuration
-or secret trees, anonymous audit volumes, service-level tmpfs, any long-form
+replicas, lifecycle hooks, dynamic-loader overrides, inherited mounts,
+executable- or library-shadowing mounts, writable configuration or secret
+trees, anonymous audit volumes, service-level tmpfs, any long-form
 tmpfs except the required read-only mount at `/dev/shm`, and
 driver-option-backed named volumes. Docker's
 implicit writable `/dev/shm` would otherwise let an unused durable audit
@@ -128,18 +129,22 @@ storage.
 Native checks have no wrapper deadline by default because validating a retained
 audit chain can legitimately take longer than a fixed deployment timeout. Use
 `--native-check-timeout-seconds SECONDS` when the operator requires a positive
-deadline. Compose dependencies are honored, so a cold Evidence check can start
-a declared Mint dependency; services started for that dependency remain under
-the operator's Compose lifecycle. Native checks consume the exact rendered
-Compose JSON already validated by the static pass, rather than re-reading
-mutable Compose or environment files.
+deadline. Selected Compose dependencies are honored. A cold Evidence check can
+check, start with `--no-deps`, and readiness-probe a declared Mint dependency
+before checking Evidence. Only Mint may be started as a preflight dependency;
+Relay's existing healthcheck is liveness-only and is not accepted as readiness.
+Services started for dependency checking remain under the operator's Compose
+lifecycle. `--dependency-timeout-seconds` bounds both Mint startup and readiness
+polling. Native checks consume the exact rendered Compose JSON already
+validated by the static pass, rather than re-reading mutable Compose or
+environment files.
 
 ## Health probes
 
-Neither image declares a Docker `HEALTHCHECK`: distroless has no shell or
-curl, and neither binary has a healthcheck subcommand (the released Notary
-and Relay binaries do). Both services serve `GET /health` on their listener;
-use HTTP probes from your orchestrator.
+Neither image declares a Docker `HEALTHCHECK`. Mint provides a strict
+`mint healthcheck` command for its private `/ready` endpoint; Evidence serves
+`GET /health` and expects an operator-owned HTTP probe. The image itself does
+not guess which listener address is reachable from the container namespace.
 
 For an approved Evidence release or candidate, use the operator-owned
 [Compose adapter](compose/README.md), pin the reviewed image digest, and run

@@ -61,7 +61,8 @@ entrypoint and command, configuration path, inherited mounts, network mode,
 and published ports. It requires the fixed audit root to be the only writable
 declared mount, requires the explicit read-only `/dev/shm` hardening mount,
 accepts exactly one `no-new-privileges` security option, and rejects mounts
-over the official executable or any ancestor. It then invokes the native
+over official executable or library paths, lifecycle hooks, and dynamic-loader
+overrides. It then invokes the native
 Evidence dependency check without printing Compose output or secret values:
 
 ```sh
@@ -72,9 +73,14 @@ python3 docker/runtime-preflight.py \
 
 The native check has no wrapper deadline by default. Add
 `--native-check-timeout-seconds SECONDS` only when the deployment requires an
-operator-selected positive deadline. The preflight honors `depends_on`; if an
-Evidence overlay declares Mint as a dependency, Compose may start Mint for a
-cold dependency check and leaves it under the operator's Compose lifecycle.
+operator-selected positive deadline. The preflight honors selected
+`depends_on` edges. If an Evidence overlay declares a selected Mint service as
+a dependency, it checks Mint, starts only that service with `--no-deps`,
+requires Mint's exact `/ready` response, and then checks Evidence. Relay cannot
+be started as a preflight dependency because its existing healthcheck is
+liveness-only. Add `--dependency-timeout-seconds SECONDS` to change the bounded
+Mint startup and readiness deadline. A started Mint remains under the
+operator's Compose lifecycle.
 The preflight accepts only Docker-managed local named audit volumes without
 driver options, or explicit bind mounts outside known ephemeral host paths. It
 rejects service-level tmpfs and every long-form tmpfs other than exactly one

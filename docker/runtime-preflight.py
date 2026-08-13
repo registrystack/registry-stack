@@ -8,12 +8,15 @@ import json
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Sequence
 
 
 MAXIMUM_COMPOSE_BYTES = 4 * 1024 * 1024
+MINIMUM_DEPENDENCY_TIMEOUT_SECONDS = 5
+MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS = 10 * 60
 PRODUCTS = ("evidence", "mint", "relay")
 SERVICE_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
 IMAGE_PATTERNS = {
@@ -26,6 +29,21 @@ AUDIT_PREFIXES = {
     "relay": "/var/lib/relay/audit",
 }
 EXECUTABLE_PATHS = {product: f"/usr/local/bin/{product}" for product in PRODUCTS}
+IMAGE_OWNED_ROOTS = tuple(
+    PurePosixPath(path)
+    for path in (
+        "/bin",
+        "/lib",
+        "/lib64",
+        "/sbin",
+        "/usr/bin",
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/local/bin",
+        "/usr/local/lib",
+        "/usr/sbin",
+    )
+)
 KNOWN_EPHEMERAL_BIND_ROOTS = tuple(
     PurePosixPath(path)
     for path in (
@@ -54,6 +72,14 @@ NATIVE_CHECKS = {
         "--require-runtime-dependencies",
     ],
     "relay": ["check", "--runtime", "/etc/relay/runtime.yaml"],
+}
+DEPENDENCY_HEALTHCHECKS = {
+    "mint": [
+        "/usr/local/bin/mint",
+        "healthcheck",
+        "--url",
+        "http://127.0.0.1:8081/ready",
+    ]
 }
 
 
@@ -120,6 +146,7 @@ def run_compose(
     timeout: int | None,
     capture_output: bool = True,
     input_text: str | None = None,
+    timeout_is_failure: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     output_options: dict[str, Any]
     if capture_output:
@@ -138,7 +165,13 @@ def run_compose(
             input=input_text,
             **output_options,
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except subprocess.TimeoutExpired as error:
+        if not timeout_is_failure:
+            return subprocess.CompletedProcess(command, 124, "", "")
+        raise PreflightError(
+            "Docker Compose could not complete the preflight"
+        ) from error
+    except OSError as error:
         raise PreflightError(
             "Docker Compose could not complete the preflight"
         ) from error
@@ -175,6 +208,13 @@ def shadows_executable(target: PurePosixPath, executable: PurePosixPath) -> bool
     return target == executable or target in executable.parents
 
 
+def shadows_image_content(target: PurePosixPath, executable: PurePosixPath) -> bool:
+    return shadows_executable(target, executable) or any(
+        target == root or target in root.parents or root in target.parents
+        for root in IMAGE_OWNED_ROOTS
+    )
+
+
 def validate_secret_entries(service: dict[str, Any], executable: PurePosixPath) -> None:
     secrets = service.get("secrets", [])
     if not isinstance(secrets, list):
@@ -195,9 +235,9 @@ def validate_secret_entries(service: dict[str, Any], executable: PurePosixPath) 
             raise PreflightError(
                 "service secret posture is not owner-only for UID 65532"
             )
-        if shadows_executable(target_path, executable):
+        if shadows_image_content(target_path, executable):
             raise PreflightError(
-                "service mounts must not shadow the official executable"
+                "service mounts must not shadow official image content"
             )
 
 
@@ -211,9 +251,9 @@ def validate_config_entries(service: dict[str, Any], executable: PurePosixPath) 
         target = container_path(
             config.get("target"), "service config mount posture is invalid"
         )
-        if shadows_executable(target, executable):
+        if shadows_image_content(target, executable):
             raise PreflightError(
-                "service mounts must not shadow the official executable"
+                "service mounts must not shadow official image content"
             )
 
 
@@ -284,9 +324,9 @@ def validate_mounts(
         mount_type = volume.get("type")
         source = volume.get("source")
         target_path = container_path(target, "service runtime mount target is invalid")
-        if shadows_executable(target_path, executable):
+        if shadows_image_content(target_path, executable):
             raise PreflightError(
-                "service mounts must not shadow the official executable"
+                "service mounts must not shadow official image content"
             )
         protected_paths = (PurePosixPath("/etc"), PurePosixPath("/run/secrets"))
         overlaps_protected_path = any(
@@ -383,6 +423,10 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
         raise PreflightError("service root filesystem must be read-only")
     if service.get("privileged") not in (None, False):
         raise PreflightError("service must not run as a privileged container")
+    for hook in ("post_start", "pre_stop"):
+        value = service.get(hook, [])
+        if not isinstance(value, list) or value:
+            raise PreflightError("service must not declare lifecycle hooks")
     if service.get("entrypoint") is not None:
         raise PreflightError("service must not override the official image entrypoint")
     if service.get("command") is not None:
@@ -390,6 +434,8 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     environment = service.get("environment", {})
     if not isinstance(environment, dict):
         raise PreflightError("service environment posture is invalid")
+    if any(name in environment for name in ("LD_AUDIT", "LD_LIBRARY_PATH", "LD_PRELOAD")):
+        raise PreflightError("service must not override dynamic-loader behavior")
     fixed_config = {
         "evidence": (
             "REGISTRY_EVIDENCE_RUNTIME",
@@ -436,6 +482,7 @@ def native_check(
             "-",
             "run",
             "--rm",
+            "--no-deps",
             selection.service,
             *NATIVE_CHECKS[selection.product],
         ],
@@ -449,14 +496,16 @@ def native_check(
         )
 
 
-def native_check_order(
+def native_check_plan(
     selections: list[ServiceSelection], document: dict[str, Any]
-) -> list[ServiceSelection]:
+) -> tuple[list[ServiceSelection], set[str]]:
     services = document.get("services")
     if not isinstance(services, dict):
         raise PreflightError("rendered Compose configuration has no services")
-    selected_services = {selection.service for selection in selections}
+    selected_by_service = {selection.service: selection for selection in selections}
+    selected_services = set(selected_by_service)
     dependencies: dict[str, set[str]] = {}
+    dependency_services: set[str] = set()
     for selection in selections:
         service = services.get(selection.service)
         if not isinstance(service, dict):
@@ -470,7 +519,14 @@ def native_check_order(
             names = raw
         else:
             raise PreflightError("service dependency posture is invalid")
-        dependencies[selection.service] = set(names) & selected_services
+        selected_dependencies = set(names) & selected_services
+        for dependency in selected_dependencies:
+            if selected_by_service[dependency].product not in DEPENDENCY_HEALTHCHECKS:
+                raise PreflightError(
+                    "only Mint can be started as a preflight dependency"
+                )
+        dependencies[selection.service] = selected_dependencies
+        dependency_services.update(selected_dependencies)
 
     ordered: list[ServiceSelection] = []
     remaining = list(selections)
@@ -489,7 +545,64 @@ def native_check_order(
         remaining.remove(ready)
         ordered.append(ready)
         completed.add(ready.service)
-    return ordered
+    return ordered, dependency_services
+
+
+def start_dependency(
+    selection: ServiceSelection, timeout: int, frozen_compose: str
+) -> None:
+    result = run_compose(
+        [
+            "docker",
+            "compose",
+            "--file",
+            "-",
+            "up",
+            "--detach",
+            "--no-deps",
+            selection.service,
+        ],
+        timeout=timeout,
+        capture_output=False,
+        input_text=frozen_compose,
+    )
+    if result.returncode != 0:
+        raise PreflightError("a declared dependency service could not be started")
+
+
+def wait_for_dependency(
+    selection: ServiceSelection, timeout: int, frozen_compose: str
+) -> None:
+    healthcheck = DEPENDENCY_HEALTHCHECKS.get(selection.product)
+    if healthcheck is None:
+        raise PreflightError("only Mint can be started as a preflight dependency")
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PreflightError("a declared dependency service did not become ready")
+        result = run_compose(
+            [
+                "docker",
+                "compose",
+                "--file",
+                "-",
+                "exec",
+                "--no-TTY",
+                selection.service,
+                *healthcheck,
+            ],
+            timeout=max(1, min(6, int(remaining))),
+            capture_output=False,
+            input_text=frozen_compose,
+            timeout_is_failure=False,
+        )
+        if result.returncode == 0:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PreflightError("a declared dependency service did not become ready")
+        time.sleep(min(1.0, remaining))
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -521,6 +634,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=positive_integer,
         help="optional positive deadline for each native check; unbounded by default",
     )
+    parser.add_argument(
+        "--dependency-timeout-seconds",
+        type=lambda raw: bounded_seconds(
+            raw,
+            minimum=MINIMUM_DEPENDENCY_TIMEOUT_SECONDS,
+            maximum=MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS,
+        ),
+        default=90,
+        help="bounded deadline for each declared Mint dependency to become ready",
+    )
     return parser.parse_args(argv)
 
 
@@ -531,6 +654,13 @@ def positive_integer(raw: str) -> int:
         raise argparse.ArgumentTypeError("must be a positive integer") from error
     if value <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
+
+
+def bounded_seconds(raw: str, *, minimum: int, maximum: int) -> int:
+    value = positive_integer(raw)
+    if value < minimum or value > maximum:
+        raise argparse.ArgumentTypeError(f"must be between {minimum} and {maximum}")
     return value
 
 
@@ -545,12 +675,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         frozen_compose = json.dumps(document, separators=(",", ":"))
         for selection in selections:
             validate_service(selection, document)
-        for selection in native_check_order(selections, document):
+        ordered, dependency_services = native_check_plan(selections, document)
+        for selection in ordered:
             native_check(
                 selection,
                 args.native_check_timeout_seconds,
                 frozen_compose,
             )
+            if selection.service in dependency_services:
+                start_dependency(
+                    selection,
+                    args.dependency_timeout_seconds,
+                    frozen_compose,
+                )
+                wait_for_dependency(
+                    selection,
+                    args.dependency_timeout_seconds,
+                    frozen_compose,
+                )
     except PreflightError as error:
         print(f"runtime preflight failed: {error}", file=sys.stderr)
         return 1
