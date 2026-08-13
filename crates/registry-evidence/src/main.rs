@@ -1056,7 +1056,10 @@ fn fixture_report_json(
 ) -> Result<String, CliError> {
     let report = FixtureReport {
         passed: summary.is_ok(),
-        evaluated_cases: summary.ok().map(|summary| summary.evaluated_cases),
+        evaluated_cases: summary
+            .ok()
+            .map(|summary| summary.evaluated_cases)
+            .or_else(|| (trace.case_count() > 0).then(|| trace.case_count())),
         trace,
     };
     serde_json::to_string_pretty(&report)
