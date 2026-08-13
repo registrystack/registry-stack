@@ -135,8 +135,8 @@
     "target_repo_path": "../registry-stack",
     "role": "Supporting service rather than a product line. Issues short-lived, audience-bound access tokens to registered machine clients, so a resource server such as Evidence Gateway can require signed expiring tokens without the deployment first standing up a general purpose identity provider.",
     "owns": [
-      "The client registry that binds a client id to that client's own public keys and to the authority Mint asserts for it.",
-      "The `client_credentials` grant with `private_key_jwt` client authentication, verifying an assertion against the keys of the client it claims to be, selected before signature verification.",
+      "The client registry that binds a client id to its registered authentication material and to the authority Mint asserts for it.",
+      "The `client_credentials` grant with `private_key_jwt` as the default client authentication, plus explicitly selected client-secret compatibility for standard authorization clients.",
       "Token signing, lifetime, and audience binding, and the `mint` binary."
     ],
     "does_not_own": [

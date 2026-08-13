@@ -2236,6 +2236,58 @@
           "subcommands": []
         },
         {
+          "name": "client-secret",
+          "invocation": "mint client-secret",
+          "about": "Provision high-entropy credentials for compatible managed clients",
+          "long_about": null,
+          "usage": "mint client-secret <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "generate",
+              "invocation": "mint client-secret generate",
+              "about": "Generate one credential file and print its non-secret fingerprint",
+              "long_about": null,
+              "usage": "mint client-secret generate --out <OUT>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--out <OUT>",
+                  "description": "New owner-only file that receives the printable client secret",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "token",
           "invocation": "mint token",
           "about": "Obtain an access token from a running token endpoint, as a client would",

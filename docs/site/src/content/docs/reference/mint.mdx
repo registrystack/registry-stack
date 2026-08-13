@@ -23,11 +23,12 @@ same status individually: they do not appear among the covered surfaces listed i
 promise. Configuration fields, the token endpoint shape, and CLI flags may change without a major
 release until Registry Mint is added to that covered-surfaces table.
 
-What is stable in practice: the `client_credentials` grant with `private_key_jwt` client
-authentication (RFC 7523), the collapse of every client-authentication failure to
-`invalid_client`, and the rule that authority is written from the client registry and never from
-the caller's own request. Those are structural properties this crate exists to hold, not
-incidental implementation choices.
+What is stable in practice: the `client_credentials` grant, registered client authentication
+with `private_key_jwt` (RFC 7523) as the default or an explicitly selected client-secret
+compatibility profile, the collapse of every client-authentication failure to `invalid_client`,
+and the rule that authority is written from the client registry and never from the caller's own
+request. Those are structural properties this crate exists to hold, not incidental
+implementation choices.
 
 ## Source of truth
 
@@ -35,7 +36,8 @@ The `registry-mint` crate at `crates/registry-mint/` is the source of truth for 
 this page. Configuration parsing and validation live in `crates/registry-mint/src/config.rs` and
 `crates/registry-mint/src/clients.rs`, the HTTP surface in
 `crates/registry-mint/src/server.rs`, token minting in `crates/registry-mint/src/token.rs`, and
-the keyed audit boundary in `crates/registry-mint/src/audit.rs`. The public error shape lives in
+client-secret generation in `crates/registry-mint/src/client_secret.rs`, and the keyed audit
+boundary in `crates/registry-mint/src/audit.rs`. The public error shape lives in
 `crates/registry-mint/src/error.rs`. `crates/registry-mint/README.md` covers the same surface in
 prose. Where this page and the crate disagree, the crate wins.
 
@@ -185,13 +187,16 @@ One file per client, parsed by `crates/registry-mint/src/clients.rs`.
 | `grant` | object: `id`, `authority` | Evidence profile only, optional | Both fields are required when the object is present. Cannot coexist with `authorization`. |
 | `delegation` | object: `actors`, `subjectClaims` | Evidence profile only, optional | Enables delegated tokens bound to one subject; cannot coexist with `authorization`. See `crates/registry-mint/README.md`. |
 | `authorization` | object: `scopes`, `claims` | Standard profile only | `scopes` has 1..=64 unique RFC 6749 scope-tokens. `claims` has at most 32 direct strings. Cannot coexist with Evidence fields. |
-| `keys` | list of public JWKs (at most 8 entries) | required | A document carrying a private key member is rejected. |
+| `clientAuthentication` | object | `method: private-key-jwt` | Selects `private-key-jwt` or `client-secret`. The secret method is valid only with standard `authorization` and carries one or two canonical `sha256:` fingerprints under `secretFingerprints`. |
+| `keys` | list of public JWKs (1..=8 entries) | required for `private-key-jwt` | A document carrying a private key member is rejected. Must be omitted for `client-secret`. |
 
 Every registration selects exactly one profile. Evidence authority consists of
 `evidenceAudience` plus `requesterTags`, with optional `grant` and `delegation`. Standard
 authorization consists of `authorization.scopes` plus optional `authorization.claims`. A
 registration that selects neither profile or combines both profiles fails the whole registry
-load.
+load. Omitting `clientAuthentication` preserves `private-key-jwt`; the client-secret method must
+be selected explicitly and cannot be combined with client keys, Evidence authority, or
+delegation.
 
 Each standard scope is 1 to 256 bytes and follows the RFC 6749 scope-token grammar. Direct claim
 names are 1 to 128 bytes. Direct claim values are non-empty strings of at most 512 bytes. The
@@ -199,12 +204,15 @@ names `iss`, `aud`, `exp`, `iat`, `nbf`, `jti`, `client_id`, `sub`, and `scope` 
 cannot be configured as direct claims. When `accessTokens.claims` is present, direct standard
 claims also cannot reuse any configured Evidence claim name.
 Mint projects the complete maximum-width signed response for each standard registration and
-refuses startup or reload when that response could exceed the shared private-key-JWT provider's
-16 KiB read ceiling.
+refuses startup or reload when that response could exceed the shared client response ceiling of
+16 KiB.
 
 ## Token endpoint contract
 
 ### Request
+
+Each registration accepts exactly one authentication method. A `private-key-jwt` registration
+uses this form:
 
 ```text
 POST /token
@@ -221,6 +229,33 @@ exactly, and `client_assertion_type` must equal
 compact JWS whose payload carries `iss` and `sub` equal to the client id, `aud` equal to the
 configured `clientAssertion.audience`, a `jti`, and `iat`/`exp` inside
 `clientAssertion.maximumLifetimeSeconds`. Every `jti` is accepted once.
+
+An explicitly selected client-secret registration accepts either HTTP Basic authentication
+(`client_secret_basic`):
+
+```text
+POST /token
+Authorization: Basic <base64(client-id:client-secret)>
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+```
+
+or form-body authentication (`client_secret_post`):
+
+```text
+POST /token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+&client_id=<client-id>
+&client_secret=<client-secret>
+```
+
+A request that mixes authentication methods is refused. A caller may send the optional OAuth
+`scope` form member for client compatibility, but Registry Mint ignores it and writes only the
+registration's server-governed scopes and direct claims. Registry Mint returns no refresh token;
+a client obtains a new short-lived token by repeating Client Credentials authentication.
 
 ### Response
 
@@ -250,9 +285,9 @@ Every response body is `{"error": "<code>"}`, from
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_request` | `400` | A required form field is missing or duplicated, or `client_assertion_type` is not the exact `jwt-bearer` URN. A missing `grant_type` is a missing field and lands here, not below. |
+| `invalid_request` | `400` | A required field is missing or duplicated, authentication methods are mixed, or `client_assertion_type` is not the exact `jwt-bearer` URN. A missing `grant_type` is a missing field and lands here, not below. |
 | `unsupported_grant_type` | `400` | `grant_type` is present but is not `client_credentials`. |
-| `invalid_client` | `401` | Every client authentication failure: unknown client id, bad signature, replayed `jti`, expired assertion. Registry Mint collapses these into one code so the endpoint cannot be used to probe which client ids are registered. Carries a `WWW-Authenticate: Bearer error="invalid_client"` header. |
+| `invalid_client` | `401` | Every client authentication failure: unknown client id, wrong authentication method, bad signature or secret, replayed `jti`, or expired assertion. Registry Mint collapses these into one code so the endpoint cannot be used to probe which client ids are registered. A failed HTTP Basic attempt carries `WWW-Authenticate: Basic realm="registry-mint"`. |
 | `server_error` | `500` | An internal failure, including failure to durably audit the token decision. |
 
 ### Other endpoints
@@ -260,14 +295,15 @@ Every response body is `{"error": "<code>"}`, from
 | Path | Purpose |
 | --- | --- |
 | `GET <signing.jwksPath>` (default `/.well-known/jwks.json`) | Public keys for verifying minted tokens, `application/jwk-set+json`. |
-| `GET /.well-known/oauth-authorization-server` | Metadata pointing at the token endpoint and the key set. |
+| `GET /.well-known/oauth-authorization-server` | Metadata pointing at the token endpoint and key set and advertising `private_key_jwt`, `client_secret_basic`, and `client_secret_post`. |
 | `GET /.well-known/openid-configuration` | The same metadata at the OIDC discovery path used by Registry Relay and other OIDC-compatible verifiers. |
 | `GET /health` | Liveness. |
 | `GET /ready` | Readiness. Returns `503` while no client is registered, after an audit write failure poisons the writer, or while the signing provider is unavailable. Provider readiness recovers after a successful self-test. |
 
 ## How a client, Registry Mint, and Evidence Gateway interact
 
-One round trip, from a client that holds only its own private key to a signed assertion. Every
+This sequence shows the preferred private-key client path, from a client that holds only its own
+private key to a signed assertion. Every
 label in this diagram is stated in the prose and tables on this page; the diagram is a summary of
 those contracts, not a second source for them.
 
@@ -354,8 +390,9 @@ Pairing therefore requires four exact configuration matches:
 - `accessTokens.lifetimeSeconds` is between 60 and 900 seconds, within Relay's fixed 15-minute
   token-lifetime ceiling.
 
-Registry Mint fixes these values in the server-side registration. The token request has no
-`scope` or authority form member, and Mint does not copy authority from the client assertion.
+Registry Mint fixes these values in the server-side registration. A token request's optional
+`scope` member is ignored, no authority form member is accepted, and Mint does not copy authority
+from the client assertion.
 Registry Relay has no Mint-specific verifier branch and keeps working with any authorization
 server that emits the same token profile.
 
@@ -364,7 +401,13 @@ Mint router and the real Relay router. The Registry Relay client obtains a token
 shared private-key-JWT provider and uses the registered scope, purpose, and row authority to
 complete a protected, disclosure-limited lookup.
 
+`crates/registry-mint/tests/client_secret_compatibility.rs` separately drives both standard
+client-secret methods through Registry Mint's real router, verifies the released token with the
+shared OIDC verifier, and covers token reacquisition, rotation, revocation, authority
+containment, and audit redaction.
+
 ## Next
 
 - [Configure Registry Mint](../../configure/mint/)
+- [Use Registry Mint with QGIS and standard OAuth clients](../../configure/use-mint-with-qgis-and-standard-oauth-clients/)
 - [API stability and versioning](../api-stability/)

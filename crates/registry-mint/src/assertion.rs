@@ -92,10 +92,11 @@ pub struct AuthenticatedClient {
     pub delegation: Option<ResolvedDelegation>,
 }
 
-/// Authenticates client assertions against a registry snapshot.
+/// Authenticates registered client credentials against a registry snapshot.
 ///
-/// One verifier is built per registered client at construction time, each bound
-/// to that client's own static JWK set.
+/// One verifier is built per `private_key_jwt` client at construction time,
+/// each bound to that client's own static JWK set. Client-secret registrations
+/// carry no key set and take the constant-time fingerprint path instead.
 pub struct ClientAuthenticator {
     registry: Arc<ClientRegistry>,
     verifiers: BTreeMap<String, Arc<TokenVerifier>>,
@@ -107,14 +108,15 @@ impl std::fmt::Debug for ClientAuthenticator {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ClientAuthenticator")
-            .field("clients", &self.verifiers.len())
+            .field("clients", &self.registry.len())
+            .field("private_key_jwt_clients", &self.verifiers.len())
             .field("maximum_lifetime_seconds", &self.maximum_lifetime_seconds)
             .finish_non_exhaustive()
     }
 }
 
 impl ClientAuthenticator {
-    /// Build one verifier per registered client.
+    /// Build one verifier per registered `private_key_jwt` client.
     ///
     /// The `replay` cache is passed in rather than created here so that
     /// reloading the registry never forgets spent assertion identifiers.
@@ -136,6 +138,9 @@ impl ClientAuthenticator {
             let client = registry
                 .get(client_id)
                 .expect("client id came from this registry");
+            if !client.accepts_private_key_jwt() {
+                continue;
+            }
             // The static set holds this client's public keys and nothing else.
             let fetcher = Arc::new(JwksFetcher::new_static(
                 client.jwks().clone(),
@@ -190,6 +195,11 @@ impl ClientAuthenticator {
             .registry
             .get(client_id)
             .ok_or_else(|| TokenError::invalid_client("unknown client"))?;
+        if !client.accepts_private_key_jwt() {
+            return Err(TokenError::invalid_client(
+                "client authentication method does not match its registration",
+            ));
+        }
         let verifier = self
             .verifiers
             .get(client_id)
@@ -275,6 +285,33 @@ impl ClientAuthenticator {
         Ok(AuthenticatedClient {
             client: Arc::clone(client),
             delegation,
+        })
+    }
+
+    /// Authenticate a bounded client id and high-entropy secret.
+    ///
+    /// Secret-authenticated registrations are standard-authority only, so no
+    /// request-carried delegation can survive this authentication method.
+    pub fn authenticate_client_secret(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+    ) -> Result<AuthenticatedClient, TokenError> {
+        let client = self
+            .registry
+            .get(client_id)
+            .ok_or_else(|| TokenError::invalid_client("unknown client"))?;
+        if client.accepts_private_key_jwt() {
+            return Err(TokenError::invalid_client(
+                "client authentication method does not match its registration",
+            ));
+        }
+        if !client.verifies_client_secret(client_secret) {
+            return Err(TokenError::invalid_client("client secret was rejected"));
+        }
+        Ok(AuthenticatedClient {
+            client: Arc::clone(client),
+            delegation: None,
         })
     }
 }
@@ -436,6 +473,7 @@ fn asserted_client_id(claims: &Value) -> Result<&str, TokenError> {
 pub(crate) mod tests {
     use super::*;
     use crate::config::Algorithm;
+    use registry_platform_authcommon::fingerprint_api_key;
     use serde_json::json;
 
     // Deterministic per-seed Ed25519 keys so tests can hold several distinct
@@ -518,6 +556,17 @@ pub(crate) mod tests {
         ClientAuthenticator::new(registry, &config, Arc::new(ReplayCache::new(256)))
     }
 
+    fn secret_registry(client_id: &str, secret: &str) -> Arc<ClientRegistry> {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let fingerprint = fingerprint_api_key(secret);
+        let document = format!(
+            "clientId: {client_id}\nprincipal: urn:example:{client_id}\nauthorization: {{scopes: [registry:read]}}\nclientAuthentication:\n  method: client-secret\n  secretFingerprints: [{fingerprint}]\n"
+        );
+        std::fs::write(directory.path().join("client.yaml"), document)
+            .expect("write client registration");
+        Arc::new(ClientRegistry::load(directory.path()).expect("registry loads"))
+    }
+
     #[tokio::test]
     async fn a_valid_assertion_authenticates_its_client() {
         let (private, public) = test_key(1);
@@ -531,6 +580,68 @@ pub(crate) mod tests {
         assert_eq!(authenticated.client.client_id(), "client-a");
         assert_eq!(authenticated.client.principal(), "urn:example:client-a");
         assert_eq!(authenticated.delegation, None);
+    }
+
+    #[test]
+    fn a_valid_client_secret_authenticates_only_its_registered_client() {
+        let authenticator = authenticator(secret_registry(
+            "qgis-installation",
+            "correct-high-entropy-client-secret-value",
+        ));
+
+        let authenticated = authenticator
+            .authenticate_client_secret(
+                "qgis-installation",
+                "correct-high-entropy-client-secret-value",
+            )
+            .expect("valid secret authenticates");
+        assert_eq!(authenticated.client.client_id(), "qgis-installation");
+        assert_eq!(authenticated.delegation, None);
+
+        for (client_id, secret) in [
+            ("qgis-installation", "wrong-client-secret"),
+            (
+                "unknown-installation",
+                "correct-high-entropy-client-secret-value",
+            ),
+        ] {
+            assert_eq!(
+                authenticator
+                    .authenticate_client_secret(client_id, secret)
+                    .expect_err("an invalid credential is rejected")
+                    .code(),
+                crate::error::TokenErrorCode::InvalidClient
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_client_cannot_switch_its_registered_authentication_method() {
+        let (private, public) = test_key(1);
+        let private_key_authenticator = authenticator(registry_with(&[("client-a", &public)]));
+        assert_eq!(
+            private_key_authenticator
+                .authenticate_client_secret("client-a", "any-secret")
+                .expect_err("a key client cannot authenticate with a secret"),
+            TokenError::invalid_client(
+                "client authentication method does not match its registration"
+            )
+        );
+
+        let secret_authenticator = authenticator(secret_registry(
+            "client-a",
+            "correct-high-entropy-client-secret-value",
+        ));
+        let assertion = sign_assertion(&private, "JWT", &assertion_claims("client-a", "jti-1"));
+        assert_eq!(
+            secret_authenticator
+                .authenticate(&assertion, NOW)
+                .await
+                .expect_err("a secret client cannot authenticate with an assertion"),
+            TokenError::invalid_client(
+                "client authentication method does not match its registration"
+            )
+        );
     }
 
     /// The core security property. Client A holds a real, registered key. It

@@ -333,6 +333,7 @@ export default defineConfig({
               items: [
                 { label: 'Add Mint to Evidence Gateway', slug: 'tutorials/issue-evidence-access-tokens-with-registry-mint' },
                 { label: 'Configure Registry Mint', slug: 'configure/mint' },
+                { label: 'Use Mint with QGIS', slug: 'configure/use-mint-with-qgis-and-standard-oauth-clients' },
                 { label: 'Call Mint from application code', slug: 'configure/request-an-access-token' },
               ],
             },

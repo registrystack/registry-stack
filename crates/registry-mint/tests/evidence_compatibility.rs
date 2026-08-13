@@ -576,7 +576,11 @@ async fn the_published_metadata_points_at_the_endpoints_that_exist() {
         );
         assert_eq!(
             document["token_endpoint_auth_methods_supported"],
-            json!(["private_key_jwt"])
+            json!([
+                "private_key_jwt",
+                "client_secret_basic",
+                "client_secret_post"
+            ])
         );
     }
 

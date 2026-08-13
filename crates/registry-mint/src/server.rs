@@ -3,8 +3,8 @@
 //! The boundary serves the token endpoint, published key set, equivalent OAuth
 //! authorization-server and OpenID Provider metadata resources, and two
 //! liveness probes. Everything a caller sends is treated as an unauthenticated
-//! claim about identity until the client assertion has been verified against
-//! that client's own registered keys.
+//! claim about identity until the selected credential has been verified only
+//! against that client's registered authentication material.
 //!
 //! The service holds two kinds of state with deliberately different lifetimes.
 //! Issuer identity, signing and audit keys, listener, and token policy are startup-only:
@@ -23,7 +23,7 @@ use axum::{
     body::{to_bytes, Body},
     extract::State,
     http::{
-        header::{CACHE_CONTROL, CONTENT_TYPE, PRAGMA},
+        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, PRAGMA},
         HeaderMap, HeaderValue, Request, StatusCode,
     },
     middleware::{from_fn, Next},
@@ -31,10 +31,12 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use registry_platform_httputil::MAXIMUM_TOKEN_RESPONSE_BYTES;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::net::TcpListener;
+use zeroize::Zeroizing;
 
 use crate::{
     assertion::ClientAuthenticator,
@@ -59,6 +61,9 @@ const MAXIMUM_STANDARD_TOKEN_LIFETIME_SECONDS: u64 = 15 * 60;
 const FORM_MEDIA_TYPE: &str = "application/x-www-form-urlencoded";
 const JSON_MEDIA_TYPE: &str = "application/json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
+const MAXIMUM_BASIC_AUTHORIZATION_BYTES: usize = 2 * 1024;
+const MAXIMUM_CLIENT_ID_BYTES: usize = 256;
+const MAXIMUM_CLIENT_SECRET_BYTES: usize = 512;
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -193,17 +198,25 @@ impl MintService {
                 "grant type is not supported",
             ));
         }
-        if request.client_assertion_type != CLIENT_ASSERTION_TYPE {
-            return Err(TokenError::invalid_request(
-                "client assertion type is not supported",
-            ));
-        }
-
         // Cloned out of the lock so a concurrent reload cannot block here.
         let authenticator = self.authenticator();
-        let authenticated = authenticator
-            .authenticate(&request.client_assertion, now)
-            .await?;
+        let authenticated = match &request.authentication {
+            TokenAuthentication::PrivateKeyJwt {
+                client_assertion_type,
+                client_assertion,
+            } => {
+                if client_assertion_type != CLIENT_ASSERTION_TYPE {
+                    return Err(TokenError::invalid_request(
+                        "client assertion type is not supported",
+                    ));
+                }
+                authenticator.authenticate(client_assertion, now).await?
+            }
+            TokenAuthentication::ClientSecret {
+                client_id,
+                client_secret,
+            } => authenticator.authenticate_client_secret(client_id, client_secret)?,
+        };
         let token = self.minter.mint(&authenticated, now).await?;
         let body = serde_json::to_vec(&token)
             .map_err(|_| TokenError::server_error("the token response could not be serialized"))?;
@@ -373,14 +386,39 @@ fn build_metadata(config: &MintConfig) -> Value {
         "token_endpoint": format!("{issuer}{MINT_TOKEN_PATH}"),
         "jwks_uri": format!("{issuer}{}", config.signing.jwks_path),
         "grant_types_supported": [GRANT_TYPE_CLIENT_CREDENTIALS],
-        "token_endpoint_auth_methods_supported": ["private_key_jwt"],
+        "token_endpoint_auth_methods_supported": [
+            "private_key_jwt",
+            "client_secret_basic",
+            "client_secret_post"
+        ],
         "token_endpoint_auth_signing_alg_values_supported": algorithms,
         // Mint has no authorization endpoint: there is no user to redirect.
         "response_types_supported": [],
     })
 }
 
-/// The three parameters Mint reads from a token request.
+/// One and only one authentication method selected from the token request.
+enum TokenAuthentication {
+    PrivateKeyJwt {
+        client_assertion_type: String,
+        client_assertion: String,
+    },
+    ClientSecret {
+        client_id: String,
+        client_secret: Zeroizing<String>,
+    },
+}
+
+impl std::fmt::Debug for TokenAuthentication {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PrivateKeyJwt { .. } => formatter.write_str("PrivateKeyJwt([redacted])"),
+            Self::ClientSecret { .. } => formatter.write_str("ClientSecret([redacted])"),
+        }
+    }
+}
+
+/// The parameters Mint reads from a token request.
 ///
 /// RFC 6749 section 3.1 requires unrecognized parameters to be ignored and
 /// forbids any parameter appearing more than once, so this is parsed by hand
@@ -388,20 +426,37 @@ fn build_metadata(config: &MintConfig) -> Value {
 #[derive(Debug)]
 struct TokenRequest {
     grant_type: String,
-    client_assertion_type: String,
-    client_assertion: String,
+    authentication: TokenAuthentication,
 }
 
-fn parse_token_request(body: &[u8]) -> Result<TokenRequest, TokenError> {
+struct BasicClientCredentials {
+    client_id: String,
+    client_secret: Zeroizing<String>,
+}
+
+impl std::fmt::Debug for BasicClientCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BasicClientCredentials([redacted])")
+    }
+}
+
+fn parse_token_request(
+    body: &[u8],
+    basic: Option<BasicClientCredentials>,
+) -> Result<TokenRequest, TokenError> {
     let mut grant_type = None;
     let mut client_assertion_type = None;
     let mut client_assertion = None;
+    let mut client_id = None;
+    let mut client_secret = None;
 
     for (name, value) in url::form_urlencoded::parse(body) {
         let slot = match name.as_ref() {
             "grant_type" => &mut grant_type,
             "client_assertion_type" => &mut client_assertion_type,
             "client_assertion" => &mut client_assertion,
+            "client_id" => &mut client_id,
+            "client_secret" => &mut client_secret,
             // Ignored by RFC 6749 section 3.1.
             _ => continue,
         };
@@ -414,14 +469,152 @@ fn parse_token_request(body: &[u8]) -> Result<TokenRequest, TokenError> {
         *slot = Some(value.into_owned());
     }
 
+    let grant_type =
+        grant_type.ok_or_else(|| TokenError::invalid_request("grant_type is missing"))?;
+    let body_secret_present = client_id.is_some() || client_secret.is_some();
+    let assertion_present = client_assertion_type.is_some() || client_assertion.is_some();
+
+    let authentication = if let Some(basic) = basic {
+        if body_secret_present || assertion_present {
+            return Err(TokenError::invalid_request(
+                "multiple client authentication methods were presented",
+            ));
+        }
+        TokenAuthentication::ClientSecret {
+            client_id: basic.client_id,
+            client_secret: basic.client_secret,
+        }
+    } else if body_secret_present {
+        if assertion_present {
+            return Err(TokenError::invalid_request(
+                "multiple client authentication methods were presented",
+            ));
+        }
+        TokenAuthentication::ClientSecret {
+            client_id: bounded_client_id(
+                client_id.ok_or_else(|| TokenError::invalid_client("client id is missing"))?,
+            )?,
+            client_secret: bounded_client_secret(
+                client_secret
+                    .ok_or_else(|| TokenError::invalid_client("client secret is missing"))?,
+            )?,
+        }
+    } else {
+        TokenAuthentication::PrivateKeyJwt {
+            client_assertion_type: client_assertion_type
+                .ok_or_else(|| TokenError::invalid_request("client_assertion_type is missing"))?,
+            client_assertion: client_assertion
+                .ok_or_else(|| TokenError::invalid_request("client_assertion is missing"))?,
+        }
+    };
+
     Ok(TokenRequest {
-        grant_type: grant_type
-            .ok_or_else(|| TokenError::invalid_request("grant_type is missing"))?,
-        client_assertion_type: client_assertion_type
-            .ok_or_else(|| TokenError::invalid_request("client_assertion_type is missing"))?,
-        client_assertion: client_assertion
-            .ok_or_else(|| TokenError::invalid_request("client_assertion is missing"))?,
+        grant_type,
+        authentication,
     })
+}
+
+fn parse_basic_client_credentials(
+    headers: &HeaderMap,
+) -> Result<Option<BasicClientCredentials>, TokenError> {
+    let mut values = headers.get_all(AUTHORIZATION).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(TokenError::invalid_request(
+            "multiple authorization headers were presented",
+        ));
+    }
+    let value = value
+        .to_str()
+        .map_err(|_| TokenError::invalid_client("basic client credentials are malformed"))?;
+    if value.len() > MAXIMUM_BASIC_AUTHORIZATION_BYTES {
+        return Err(TokenError::invalid_client(
+            "basic client credentials are malformed",
+        ));
+    }
+    let Some((scheme, encoded)) = value.split_once(' ') else {
+        return Err(TokenError::invalid_client(
+            "basic client credentials are malformed",
+        ));
+    };
+    if !scheme.eq_ignore_ascii_case("Basic")
+        || encoded.is_empty()
+        || encoded.bytes().any(|byte| byte.is_ascii_whitespace())
+    {
+        return Err(TokenError::invalid_client(
+            "basic client credentials are malformed",
+        ));
+    }
+    let decoded = Zeroizing::new(
+        STANDARD
+            .decode(encoded)
+            .map_err(|_| TokenError::invalid_client("basic client credentials are malformed"))?,
+    );
+    let decoded = std::str::from_utf8(&decoded)
+        .map_err(|_| TokenError::invalid_client("basic client credentials are malformed"))?;
+    let (client_id, client_secret) = decoded
+        .split_once(':')
+        .ok_or_else(|| TokenError::invalid_client("basic client credentials are malformed"))?;
+    let client_id = decode_form_component(client_id)?;
+    let client_secret = decode_form_component(client_secret)?;
+    Ok(Some(BasicClientCredentials {
+        client_id: bounded_client_id(client_id)?,
+        client_secret: bounded_client_secret(client_secret)?,
+    }))
+}
+
+/// Decode RFC 6749 section 2.3.1's form-encoded Basic components strictly.
+fn decode_form_component(value: &str) -> Result<String, TokenError> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => decoded.push(b' '),
+            b'%' if index + 2 < bytes.len() => {
+                let high = hex_nibble(bytes[index + 1])?;
+                let low = hex_nibble(bytes[index + 2])?;
+                decoded.push((high << 4) | low);
+                index += 2;
+            }
+            b'%' => {
+                return Err(TokenError::invalid_client(
+                    "basic client credentials are malformed",
+                ))
+            }
+            byte => decoded.push(byte),
+        }
+        index += 1;
+    }
+    String::from_utf8(decoded)
+        .map_err(|_| TokenError::invalid_client("basic client credentials are malformed"))
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, TokenError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(TokenError::invalid_client(
+            "basic client credentials are malformed",
+        )),
+    }
+}
+
+fn bounded_client_id(value: String) -> Result<String, TokenError> {
+    if value.trim().is_empty() || value.len() > MAXIMUM_CLIENT_ID_BYTES {
+        return Err(TokenError::invalid_client("client id is not bounded"));
+    }
+    Ok(value)
+}
+
+fn bounded_client_secret(value: String) -> Result<Zeroizing<String>, TokenError> {
+    if value.is_empty() || value.len() > MAXIMUM_CLIENT_SECRET_BYTES {
+        return Err(TokenError::invalid_client("client secret is not bounded"));
+    }
+    Ok(Zeroizing::new(value))
 }
 
 /// Build the router over an already loaded service.
@@ -467,14 +660,22 @@ where
 
 async fn token(State(service): State<Arc<MintService>>, request: Request<Body>) -> Response {
     let operation = format!("urn:ulid:{}", ulid::Ulid::new());
+    let used_http_authorization = request.headers().contains_key(AUTHORIZATION);
     if !has_exact_content_type(request.headers(), FORM_MEDIA_TYPE) {
-        return service
-            .reject(
-                &operation,
-                TokenError::invalid_request("content type must be form encoded"),
-            )
-            .await;
+        return reject_token_request(
+            &service,
+            &operation,
+            used_http_authorization,
+            TokenError::invalid_request("content type must be form encoded"),
+        )
+        .await;
     }
+    let basic = match parse_basic_client_credentials(request.headers()) {
+        Ok(basic) => basic,
+        Err(error) => {
+            return reject_token_request(&service, &operation, used_http_authorization, error).await
+        }
+    };
 
     let maximum_bytes = service.config.listener.maximum_request_bytes as usize;
     let timeout = Duration::from_millis(service.config.listener.request_timeout_milliseconds);
@@ -482,32 +683,55 @@ async fn token(State(service): State<Arc<MintService>>, request: Request<Body>) 
         match tokio::time::timeout(timeout, to_bytes(request.into_body(), maximum_bytes)).await {
             Ok(Ok(body)) => body,
             Ok(Err(_)) => {
-                return service
-                    .reject(
-                        &operation,
-                        TokenError::invalid_request("the request body could not be read"),
-                    )
-                    .await
+                return reject_token_request(
+                    &service,
+                    &operation,
+                    used_http_authorization,
+                    TokenError::invalid_request("the request body could not be read"),
+                )
+                .await
             }
             Err(_) => {
-                return service
-                    .reject(
-                        &operation,
-                        TokenError::invalid_request("the request body timed out"),
-                    )
-                    .await;
+                return reject_token_request(
+                    &service,
+                    &operation,
+                    used_http_authorization,
+                    TokenError::invalid_request("the request body timed out"),
+                )
+                .await;
             }
         };
 
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let parsed = match parse_token_request(&body) {
+    let parsed = match parse_token_request(&body, basic) {
         Ok(parsed) => parsed,
-        Err(error) => return service.reject(&operation, error).await,
+        Err(error) => {
+            return reject_token_request(&service, &operation, used_http_authorization, error).await
+        }
     };
     match service.issue(&operation, &parsed, now).await {
         Ok(response) => response,
-        Err(error) => service.reject(&operation, error).await,
+        Err(error) => {
+            reject_token_request(&service, &operation, used_http_authorization, error).await
+        }
     }
+}
+
+async fn reject_token_request(
+    service: &MintService,
+    operation: &str,
+    used_http_authorization: bool,
+    error: TokenError,
+) -> Response {
+    let invalid_client = error.code() == crate::error::TokenErrorCode::InvalidClient;
+    let mut response = service.reject(operation, error).await;
+    if used_http_authorization && invalid_client && response.status() == StatusCode::UNAUTHORIZED {
+        response.headers_mut().insert(
+            axum::http::header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Basic realm=\"registry-mint\""),
+        );
+    }
+    response
 }
 
 async fn jwks(State(service): State<Arc<MintService>>) -> Response {
@@ -604,7 +828,7 @@ mod tests {
 
     #[test]
     fn a_repeated_parameter_is_rejected() {
-        let error = parse_token_request(b"grant_type=a&grant_type=b")
+        let error = parse_token_request(b"grant_type=a&grant_type=b", None)
             .expect_err("a repeated parameter must be rejected");
         assert_eq!(
             error,
@@ -616,11 +840,17 @@ mod tests {
     fn unrecognized_parameters_are_ignored() {
         let request = parse_token_request(
             b"grant_type=client_credentials&scope=anything&client_assertion_type=t&client_assertion=a",
+            None,
         )
         .expect("unrecognized parameters must be ignored");
         assert_eq!(request.grant_type, "client_credentials");
-        assert_eq!(request.client_assertion_type, "t");
-        assert_eq!(request.client_assertion, "a");
+        assert!(matches!(
+            request.authentication,
+            TokenAuthentication::PrivateKeyJwt {
+                client_assertion_type,
+                client_assertion,
+            } if client_assertion_type == "t" && client_assertion == "a"
+        ));
     }
 
     #[test]
@@ -631,9 +861,124 @@ mod tests {
             &b"grant_type=g&client_assertion_type=t"[..],
         ] {
             let error =
-                parse_token_request(body).expect_err("a missing parameter must be rejected");
+                parse_token_request(body, None).expect_err("a missing parameter must be rejected");
             assert_eq!(error.code(), crate::error::TokenErrorCode::InvalidRequest);
         }
+    }
+
+    #[test]
+    fn client_secret_post_requires_one_bounded_pair() {
+        let request = parse_token_request(
+            b"grant_type=client_credentials&client_id=qgis-installation&client_secret=secret-value",
+            None,
+        )
+        .expect("client_secret_post parses");
+        assert!(matches!(
+            request.authentication,
+            TokenAuthentication::ClientSecret { client_id, client_secret }
+                if client_id == "qgis-installation" && client_secret.as_str() == "secret-value"
+        ));
+
+        for body in [
+            &b"grant_type=client_credentials&client_id=qgis-installation"[..],
+            &b"grant_type=client_credentials&client_secret=secret-value"[..],
+            &b"grant_type=client_credentials&client_id=&client_secret=secret-value"[..],
+            &b"grant_type=client_credentials&client_id=qgis-installation&client_secret="[..],
+        ] {
+            assert_eq!(
+                parse_token_request(body, None)
+                    .expect_err("an incomplete credential pair is rejected")
+                    .code(),
+                crate::error::TokenErrorCode::InvalidClient
+            );
+        }
+    }
+
+    #[test]
+    fn client_secret_request_debug_output_is_redacted() {
+        let request = parse_token_request(
+            b"grant_type=client_credentials&client_id=qgis-installation&client_secret=secret-value",
+            None,
+        )
+        .expect("client_secret_post parses");
+
+        let rendered = format!("{request:?}");
+        assert!(rendered.contains("ClientSecret([redacted])"));
+        assert!(!rendered.contains("qgis-installation"));
+        assert!(!rendered.contains("secret-value"));
+    }
+
+    #[test]
+    fn client_secret_basic_decodes_rfc6749_form_components() {
+        let credentials = STANDARD.encode("qgis%3Ainstallation:secret%3Avalue");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Basic {credentials}")).expect("header"),
+        );
+        let basic = parse_basic_client_credentials(&headers)
+            .expect("basic header parses")
+            .expect("basic credentials are present");
+        assert_eq!(basic.client_id, "qgis:installation");
+        assert_eq!(basic.client_secret.as_str(), "secret:value");
+
+        let request = parse_token_request(b"grant_type=client_credentials", Some(basic))
+            .expect("client_secret_basic selects the credential");
+        assert!(matches!(
+            request.authentication,
+            TokenAuthentication::ClientSecret { client_id, client_secret }
+                if client_id == "qgis:installation" && client_secret.as_str() == "secret:value"
+        ));
+    }
+
+    #[test]
+    fn malformed_or_multiple_basic_credentials_are_rejected() {
+        for value in ["Bearer value", "Basic", "Basic !!!", "Basic bm9jb2xvbg=="] {
+            let mut headers = HeaderMap::new();
+            headers.insert(AUTHORIZATION, HeaderValue::from_str(value).expect("header"));
+            assert_eq!(
+                parse_basic_client_credentials(&headers)
+                    .expect_err("malformed Basic credentials are rejected")
+                    .code(),
+                crate::error::TokenErrorCode::InvalidClient,
+                "{value}"
+            );
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.append(AUTHORIZATION, HeaderValue::from_static("Basic YTpi"));
+        headers.append(AUTHORIZATION, HeaderValue::from_static("Basic Yzpk"));
+        assert_eq!(
+            parse_basic_client_credentials(&headers)
+                .expect_err("multiple authorization headers are rejected")
+                .code(),
+            crate::error::TokenErrorCode::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn multiple_client_authentication_methods_are_rejected() {
+        let basic = BasicClientCredentials {
+            client_id: "qgis-installation".to_owned(),
+            client_secret: Zeroizing::new("secret-value".to_owned()),
+        };
+        assert_eq!(
+            parse_token_request(
+                b"grant_type=client_credentials&client_id=qgis-installation&client_secret=secret-value",
+                Some(basic),
+            )
+            .expect_err("Basic and body authentication cannot be combined"),
+            TokenError::invalid_request("multiple client authentication methods were presented")
+        );
+
+        assert_eq!(
+            parse_token_request(
+                b"grant_type=client_credentials&client_id=qgis-installation&client_secret=secret-value&client_assertion_type=t&client_assertion=a",
+                None,
+            )
+            .expect_err("secret and assertion authentication cannot be combined"),
+            TokenError::invalid_request("multiple client authentication methods were presented")
+        );
     }
 
     #[test]
@@ -897,7 +1242,11 @@ mod tests {
         );
         assert_eq!(
             metadata["token_endpoint_auth_methods_supported"],
-            json!(["private_key_jwt"])
+            json!([
+                "private_key_jwt",
+                "client_secret_basic",
+                "client_secret_post"
+            ])
         );
         assert_eq!(
             metadata["grant_types_supported"],

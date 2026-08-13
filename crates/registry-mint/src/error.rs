@@ -1,10 +1,11 @@
 //! OAuth 2.0 token endpoint errors.
 //!
 //! The public error code is deliberately coarse. Whether a client is unknown,
-//! presented a bad signature, replayed a `jti`, or sent an expired assertion,
-//! the caller sees `invalid_client`. Distinguishing those cases on the wire
-//! would turn the token endpoint into an oracle for probing the client
-//! registry. The specific reason is retained for operator logs only.
+//! used the wrong authentication method, presented a bad signature or secret,
+//! replayed a `jti`, or sent an expired assertion, the caller sees
+//! `invalid_client`. Distinguishing those cases on the wire would turn the token
+//! endpoint into an oracle for probing the client registry. The specific reason
+//! is retained for operator logs only.
 
 use axum::{
     http::StatusCode,
@@ -107,20 +108,13 @@ impl TokenError {
             reason = self.reason,
             "token request rejected"
         );
-        let mut response = (
+        (
             self.code.status(),
             Json(TokenErrorBody {
                 error: self.code.as_str(),
             }),
         )
-            .into_response();
-        if self.code == TokenErrorCode::InvalidClient {
-            response.headers_mut().insert(
-                axum::http::header::WWW_AUTHENTICATE,
-                axum::http::HeaderValue::from_static("Bearer error=\"invalid_client\""),
-            );
-        }
-        response
+            .into_response()
     }
 }
 
@@ -139,6 +133,7 @@ mod tests {
         for reason in [
             "unknown client",
             "signature did not verify",
+            "client secret did not verify",
             "assertion replayed",
             "assertion expired",
         ] {

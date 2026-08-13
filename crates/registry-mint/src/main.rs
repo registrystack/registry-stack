@@ -1,8 +1,9 @@
 //! The `mint` binary.
 //!
-//! Three subcommands. `check` validates a deployment without opening a socket
-//! and `serve` runs the token endpoint; `SIGHUP` reloads the client registry in
-//! place so onboarding a caller never restarts the service.
+//! `check` validates a deployment without opening a socket and `serve` runs the
+//! token endpoint; `SIGHUP` reloads the client registry in place so onboarding
+//! a caller never restarts the service. `client-secret` provisions compatible
+//! managed clients without printing their raw credential.
 //!
 //! `token` is the odd one out: it is a *caller* tool, not an operator one. It
 //! reads no server configuration and never touches Mint's signing key. It signs
@@ -13,10 +14,11 @@
 use std::{collections::BTreeMap, path::Path, process::ExitCode, sync::Arc};
 
 use clap::Parser;
-use registry_mint::cli::{Cli, Command};
+use registry_mint::cli::{Cli, ClientSecretCommand, Command};
 use registry_mint::{
     audit::MintAuditLog,
     caller::{sign_client_assertion, AssertionRequest},
+    client_secret,
     config::MintConfig,
     secretfile,
     server::{serve, MintService},
@@ -37,7 +39,10 @@ fn main() -> ExitCode {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .json();
-    if matches!(cli.command, Command::Token { .. }) {
+    if matches!(
+        cli.command,
+        Command::Token { .. } | Command::ClientSecret { .. }
+    ) {
         logs.with_writer(std::io::stderr).init();
     } else {
         logs.init();
@@ -112,6 +117,15 @@ fn run(cli: Cli) -> Result<(), String> {
             );
             Ok(())
         }
+        Command::ClientSecret { command } => match command {
+            ClientSecretCommand::Generate { out } => {
+                let fingerprint = client_secret::generate(&out).map_err(|error| {
+                    format!("the client secret could not be generated: {error}")
+                })?;
+                println!("{fingerprint}");
+                Ok(())
+            }
+        },
         Command::Token {
             url,
             client_id,

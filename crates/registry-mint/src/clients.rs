@@ -22,6 +22,7 @@ use std::{
 };
 
 use jsonwebtoken::{jwk::JwkSet, DecodingKey};
+use registry_platform_authcommon::{parse_fingerprint, verify_api_key};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -48,6 +49,8 @@ const MAX_AUTHORIZATION_CLAIMS: usize = 32;
 const MAX_AUTHORIZATION_CLAIM_NAME_BYTES: usize = 128;
 /// Relay accepts direct authority values only through this byte ceiling.
 const MAX_AUTHORIZATION_CLAIM_VALUE_BYTES: usize = 512;
+/// One active credential plus one planned rotation credential.
+const MAX_CLIENT_SECRET_FINGERPRINTS: usize = 2;
 
 const RESERVED_ACCESS_TOKEN_CLAIMS: [&str; 9] = [
     "iss",
@@ -126,6 +129,46 @@ pub struct Authorization {
     pub claims: BTreeMap<String, String>,
 }
 
+/// The client authentication method selected by one registration.
+///
+/// Existing registrations omit `clientAuthentication` and remain
+/// `private_key_jwt` clients. Client-secret authentication is an explicit
+/// compatibility profile and cannot silently become the default.
+#[derive(Clone, Deserialize, Eq, PartialEq)]
+#[serde(
+    tag = "method",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum ClientAuthenticationDocument {
+    PrivateKeyJwt,
+    ClientSecret { secret_fingerprints: Vec<String> },
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub enum ClientAuthentication {
+    PrivateKeyJwt,
+    ClientSecret { secret_fingerprints: Vec<String> },
+}
+
+impl fmt::Debug for ClientAuthentication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PrivateKeyJwt => formatter.write_str("PrivateKeyJwt"),
+            Self::ClientSecret {
+                secret_fingerprints,
+            } => formatter
+                .debug_struct("ClientSecret")
+                .field(
+                    "secret_fingerprints",
+                    &format_args!("[{} redacted]", secret_fingerprints.len()),
+                )
+                .finish(),
+        }
+    }
+}
+
 impl fmt::Debug for Authorization {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -147,7 +190,7 @@ impl Delegation {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ClientDocument {
     client_id: String,
@@ -162,6 +205,9 @@ struct ClientDocument {
     delegation: Option<Delegation>,
     #[serde(default)]
     authorization: Option<Authorization>,
+    #[serde(default)]
+    client_authentication: Option<ClientAuthenticationDocument>,
+    #[serde(default)]
     keys: Vec<Value>,
 }
 
@@ -176,6 +222,7 @@ pub struct RegisteredClient {
     grant: Option<Grant>,
     delegation: Option<Delegation>,
     authorization: Option<Authorization>,
+    authentication: ClientAuthentication,
     jwks: JwkSet,
 }
 
@@ -221,6 +268,37 @@ impl RegisteredClient {
         self.authorization.as_ref()
     }
 
+    /// The one client-authentication method this registration accepts.
+    #[must_use]
+    pub fn authentication(&self) -> &ClientAuthentication {
+        &self.authentication
+    }
+
+    #[must_use]
+    pub fn accepts_private_key_jwt(&self) -> bool {
+        matches!(self.authentication, ClientAuthentication::PrivateKeyJwt)
+    }
+
+    /// Verify a presented client secret against every active rotation
+    /// fingerprint without returning early on the matching slot.
+    #[must_use]
+    pub fn verifies_client_secret(&self, secret: &str) -> bool {
+        let ClientAuthentication::ClientSecret {
+            secret_fingerprints,
+        } = &self.authentication
+        else {
+            return false;
+        };
+        let mut accepted = false;
+        for fingerprint in secret_fingerprints {
+            // Loading parsed every fingerprint already. Treat disagreement as
+            // non-acceptance rather than converting configuration trouble into
+            // a credential oracle.
+            accepted |= verify_api_key(secret, fingerprint).unwrap_or(false);
+        }
+        accepted
+    }
+
     /// The public keys registered for this client, and nothing else. This is
     /// the set an assertion from this client is verified against.
     #[must_use]
@@ -257,6 +335,7 @@ impl fmt::Debug for RegisteredClient {
                 "authorization",
                 &self.authorization.as_ref().map(|_| "[redacted]"),
             )
+            .field("authentication", &self.authentication)
             .field("keys", &self.jwks.keys.len())
             .finish()
     }
@@ -363,8 +442,11 @@ fn build_client(
         return Err(invalid("principal must be 1..=512 bytes"));
     }
     validate_authority_profile(&document, &invalid)?;
-
-    let jwks = build_public_jwks(document.keys, &invalid)?;
+    let authentication = validate_client_authentication(&document, &invalid)?;
+    let jwks = match &authentication {
+        ClientAuthentication::PrivateKeyJwt => build_public_jwks(document.keys, &invalid)?,
+        ClientAuthentication::ClientSecret { .. } => JwkSet { keys: Vec::new() },
+    };
 
     Ok(RegisteredClient {
         client_id: document.client_id,
@@ -374,8 +456,64 @@ fn build_client(
         grant: document.grant,
         delegation: document.delegation,
         authorization: document.authorization,
+        authentication,
         jwks,
     })
+}
+
+fn validate_client_authentication(
+    document: &ClientDocument,
+    invalid: &impl Fn(&'static str) -> ClientRegistryError,
+) -> Result<ClientAuthentication, ClientRegistryError> {
+    match document.client_authentication.as_ref() {
+        None | Some(ClientAuthenticationDocument::PrivateKeyJwt) => {
+            if document.keys.is_empty() {
+                return Err(invalid(
+                    "private-key-jwt authentication requires client keys",
+                ));
+            }
+            Ok(ClientAuthentication::PrivateKeyJwt)
+        }
+        Some(ClientAuthenticationDocument::ClientSecret {
+            secret_fingerprints,
+        }) => {
+            if !document.keys.is_empty() {
+                return Err(invalid(
+                    "client-secret and private-key-jwt authentication are mutually exclusive",
+                ));
+            }
+            if document.authorization.is_none()
+                || document.evidence_audience.is_some()
+                || document.requester_tags.is_some()
+                || document.grant.is_some()
+                || document.delegation.is_some()
+            {
+                return Err(invalid(
+                    "client-secret authentication requires standard authorization",
+                ));
+            }
+            if secret_fingerprints.is_empty()
+                || secret_fingerprints.len() > MAX_CLIENT_SECRET_FINGERPRINTS
+            {
+                return Err(invalid(
+                    "between 1 and 2 client-secret fingerprints are required",
+                ));
+            }
+            for fingerprint in secret_fingerprints {
+                parse_fingerprint(fingerprint).map_err(|_| {
+                    invalid("client-secret fingerprints must be canonical SHA-256 values")
+                })?;
+            }
+            if secret_fingerprints.iter().collect::<BTreeSet<_>>().len()
+                != secret_fingerprints.len()
+            {
+                return Err(invalid("client-secret fingerprints must be unique"));
+            }
+            Ok(ClientAuthentication::ClientSecret {
+                secret_fingerprints: secret_fingerprints.clone(),
+            })
+        }
+    }
 }
 
 fn validate_authority_profile(
@@ -653,6 +791,9 @@ pub fn contains_private_material(object: &Map<String, Value>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_authcommon::fingerprint_api_key;
+
+    const CLIENT_SECRET: &str = "M7vEwCZZ5R2UjUVn5tQJ8w23F4w7T6s8d9P0yK1mN2o";
 
     const CLIENT_A: &str = r#"
 clientId: client-a
@@ -674,6 +815,24 @@ authorization:
 keys:
   - {kty: OKP, crv: Ed25519, kid: relay-consumer-2026-01, alg: EdDSA, x: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo}
 "#;
+
+    fn secret_client(fingerprints: &[String]) -> String {
+        let fingerprints = if fingerprints.is_empty() {
+            "  secretFingerprints: []".to_owned()
+        } else {
+            format!(
+                "  secretFingerprints:\n{}",
+                fingerprints
+                    .iter()
+                    .map(|fingerprint| format!("    - {fingerprint}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+        format!(
+            "clientId: qgis-installation\nprincipal: urn:example:qgis-installation\nauthorization:\n  scopes: [registry:qgis:read]\nclientAuthentication:\n  method: client-secret\n{fingerprints}\n"
+        )
+    }
 
     fn registry_from(files: &[(&str, &str)]) -> Result<ClientRegistry, ClientRegistryError> {
         let directory = tempfile::tempdir().expect("temp dir");
@@ -746,6 +905,104 @@ keys:
                 ("authority".to_owned(), "district-17".to_owned()),
                 ("purpose".to_owned(), "statutory-consultation".to_owned()),
             ])
+        );
+    }
+
+    #[test]
+    fn a_client_secret_registration_is_explicit_bounded_and_verifiable() {
+        let fingerprint = fingerprint_api_key(CLIENT_SECRET);
+        let registry = load_one(&secret_client(std::slice::from_ref(&fingerprint)))
+            .expect("client-secret registration loads");
+        let client = registry
+            .get("qgis-installation")
+            .expect("client is registered");
+
+        assert!(matches!(
+            client.authentication(),
+            ClientAuthentication::ClientSecret { secret_fingerprints }
+                if secret_fingerprints == std::slice::from_ref(&fingerprint)
+        ));
+        assert!(!client.accepts_private_key_jwt());
+        assert!(client.verifies_client_secret(CLIENT_SECRET));
+        assert!(!client.verifies_client_secret("wrong-client-secret"));
+        assert!(client.jwks().keys.is_empty());
+    }
+
+    #[test]
+    fn client_secret_authentication_is_opt_in_and_mutually_exclusive_with_keys() {
+        let registry = load_one(SCOPED_CLIENT).expect("legacy registration loads");
+        assert!(registry
+            .get("relay-consumer")
+            .expect("client is registered")
+            .accepts_private_key_jwt());
+
+        let fingerprint = fingerprint_api_key(CLIENT_SECRET);
+        let with_key = secret_client(std::slice::from_ref(&fingerprint)).replace(
+            "clientAuthentication:",
+            "keys:\n  - {kty: OKP, crv: Ed25519, kid: client-key, alg: EdDSA, x: 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo}\nclientAuthentication:",
+        );
+        assert_eq!(
+            load_error(&with_key),
+            invalid("client-secret and private-key-jwt authentication are mutually exclusive")
+        );
+
+        let missing_keys = SCOPED_CLIENT
+            .lines()
+            .take_while(|line| *line != "keys:")
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            load_error(&missing_keys),
+            invalid("private-key-jwt authentication requires client keys")
+        );
+    }
+
+    #[test]
+    fn client_secret_fingerprints_are_canonical_unique_and_rotation_bounded() {
+        let first = fingerprint_api_key(CLIENT_SECRET);
+        let second = fingerprint_api_key("another-high-entropy-client-secret-value");
+        load_one(&secret_client(&[first.clone(), second.clone()]))
+            .expect("two rotation fingerprints load");
+
+        for (fingerprints, reason) in [
+            (
+                Vec::<String>::new(),
+                "between 1 and 2 client-secret fingerprints are required",
+            ),
+            (
+                vec![first.clone(), second.clone(), fingerprint_api_key("third")],
+                "between 1 and 2 client-secret fingerprints are required",
+            ),
+            (
+                vec![first.clone(), first.clone()],
+                "client-secret fingerprints must be unique",
+            ),
+            (
+                vec!["sha256:not-canonical".to_owned()],
+                "client-secret fingerprints must be canonical SHA-256 values",
+            ),
+        ] {
+            assert_eq!(load_error(&secret_client(&fingerprints)), invalid(reason));
+        }
+    }
+
+    #[test]
+    fn client_secret_authentication_cannot_enter_the_evidence_authority_profile() {
+        let fingerprint = fingerprint_api_key(CLIENT_SECRET);
+        let evidence = CLIENT_A
+            .lines()
+            .take_while(|line| *line != "keys:")
+            .chain([
+                "clientAuthentication:",
+                "  method: client-secret",
+                "  secretFingerprints:",
+                &format!("    - {fingerprint}"),
+            ])
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            load_error(&evidence),
+            invalid("client-secret authentication requires standard authorization")
         );
     }
 

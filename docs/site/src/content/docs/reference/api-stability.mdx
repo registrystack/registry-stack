@@ -67,9 +67,10 @@ Registry Mint and `evidence-oid4vci` are deliberately absent from the table. Bot
 services rather than patterns of their own, and their configuration fields, route shapes, and CLI
 flags may still change without a major release, as the [Registry Mint reference](../mint/) states
 for each of its surfaces. What Registry Mint does hold steady is structural rather than versioned:
-the `client_credentials` grant with `private_key_jwt` client authentication (RFC 7523), the
-collapse of every client authentication failure to `invalid_client`, and authority written from
-the client registry rather than from the caller's request.
+the `client_credentials` grant with registered authentication, `private_key_jwt` (RFC 7523) by
+default or an explicitly selected standard client-secret method, the collapse of every client
+authentication failure to `invalid_client`, and authority written from the client registry rather
+than from the caller's request.
 
 ## What counts as a breaking change
 

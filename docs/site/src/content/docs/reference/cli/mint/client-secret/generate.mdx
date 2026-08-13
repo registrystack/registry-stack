@@ -1,6 +1,6 @@
 ---
-title: "mint command reference"
-description: "Generated syntax and options for mint."
+title: "mint client-secret generate command reference"
+description: "Generated syntax and options for mint client-secret generate."
 status: current
 owner: registry-docs
 source_repos:
@@ -13,7 +13,7 @@ standards_referenced: []
 
 {/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
 
-Registry Stack token issuer.
+Generate one credential file and print its non-secret fingerprint.
 
 ## Contract status
 
@@ -22,25 +22,15 @@ This page is generated from the public Clap command tree. Hidden implementation 
 ## Usage
 
 ```text
-mint <COMMAND>
+mint client-secret generate --out <OUT>
 ```
-
-## Commands
-
-| Command | Description |
-| --- | --- |
-| [`check`](./check/) | Load the configuration, keys, audit chain, and client registry, then exit |
-| [`serve`](./serve/) | Serve the token endpoint until terminated |
-| [`verify-audit`](./verify-audit/) | Verify the retained keyed Mint audit chain named by the configuration |
-| [`client-secret`](./client-secret/) | Provision high-entropy credentials for compatible managed clients |
-| [`token`](./token/) | Obtain an access token from a running token endpoint, as a client would |
 
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
+| `--out <OUT>` | Yes | n/a | n/a | n/a | New owner-only file that receives the printable client secret |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
-| `-V, --version` | No | n/a | n/a | n/a | Print version |
 
 ## Generation contract
 
