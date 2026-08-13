@@ -732,7 +732,8 @@ the audit master is different and always starts a new epoch:
 4. Generate a fresh independent audit master, increment `hashKeyVersion`, and
    select a fresh empty `auditStorage.path`. Do not rename or reuse the old
    active path.
-5. Run `evidence check` and the full handoff checks, start the new process, and
+5. Run `evidence check --require-runtime-dependencies` and the full handoff
+   checks, start the new process, and
    route traffic only after readiness succeeds.
 
 Never append a new audit master to an existing chain. Startup with replacement
@@ -1137,8 +1138,9 @@ that reads it, with `source.unavailable` at the boundary and the
 `source-extract-stale` audit category, while `/ready` stays `200` and the
 requirements on other sources keep being served. Every replica may mount the
 same file, so removing all of them from rotation would turn one stale source
-into a full service outage. The deployment preflight is `evidence check`: it
-refuses an extract that is already stale before traffic is routed. A later
+into a full service outage. The deployment preflight is
+`evidence check --require-runtime-dependencies`: it refuses an extract that is
+already stale before traffic is routed. A later
 transition to stale remains visible through the safe startup diagnostic and
 audit category. Version 1 operator conformance additionally requires every
 stale-extract fault to identify only the governed source or extract profile,
