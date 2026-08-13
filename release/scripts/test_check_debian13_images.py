@@ -116,6 +116,112 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 failures,
             )
 
+    def test_relay_v2_release_recipe_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.repository_copy(root)
+
+            self.assertEqual([], POLICY.check_repository(root))
+
+    def test_relay_v2_rejects_runtime_preparation_mutations(self) -> None:
+        mutations = (
+            "chown 65532:65532 /workspace/runtime-root/etc/relay",
+            "chown -R 65532:65532 /workspace/runtime-root/etc",
+            "chmod 0777 /workspace/runtime-root/etc",
+            "chmod g+w /workspace/runtime-root",
+            "install -d -o 65532 -g 65532 -m 0777 /workspace/runtime-root/etc",
+            "chmod 0777 /workspace/runtime-root/etc/*",
+            "chown 65532:65532 `/bin/echo /workspace/runtime-root/etc`",
+            "command cd /workspace/runtime-root && chmod 0777 etc",
+            "(cd /workspace/runtime-root && chmod 0777 etc)",
+            "( cd /workspace/runtime-root && chmod 0777 etc )",
+        )
+        for mutation in mutations:
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                dockerfile = root / "release/docker/Dockerfile.relay"
+                dockerfile.write_text(
+                    dockerfile.read_text(encoding="utf-8").replace(
+                        "    && find /workspace/runtime-root",
+                        f"    && {mutation} \\\n    && find /workspace/runtime-root",
+                    ),
+                    encoding="utf-8",
+                )
+
+                failures = POLICY.check_repository(root)
+                self.assertTrue(
+                    any("runtime preparation stage" in failure for failure in failures),
+                    failures,
+                )
+
+        for replacement in (
+            "install -d -o 65532 -g 65532 -m 0755",
+            "install -d -o 0 -g 0 -m 0775",
+        ):
+            with (
+                self.subTest(replacement=replacement),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                dockerfile = root / "release/docker/Dockerfile.relay"
+                dockerfile.write_text(
+                    dockerfile.read_text(encoding="utf-8").replace(
+                        "install -d -o 0 -g 0 -m 0755", replacement, 1
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertTrue(
+                    any(
+                        "runtime preparation stage" in failure
+                        for failure in POLICY.check_repository(root)
+                    )
+                )
+
+    def test_relay_v2_rejects_runtime_copy_mutations(self) -> None:
+        canonical = "COPY --from=runtime-root /workspace/runtime-root/ /"
+        runtime_base = f"FROM {POLICY.DISTROLESS_RUNTIME} AS runtime"
+        mutations = (
+            "COPY --from=runtime-root --chown=65532:65532 /workspace/runtime-root/ /",
+            "COPY --from=runtime-root --chown 65532:65532 /workspace/runtime-root/ /",
+            "COPY --from=runtime-root --chmod=0777 /workspace/runtime-root/ /",
+            canonical + "\nCOPY --from=runtime-root --chmod=0777 "
+            "/workspace/runtime-root/etc/ /etc/",
+            canonical + "\nCOPY --from=runtime-root --chown=65532:65532 "
+            "/workspace/runtime-root/etc /",
+            canonical + f"\n{runtime_base}-shadow",
+            canonical + f"\n{runtime_base}",
+            canonical + "\nADD --chown=65532:65532 --chmod=0777 LICENSE /etc/relay/",
+            canonical + "\nUSER 0",
+            canonical
+            + f"\nFROM {POLICY.DISTROLESS_RUNTIME} AS post\n"
+            + "COPY --from=runtime-root /workspace/runtime-root/ /\nUSER 0",
+        )
+        for mutation in mutations:
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                dockerfile = root / "release/docker/Dockerfile.relay"
+                dockerfile.write_text(
+                    dockerfile.read_text(encoding="utf-8").replace(canonical, mutation),
+                    encoding="utf-8",
+                )
+                failures = POLICY.check_repository(root)
+                self.assertTrue(
+                    any(
+                        "metadata-preserving release recipe" in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+
     def test_relay_v2_image_healthcheck_endpoint_is_configurable(self) -> None:
         mutations = (
             (

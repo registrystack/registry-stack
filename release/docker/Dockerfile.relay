@@ -8,15 +8,17 @@ ARG SOURCE_DATE_EPOCH
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
     mkdir -p \
-        /workspace/runtime-root/etc/relay \
         /workspace/runtime-root/licenses/relay \
         /workspace/runtime-root/usr/local/bin \
         /workspace/runtime-root/var/lib/relay/audit \
         /workspace/runtime-root/var/lib/relay/data \
+    && install -d -o 0 -g 0 -m 0755 \
+        /workspace/runtime-root \
+        /workspace/runtime-root/etc \
+        /workspace/runtime-root/etc/relay \
     && install -m 0755 /workspace/image-bin/relay /workspace/runtime-root/usr/local/bin/relay \
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/relay/LICENSE \
     && chown -R 65532:65532 \
-        /workspace/runtime-root/etc/relay \
         /workspace/runtime-root/var/lib/relay \
     && chmod 0700 /workspace/runtime-root/var/lib/relay/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
