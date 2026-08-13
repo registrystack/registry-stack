@@ -42,7 +42,7 @@ subcommands.
 | `relayctl diff <PREVIOUS> <CURRENT>` | Two project directories | Classifies meaning, disclosure, and security changes between the reviewed project and the candidate | Add or remove change classes, or decide whether the change is acceptable |
 | `relayctl package <PROJECT> --output <DIRECTORY>` | Project that compiles under the production profile | Builds a sealed package directory carrying `relay-package.json` | Sign the package, deploy it, or write into a destination that already exists |
 | `relayctl tooling editor [PROJECT]` | Authoring project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all six managed files | Install an extension, change editor settings outside the project, or read any database |
-| `relayctl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Relay V2 authoring diagnostics from the shared in-memory authoring compiler, as an editor types | Open a socket, observe SQLite, or read source values |
+| `relayctl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Relay V2 authoring diagnostics from the entry documents and exact governed closure held for the workspace | Open a socket, observe SQLite, read source values, or adopt an unrelated file merely because a recursive watcher reports it |
 
 ## Global options
 

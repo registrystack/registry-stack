@@ -253,6 +253,10 @@ REQ-PR-RELAYCTL-027: A diagnostic MUST identify a location by authored key path 
 a source value.
 An operational failure MUST be reported to standard error as `relayctl: <message>` using a
 categorical message that names neither a source value nor an absolute filesystem path.
+The language server MUST load only `registry.yaml`, `runtime.yaml`, and the exact governed closure
+resolved from its current project documents. A recursive watcher notification MUST NOT authorize a
+read, diagnostic, or retained buffer for an unrelated path, and a document that leaves the governed
+closure MUST be discarded.
 
 The project workflow JSON report carries no schema-version field and is not a versioned automation
 contract.
@@ -332,6 +336,9 @@ tests.
      destination, and that the commands link the shared library and never spawn relay. */}
 {/* Evidence: crates/registry-relayctl/tests/editor.rs and language_server.rs pin the distinct editor
      report and LSP output surfaces. */}
+{/* Evidence: crates/registry-language-server/src/relay_v2/index.rs and workspace.rs restrict Relay
+     V2 reads and retained buffers to the entry documents and exact governed closure; their unit
+     tests reject unrelated watcher paths and discard documents that leave that closure. */}
 {/* Evidence: crates/registry-relayctl/tests/fixture_environment.rs pins that fixture testing ignores
      ambient temporary-directory configuration, supports a read-only project, and leaves no scratch
      state behind. */}

@@ -124,6 +124,7 @@ The `mint` binary reads the variables below.
 | Name | Purpose | Default or required |
 | --- | --- | --- |
 | `MINT_CONFIG` | YAML config path for `mint check`, `mint serve`, and `mint verify-audit`. Equivalent to `--config`. | Required for those three subcommands, by flag or by variable. |
+| `MINT_HEALTHCHECK_URL` | Exact numeric loopback or private-address HTTP URL for `mint healthcheck`. The path must be `/ready`; credentials, query, and fragment are refused. | Defaults to `http://127.0.0.1:8081/ready`. |
 | `RUST_LOG` | Tracing filter for the JSON operational logs. Applies to every subcommand; `mint token` sends its logs to standard error so the access token stays alone on standard output. | Defaults to `info`. |
 
 Registry Mint's governed service public keys, Transit proxy settings, and client registrations are named
