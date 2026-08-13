@@ -752,6 +752,73 @@ def yaml_step_blocks(workflow: str) -> list[str]:
     return blocks
 
 
+def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[str]:
+    """Confine coverage OIDC upload to an exact protected-main push."""
+
+    gate = "Platform coverage OIDC permission isolation"
+    if workflow is None:
+        return [gate]
+    coverage = yaml_job_block(workflow, "platform-coverage")
+    upload = yaml_job_block(workflow, "platform-coverage-upload")
+    aggregate = yaml_job_block(workflow, "ci-result")
+    if coverage is None or upload is None or aggregate is None:
+        return [gate]
+
+    upload_permissions = (
+        "    permissions:\n"
+        "      actions: read\n"
+        "      contents: read\n"
+        "      id-token: write"
+    )
+    permission_block = upload.split("    permissions:\n", 1)
+    upload_permission_lines = (
+        permission_block[1].split("\n    steps:", 1)[0]
+        if len(permission_block) == 2
+        else ""
+    )
+    steps_block = upload.split("\n    steps:\n", 1)
+    upload_steps_text = steps_block[1] if len(steps_block) == 2 else ""
+    upload_steps = yaml_step_blocks(upload)
+    coverage_steps = yaml_step_blocks(coverage)
+    staging_step = next(
+        (
+            step
+            for step in coverage_steps
+            if "name: Stage platform coverage for trusted upload" in step
+        ),
+        "",
+    )
+    protected_push = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    if (
+        "id-token: write" in coverage
+        or "permissions: write-all" in workflow
+        or f"        if: {protected_push}\n" not in staging_step
+        or "actions/upload-artifact@" not in staging_step
+        or "retention-days: 1" not in staging_step
+        or "needs:\n      - changes\n      - platform-coverage" not in upload
+        or f"    if: {protected_push} && needs.changes.outputs.platform == 'true'\n"
+        not in upload
+        or upload_permissions not in upload
+        or upload_permission_lines
+        != "      actions: read\n      contents: read\n      id-token: write"
+        or upload_steps_text.count("\n      - ") != 1
+        or not upload_steps_text.startswith("      - ")
+        or upload_steps_text.count("        uses:") != 2
+        or len(upload_steps) != 2
+        or "uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+        not in upload_steps[0]
+        or "uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f"
+        not in upload_steps[1]
+        or "use_oidc: true" not in upload_steps[1]
+        or "actions/checkout@" in upload
+        or "        run:" in upload
+        or workflow.count("id-token: write") != upload.count("id-token: write")
+        or "      - platform-coverage-upload" not in aggregate
+    ):
+        return [gate]
+    return []
+
+
 def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
     if workflow is None:
         return ["Candidate build job isolation"]
@@ -1083,6 +1150,9 @@ def main() -> int:
     )
     policy_texts = policy_file_texts(ROOT, RELEASE_SECURITY_POLICY_PATHS)
     policy_violations.extend(
+        platform_coverage_oidc_isolation_violations(workflow_text)
+    )
+    policy_violations.extend(
         candidate_build_isolation_violations(
             policy_texts.get(".github/workflows/release-candidate.yml")
         )
@@ -1138,7 +1208,7 @@ def main() -> int:
         + len(REQUIRED_RELEASE_SECURITY_GATES)
         + len(ORDERED_RELEASE_SECURITY_GATES)
         + len(FORBIDDEN_RELEASE_SECURITY_GATES)
-        + 5  # Structural isolation, retention, rebuild, and destination gates.
+        + 6  # Structural permission, isolation, retention, rebuild, and destination gates.
     )
     print(
         f"gate inventory check passed for {declared_gate_count} gates; "
