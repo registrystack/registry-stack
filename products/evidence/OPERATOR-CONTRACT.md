@@ -1023,7 +1023,7 @@ what any off-host copy accepted.
 Before production exposure, the operator runs:
 
 ```sh
-evidence check
+evidence check --require-runtime-dependencies
 evidence evaluate --fixture "<path>"
 ```
 

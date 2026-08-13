@@ -59,8 +59,8 @@ invariants:
   - id: sec-issuer-identity-transport-separation
     threat: A rollout or internal discovery hostname silently changes the JWT issuer Relay trusts, or two configured key transports create an ambiguous trust source.
     enforcementPoint: Closed RelayRuntime issuer profile, exact discovery metadata comparison, and exact JWT issuer verification.
-    expected: Relay accepts exactly one discovery or JWKS transport, retains trustedIssuer as the exact token iss value, refuses discovery metadata declaring another issuer, and preserves legacy derivation only for the canonical discovery URL form.
-    evidence: issuer-transport-and-token-verification-tests
+    expected: Relay accepts exactly one discovery or direct JWKS transport, validates trustedIssuer as the exact token iss value independently of the transport authority, refuses discovery metadata declaring another issuer, and preserves legacy derivation only for the canonical discovery URL form.
+    evidence: issuer-transport-configuration-and-platform-token-verification-tests
     negativeTest: runtime_separates_trusted_issuer_from_one_key_transport
     tests:
       - {path: crates/registry-relay-v2/src/contract.rs, name: runtime_separates_trusted_issuer_from_one_key_transport}

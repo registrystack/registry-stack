@@ -1258,6 +1258,7 @@ bytes, runtime bindings, trust files, or secrets change:
 ```sh
 evidencectl doctor --project '<candidate>'
 evidencectl fixtures run --project '<candidate>'
+evidence --runtime '<candidate>/runtime.yaml' check --require-runtime-dependencies
 evidence --runtime '<candidate>/runtime.yaml' serve
 ```
 
