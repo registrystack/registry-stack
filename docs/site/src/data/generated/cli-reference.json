@@ -101,6 +101,15 @@
               "environment": null
             },
             {
+              "display": "--case <CASE>",
+              "description": "Evaluate only the case with this exact identifier",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--explain",
               "description": "Print the per-stage trace of what each case actually did. A failure names the contract that broke and nothing else, which says that a case failed but never why. The trace says how far each case got, what shape the response and facts had, and which declared concept the output gate was checking. It reports shapes, counts, and identifiers, never document values, and it never changes an outcome, an exit code, or a message.",
               "always_required": false,
@@ -1517,6 +1526,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--case <CASE>",
+                  "description": "Run only the exact case identifier in the selected fixture",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--json",
                   "description": "Emit one machine-readable JSON report on standard output",
                   "always_required": false,
@@ -1544,7 +1562,15 @@
                   "environment": null
                 }
               ],
-              "constraints": [],
+              "constraints": [
+                {
+                  "kind": "requires_all",
+                  "when": "--case <CASE>",
+                  "arguments": [
+                    "--fixture <FIXTURE>"
+                  ]
+                }
+              ],
               "subcommands": []
             }
           ]

@@ -37,6 +37,7 @@ evidence evaluate [OPTIONS] --fixture <FIXTURE>
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--fixture <FIXTURE>` | Yes | n/a | n/a | n/a | Bundle-relative fixture path referenced by exactly one requirement |
+| `--case <CASE>` | No | n/a | n/a | n/a | Evaluate only the case with this exact identifier |
 | `--explain` | No | n/a | n/a | n/a | Print the per-stage trace of what each case actually did. A failure names the contract that broke and nothing else, which says that a case failed but never why. The trace says how far each case got, what shape the response and facts had, and which declared concept the output gate was checking. It reports shapes, counts, and identifiers, never document values, and it never changes an outcome, an exit code, or a message. |
 | `--explain-format <EXPLAIN_FORMAT>` | No | n/a | `text`, `json` | n/a | Render the `--explain` trace for a machine reader instead of a person. The JSON form is the whole of standard output, so the summary line's verdict and evaluated-case count move inside the document rather than trailing it |
 | `--runtime <RUNTIME>` | No | `/etc/registry-evidence/runtime.yaml` | n/a | `REGISTRY_EVIDENCE_RUNTIME` | One closed operator runtime file that binds the governed bundle |
