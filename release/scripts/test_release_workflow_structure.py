@@ -1017,7 +1017,8 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "Reconcile platform packages, then publish the root package",
         )
         self.assertIn("client_registry.py npm-state", npm_publish)
-        self.assertIn("npm publish", npm_publish)
+        self.assertIn('npm publish "./${tarball}"', npm_publish)
+        self.assertNotIn('npm publish "${tarball}"', npm_publish)
         self.assertIn("require_unexpired_candidate", npm_publish)
         self.assertLess(
             npm_publish.rindex("require_unexpired_candidate"),
