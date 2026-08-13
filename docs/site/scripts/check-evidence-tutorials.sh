@@ -51,6 +51,7 @@
 #   EVIDENCE_OID4VCI_INTEROP_TEST_BIN     run this prebuilt sanitized flow test
 #   EVIDENCE_CLIENT_PY_LIB                import this prebuilt Python client
 #                                         module instead of building one
+#   EVIDENCE_CLIENT_PY_BIN                use this exact Python executable
 #   EVIDENCE_CLIENT_NODE_DIR              import this prebuilt Node.js client
 #                                         package instead of building one
 #   EVIDENCE_CLIENT_NODE_BIN              use this exact Node.js executable
@@ -686,6 +687,7 @@ prepare_toolset() {
 # imports under any CPython the replay userland carries, exactly as
 # EVIDENCE_CLIENT_PY_LIB's siblings let CI mount prebuilt binaries.
 PYTHON_CLIENT_LIB="${EVIDENCE_CLIENT_PY_LIB:-}"
+PYTHON_CLIENT_BIN="${EVIDENCE_CLIENT_PY_BIN:-}"
 NODE_CLIENT_DIR="${EVIDENCE_CLIENT_NODE_DIR:-}"
 NODE_CLIENT_BIN="${EVIDENCE_CLIENT_NODE_BIN:-}"
 
@@ -718,6 +720,15 @@ prepare_python_client() {
 		printf 'Python client module not built: %s\n' "$PYTHON_CLIENT_LIB" >&2
 		exit 1
 	fi
+	if [[ -z "$PYTHON_CLIENT_BIN" ]]; then
+		PYTHON_CLIENT_BIN="$(command -v python3 || true)"
+	fi
+	if [[ "$PYTHON_CLIENT_BIN" != /* || ! -x "$PYTHON_CLIENT_BIN" ]]; then
+		printf 'Python client executable must be an absolute executable path: %s\n' \
+			"${PYTHON_CLIENT_BIN:-<unset>}" >&2
+		exit 1
+	fi
+	ln -sf "$PYTHON_CLIENT_BIN" "$SHIM_DIR/python"
 }
 
 prepare_node_client() {

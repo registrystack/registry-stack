@@ -74,6 +74,23 @@ fn an_undeclared_command_is_still_refused() {
     );
 }
 
+#[test]
+fn progressive_request_preparation_accepts_no_caller_supplied_selector() {
+    registry_evidencectl::command()
+        .try_get_matches_from([
+            "evidencectl",
+            "request",
+            "prepare",
+            "--profile",
+            "client.json",
+            "--requirement",
+            "authentication-derived-status",
+            "--name",
+            "authentication-derived-status",
+        ])
+        .expect("the published contract decides whether request-origin selectors are required");
+}
+
 fn evidencectl(arguments: &[&str]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
         .args(arguments)

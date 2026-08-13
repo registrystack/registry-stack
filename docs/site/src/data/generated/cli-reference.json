@@ -748,6 +748,22 @@
                         "--private-key-file <PATH>",
                         "--private-key-env <VARIABLE>"
                       ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--local-loopback-discovery",
+                        "--pinned-jwks <PATH>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--private-key-env <VARIABLE>",
+                        "--private-key-file <PATH>"
+                      ]
                     }
                   ],
                   "subcommands": []
@@ -1979,14 +1995,6 @@
                       "kind": "mutually_exclusive",
                       "when": null,
                       "arguments": [
-                        "--case <CASE>",
-                        "--config <CONFIG>"
-                      ]
-                    },
-                    {
-                      "kind": "mutually_exclusive",
-                      "when": null,
-                      "arguments": [
                         "--config <CONFIG>",
                         "--openapi <OPENAPI>"
                       ]
@@ -1996,23 +2004,7 @@
                       "when": null,
                       "arguments": [
                         "--config <CONFIG>",
-                        "--operation <OPERATION>"
-                      ]
-                    },
-                    {
-                      "kind": "mutually_exclusive",
-                      "when": null,
-                      "arguments": [
-                        "--config <CONFIG>",
                         "--output <OUTPUT>"
-                      ]
-                    },
-                    {
-                      "kind": "mutually_exclusive",
-                      "when": null,
-                      "arguments": [
-                        "--config <CONFIG>",
-                        "--path-parameter <PATH_PARAMETERS>"
                       ]
                     },
                     {
@@ -2262,7 +2254,7 @@
               "invocation": "evidencectl request prepare",
               "about": "Prepare the request, authorization header, and verification context",
               "long_about": null,
-              "usage": "evidencectl request prepare [OPTIONS] --name <NAME> <--subject <SUBJECT>|--subjects-file <PATH>> <QUESTION|--profile <PROFILE>>",
+              "usage": "evidencectl request prepare [OPTIONS] --name <NAME> <QUESTION|--profile <PROFILE>>",
               "arguments": [
                 {
                   "display": "[QUESTION]",
@@ -2367,8 +2359,16 @@
                   "kind": "required_exactly_one",
                   "when": null,
                   "arguments": [
-                    "--subject <SUBJECT>",
-                    "--subjects-file <PATH>"
+                    "[QUESTION]",
+                    "--profile <PROFILE>"
+                  ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--profile <PROFILE>",
+                    "[QUESTION]"
                   ]
                 },
                 {
@@ -2377,14 +2377,6 @@
                   "arguments": [
                     "--subject <SUBJECT>",
                     "--subjects-file <PATH>"
-                  ]
-                },
-                {
-                  "kind": "required_exactly_one",
-                  "when": null,
-                  "arguments": [
-                    "[QUESTION]",
-                    "--profile <PROFILE>"
                   ]
                 }
               ],

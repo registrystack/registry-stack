@@ -93,16 +93,13 @@ pub struct GenerateArgs {
     #[arg(long, conflicts_with = "config")]
     openapi: Option<PathBuf>,
 
-    /// Create only missing bodies from an existing editable configuration.
+    /// Existing editable configuration to complete or extend.
     #[arg(
         long,
         conflicts_with_all = [
             "openapi",
             "output",
             "project",
-            "operation",
-            "case",
-            "path_parameters",
             "seed",
             "as_of"
         ]

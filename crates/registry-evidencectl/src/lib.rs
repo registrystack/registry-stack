@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn request_prepare_requires_one_subject_input_form() {
+    fn request_prepare_keeps_subject_input_forms_mutually_exclusive() {
         let base = [
             "evidencectl",
             "request",
@@ -155,9 +155,7 @@ mod tests {
             "retained-request",
         ];
 
-        let missing_subject =
-            Cli::try_parse_from(base).expect_err("one subject input form is required");
-        assert_eq!(missing_subject.kind(), ErrorKind::MissingRequiredArgument);
+        assert!(Cli::try_parse_from(base).is_ok());
 
         assert!(
             Cli::try_parse_from(base.into_iter().chain(["--subject", "person:id=123"]),).is_ok()
@@ -226,14 +224,8 @@ mod tests {
     }
 
     #[test]
-    fn stored_source_mock_generation_rejects_new_generation_inputs() {
-        for option in [
-            ["--operation", "GET /records"],
-            ["--case", "starter"],
-            ["--path-parameter", "id=123"],
-            ["--seed", "1"],
-            ["--as-of", "2026-08-13"],
-        ] {
+    fn stored_source_mock_generation_reuses_settings_and_can_append_cases() {
+        for option in [["--seed", "1"], ["--as-of", "2026-08-13"]] {
             let error = Cli::try_parse_from(
                 [
                     "evidencectl",
@@ -249,6 +241,22 @@ mod tests {
             .expect_err("stored generation must reject new generation inputs");
             assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
         }
+
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "source",
+            "mock",
+            "generate",
+            "--config",
+            "source.yaml",
+            "--operation",
+            "GET /records/{id}",
+            "--case",
+            "second-record",
+            "--path-parameter",
+            "id=123",
+        ])
+        .is_ok());
 
         assert!(Cli::try_parse_from([
             "evidencectl",

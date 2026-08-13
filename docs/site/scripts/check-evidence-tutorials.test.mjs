@@ -256,11 +256,11 @@ test('--only refuses an unpublished legacy tutorial', async () => {
   assert.match(output, /not a registered Evidence tutorial/u);
 });
 
-// The replay runs inside a clean Debian userland holding a shell, coreutils
-// and the toolset under test. An interpreter the container does not carry
-// fails mid-journey, where the transcript makes it look like a tutorial
-// defect, so the gate and everything it emits stay on that floor.
-test('the gate depends on no interpreter beyond the replay userland and supplied Node', async () => {
+// The replay runs inside a clean Debian userland holding a shell, coreutils,
+// Python, and the toolset under test. An undeclared interpreter fails
+// mid-journey, where the transcript looks like a tutorial defect, so the gate
+// and everything it emits stay on that explicit floor.
+test('the gate depends on no interpreter beyond the supplied Python and Node runtimes', async () => {
   const source = await readFile(gate, 'utf8');
   const offenders = source
     .split('\n')
@@ -275,7 +275,12 @@ test('the gate depends on no interpreter beyond the replay userland and supplied
     // fence with the shell helper and does not execute the named interpreter.
     .filter(([, line]) => !/^\s*"save:[^"]+\|[^|]+\|\d+\|[^"]+",?$/u.test(line))
     // This is another required Markdown literal, not a gate command.
-    .filter(([, line]) => !/^\s*"TUTORIAL_MISMATCH_BINDING=1 python age-check\.py"/u.test(line));
+    .filter(([, line]) => !/^\s*"TUTORIAL_MISMATCH_BINDING=1 python age-check\.py"/u.test(line))
+    // The first assertion tutorial deliberately executes its Python lane. The
+    // runner resolves one configured interpreter and exposes only that binary
+    // under the `python` name created by an activated virtual environment.
+    .filter(([, line]) => !/^\s*PYTHON_CLIENT_BIN="\$\(command -v python3 \|\| true\)"$/u.test(line))
+    .filter(([, line]) => !/^\s*ln -sf "\$PYTHON_CLIENT_BIN" "\$SHIM_DIR\/python"$/u.test(line));
   assert.deepEqual(offenders, [], 'the gate must not reach for an interpreter');
 });
 

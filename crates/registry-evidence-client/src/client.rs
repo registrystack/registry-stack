@@ -373,8 +373,11 @@ impl EvidenceClient {
         &self,
     ) -> Result<EvidenceClientContracts, EvidenceClientError> {
         let state = self.progressive_state()?;
-        let snapshot = self.progressive_snapshot(state).await?;
-        Ok(snapshot.definitions.into())
+        let service = self.progressive_service_snapshot(state).await?;
+        let definitions = self.discover_published_definitions(&service).await?;
+        definitions.validate_for_progressive_request()?;
+        validate_profile_expectations(&state.profile, &definitions)?;
+        Ok(definitions.into())
     }
 
     /// Prepare owner-only artifacts for a caller that will perform the single
@@ -436,15 +439,7 @@ impl EvidenceClient {
         let service = self.progressive_service_snapshot(state).await?;
         let definitions = match &state.profile.contracts {
             ContractsProfile::Reviewed { file } => state.profile.load_reviewed_contracts(file)?,
-            ContractsProfile::Published => {
-                let temporary = EvidenceClient::new(EvidenceClientConfig::new(
-                    self.config.base_url.clone(),
-                    Arc::clone(&service.token_provider),
-                    service.jwks.clone(),
-                    Vec::new(),
-                ))?;
-                temporary.discover().await?
-            }
+            ContractsProfile::Published => self.discover_published_definitions(&service).await?,
         };
         definitions.validate_for_progressive_request()?;
         validate_profile_expectations(&state.profile, &definitions)?;
@@ -453,6 +448,19 @@ impl EvidenceClient {
             jwks: service.jwks,
             token_provider: service.token_provider,
         })
+    }
+
+    async fn discover_published_definitions(
+        &self,
+        service: &ProgressiveServiceSnapshot,
+    ) -> Result<EvidenceDefinitionsDocument, EvidenceClientError> {
+        let temporary = EvidenceClient::new(EvidenceClientConfig::new(
+            self.config.base_url.clone(),
+            Arc::clone(&service.token_provider),
+            service.jwks.clone(),
+            Vec::new(),
+        ))?;
+        temporary.discover().await
     }
 
     async fn progressive_service_snapshot(
@@ -527,11 +535,14 @@ impl EvidenceClient {
         let issuer = Url::parse(announced_issuer).map_err(|_| metadata_protocol_failure())?;
         validate_metadata_url(&issuer, &state.profile.trust)?;
         let metadata_url = metadata_endpoint(&issuer)?;
+        let previous_authorization = previous.filter(|value| {
+            authorization_metadata_source_matches(&value.authorization.issuer, announced_issuer)
+        });
         let authorization = self
             .public_json(
                 metadata_url,
                 JSON_MEDIA_TYPE,
-                previous.map(|value| {
+                previous_authorization.map(|value| {
                     (
                         &value.authorization,
                         value.authorization_etag.as_ref(),
@@ -1326,6 +1337,10 @@ fn metadata_protocol_failure() -> EvidenceClientError {
         trace_id: None,
         retry_after_seconds: None,
     }
+}
+
+fn authorization_metadata_source_matches(cached_issuer: &str, announced_issuer: &str) -> bool {
+    cached_issuer == announced_issuer
 }
 
 fn cache_deadlines(
@@ -3338,6 +3353,23 @@ mod tests {
                 !authorization_server_metadata_is_compatible(&metadata, mismatch),
                 "{mismatch} was treated as the exact issuer"
             );
+        }
+    }
+
+    #[test]
+    fn authorization_metadata_etags_are_scoped_to_the_exact_announced_issuer() {
+        assert!(authorization_metadata_source_matches(
+            "https://issuer.example.org/tenant",
+            "https://issuer.example.org/tenant"
+        ));
+        for changed in [
+            "https://issuer.example.org/tenant/",
+            "https://other.example.org/tenant",
+        ] {
+            assert!(!authorization_metadata_source_matches(
+                "https://issuer.example.org/tenant",
+                changed
+            ));
         }
     }
 

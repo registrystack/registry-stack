@@ -733,12 +733,19 @@ If you do not plan to continue, you can remove the complete directory with ordin
 Choose two different unused ports when you start the local services:
 
 ```sh
+mv client.json client.default-ports.json
+evidencectl client profile create \
+  --base-url http://127.0.0.1:8180 \
+  --client-id first-assertion-client \
+  --private-key-file .evidence/clients/first-assertion-client/private.jwk \
+  --local-loopback-discovery \
+  --out client.json
 evidencectl dev --detach --evidence-port 8180 --mint-port 8181
 ```
 
 Evidence Gateway uses the selected ports consistently in its runtime, Mint authorization, readiness
-checks, and generated request artifacts. Send the assertion request to the selected Evidence Gateway port,
-such as `http://127.0.0.1:8180/v1/evidence`.
+checks, client profile, and generated request artifacts. The SDK and curl lanes continue to read
+`client.json`, now bound to `http://127.0.0.1:8180`.
 
 The source mock separately uses `127.0.0.1:4010`, the origin retained in `source.openapi.yaml`. If that
 port is unavailable, change the OpenAPI server URL before creating the project and pass the same origin

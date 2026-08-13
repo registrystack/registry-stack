@@ -20,6 +20,8 @@ const MAXIMUM_PROFILE_BYTES: u64 = 256 * 1024;
 const MAXIMUM_PRIVATE_KEY_BYTES: u64 = 64 * 1024;
 const MAXIMUM_PINNED_JWKS_BYTES: u64 = 1024 * 1024;
 const MAXIMUM_REVIEWED_CONTRACTS_BYTES: u64 = 4 * 1024 * 1024;
+const MAXIMUM_PROFILE_REFERENCE_BYTES: usize = 4096;
+const MAXIMUM_ENVIRONMENT_VARIABLE_BYTES: usize = 128;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -70,6 +72,9 @@ impl EvidenceClientProfile {
         if self.schema != EVIDENCE_CLIENT_PROFILE_SCHEMA_V1
             || self.client_id.is_empty()
             || self.client_id.len() > 256
+            || !valid_private_key_reference(&self.private_key)
+            || !valid_trust_reference(&self.trust)
+            || !valid_contracts_reference(&self.contracts)
             || [
                 self.expected.audience.as_deref(),
                 self.expected.issuer.as_deref(),
@@ -158,6 +163,44 @@ fn valid_expected_identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAXIMUM_IDENTIFIER_BYTES
         && url::Url::parse(value).is_ok_and(|url| !url.scheme().is_empty())
+}
+
+fn valid_private_key_reference(reference: &PrivateKeyReference) -> bool {
+    match reference {
+        PrivateKeyReference::File { path } => valid_profile_path(path),
+        PrivateKeyReference::Environment { variable } => valid_environment_variable(variable),
+    }
+}
+
+fn valid_trust_reference(trust: &TrustProfile) -> bool {
+    match trust {
+        TrustProfile::PinnedJwks { file } => valid_profile_path(file),
+        TrustProfile::HttpsDiscovery | TrustProfile::LocalLoopbackDiscovery => true,
+    }
+}
+
+fn valid_contracts_reference(contracts: &ContractsProfile) -> bool {
+    match contracts {
+        ContractsProfile::Reviewed { file } => valid_profile_path(file),
+        ContractsProfile::Published => true,
+    }
+}
+
+fn valid_profile_path(path: &Path) -> bool {
+    path.to_str().is_some_and(|value| {
+        !value.is_empty()
+            && value.len() <= MAXIMUM_PROFILE_REFERENCE_BYTES
+            && !value.chars().any(char::is_control)
+    })
+}
+
+fn valid_environment_variable(variable: &str) -> bool {
+    let mut bytes = variable.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte == b'_' || byte.is_ascii_alphabetic())
+        && variable.len() <= MAXIMUM_ENVIRONMENT_VARIABLE_BYTES
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 fn read_bounded_file(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>, EvidenceClientError> {
@@ -428,6 +471,86 @@ mod tests {
             },
         ] {
             assert!(profile(rejected).validate().is_err());
+        }
+    }
+
+    #[test]
+    fn profile_artifact_references_are_bounded_and_closed_before_use() {
+        let profile = |private_key, trust, contracts| EvidenceClientProfile {
+            schema: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+            base_url: "https://evidence.example.org".to_owned(),
+            client_id: "client".to_owned(),
+            private_key,
+            trust,
+            contracts,
+            verification: VerificationProfile::default(),
+            maximum_metadata_cache_seconds: DEFAULT_METADATA_CACHE_SECONDS,
+            expected: ExpectedServiceProfile::default(),
+            origin_directory: None,
+        };
+        profile(
+            PrivateKeyReference::File {
+                path: PathBuf::from("keys/client.jwk"),
+            },
+            TrustProfile::PinnedJwks {
+                file: PathBuf::from("trust/evidence.jwks"),
+            },
+            ContractsProfile::Reviewed {
+                file: PathBuf::from("contracts/evidence.json"),
+            },
+        )
+        .validate()
+        .expect("bounded artifact references");
+
+        for rejected in [
+            profile(
+                PrivateKeyReference::File {
+                    path: PathBuf::new(),
+                },
+                TrustProfile::HttpsDiscovery,
+                ContractsProfile::Published,
+            ),
+            profile(
+                PrivateKeyReference::File {
+                    path: PathBuf::from("a".repeat(MAXIMUM_PROFILE_REFERENCE_BYTES + 1)),
+                },
+                TrustProfile::HttpsDiscovery,
+                ContractsProfile::Published,
+            ),
+            profile(
+                PrivateKeyReference::Environment {
+                    variable: "1INVALID".to_owned(),
+                },
+                TrustProfile::HttpsDiscovery,
+                ContractsProfile::Published,
+            ),
+            profile(
+                PrivateKeyReference::Environment {
+                    variable: "A".repeat(MAXIMUM_ENVIRONMENT_VARIABLE_BYTES + 1),
+                },
+                TrustProfile::HttpsDiscovery,
+                ContractsProfile::Published,
+            ),
+            profile(
+                PrivateKeyReference::Environment {
+                    variable: "EVIDENCE_KEY".to_owned(),
+                },
+                TrustProfile::PinnedJwks {
+                    file: PathBuf::new(),
+                },
+                ContractsProfile::Published,
+            ),
+            profile(
+                PrivateKeyReference::Environment {
+                    variable: "EVIDENCE_KEY".to_owned(),
+                },
+                TrustProfile::HttpsDiscovery,
+                ContractsProfile::Reviewed {
+                    file: PathBuf::from("a".repeat(MAXIMUM_PROFILE_REFERENCE_BYTES + 1)),
+                },
+            ),
+        ] {
+            assert!(rejected.validate().is_err());
         }
     }
 

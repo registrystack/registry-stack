@@ -52,7 +52,6 @@ pub enum RequestCommand {
 #[derive(Debug, Args)]
 #[command(group(
     ArgGroup::new("subject_input")
-        .required(true)
         .args(["subject", "subjects_file"])
 ), group(
     ArgGroup::new("request_source")
@@ -1199,6 +1198,14 @@ mod tests {
         ] {
             assert!(progressive_subject_inputs(&progressive_args(subject, None)).is_err());
         }
+    }
+
+    #[test]
+    fn progressive_requests_allow_contracts_with_no_request_origin_selectors() {
+        let (selectors, subjects) = progressive_subject_inputs(&progressive_args(Vec::new(), None))
+            .expect("selector-free progressive request");
+        assert!(selectors.is_empty());
+        assert!(subjects.is_none());
     }
 
     /// `.evidence` holds a live bearer token. The scaffold ignores it from the

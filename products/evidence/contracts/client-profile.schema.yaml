@@ -25,7 +25,7 @@ properties:
         required: [source, variable]
         properties:
           source: {const: environment}
-          variable: {type: string, pattern: '^[A-Za-z_][A-Za-z0-9_]*$'}
+          variable: {type: string, maxLength: 128, pattern: '^[A-Za-z_][A-Za-z0-9_]*$'}
   trust:
     oneOf:
       - type: object

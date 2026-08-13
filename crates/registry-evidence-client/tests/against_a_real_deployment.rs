@@ -743,6 +743,15 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
         issuer.client_key.clone(),
     )
     .expect("the reviewed profile configures the client");
+    let fresh_candidate = reviewed_client
+        .contracts_candidate()
+        .await
+        .expect("a reviewed profile can still fetch a fresh published candidate");
+    assert_ne!(
+        fresh_candidate.definitions[0].configuration_revision,
+        format!("sha256:{}", "0".repeat(64)),
+        "candidate fetching must not copy the already-reviewed catalog"
+    );
     let reviewed_result = reviewed_client.request(request()).await;
     let Err(reviewed_error) = reviewed_result else {
         panic!("a reviewed revision cannot silently adopt a live revision");
