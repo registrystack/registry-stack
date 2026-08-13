@@ -445,6 +445,8 @@ load_spec() {
 		SPEC_LITERALS=(
 			'context["trustedJwks"]'
 			'context["verificationPolicy"]'
+			'context["subjectExpectation"]'
+			'accepted["subjects"]'
 			".evidence/requests/first-assertion/verification.json"
 			"--jws assertion.jws.json"
 			"--jwks trusted-issuer-keys.json"

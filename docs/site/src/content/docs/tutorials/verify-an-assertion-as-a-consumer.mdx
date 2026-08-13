@@ -52,11 +52,23 @@ from pathlib import Path
 context = json.loads(
     Path(".evidence/requests/first-assertion/verification.json").read_text()
 )
+accepted = json.loads(Path("verified.json").read_text())
+expectation = context["subjectExpectation"]
+if expectation["mode"] != "accept-first-use":
+    raise SystemExit("expected the first tutorial's first-use context")
+subjects = [
+    {"role": subject["role"], "binding": subject["binding"]}
+    for subject in accepted["subjects"]
+]
+if sorted(subject["role"] for subject in subjects) != sorted(expectation["roles"]):
+    raise SystemExit("the verified subject roles do not match the retained request")
+policy = context["verificationPolicy"]
+policy["expectedSubjects"] = subjects
 Path("trusted-issuer-keys.json").write_text(
     json.dumps(context["trustedJwks"], indent=2) + "\n"
 )
 Path("verification-policy.json").write_text(
-    json.dumps(context["verificationPolicy"], indent=2) + "\n"
+    json.dumps(policy, indent=2) + "\n"
 )
 PY
 ```
@@ -65,12 +77,15 @@ You now have:
 
 - `assertion.jws.json`, the exact untrusted response bytes you stored;
 - `trusted-issuer-keys.json`, the public keys your relying party trusts;
-- `verification-policy.json`, expectations retained from your own request and governance.
+- `verification-policy.json`, expectations retained from your own request and governance, with the
+  first-use binding pinned from the already verified transaction record.
 
-The tutorial extracts the latter two from the private local context because it recorded them before
-the response. A production consumer builds and stores them in its own transaction and trust
-records. Never decode an untrusted response and copy its claims into the policy used to verify that
-same response.
+The tutorial extracts the key set and original policy from the private local context because it
+recorded them before the response. First use could not contain a prior subject binding, so the script
+adds that one opaque value from `verified.json`, which the first tutorial wrote only after local
+verification succeeded. A production consumer atomically pins the same receipt in its own
+transaction record before acting. Never decode an untrusted response and copy its claims into the
+policy used to verify that same response.
 
 ## Re-verify the recorded decision
 
@@ -128,7 +143,7 @@ Retain enough to repeat the decision without asking the provider to recreate it:
 - the original request or application transaction record that maps the internal person or case to
   the request;
 - the request nonce and expected subjects, concepts, purpose, audience, provider, issuer, and
-  configuration revision;
+  configuration revision, including any first-use binding pinned from the verified result;
 - the trusted JWKS revision used at the decision;
 - the verification instant and maximum accepted lifetime;
 - the resulting verified payload or a governed digest, according to your data-retention policy.
