@@ -1040,7 +1040,9 @@ local assurance profile.
 
 The reference file-secret provider reads only regular, non-symlink files below
 the configured `secretProviders.file.root`. The secret root is operator-only and
-each secret file must be owned by the service identity with mode `0600`.
+each secret file must be owned by the service identity with exact mode `0400` or
+`0600`. Read-only container secret mounts commonly present `0400`; `0600` remains
+valid when the operator stages owner-writable material before the service starts.
 Audit and subject-binding secret files contain independently generated raw key
 bytes, must each be at least 32 bytes, must use distinct references, and must
 resolve to distinct bytes. They are not decoded as base64 by the file provider.

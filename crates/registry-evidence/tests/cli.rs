@@ -3,11 +3,16 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write as _,
-    net::TcpStream,
+    io::{Read as _, Write as _},
+    net::{TcpListener, TcpStream},
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -16,6 +21,97 @@ use serde_json::{json, Value};
 /// A value planted in every mutated artifact so a diagnostic that leaks a
 /// document value fails loudly instead of quietly.
 const CANARY: &str = "s3cr3t-canary-value";
+
+/// A bounded local JWKS endpoint for exercising the actual CLI process.
+///
+/// The acceptance bundle is switched to its explicit local-assurance HTTP
+/// issuer profile, so this server proves the same fetch path the deployed
+/// authenticator uses without depending on a network outside the test.
+struct JwksServer {
+    origin: String,
+    stop: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl JwksServer {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("JWKS server binds");
+        listener
+            .set_nonblocking(true)
+            .expect("JWKS listener becomes nonblocking");
+        let address = listener.local_addr().expect("JWKS server has an address");
+        let key = registry_platform_crypto::PrivateJwk::parse(VERIFY_PRIVATE_JWK)
+            .expect("fixture key parses");
+        let body =
+            serde_json::to_vec(&json!({"keys": [key.public()]})).expect("JWKS response serializes");
+        let response = Arc::new(
+            [
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .into_bytes(),
+                body,
+            ]
+            .concat(),
+        );
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = std::thread::spawn(move || {
+            while !worker_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let mut request = Vec::with_capacity(1_024);
+                        while request.len() < 8_192
+                            && !request.windows(4).any(|window| window == b"\r\n\r\n")
+                        {
+                            let mut chunk = [0_u8; 512];
+                            let Ok(read) = stream.read(&mut chunk) else {
+                                break;
+                            };
+                            if read == 0 {
+                                break;
+                            }
+                            request.extend_from_slice(&chunk[..read]);
+                        }
+                        let valid_request =
+                            request.starts_with(b"GET /.well-known/jwks.json HTTP/1.1\r\n");
+                        let rejected = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                        let _ = stream.write_all(if valid_request {
+                            response.as_ref()
+                        } else {
+                            rejected
+                        });
+                        let _ = stream.flush();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        Self {
+            origin: format!("http://{address}"),
+            stop,
+            worker: Some(worker),
+        }
+    }
+
+    fn origin(&self) -> &str {
+        &self.origin
+    }
+}
+
+impl Drop for JwksServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() {
+            worker.join().expect("JWKS server stops");
+        }
+    }
+}
 
 /// One shipped reference deployment project, staged for the real binary.
 ///
@@ -127,6 +223,78 @@ fn actual_binary_checks_and_evaluates_an_immutable_project() {
         "Evidence fixture passed (",
         " evaluated cases)\n",
     );
+}
+
+#[test]
+fn dependency_check_proves_the_real_runtime_boundaries() {
+    let key_server = JwksServer::start();
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(key_server.origin());
+
+    assert_success(
+        &deployment.check_with_runtime_dependencies(),
+        "Evidence deployment ",
+        " passed check (4 requirements)\n",
+    );
+}
+
+#[test]
+fn dependency_check_fails_closed_when_the_jwks_endpoint_is_unavailable() {
+    let unavailable = TcpListener::bind("127.0.0.1:0").expect("ephemeral port binds");
+    let origin = format!(
+        "http://{}",
+        unavailable.local_addr().expect("listener has an address")
+    );
+    drop(unavailable);
+
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    deployment.point_authentication_to(&origin);
+    let output = deployment.check_with_runtime_dependencies();
+
+    assert!(!output.status.success(), "an unavailable JWKS passed check");
+    assert!(
+        output.stdout.is_empty(),
+        "a failed dependency check wrote output"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: a required runtime dependency is unavailable\n"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(&origin));
+}
+
+#[tokio::test]
+async fn dependency_check_fails_when_an_audit_writer_already_holds_the_sink() {
+    use registry_evidence::audit::EvidenceAuditLog;
+
+    let deployment = Deployment::stage("all-definitions");
+    deployment.stage_acceptance_secrets();
+    let writer = EvidenceAuditLog::initialize(
+        deployment.path("audit.jsonl"),
+        1_073_741_824,
+        b"audit-hash-secret-32-bytes-minimum-value".to_vec(),
+        1,
+    )
+    .await
+    .expect("first audit writer initializes");
+
+    let output = deployment.check_with_runtime_dependencies();
+
+    assert!(
+        !output.status.success(),
+        "a second audit writer passed check"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a failed dependency check wrote output"
+    );
+    assert_eq!(
+        std::str::from_utf8(&output.stderr).expect("diagnostic is UTF-8"),
+        "evidence: runtime audit initialization failed: another writer already holds the audit sink lock\n"
+    );
+    drop(writer);
 }
 
 #[test]
@@ -2553,6 +2721,19 @@ outboundTls:
         self.write_secret("source-d-token", "synthetic-source-token");
     }
 
+    fn point_authentication_to(&self, origin: &str) {
+        self.replace(
+            "bundle/evidence.yaml",
+            "  issuer: https://identity.invalid\n",
+            &format!("  issuer: {origin}\n"),
+        );
+        self.replace(
+            "bundle/evidence.yaml",
+            "  jwksUri: https://identity.invalid/.well-known/jwks.json\n",
+            &format!("  jwksUri: {origin}/.well-known/jwks.json\n"),
+        );
+    }
+
     /// Place an audit chain the service will find on start, owner-only as the
     /// sink requires. A case that is about a mode widens it afterwards.
     fn stage_audit_chain(&self, contents: &str) {
@@ -2585,6 +2766,16 @@ outboundTls:
     fn check(&self) -> Output {
         self.seal();
         let output = invoke(&self.path("runtime.yaml"), &["check"]);
+        self.unseal();
+        output
+    }
+
+    fn check_with_runtime_dependencies(&self) -> Output {
+        self.seal();
+        let output = invoke(
+            &self.path("runtime.yaml"),
+            &["check", "--require-runtime-dependencies"],
+        );
         self.unseal();
         output
     }

@@ -1358,12 +1358,17 @@ impl MetricsListenerConfig {
             .bind_host
             .parse()
             .expect("validated evidence listener address is numeric");
-        let same_family = matches!(
-            (metrics_ip, evidence_ip),
-            (IpAddr::V4(_), IpAddr::V4(_)) | (IpAddr::V6(_), IpAddr::V6(_))
-        );
-        let binding_overlaps =
-            metrics_ip == evidence_ip || (evidence_ip.is_unspecified() && same_family);
+        // Linux commonly creates an IPv6 wildcard socket as dual-stack, so
+        // `[::]:port` can also occupy the corresponding IPv4 port. Evidence
+        // does not force IPV6_V6ONLY, and configuration validation must be
+        // portable across the hosts on which the process can run. Treat the
+        // IPv6 wildcard as covering both families; the IPv4 wildcard covers
+        // only IPv4.
+        let wildcard_covers_metrics = match evidence_ip {
+            IpAddr::V4(ip) => ip.is_unspecified() && metrics_ip.is_ipv4(),
+            IpAddr::V6(ip) => ip.is_unspecified(),
+        };
+        let binding_overlaps = metrics_ip == evidence_ip || wildcard_covers_metrics;
         if binding_overlaps && self.port == evidence_listener.port {
             return invalid("metricsListener must not share the evidence listener binding");
         }
@@ -7520,6 +7525,18 @@ outboundTls:
                 ))
             ));
         }
+        let dual_stack_base = base.replace(
+            "bindHost: 127.0.0.1",
+            "bindHost: '::'\n  networkExposure: container-private",
+        );
+        let dual_stack_collision =
+            format!("{dual_stack_base}metricsListener:\n  bindHost: 127.0.0.1\n  port: 8080\n");
+        assert!(matches!(
+            RuntimeConfig::parse_yaml(dual_stack_collision.as_bytes()),
+            Err(ConfigError::Invalid(
+                "metricsListener must not share the evidence listener binding"
+            ))
+        ));
 
         // The block is closed like every other level of the document.
         let unknown = format!(
