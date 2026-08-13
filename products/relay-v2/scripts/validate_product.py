@@ -55,6 +55,7 @@ SECURITY_INVARIANT_IDS = {
     "sec-sqlite-read-only",
     "sec-sqlite-connection-recovery",
     "sec-token-profile-closed",
+    "sec-issuer-identity-transport-separation",
     "sec-resource-existence-concealment",
     "sec-operation-confinement",
     "sec-classification-review-binding",

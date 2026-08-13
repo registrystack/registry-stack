@@ -56,6 +56,16 @@ invariants:
     tests:
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: real_jwt_path_rejects_malformed_audience_time_and_expired_tokens}
       - {path: crates/registry-relay-v2/src/auth.rs, name: malformed_subject_cannot_fall_back_to_client_identifier}
+  - id: sec-issuer-identity-transport-separation
+    threat: A rollout or internal discovery hostname silently changes the JWT issuer Relay trusts, or two configured key transports create an ambiguous trust source.
+    enforcementPoint: Closed RelayRuntime issuer profile, exact discovery metadata comparison, and exact JWT issuer verification.
+    expected: Relay accepts exactly one discovery or JWKS transport, retains trustedIssuer as the exact token iss value, refuses discovery metadata declaring another issuer, and preserves legacy derivation only for the canonical discovery URL form.
+    evidence: issuer-transport-and-token-verification-tests
+    negativeTest: runtime_separates_trusted_issuer_from_one_key_transport
+    tests:
+      - {path: crates/registry-relay-v2/src/contract.rs, name: runtime_separates_trusted_issuer_from_one_key_transport}
+      - {path: crates/registry-platform-oidc/src/lib.rs, name: explicit_discovery_transport_preserves_the_canonical_issuer}
+      - {path: crates/registry-platform-oidc/src/lib.rs, name: oidc_userinfo_jwt_requires_issuer_audience_and_matching_subject}
   - id: sec-resource-existence-concealment
     threat: Authentication or scope failures reveal whether a protected resource, operation, or identifier exists.
     enforcementPoint: Authentication precedes route selection and a verified principal without the operation scope receives the unknown-resource response and generic refusal audit.
