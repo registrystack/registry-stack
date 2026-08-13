@@ -3455,6 +3455,292 @@ async fn request_batch_later_dependency_failure_has_one_value_free_abort_and_no_
     assert!(!audit.contains("Binta") && !audit.contains("Cara"));
 }
 
+/// Threat: treating a source-declared unresolved search as an outer outage
+/// would disclose a different public result from the same unresolved class in
+/// singular evaluation. Enforcement: the sequential batch maps the exact
+/// declared search outcome to one data-free unavailable item and releases the
+/// otherwise successful envelope only after every item completes.
+#[tokio::test]
+async fn request_batch_declared_unresolved_search_is_item_unavailable() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_search_then_fetch(bundle_root, &source_origin);
+            declare_unresolved_problem(bundle_root, "source-a");
+        },
+    );
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("declared unresolved search runtime initializes"),
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .and(body_json(adult_search_request_for("Amina", &["record_id"])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "record_id": "record-001"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"date_of_birth": "2000-01-01"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    const TRACE_CANARY: &str = "search-declared-unresolved-trace-canary";
+    Mock::given(method("POST"))
+        .and(path("/v1/search"))
+        .and(body_json(adult_search_request_for("Binta", &["record_id"])))
+        .respond_with(declared_unresolved_response(TRACE_CANARY))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut batch = adult_request_batch(2);
+    set_batch_adult_given_name(&mut batch, 1, "Binta");
+    let http = TestServer::new(build_app(runtime));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&batch)
+        .await;
+    response.assert_status_ok();
+    let envelope = response.json::<EvidenceRequestBatchResponse>();
+    assert!(matches!(
+        envelope.items.as_slice(),
+        [
+            EvidenceRequestBatchResponseItem::Evidence { .. },
+            EvidenceRequestBatchResponseItem::EvidenceNotAvailable
+        ]
+    ));
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("source journal is available")
+            .len(),
+        3
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 1);
+    assert_eq!(audit.matches("\"phase\":\"terminal-failure\"").count(), 0);
+    assert!(audit.contains("\"outcome\":\"evidence-not-available\""));
+    assert!(!audit.contains(TRACE_CANARY));
+}
+
+/// Threat: releasing a completed earlier item when a later fetch reports a
+/// declared unresolved result would make the ordered batch non-atomic.
+/// Enforcement: a fetch-stage unresolved result remains dependency failure,
+/// aborts the outer request, and emits neither item material nor a release
+/// audit record.
+#[tokio::test]
+async fn request_batch_declared_unresolved_fetch_aborts_without_partial_release() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_search_then_fetch(bundle_root, &source_origin);
+            declare_unresolved_problem(bundle_root, "source-a-fetch");
+        },
+    );
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("declared unresolved fetch runtime initializes"),
+    );
+    for (given_name, record_id) in [("Amina", "record-001"), ("Binta", "record-002")] {
+        Mock::given(method("POST"))
+            .and(path("/v1/search"))
+            .and(body_json(adult_search_request_for(
+                given_name,
+                &["record_id"],
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 1,
+                "record_id": record_id
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-001"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"date_of_birth": "2000-01-01"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    const TRACE_CANARY: &str = "batch-fetch-unresolved-trace-canary";
+    Mock::given(method("GET"))
+        .and(path("/v1/records/record-002"))
+        .respond_with(declared_unresolved_response(TRACE_CANARY))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut batch = adult_request_batch(2);
+    set_batch_adult_given_name(&mut batch, 1, "Binta");
+    let http = TestServer::new(build_app(runtime));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&batch)
+        .await;
+    assert_eq!(
+        response.status_code(),
+        ProblemCode::DependencyUnavailable.status()
+    );
+    let problem = response.json::<Value>();
+    assert_eq!(problem["code"], "source.unavailable");
+    for forbidden in ["items", "payload", "protected", "signature"] {
+        assert!(
+            problem.get(forbidden).is_none(),
+            "outer failure carried {forbidden}"
+        );
+    }
+    assert!(!problem.to_string().contains(TRACE_CANARY));
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("source journal is available")
+            .len(),
+        4
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"phase\":\"terminal-failure\"").count(), 1);
+    assert!(audit.contains("\"safeErrorCategory\":\"fetch-result\""));
+    assert!(!audit.contains(TRACE_CANARY));
+}
+
+/// Threat: a declared unresolved member must not be downgraded to an
+/// unavailable item after another batch item has already completed its fetch
+/// set. Enforcement: the member is an atomic outer dependency failure, later
+/// members are not contacted, and no partial envelope is released.
+#[tokio::test]
+async fn request_batch_declared_unresolved_fetch_set_member_aborts_without_partial_release() {
+    let server = MockServer::start().await;
+    let source_origin = server.uri();
+    let prepared = prepare_fixture_with_mutation(
+        "subject-binding-secret-canary-32-bytes-minimum",
+        &source_origin,
+        &FixtureCeilings::deployment_defaults(),
+        |bundle_root| {
+            configure_fetch_set(bundle_root, &source_origin);
+            declare_unresolved_problem(bundle_root, "source-a-fetch");
+        },
+    );
+    enable_fetch_set_acquisition(&prepared.runtime_path);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("declared unresolved fetch-set runtime initializes"),
+    );
+    for (given_name, record_id, partner_ref) in [
+        ("Amina", "record-001", "partner-77"),
+        ("Binta", "record-002", "partner-88"),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/v1/search"))
+            .and(body_json(adult_search_request_for(
+                given_name,
+                &["record_id", "partner_ref"],
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 1,
+                "record_id": record_id,
+                "partner_ref": partner_ref
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-001"))
+        .and(body_json(json!({"lookup": {"record_id": "record-001"}})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"date_of_birth": "2000-01-01"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .and(body_json(json!({"lookup": {"partner_ref": "partner-77"}})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"partner_status": "active"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    const TRACE_CANARY: &str = "batch-fetch-set-unresolved-trace-canary";
+    Mock::given(method("POST"))
+        .and(path("/v1/records/record-002"))
+        .and(body_json(json!({"lookup": {"record_id": "record-002"}})))
+        .respond_with(declared_unresolved_response(TRACE_CANARY))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/partners"))
+        .and(body_json(json!({"lookup": {"partner_ref": "partner-88"}})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"partner_status": "active"})))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let mut batch = adult_request_batch(2);
+    set_batch_adult_given_name(&mut batch, 1, "Binta");
+    let http = TestServer::new(build_app(runtime));
+    let response = http
+        .post("/v1/evidence/batch")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .add_header("accept", EVIDENCE_REQUEST_BATCH_MEDIA_TYPE)
+        .json(&batch)
+        .await;
+    assert_eq!(
+        response.status_code(),
+        ProblemCode::DependencyUnavailable.status()
+    );
+    let problem = response.json::<Value>();
+    assert_eq!(problem["code"], "source.unavailable");
+    for forbidden in ["items", "payload", "protected", "signature"] {
+        assert!(
+            problem.get(forbidden).is_none(),
+            "outer failure carried {forbidden}"
+        );
+    }
+    assert!(!problem.to_string().contains(TRACE_CANARY));
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .expect("source journal is available")
+            .len(),
+        5,
+        "the failed item's later member is never contacted"
+    );
+    let audit = fs::read_to_string(&prepared.audit_path).expect("audit is readable");
+    assert_eq!(audit.matches("\"phase\":\"disclosure-release\"").count(), 0);
+    assert_eq!(audit.matches("\"phase\":\"terminal-failure\"").count(), 1);
+    assert!(audit.contains("\"safeErrorCategory\":\"fetch-result\""));
+    assert!(!audit.contains(TRACE_CANARY));
+}
+
 #[tokio::test]
 async fn request_batch_response_above_one_mib_releases_no_partial_envelope() {
     let server = MockServer::start().await;
@@ -8842,6 +9128,38 @@ fn adult_source_request_for(given_name: &str) -> Value {
         "fields": ["date_of_birth"],
         "limit": 2
     })
+}
+
+fn adult_search_request_for(given_name: &str, requested_fields: &[&str]) -> Value {
+    json!({
+        "lookup": {
+            "given_name": given_name,
+            "family_name": "Diallo",
+            "birth_date": "2000-01-01"
+        },
+        "fields": requested_fields,
+        "limit": 2
+    })
+}
+
+fn declare_unresolved_problem(bundle_root: &Path, source_id: &str) {
+    let path = bundle_root.join("evidence.yaml");
+    let mut config = fs::read_to_string(&path).expect("source config is readable");
+    let source = format!("  {source_id}:\n    transport: http-json\n");
+    let declared = format!(
+        "  {source_id}:\n    transport: http-json\n    unresolvedProblem: {{status: 404, type: https://id.example.invalid/problems/unresolved, code: consultation.unresolved}}\n"
+    );
+    replace_exact(&mut config, &source, &declared, 1);
+    fs::write(path, config).expect("declared unresolved source config is written");
+}
+
+fn declared_unresolved_response(trace_id: &str) -> ResponseTemplate {
+    ResponseTemplate::new(404).set_body_raw(
+        format!(
+            r#"{{"type":"https://id.example.invalid/problems/unresolved","title":"Unresolved","status":404,"detail":"not resolved","code":"consultation.unresolved","traceId":"{trace_id}"}}"#
+        ),
+        "application/problem+json",
+    )
 }
 
 async fn mount_named_adult_source(server: &MockServer, given_name: &str, response: Value) {
