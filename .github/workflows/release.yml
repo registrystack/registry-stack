@@ -1263,7 +1263,7 @@ jobs:
               --tarball "${tarball}")"
             if [[ "${state}" == absent ]]; then
               require_unexpired_candidate
-              npm publish "${tarball}" --access public --provenance
+              npm publish "./${tarball}" --access public --provenance
             else
               test "${state}" = present
             fi

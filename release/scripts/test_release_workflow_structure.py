@@ -569,6 +569,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "package/${client}-client.${{ matrix.napi_platform }}.node",
             node,
         )
+        self.assertIn('"./npm/${{ matrix.napi_platform }}"', node)
         self.assertIn("registry-${client}-client-node", node)
         for name in ("Smoke Python client wheels", "Smoke Node client packages"):
             smoke = step_run(document, "clients", name)
@@ -1016,7 +1017,8 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "Reconcile platform packages, then publish the root package",
         )
         self.assertIn("client_registry.py npm-state", npm_publish)
-        self.assertIn("npm publish", npm_publish)
+        self.assertIn('npm publish "./${tarball}"', npm_publish)
+        self.assertNotIn('npm publish "${tarball}"', npm_publish)
         self.assertIn("require_unexpired_candidate", npm_publish)
         self.assertLess(
             npm_publish.rindex("require_unexpired_candidate"),
