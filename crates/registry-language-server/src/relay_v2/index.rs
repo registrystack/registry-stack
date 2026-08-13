@@ -38,14 +38,27 @@ pub(crate) fn declares_root(directory: &Path) -> bool {
     plain_file(&directory.join(PROJECT_FILE))
 }
 
-pub(crate) fn is_project_document(root: &Path, path: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(root) else {
-        return false;
-    };
-    !relative.as_os_str().is_empty()
-        && relative
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
+/// Whether `path` is one of the documents the current Relay V2 project resolves.
+///
+/// The recursive watcher has to observe every safe relative path because a governed reference may
+/// name any of them. Observation is not ownership: only the two entry documents and the governed
+/// closure resolved from the current in-memory documents belong to the project.
+pub(crate) fn is_project_document(
+    root: &Path,
+    path: &Path,
+    documents: &BTreeMap<PathBuf, String>,
+) -> bool {
+    project_document_paths(root, documents).contains(path)
+}
+
+pub(crate) fn retain_project_documents(
+    root: &Path,
+    documents: &mut BTreeMap<PathBuf, String>,
+    diagnostics: &mut Vec<IndexedDiagnostic>,
+) {
+    let retained = project_document_paths(root, documents);
+    documents.retain(|path, _| retained.contains(path));
+    diagnostics.retain(|diagnostic| retained.contains(&diagnostic.path));
 }
 
 pub(crate) fn load_project_documents(root: &Path) -> Result<LoadedProjectDocuments> {
@@ -56,10 +69,7 @@ pub(crate) fn load_project_documents_with_overrides(
     root: &Path,
     overrides: &BTreeMap<PathBuf, String>,
 ) -> Result<LoadedProjectDocuments> {
-    let mut candidates = BTreeSet::from([root.join(PROJECT_FILE)]);
-    if plain_file(&root.join(RUNTIME_FILE)) || overrides.contains_key(&root.join(RUNTIME_FILE)) {
-        candidates.insert(root.join(RUNTIME_FILE));
-    }
+    let mut candidates = entry_document_paths(root);
 
     let mut documents = BTreeMap::new();
     let mut diagnostics = Vec::new();
@@ -89,12 +99,8 @@ pub(crate) fn load_project_documents_with_overrides(
         anyhow::bail!("registry.yaml is missing, unsafe, oversized, or not valid UTF-8");
     };
 
-    if let Ok(contract) = RegistryContract::parse_yaml(registry_yaml) {
-        candidates.extend(
-            referenced_governed_files(&contract)
-                .into_iter()
-                .filter_map(|reference| supported_reference(root, reference)),
-        );
+    if RegistryContract::parse_yaml(registry_yaml).is_ok() {
+        extend_registry_references(root, &documents, &mut candidates);
         if let Some(path) = load_candidates(
             root,
             &candidates,
@@ -106,25 +112,7 @@ pub(crate) fn load_project_documents_with_overrides(
             return Ok(blocked_project(&path));
         }
 
-        let review_path = root.join(&contract.classifications.provenance_ref);
-        if let Some(review) = documents
-            .get(&review_path)
-            .and_then(|source| serde_norway::from_str::<ClassificationReviewDocument>(source).ok())
-        {
-            for reference in [
-                Some(review.rationale_ref.as_str()),
-                review
-                    .generated_identification
-                    .as_ref()
-                    .map(|binding| binding.report_ref.as_str()),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if let Some(path) = supported_reference(root, reference) {
-                    candidates.insert(path);
-                }
-            }
+        if extend_review_references(root, &documents, &mut candidates) {
             if let Some(path) = load_candidates(
                 root,
                 &candidates,
@@ -145,6 +133,73 @@ pub(crate) fn load_project_documents_with_overrides(
     })
 }
 
+fn entry_document_paths(root: &Path) -> BTreeSet<PathBuf> {
+    BTreeSet::from([root.join(PROJECT_FILE), root.join(RUNTIME_FILE)])
+}
+
+fn project_document_paths(root: &Path, documents: &BTreeMap<PathBuf, String>) -> BTreeSet<PathBuf> {
+    let mut candidates = entry_document_paths(root);
+    extend_registry_references(root, documents, &mut candidates);
+    extend_review_references(root, documents, &mut candidates);
+    candidates
+}
+
+fn extend_registry_references(
+    root: &Path,
+    documents: &BTreeMap<PathBuf, String>,
+    candidates: &mut BTreeSet<PathBuf>,
+) {
+    let Some(contract) = documents
+        .get(&root.join(PROJECT_FILE))
+        .and_then(|source| RegistryContract::parse_yaml(source).ok())
+    else {
+        return;
+    };
+    candidates.extend(
+        referenced_governed_files(&contract)
+            .into_iter()
+            .filter_map(|reference| supported_reference(root, reference)),
+    );
+}
+
+fn extend_review_references(
+    root: &Path,
+    documents: &BTreeMap<PathBuf, String>,
+    candidates: &mut BTreeSet<PathBuf>,
+) -> bool {
+    let Some(contract) = documents
+        .get(&root.join(PROJECT_FILE))
+        .and_then(|source| RegistryContract::parse_yaml(source).ok())
+    else {
+        return false;
+    };
+    let Some(review_path) = supported_reference(root, &contract.classifications.provenance_ref)
+    else {
+        return false;
+    };
+    let Some(review) = documents
+        .get(&review_path)
+        .and_then(|source| serde_norway::from_str::<ClassificationReviewDocument>(source).ok())
+    else {
+        return false;
+    };
+    for reference in [
+        Some(review.rationale_ref.as_str()),
+        review
+            .generated_identification
+            .as_ref()
+            .map(|binding| binding.report_ref.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(path) = supported_reference(root, reference) {
+            candidates.insert(path);
+        }
+    }
+    true
+}
+
 fn load_candidates(
     root: &Path,
     candidates: &BTreeSet<PathBuf>,
@@ -153,6 +208,7 @@ fn load_candidates(
     indexed_bytes: &mut usize,
     overrides: &BTreeMap<PathBuf, String>,
 ) -> Result<Option<PathBuf>> {
+    let project_path = root.join(PROJECT_FILE);
     for path in candidates {
         if documents.contains_key(path) {
             continue;
@@ -178,7 +234,7 @@ fn load_candidates(
         let file = match secure_regular_file(root, path) {
             Ok(Some(file)) => file,
             Ok(None) => continue,
-            Err(error) if path.ends_with(PROJECT_FILE) => {
+            Err(error) if path == &project_path => {
                 return Err(error).context("failed to read registry.yaml");
             }
             Err(_) => {
@@ -207,7 +263,7 @@ fn load_candidates(
                     "Project document is not valid UTF-8 and cannot be indexed",
                 )),
             },
-            Err(error) if path.ends_with(PROJECT_FILE) => {
+            Err(error) if path == &project_path => {
                 return Err(error).context("failed to read registry.yaml");
             }
             Err(_) => diagnostics.push(document_diagnostic(
@@ -221,7 +277,12 @@ fn load_candidates(
 
 fn supported_reference(root: &Path, reference: &str) -> Option<PathBuf> {
     let path = root.join(reference);
-    is_project_document(root, &path).then_some(path)
+    let relative = path.strip_prefix(root).ok()?;
+    (!relative.as_os_str().is_empty()
+        && relative
+            .components()
+            .all(|component| matches!(component, Component::Normal(_))))
+    .then_some(path)
 }
 
 fn blocked_project(path: &Path) -> LoadedProjectDocuments {
@@ -692,8 +753,10 @@ impl IndexBuilder<'_> {
     }
 
     fn extract_governed_files(&mut self) {
+        let project_path = self.root.join(PROJECT_FILE);
+        let runtime_path = self.root.join(RUNTIME_FILE);
         for path in self.documents.keys() {
-            if path.ends_with(PROJECT_FILE) || path.ends_with(RUNTIME_FILE) {
+            if path == &project_path || path == &runtime_path {
                 continue;
             }
             let Ok(relative) = path.strip_prefix(self.root) else {
@@ -1026,15 +1089,35 @@ mod tests {
     }
 
     #[test]
-    fn governed_files_may_use_any_safe_relative_directory() {
-        let root = Path::new("/project");
+    fn project_documents_are_entry_documents_and_the_exact_governed_closure() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/relay-v2/acceptance/business-registry");
+        let loaded = load_project_documents(&root).unwrap();
+
         assert!(is_project_document(
-            root,
-            &root.join("policies/reviews/rationale.md")
+            &root,
+            &root.join("registry.yaml"),
+            &loaded.documents,
+        ));
+        assert!(is_project_document(
+            &root,
+            &root.join("runtime.yaml"),
+            &loaded.documents,
+        ));
+        assert!(is_project_document(
+            &root,
+            &root.join("governance/classification-review-rationale.md"),
+            &loaded.documents,
         ));
         assert!(!is_project_document(
-            root,
-            &root.join("../outside/rationale.md")
+            &root,
+            &root.join("expected-http.yaml"),
+            &loaded.documents,
+        ));
+        assert!(!is_project_document(
+            &root,
+            &root.join("../outside/rationale.md"),
+            &loaded.documents,
         ));
     }
 }
