@@ -24,8 +24,9 @@ manifest under `release/manifests/`) shares that version.
 
 Before `v1.0.0`:
 
-- A minor release may contain breaking changes. Each one is announced in the affected
-  CHANGELOG with a `BREAKING:` entry and concrete migration steps.
+- A minor release may contain breaking changes. Each one is announced with a `BREAKING:` entry and
+  concrete migration steps in the stack release note, plus the owning product CHANGELOG where one
+  exists.
 - A patch release is backward compatible with the latest minor line.
 
 From `v1.0.0`:
@@ -47,7 +48,7 @@ The enforcement column names the repository CI checks so the mechanism is audita
 | Relay HTTP API (the fixed route inventory and the response envelope it carries) | The closed route list built by `router` in `crates/registry-relay-v2/src/server.rs` and the generated-artifact contract `products/relay-v2/contracts/artifact-inventory.yaml`. Relay has no product-level OpenAPI document to pin, because the resources a document describes come from the adopter's own Registry contract; each deployment serves its own description at `GET /openapi.json`. See [API references](../apis/) | Root CI's `relay-v2-contracts` job runs `products/relay-v2/scripts/check-contracts.sh` and `products/relay-v2/scripts/test-http.sh`, which replay the four coequal acceptance projects under `products/relay-v2/acceptance/` against their recorded `expected-http.yaml` exchanges |
 | Relay authoring grammar and sealed package format | The Registry contract grammar `relay.registrystack.org/v2alpha1`, covering `registry.yaml` (`kind: RegistryContract`) and `runtime.yaml` (`kind: RelayRuntime`), and the sealed package format `relay.registrystack.org/package/v1alpha3` described by `products/relay-v2/contracts/package-layout.yaml`. Both carry pre-1.0 version markers today; the promise attaches to the version each one carries at `v1.0.0` | `RegistryContract::parse_yaml` and `RelayRuntime::parse_yaml` reject unknown keys rather than ignoring them (`crates/registry-relay-v2/src/contract.rs`); `products/relay-v2/scripts/check-configs.sh` holds each acceptance project against its recorded contract revision, package revision, and artifact digests in `products/relay-v2/contracts/generated-baselines.yaml`; `relay serve` verifies a package before it activates |
 | Evidence Gateway HTTP API and its Version 1 contracts | The frozen Version 1 source contracts under `products/evidence/contracts/`, indexed by `products/evidence/contracts/README.md`, and the artifacts generated from them under `products/evidence/generated/`, including `registry-evidence.openapi.json` | Root CI's `evidence-contracts` job runs `products/evidence/scripts/check-contracts.sh`, which regenerates every contract artifact and fails on any byte difference from the committed copies, plus `products/evidence/scripts/check-source-neutrality.sh` and `products/evidence/scripts/check-verifier-portability.sh` |
-| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), and the `https://id.registrystack.org/` identifier space. Relay's set is closed by `ProblemCode` in `crates/registry-relay-v2/src/problem.rs`. Evidence Gateway's closed problem set has its own frozen contract, `products/evidence/contracts/problem-contract.yaml`, documented at [Evidence Gateway problem types](../evidence-problems/) | Relay's code, status, title, detail, and type URI all come from one exhaustive match, and its product tests pin the rendered body and headers; the `evidence-contracts` job byte-diffs the generated Evidence Gateway problem schema |
+| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), and the `https://id.registrystack.org/` identifier space. Relay's set is closed by `ProblemCode` in `crates/registry-relay-http-contract/src/lib.rs`. Evidence Gateway's closed problem set has its own frozen contract, `products/evidence/contracts/problem-contract.yaml`, documented at [Evidence Gateway problem types](../evidence-problems/) | Relay's code, status, title, detail, and type URI come from one exhaustive catalog, and product tests pin the rendered body and headers; the `evidence-contracts` job regenerates and byte-diffs the committed Evidence Gateway problem schema against runtime-owned generation |
 | Configuration formats and documented environment variables | Relay's `registry.yaml` and `runtime.yaml` grammars, the frozen Evidence Gateway schemas `products/evidence/contracts/runtime.schema.yaml` and `products/evidence/contracts/bundle.schema.yaml`, plus the [environment variable reference](../environment-variables/) | Relay and Evidence Gateway both parse with `deny_unknown_fields`, so a retired or misspelled key is a startup refusal rather than an ignored field; Evidence Gateway's config parser is tested against the frozen contract schemas (`crates/registry-evidence/src/config.rs`), and `products/evidence/scripts/check-config-key-paths.sh` holds its configuration reference in exact parity with them |
 | Registry Manifest schema and rendered artifacts | `registry-manifest/v1` and the rendered artifact schema versions, governed by [RS-DM-MANIFEST](../../spec/rs-dm-manifest/) | `validate_manifest` accepts only `registry-manifest/v1`; REQ-DM-MANIFEST-013 requires strict unknown-key rejection at parse time |
 | Command-line interfaces | Documented commands and flags of `relay`, `evidence`, and `registry-manifest`, and their machine-readable output modes | CLI reference pages; the `evidence` command surface is stated in `products/evidence/OPERATOR-CONTRACT.md` and exercised end to end against the built binary in `crates/registry-evidence/tests/cli.rs`; the release candidate workflow asserts each built binary reports the release version |
@@ -63,14 +64,15 @@ No shipping binary currently exposes a covered metric family. Relay serves no me
 selected-metrics mechanism defined in this page has nothing under it until a maintained product
 publishes a family through it.
 
-Registry Mint and `evidence-oid4vci` are deliberately absent from the table. Both are supporting
-services rather than patterns of their own, and their configuration fields, route shapes, and CLI
-flags may still change without a major release, as the [Registry Mint reference](../mint/) states
-for each of its surfaces. What Registry Mint does hold steady is structural rather than versioned:
-the `client_credentials` grant with registered authentication, `private_key_jwt` (RFC 7523) by
-default or an explicitly selected standard client-secret method, the collapse of every client
-authentication failure to `invalid_client`, and authority written from the client registry rather
-than from the caller's request.
+Registry Mint and `evidence-oid4vci` service surfaces are deliberately absent from the table. Both
+are supporting services rather than patterns of their own, and their configuration fields, route
+shapes, and CLI flags may still change without a major release. Registry Mint's released image name
+and digest-verification interface remain covered release artifacts. What Registry Mint does hold
+steady is structural rather than versioned: the `client_credentials` grant with registered
+authentication, `private_key_jwt` (RFC 7523) by default or an explicitly selected standard
+client-secret method, the collapse of every client authentication failure to `invalid_client`,
+and authority written from the client registry rather than from the caller's request. The
+[Registry Mint reference](../mint/) defines these surfaces.
 
 ## What counts as a breaking change
 
@@ -177,17 +179,22 @@ plane. Both are served by one listener. Relay has no admin plane, no separate ad
 no metrics route, so no third namespace exists to version. Its `/health`, `/ready`, and
 `/openapi.json` routes are operational and discovery routes, unversioned by convention.
 
-Evidence Gateway's two versioned routes, `POST /v1/evidence` and `GET /v1/evidence-definitions`, are the
-whole of its evidence surface under the frozen Version 1 contract. Its remaining routes are
+Evidence Gateway's three versioned operations, `POST /v1/evidence`, `POST /v1/evidence/batch`, and
+`GET /v1/evidence-definitions`, are the whole of its evidence surface under the frozen Version 1
+contract. Its remaining routes are
 operational or discovery routes and are unversioned by convention: `/health`, `/ready`,
 `/openapi.json`, `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. Evidence Gateway
 serves `/metrics` on a separate listener when one is configured, never on the request listener.
 
 Registry Mint's routes are unversioned by protocol convention rather than by promise: the fixed,
 non-configurable `POST /token`, the key set at the configured `signing.jwksPath` (default
-`/.well-known/jwks.json`), `/.well-known/oauth-authorization-server`, `/health`, and `/ready`.
+`/.well-known/jwks.json`), `/.well-known/oauth-authorization-server`,
+`/.well-known/openid-configuration`, `/health`, and `/ready`.
 Discovery routes under `/.well-known/` follow RFC 8615 and their own upstream protocol
 conventions, so they carry no version prefix in any product.
+
+The `evidence-oid4vci` supporting service has eight public routes. They are unversioned by OID4VCI
+protocol convention and remain outside the stack compatibility promise described above.
 
 ## Enforcement
 

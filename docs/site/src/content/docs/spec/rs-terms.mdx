@@ -75,7 +75,7 @@ The registry stack comprises four formal products: Registry Platform, Registry R
 
 **Registry Relay** (`registry-relay`): Contract-compiled, read-only consultation runtime and the `relay` binary. It serves a fixed route set over one sealed package holding an adopter's governed contract, the compiled Registry derived from it, and every artifact generated from that Registry. Sources are SQLite databases read through the shared bounded read-only boundary. Relay exposes no write route, no administrative route, and no reload endpoint: a governed change is a new package and a new process. Specification prose shortens the name to Relay.
 
-**relayctl**: The adopter command line beside Relay, shipped from the same product. It initializes an authoring project, inspects SQLite structure without reading row values, compiles and validates a project, generates deterministic artifacts, runs offline fixtures, classifies the change between two project revisions, and builds the sealed package. Every operation links the same shared library the runtime uses, so the authoring path and the serving path cannot diverge. `relayctl` starts no process, reaches no running deployment, reads no environment variable, and signs nothing.
+**relayctl**: The adopter command line beside Relay, shipped from the same product. It initializes an authoring project, inspects SQLite structure without reading row values, compiles and validates a project, generates deterministic artifacts, runs offline fixtures, classifies the change between two project revisions, builds the sealed package, writes editor configuration, and provides a language-server protocol. Every operation links the same shared library the runtime uses, so the authoring path and the serving path cannot diverge. `relayctl` starts no process, reaches no running deployment, defines no product-specific environment-variable configuration, and signs nothing. Its fixture runner may use the host's temporary-directory selection only for internal materialization.
 
 **Registry Manifest** (`registry-manifest`): Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Relay. Provides a library (`registry-manifest-core`) and a command-line interface (`registry-manifest-cli`).
 
@@ -327,7 +327,7 @@ This specification is `verified`: the definitions are distilled from published r
 {/* Evidence: crates/registry-relay-v2/src/{contract,compiler,api,artifacts,package,startup}.rs
     carry the contract kinds, source profiles, access and disclosure profiles, Registry Core record
     context, capability families, and package verification these terms name.
-    crates/registry-relayctl/src/ carries the seven commands. crates/registry-manifest-core/src/lib.rs
+    crates/registry-relayctl/src/ carries the seven workflow commands and two tooling commands. crates/registry-manifest-core/src/lib.rs
     still holds REQUIRED_EVIDENCE_PACK_GATES, ODRL_ENFORCEMENT_PROFILE, and the policy-hash checks the
     Section 4 manifest terms describe. The retired registry-platform-pdp crate is absent. */}
 

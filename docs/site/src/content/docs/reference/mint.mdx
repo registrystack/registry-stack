@@ -17,11 +17,11 @@ provider.
 
 ## Contract status
 
-Registry Stack as a whole is a pre-1.0 technical release, and Registry Mint's surfaces carry that
-same status individually: they do not appear among the covered surfaces listed in
-[API stability and versioning](../api-stability/), so nothing on this page is a compatibility
-promise. Configuration fields, the token endpoint shape, and CLI flags may change without a major
-release until Registry Mint is added to that covered-surfaces table.
+Registry Stack as a whole is a pre-1.0 technical release. Registry Mint's configuration, HTTP, and
+CLI surfaces do not appear among the covered surfaces in
+[API stability and versioning](../api-stability/), so those surfaces may change without a major
+release until Mint is added to that table. The released Mint image name and digest-verification
+interface are covered release artifacts.
 
 What is stable in practice: the `client_credentials` grant, registered client authentication
 with `private_key_jwt` (RFC 7523) as the default or an explicitly selected client-secret
@@ -32,26 +32,29 @@ implementation choices.
 
 ## Source of truth
 
-The `registry-mint` crate at `crates/registry-mint/` is the source of truth for every claim on
-this page. Configuration parsing and validation live in `crates/registry-mint/src/config.rs` and
+The `registry-mint` crate at `crates/registry-mint/` is the source of truth for Mint runtime,
+configuration, HTTP, token, and audit behavior. Configuration parsing and validation live in
+`crates/registry-mint/src/config.rs` and
 `crates/registry-mint/src/clients.rs`, the HTTP surface in
 `crates/registry-mint/src/server.rs`, token minting in `crates/registry-mint/src/token.rs`, and
 client-secret generation in `crates/registry-mint/src/client_secret.rs`, and the keyed audit
 boundary in `crates/registry-mint/src/audit.rs`. The public error shape lives in
-`crates/registry-mint/src/error.rs`. `crates/registry-mint/README.md` covers the same surface in
-prose. Where this page and the crate disagree, the crate wins.
+`crates/registry-mint/src/error.rs`. Release image and digest claims are owned under `release/`;
+Evidence and Relay verification claims are owned by those runtimes and their shared OIDC code.
+`crates/registry-mint/README.md` covers the Mint surface in prose.
 
 ## Official container image
 
 Starting with `v0.21.0`, Registry Stack publishes Registry Mint as
 `ghcr.io/registrystack/mint:v0.21.0`. The image uses the distroless nonroot
-runtime identity, UID and GID 65532, with no shell or package tools. Pin the
-digest recorded in the release manifest.
+runtime identity, UID and GID 65532, with no shell or package tools. Pin the digest recorded in the
+checksum-covered `registry-stack-v0.21.0-release-manifest.json` public release asset, following
+[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md).
 
 The image reads `MINT_CONFIG`, which defaults to
-`/etc/registry-mint/config.yaml`. Mount that configuration and every relative
-path it names read-only under `/etc/registry-mint`. Put `audit.path` under the
-writable `/var/lib/registry-mint/audit` directory and attach persistent storage
+`/etc/registry-mint/config.yaml`. Mount the configuration and immutable relative inputs read-only
+under `/etc/registry-mint`. Set `audit.path` to an absolute path under the writable
+`/var/lib/registry-mint/audit` directory and attach persistent storage
 owned by UID and GID 65532. The image exposes port `8081` and serves
 `GET /health` for an external HTTP probe; it does not include a Docker
 `HEALTHCHECK`.
@@ -68,7 +71,7 @@ following tables group the surface by the struct that owns each field.
 | --- | --- | --- | --- |
 | `version` | integer | required | Must equal `1`. |
 | `validationMode` | `strict` or `supervised-local-development` | `strict` | Strict mode requires Transit. Supervised local development also permits `local-jwk`. |
-| `issuer` | string (URL) | required | Must be `https`, have a host, and carry no credentials, query, or fragment. |
+| `issuer` | string (URL) | required | Strict mode requires HTTPS with a host and no credentials, query, or fragment. Supervised local mode also accepts only canonical `http://127.0.0.1:<nonzero-port>`, aligned with the listener, JWKS path, and `${issuer}/token` assertion audience. |
 | `listener` | object | required | See [Listener](#listener). |
 | `signing` | object | required | See [Signing](#signing). |
 | `signer` | object | required | The local-JWK or Transit signing provider. |
@@ -92,19 +95,26 @@ following tables group the surface by the struct that owns each field.
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `algorithm` | `ES256` | required | Fixed service-token signing algorithm. Client assertions have their own allowlist. |
-| `activePublicJwkFile` | path | required | Exact public P-256 JWK for the signer. Its `kid` must be the derived RFC 7638 thumbprint. |
-| `publishedPublicJwkFiles` | list of paths | `[]` | Other current public P-256 JWKs that remain in JWKS during a planned rotation. |
-| `revokedKeyIds` | list of thumbprints | `[]` | Denylisted service keys. They cannot be active, published, or returned by JWKS. |
+| `activePublicJwkFile` | path | required | Exact six-member public ES256 P-256 JWK for the signer. Its `kid` must be the 43-character RFC 7638 thumbprint, and the file name must be `<thumbprint>.jwk.json`. |
+| `publishedPublicJwkFiles` | list of paths | `[]` | Other current public P-256 JWKs that remain in JWKS during a planned rotation. Active plus published is limited to 33 unique keys. |
+| `revokedKeyIds` | list of thumbprints | `[]` | At most 33 unique RFC 7638 thumbprints. They cannot be active, published, or returned by JWKS. |
 | `jwksPath` | string | `/.well-known/jwks.json` | A plain absolute path: one or more non-empty segments of `A-Z a-z 0-9 - . _ ~`, no dot segments, and no query, fragment, or route pattern. Must not be `/token`, `/health`, `/ready`, `/.well-known/oauth-authorization-server`, or `/.well-known/openid-configuration`. |
 
 ### Signer
 
 `signer.kind` is `transit` in strict mode and `local-jwk` only for supervised local development.
-A Transit configuration has `unixSocketPath`, `mount`, `keyName`, `keyVersion`, and
-`timeoutMilliseconds`. The Unix socket points to a workload-local proxy, not a network provider.
-The key version is nonzero and pinned. Mint verifies the public key, Transit custody controls, key
-version, and a signature before readiness admits traffic. A local-JWK configuration has only
-`privateKeyRef`; its resolved key must match `activePublicJwkFile`.
+A Transit configuration has an absolute `unixSocketPath`; non-empty `mount` and `keyName` values of
+at most 128 ASCII letters, digits, `-`, or `_`; a nonzero pinned `keyVersion`; and
+`timeoutMilliseconds` from 1 through 30000. The socket points to a workload-local proxy, not a
+network provider. Mint verifies the public key, Transit custody controls, key version, and a
+signature before readiness admits traffic. A local-JWK configuration has only `privateKeyRef`; its
+resolved key must match `activePublicJwkFile`.
+
+### Secret provider
+
+`secretProviders.file.root` must be absolute. Every secret reference uses the exact
+`secret:file/<name>` grammar. The name starts with a lowercase ASCII letter, continues with lowercase
+letters, digits, `.`, `_`, or `-`, and is at most 128 characters.
 
 ### Audit
 
@@ -122,7 +132,7 @@ The keyed chain continues across segments. Mint does not delete or compact seale
 operator owns total capacity, backup, and retention. Verify retained records with:
 
 ```sh
-mint verify-audit --config /etc/mint/mint.yaml
+mint verify-audit --config /etc/registry-mint/config.yaml
 ```
 
 The command verifies every sealed segment and reports a missing sequence distinctly. It verifies
@@ -163,7 +173,7 @@ must be distinct, must not shadow the registered JWT claims Registry Mint writes
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `audience` | string (URL with host) | required | The value client assertions must carry as their own `aud`. |
+| `audience` | string (URL with host) | required | The value client assertions must carry as `aud`. Strict mode requires HTTPS. Canonical supervised local HTTP requires exactly `${issuer}/token`. |
 | `maximumLifetimeSeconds` | integer (`u64`) | `300` | Bounded `30..=600`. |
 | `algorithms` | list of enum: `EdDSA`, `ES256`, `RS256` | required, non-empty | Accepted client assertion signature algorithms. |
 | `replayCacheEntries` | integer (`usize`) | `8192` | Minimum `256`. |
@@ -172,7 +182,7 @@ must be distinct, must not shadow the registered JWT claims Registry Mint writes
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `directory` | path | required | Directory of per-client registration files. The one reloadable part of the configuration: `SIGHUP` re-reads it in place. |
+| `directory` | path | required | Directory of at most 4096 per-client `*.yaml` registration files. The one reloadable part of the configuration: `SIGHUP` loads a complete replacement in place; a failed reload retains the prior registry. |
 
 ### Client registration fields (`clients/*.yaml`)
 
@@ -180,15 +190,15 @@ One file per client, parsed by `crates/registry-mint/src/clients.rs`.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `clientId` | string | required | |
-| `principal` | string (at most 512 bytes) | required | |
-| `evidenceAudience` | string | Evidence profile only | Required with `requesterTags`; cannot coexist with `authorization`. |
-| `requesterTags` | list of strings (1..=32 entries) | Evidence profile only | Required with `evidenceAudience`; cannot coexist with `authorization`. |
-| `grant` | object: `id`, `authority` | Evidence profile only, optional | Both fields are required when the object is present. Cannot coexist with `authorization`. |
-| `delegation` | object: `actors`, `subjectClaims` | Evidence profile only, optional | Enables delegated tokens bound to one subject; cannot coexist with `authorization`. See `crates/registry-mint/README.md`. |
+| `clientId` | string (1..=256 bytes) | required | Unique across the loaded registry. |
+| `principal` | string (1..=512 bytes) | required | Must not be blank. |
+| `evidenceAudience` | URL string (at most 512 bytes) | Evidence profile only | Required with `requesterTags`; cannot coexist with `authorization`. |
+| `requesterTags` | 1..=32 unique strings, each 1..=256 bytes | Evidence profile only | Required with `evidenceAudience`; cannot coexist with `authorization`. |
+| `grant` | object: `id`, `authority` | Evidence profile only, optional | Both values are 1..=512 bytes when present. Cannot coexist with `authorization`. |
+| `delegation` | object: `actors`, `subjectClaims` | Evidence profile only, optional | `actors`, when present, has 1..=64 unique values of 1..=512 bytes. `subjectClaims` has 1..=16 non-overlapping claim paths. Cannot coexist with `authorization`. |
 | `authorization` | object: `scopes`, `claims` | Standard profile only | `scopes` has 1..=64 unique RFC 6749 scope-tokens. `claims` has at most 32 direct strings. Cannot coexist with Evidence fields. |
 | `clientAuthentication` | object | `method: private-key-jwt` | Selects `private-key-jwt` or `client-secret`. The secret method is valid only with standard `authorization` and carries one or two canonical `sha256:` fingerprints under `secretFingerprints`. |
-| `keys` | list of public JWKs (1..=8 entries) | required for `private-key-jwt` | A document carrying a private key member is rejected. Must be omitted for `client-secret`. |
+| `keys` | list of public JWKs (1..=8 entries) | required for `private-key-jwt` | Key ids are non-empty, at most 256 bytes, and unique per client. A document carrying a private key member is rejected. Must be omitted for `client-secret`. |
 
 Every registration selects exactly one profile. Evidence authority consists of
 `evidenceAudience` plus `requesterTags`, with optional `grant` and `delegation`. Standard
@@ -196,7 +206,8 @@ authorization consists of `authorization.scopes` plus optional `authorization.cl
 registration that selects neither profile or combines both profiles fails the whole registry
 load. Omitting `clientAuthentication` preserves `private-key-jwt`; the client-secret method must
 be selected explicitly and cannot be combined with client keys, Evidence authority, or
-delegation.
+delegation. Each registration must be a regular file no larger than 256 KiB. Loading is all-or-nothing:
+one malformed or duplicated registration refuses the complete startup or reload.
 
 Each standard scope is 1 to 256 bytes and follows the RFC 6749 scope-token grammar. Direct claim
 names are 1 to 128 bytes. Direct claim values are non-empty strings of at most 512 bytes. The
@@ -228,7 +239,17 @@ exactly, and `client_assertion_type` must equal
 `urn:ietf:params:oauth:client-assertion-type:jwt-bearer` exactly. `client_assertion` is a
 compact JWS whose payload carries `iss` and `sub` equal to the client id, `aud` equal to the
 configured `clientAssertion.audience`, a `jti`, and `iat`/`exp` inside
-`clientAssertion.maximumLifetimeSeconds`. Every `jti` is accepted once.
+`clientAssertion.maximumLifetimeSeconds`.
+
+The protected header uses one configured algorithm, a `typ` of `JWT` or
+`client-assertion+jwt`, and a `kid` present in that client's registered public keys. The compact
+assertion is at most 16 KiB; its decoded header and claims are each at most 8 KiB; and the client id
+and `jti` are each at most 256 bytes. A delegated request adds the signed
+`on_behalf_of: {actor, subject}` claim.
+
+A valid assertion's `(client_id, jti)` is accepted at most once while the assertion remains
+acceptable, including clock skew. Client-registry reloads do not clear spent identifiers. A
+delegation refused before authentication completes does not spend the identifier.
 
 An explicitly selected client-secret registration accepts HTTP Basic authentication
 (`client_secret_basic`):
@@ -284,12 +305,12 @@ before sending this response. If that append fails, the token is not released.
 
 ### Errors
 
-Every response body is `{"error": "<code>"}`, from
-`crates/registry-mint/src/error.rs`:
+Token and protocol error responses use `{"error": "<code>"}`, from
+`crates/registry-mint/src/error.rs`. Readiness has the separate response described below.
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_request` | `400` | A required field is missing or duplicated, authentication methods are mixed, or `client_assertion_type` is not the exact `jwt-bearer` URN. A missing `grant_type` is a missing field and lands here, not below. |
+| `invalid_request` | `400` | The content type is wrong; the bounded request body is unreadable, oversized, or timed out; a recognized form field is missing or duplicated; authentication methods are mixed; or `client_assertion_type` is not the exact `jwt-bearer` URN. Unknown form members are ignored. A missing `grant_type` lands here, not below. |
 | `unsupported_grant_type` | `400` | `grant_type` is present but is not `client_credentials`. |
 | `invalid_client` | `401` | Every client authentication failure: unknown client id, wrong authentication method, bad signature or secret, replayed `jti`, or expired assertion. Registry Mint collapses these into one code so the endpoint cannot be used to probe which client ids are registered. A failed HTTP Basic attempt carries `WWW-Authenticate: Basic realm="registry-mint"`. |
 | `server_error` | `500` | An internal failure, including failure to durably audit the token decision. |
@@ -337,10 +358,10 @@ sequenceDiagram
 ```
 
 Everything through the access-token return is the whole of Registry Mint's job. It never sees the
-source, the acceptance definition, or the assertion. The remaining exchanges are Evidence Gateway's, and
-Evidence Gateway's only knowledge of Registry Mint is a URL and a key set: it reads the token by the claim
-names in its own
-configuration, so any issuer writing those claims would serve equally well.
+source, the acceptance definition, or the Evidence assertion. Evidence Gateway has no Mint runtime
+dependency. It treats Mint as an ordinary issuer configured with exact issuer, audiences, token
+types, algorithms, JWKS URI, authority claim names, maximum token lifetime, and denied key ids. Any
+issuer can be used only when it satisfies that complete token profile.
 
 The exact wire shapes the diagram abbreviates are given in full below:
 [Token endpoint contract](#token-endpoint-contract) for the assertion and token,
@@ -348,11 +369,12 @@ The exact wire shapes the diagram abbreviates are given in full below:
 [How Evidence Gateway verifies these tokens](#how-evidence-gateway-verifies-these-tokens) for the claim names.
 
 Two failures collapse deliberately and are worth reading beside the diagram. A client
-authentication failure returns `401 invalid_client` whatever went wrong, so the token endpoint
-cannot be used to probe which client ids are registered. A key-set retrieval failure prevents
-Evidence Gateway from verifying a token: with no key set ever retrieved, every request is rejected until
-one can be, and with a key set already held, that held set keeps being accepted only until its
-allowance runs out. Evidence Gateway names the outage in either case rather than failing silently.
+authentication failure has the same public `401 invalid_client` response whether the asserted
+client id is unknown or its assertion fails another check. A key-set retrieval failure prevents
+Evidence Gateway from verifying a token: with no key set ever retrieved, every request is rejected
+until one can be, and with a key set already held, that held set keeps being accepted only until its
+allowance runs out. Caller-facing authentication errors remain generic; readiness and bounded
+operational records expose the dependency failure to operators.
 
 ## How Evidence Gateway verifies these tokens
 
@@ -384,11 +406,14 @@ lifetime, principal, token identifier, and space-delimited `scope` claim. The se
 or access profile then requires one exact compiled scope. Optional purpose and row-authority
 checks read direct verified string claims.
 
-Pairing therefore requires four exact configuration matches:
+Pairing therefore requires these exact configuration matches:
 
 - `accessTokens.audiences` is a one-entry list equal to the Relay runtime's issuer audience.
-- `authorization.scopes` contains only the operation and access-profile scopes registered for
-  that client.
+- Relay's `discoveryUrl` points to Mint's discovery document and its algorithm allowlist contains
+  `ES256`.
+- `authorization.scopes` includes every exact compiled operation or access-profile scope required
+  by that client. Keeping the registration to the minimum needed set is governance guidance; Relay
+  checks required-scope membership rather than rejecting unrelated extra scopes.
 - `authorization.claims` supplies the configured purpose or row-authority values that the
   selected Relay access rule requires.
 - `accessTokens.lifetimeSeconds` is between 60 and 900 seconds, within Relay's fixed 15-minute

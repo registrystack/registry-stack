@@ -1,6 +1,6 @@
 ---
 title: API references
-description: Where to find the HTTP API reference for each Registry Stack service, and why only Evidence Gateway has a pinned OpenAPI document.
+description: Where to find fixed, supporting-service, and deployment-generated HTTP API references across Registry Stack.
 wide: true
 status: current
 owner: registry-docs
@@ -16,19 +16,21 @@ standards_referenced:
 
 import OpenApiSourcesTable from '../../../../components/OpenApiSourcesTable.astro';
 
-Use this section to browse the HTTP API for a Registry Stack service. The two services publish
-their OpenAPI documents in different ways, because one has a product-level route contract and the
-other does not.
+Use this section to find each maintained HTTP surface. Evidence Gateway and its OID4VCI wallet
+delivery front end have fixed generated contracts. Registry Mint has a hand-authored reference.
+Relay generates its description from each adopter's Registry contract.
 
 {/* Do not duplicate endpoint reference content in narrative pages. */}
 
-## Evidence Gateway: one pinned document
+## Fixed generated APIs
 
 Evidence Gateway's routes are the same in every deployment, so one generated OpenAPI document
-describes the product. That document is pinned into this site and rendered as a reference page.
+describes the product. The development site reads it from the checked-out current source. Archived
+docsets read it from their release ref and hold it under the archive lock.
 
 - [Evidence Gateway API](./registry-evidence/) documents the assertion, requester-scoped
-  definition discovery, health, readiness, served-contract, and key discovery endpoints.
+  definition discovery, request batch, JWT VC issuer metadata, health, readiness, served-contract,
+  and key discovery endpoints.
 
 The document is generated with the other Evidence Gateway contract artifacts:
 
@@ -36,17 +38,32 @@ The document is generated with the other Evidence Gateway contract artifacts:
 cargo run -p registry-evidence --example evidence-contracts -- --output "<directory>"
 ```
 
-The committed copy lives in `products/evidence/generated/`, and root CI's `evidence-contracts`
-job fails on any byte difference between the committed artifacts and a fresh generation. A running
+The committed copy lives in `products/evidence/generated/`, and root CI's `evidence-contracts` job
+fails on any byte difference between the committed artifacts and a fresh generation. A running
 Evidence Gateway service publishes the same document at `GET /openapi.json` with no authentication
 required.
 
-### Pinned sources
+The separate `evidence-oid4vci` supporting service also has a deterministic, committed OpenAPI
+document. Root CI drift-checks it with the Evidence contract artifacts. Use the
+[v0.21.0 OID4VCI OpenAPI artifact](https://github.com/registrystack/registry-stack/blob/v0.21.0/products/evidence/generated/registry-evidence-oid4vci.openapi.json)
+or render the current binary's contract:
 
-The card below shows the current artifact status, source generator, and link to the reference page.
-It is generated from `src/data/openapi-sources.yaml`.
+```sh
+evidence-oid4vci openapi --output oid4vci.openapi.json
+```
+
+### Rendered source
+
+The card below shows how the rendered Evidence Gateway artifact is selected and links to its
+operations. It is generated from `src/data/openapi-sources.yaml`.
 
 <OpenApiSourcesTable />
+
+## Registry Mint: hand-authored supporting-service API
+
+Registry Mint has a fixed HTTP surface but no generated OpenAPI artifact. Its configuration, token
+request and response, OAuth errors, discovery documents, key set, health, and readiness routes are
+documented in the [Registry Mint reference](../mint/).
 
 ## Relay: one document per deployment
 
@@ -56,8 +73,8 @@ A Relay deployment serves data that its own `registry.yaml` declares. The compil
 document into the deployment's OpenAPI 3.1.0 description, and `relay` serves the public projection
 of it at `GET /openapi.json` with no authentication required. The description names that
 deployment's registry, its contract version, its base URI, and its own resources, operations, and
-statistical datasets, so no two deployments produce the same document. Fetch it from the deployment
-you are integrating with:
+statistical datasets. Deployments with different Registry contracts can produce different
+documents. Fetch the document from the deployment you are integrating with:
 
 ```sh
 curl -fsS https://<relay-host>/openapi.json

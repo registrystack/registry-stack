@@ -13,16 +13,14 @@ locale: en
 standards_referenced: []
 ---
 
-Each of the three services answers a failing request with a fixed, value-free body. None of them
-attaches the rejected value, the SQL it would have run, a source path, token material, or a
-principal identifier to the failure. This page carries Relay's set in full and points at the two
-sets that are written down elsewhere under their own drift gates.
+Registry Stack HTTP surfaces use product-specific error contracts. This page carries Relay's set in
+full and points to the Evidence Gateway, Registry Mint, and OID4VCI supporting-service contracts.
 
 ## Relay
 
 Relay returns errors as RFC 9457 problem details with the media type `application/problem+json`.
-The set is closed: `ProblemCode` in `crates/registry-relay-v2/src/problem.rs` has 26 variants and
-the HTTP boundary can return nothing else.
+The set is closed: `ProblemCode` in `crates/registry-relay-http-contract/src/lib.rs` has 26 variants,
+and the HTTP boundary can return nothing else.
 
 ### Response shape
 
@@ -91,7 +89,9 @@ refused without inspecting the path.
 Four distinctions are worth knowing before writing client code.
 
 - `resource.not_found` means the path does not name anything this caller may reach.
-  `consultation.unresolved` means the operation exists and ran, and no record answered it. A caller
+  `consultation.unresolved` means a known consultation did not resolve exactly one record. It also
+  covers an invalid record identifier rejected before a source query, so callers must not infer
+  that source execution occurred. A caller
   that is authenticated but not entitled to a resource gets the same `resource.not_found` as a
   caller asking for a resource that was never declared, so the code cannot be used to probe what
   exists. The exception is deliberate: an anonymous caller asking for something whose class has any
@@ -110,20 +110,18 @@ Four distinctions are worth knowing before writing client code.
 
 ### Startup failures are not problems
 
-Relay compiles and verifies its sealed package before it serves anything. A failure at that stage
-is not an HTTP problem: the process writes a bounded operational record on standard error and
-exits, or `/ready` answers `service.not_ready` while a dependency is not yet usable. There is no
-startup-only code namespace in the problem set, because a Relay that cannot activate its package
-does not begin serving. See [Operate Relay](../../operate/relay/) for what those startup records look
-like.
+Relay compiles and verifies its sealed package and checks initial readiness before binding its
+listener. A failure at that stage is not an HTTP problem: the process writes a bounded operational
+record on standard error and exits. After serving begins, `/ready` can answer `service.not_ready` if
+readiness is later lost. There is no startup-only code namespace in the problem set. See
+[Operate Relay](../../operate/relay/) for what those startup records look like.
 
 ## Evidence Gateway
 
 Evidence Gateway has its own closed problem set, documented at
 [Evidence Gateway problem types](../evidence-problems/). That page is the single place the set is written
-down, because the set is frozen in `products/evidence/contracts/problem-contract.yaml` and CI
-byte-diffs the generated schema against it; a second copy of the table here would drift without a
-gate to catch it.
+down. The runtime-owned generator reproduces the committed schema and OpenAPI artifacts under CI;
+the frozen `products/evidence/contracts/problem-contract.yaml` is maintained separately.
 
 Evidence Gateway type URIs use
 `https://id.registrystack.org/problems/registry-evidence/<code-path>`, where
@@ -135,18 +133,25 @@ identifier.
 
 ## Registry Mint
 
-Registry Mint is an OAuth 2.0 token endpoint, so it does not use RFC 9457 at all. Every error
-response body is the OAuth form `{"error": "<code>"}` over four codes (`invalid_request`,
+Registry Mint is an OAuth 2.0 token endpoint, so its token and protocol failures use the OAuth form
+`{"error": "<code>"}` over four codes (`invalid_request`,
 `unsupported_grant_type`, `invalid_client`, and `server_error`), transcribed with their statuses
 and causes in the [Registry Mint reference](../mint/). The one to know before reading it:
-every client authentication failure collapses to `invalid_client`, so the endpoint cannot be used
-to probe which client ids are registered.
+every client authentication failure has the same public status, code, body, and authentication
+header, regardless of whether the asserted client id is registered. An unready `GET /ready` instead
+returns `503 {"status":"not ready"}`.
+
+## Evidence OID4VCI supporting service
+
+The OID4VCI delivery service has its own closed protocol error vocabulary in the
+[committed v0.21.0 OpenAPI artifact](https://github.com/registrystack/registry-stack/blob/v0.21.0/products/evidence/generated/registry-evidence-oid4vci.openapi.json).
+Framework-level refusals that never enter the protocol handler can intentionally use `text/plain`.
 
 ## Source
 
-The Relay codes above are transcribed from `ProblemCode` in
-`crates/registry-relay-v2/src/problem.rs`, which owns the code strings, titles, details, statuses,
-type URIs, and response headers in one place. The trace behavior is `TraceContext` in the same file.
+The Relay catalog is `ProblemCode` in `crates/registry-relay-http-contract/src/lib.rs`. Runtime
+serialization and response headers are in `crates/registry-relay-v2/src/problem.rs`; trace handling
+is `TraceContext` in `crates/registry-platform-httpsec/src/server.rs`.
 
 The codes this page points at rather than repeating are transcribed on their own pages from
 `crates/registry-evidence/src/problem.rs` with `products/evidence/contracts/problem-contract.yaml`

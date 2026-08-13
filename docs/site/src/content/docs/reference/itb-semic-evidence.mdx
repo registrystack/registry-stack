@@ -14,41 +14,39 @@ standards_referenced:
   - bregdcat-ap
   - shacl
   - json-schema
-  - openapi
 ---
 
 This page summarizes selected external validation evidence for Registry Manifest.
 It is not a certification statement, and it does not claim every generated artifact or every runtime deployment has been tested.
 
-Registry Relay and Evidence Gateway have no external ITB or SEMIC evidence recorded yet.
+Registry Relay and Evidence Gateway have no external ITB or SEMIC evidence recorded.
 
-## Summary
+## Evidence status
 
-| Product | Artifact | External check | Result | Boundary |
-| --- | --- | --- | --- | --- |
-| Registry Manifest | Generated JSON Schema Draft 2020-12 files for the civil-registration fixture | ITB JSON validator, `any` domain, with the Draft 2020-12 metaschema embedded | `SUCCESS`, 0 errors, 0 warnings | Selected generated schemas only |
-| Registry Manifest | Generated DCAT JSON-LD for the civil-registration fixture | Public ITB/SEMIC SHACL validator, `dcatap.3_0_1_base0` | `SUCCESS`, 0 errors, 0 warnings | Selected DCAT artifact only |
-| Registry Manifest | Generated BRegDCAT-AP JSON-LD for the civil-registration fixture | Public ITB/SEMIC SHACL validator, `bregdcatap.2_0_0` and `bregdcatap.2_1_0` | `SUCCESS`, 0 errors, 2 warnings per profile | Passes with warnings; see the owning Manifest PR |
+Registry Manifest includes a reproducible driver for selected JSON Schema, DCAT-AP, and
+BRegDCAT-AP checks. This repository does not currently pin immutable sanitized validator reports
+for the historical result counts, so those counts are not presented as current evidence.
+{/* TODO[evidence]: Exact result counts require immutable sanitized reports that bind the validator
+    profile, source and artifact digests, execution date, and warning count. */}
 
 ## Source links
 
-- Validator outputs and the warning boundary are recorded in
-  [registry-manifest PR #27](https://github.com/jeremi/registry-manifest/pull/27).
-- Registry Manifest documents the BRegDCAT warning boundary in the Manifest
-  ITB and SEMIC validation guide.
+- [v0.20.0 validation guide](https://github.com/registrystack/registry-stack/blob/v0.20.0/products/manifest/docs/itb-semic-validation.md)
+- [v0.20.0 smoke script](https://github.com/registrystack/registry-stack/blob/v0.20.0/products/manifest/scripts/itb-semic-smoke.sh)
 
 ## What is not covered
 
 - No maintained runtime has been validated by a GITB scenario suite.
-- Registry Manifest BRegDCAT-AP output passes the selected public validators with warnings.
-  The warning profiles differ on `dcat:themeTaxonomy`, so the warnings are documented rather than hidden.
+- Exact historical success, error, and warning counts are not retained as immutable release
+  evidence in this repository.
 - The evidence applies to selected fixtures and profiles, not to every possible operator manifest or deployment.
 
-## Public wording
+## Evidence required for exact result counts
 
-This evidence supports statements that the published examples validate against the SEMIC
-validators with zero errors; it does not support claims of certification, official validation, or
-full conformance.
+Exact public result claims require sanitized request and response reports with the
+validator profile, source and artifact digests, execution date, and warning count under an immutable
+release tag. The current smoke script writes reports under `target/` and enforces zero errors, but it
+does not publish those reports.
 
 ## Next
 

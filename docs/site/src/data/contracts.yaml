@@ -1,25 +1,3 @@
-- id: registry-platform.crate-apis
-  name: Registry Platform Crate APIs
-  owner: registry-platform
-  status: current-source
-  surface: Shared Rust crate APIs for auth helpers, OIDC verification, audit envelopes and sinks, HTTP security middleware, outbound HTTP policy, Ed25519 JWK and DID helpers, SD-JWT VC issuance, and testing fixtures.
-  source_of_truth:
-    label: Registry Platform crates
-    url: https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates
-  consumer_note: Relay, Evidence Gateway, Registry Mint, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally.
-- id: registry-platform.ops-posture-v1
-  name: Registry Ops Posture v1
-  owner: registry-platform
-  status: current-source
-  surface: Versioned JSON Schema for protected Registry Relay operations posture observations, including the shared envelope, component sections, default and restricted sensitivity tiers, deployment findings, audit state, and standards-artifact references. The frozen v1 shape still models the retired Registry Notary component so that a consumer can validate a document it already holds.
-  source_of_truth:
-    label: Registry Ops Posture v1 JSON Schema
-    url: https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json
-  consumer_note: >-
-    Validate every document against `registry.ops.posture.v1` before use. The
-    schema is closed: every post-1.0 shape change, including an additive field,
-    requires a new schema identifier. Use the default tier for the emit-only
-    allowlisted projection; restricted output remains protected operational data.
 - id: registry-relay.registry-contract
   name: Relay Registry Contract Grammar
   owner: registry-relay
@@ -30,11 +8,11 @@
     url: https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/contract.rs
   consumer_note: >-
     Both documents are closed shapes: an unrecognized key is a parse failure,
-    not an ignored field, so a document that compiles today cannot silently
-    change meaning under a later runtime. The grammar is pre-1.0 and can change
-    with a documented migration in a release note. A deployment's HTTP surface
-    is compiled from its own `registry.yaml`, so no product-level OpenAPI
-    document describes Relay; fetch `GET /openapi.json` from the deployment.
+    not an ignored field. Compatibility for recognized keys follows the release
+    policy. The grammar is pre-1.0 and can change with a documented migration in
+    a release note. A deployment's HTTP surface is compiled from its own
+    `registry.yaml`, so no product-level OpenAPI document describes Relay; fetch
+    `GET /openapi.json` from the deployment.
 - id: registry-relay.package
   name: Relay Sealed Package Format
   owner: registry-relay
@@ -69,7 +47,7 @@
     url: https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/manifest/fixtures/cpsv-ap
   consumer_note: Each CCCEV evidence type list is one grouped option; multiple lists on a requirement are alternatives.
 - id: registry-manifest.static-publication
-  name: Static Metadata Publication Bundle
+  name: Static Discovery Bundle
   owner: registry-manifest
   status: current-source
   surface: Static index, catalog JSON, evidence offerings, policies, DCAT, CPSV-AP, BRegDCAT-AP, SHACL, OGC Records item collection, entity JSON Schemas, form JSON Schemas, and embedded SKOS-shaped codelist nodes.

@@ -199,9 +199,10 @@ test('keeps validation on the offline relayctl commands', () => {
     );
   }
   // The offline claim the page has to keep making, in relayctl's own terms:
-  // the checks read but never write, and the command line is the whole input.
+  // the checks read but never write, and ambient product configuration cannot
+  // select a different Registry or deployment.
   assert.match(validationSource, /read-only/);
-  assert.match(validationSource, /reads no environment variables/);
+  assert.match(validationSource, /defines no product-specific environment-variable configuration/);
   // registryctl is retired, and relayctl runs no service: nothing on this page
   // may present a start, stop, or live-run command as a validation step.
   assert.doesNotMatch(validationSource, /\bregistryctl\b/);

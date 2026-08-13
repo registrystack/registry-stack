@@ -44,6 +44,8 @@ The checker reads only local files and Git objects. It verifies that:
 - source YAML evidence URLs match the checked-in generated JSON
 - every tag or commit exists in the local repository
 - every linked repository path exists at that exact tag or commit
+- every `current-source` contract ref is reachable from the selected source
+- every `current-source` contract path still exists at the selected source
 - every root-relative documentation route exists at the selected source commit
 
 The exact source tag of the newest validated release manifest is the only

@@ -9,6 +9,7 @@ source_repos:
   - registry-stack
   - registry-platform
   - registry-manifest
+  - registry-evidence
 last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
@@ -26,6 +27,7 @@ standards_referenced:
   - skos
   - json-schema
   - json-ld
+  - oid4vci
   - sd-jwt-vc
   - verifiable-credentials
   - cccev
@@ -41,7 +43,10 @@ standards_referenced:
 
 import StandardsTable from '../../../components/StandardsTable.astro';
 
-This register lists every standard the registry stack touches, the projects that touch it, and the claim level that names how strong the relationship is. The registry stack does not introduce a new standard; each project emits, maps to, or aligns with existing ones, and says so explicitly.
+This register lists every standard Registry Stack touches and the projects that touch it. It records
+each relationship using one of six explicit claim levels: `implements`, `emits`, `maps_to`,
+`aligns_with`, `inspired_by`, or `compares_against`. Registry Stack does not introduce a new
+standard.
 
 The table is generated from `src/data/standards.yaml`.
 For selected external validator results, see [ITB and SEMIC evidence](../itb-semic-evidence/).
@@ -109,24 +114,26 @@ Six levels in descending strength:
 
 What these levels mean for integrators:
 
-- `emits`: you can parse that project's output as the standard expects. Fixtures or generated artifacts back the claim.
+- `emits`: the named output is shaped according to the stated standard or profile. Read the row's
+  notes and evidence before assuming validator conformance.
 - `aligns_with`: the project uses the vocabulary and intent of the standard but does not guarantee strict conformance. Do not write a validator against the spec without reading the surface notes.
-- `implements`: a normative requirement is met; you can rely on the API shape.
+- `implements`: only the named normative requirement or API surface, within the stated profile and
+  evidence boundary, is implemented.
 - `inspired_by` or `compares_against`: design context only, no interoperability claim.
 
-{/* A claim is only as strong as its evidence. When evidence is a README sentence, the claim is at most aligns_with. When evidence is a test, fixture, or generated artifact, the claim can reach emits or implements. A standard appears in the register only when it has all five required fields: standard, status, used_by, claim_level, and evidence. */}
+{/* A claim is only as strong as its evidence. When evidence is a README sentence, the claim is at most aligns_with. When evidence is a test, fixture, or generated artifact, the claim can reach emits or implements. A standard appears in the register only when it has all required fields. */}
 
 ## Column guide
 
 - **Standard** links to the official standards body page.
 - **Status** is one of `used`, `referenced`, `evaluated`, `planned`, or `historical`.
-- **Used by** lists the registry stack projects that reference this standard.
+- **Used by** lists the registry stack projects covered by the displayed claim level.
 - **Claim level** uses the six levels defined above.
 - **Surface** names the specific output or endpoint that the claim applies to.
 - **Profile and notes** identifies the version or profile in use and any boundary conditions.
-- **Evidence Gateway** links to the source code, fixture, or document that supports the claim.
+- **Evidence** links to the source code, fixture, or document that supports the claim.
 
-## Gaps
+## Scope boundaries
 
 - OGC API Features and OGC API EDR were feature-gated routes on the retired Relay V1 runtime, and no
   maintained surface implements them. Both are recorded at `compares_against` with no user, and their
@@ -143,10 +150,12 @@ What these levels mean for integrators:
   rather than an access grant. No maintained runtime enforces an ODRL constraint. The governed
   evaluation path belonged to Relay V1. Its `registry-platform-pdp` crate was
   removed; Registry Manifest retains the descriptive vocabulary it validates.
-- The Verifiable Credentials Data Model (W3C VC) is listed as `aligns_with` (`referenced`).
-  The retired product that issued SD-JWT VC credentials under this alignment never emitted a full
-  W3C VC Data Model envelope. Relay does not emit or host VC artifacts either.
-  {/* The retired product's evidence packet stated "W3C Verifiable Credentials Data Model: NOT PRESENT". This was a confirmed absence, not an evidence gap; keep at aligns_with until a reviewed VC profile and validation fixtures are pinned. */}
+- The CCCEV row's `emits` claim applies to Registry Manifest. Evidence Gateway separately
+  [`maps_to` CCCEV fields](https://github.com/registrystack/registry-stack/blob/v0.21.0/products/evidence/contracts/cccev-field-mapping.yaml)
+  under its frozen assertion profile and does not emit a CCCEV document.
+- Evidence Gateway emits an IETF SD-JWT VC under its frozen draft-18 profile, and the separate
+  OID4VCI supporting service transports it. This is not a W3C Verifiable Credentials Data Model 2.0
+  envelope. No maintained component emits a W3C VCDM 2.0 document; Relay does not emit or host one.
 - PROV-O is listed as `inspired_by` (`referenced`).
   The code uses provenance-shaped concepts (audit fields, claim provenance struct) but no PROV-O
   vocabulary terms are emitted as JSON-LD.

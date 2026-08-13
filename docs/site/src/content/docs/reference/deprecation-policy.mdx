@@ -14,8 +14,8 @@ standards_referenced: []
 This page defines how Registry Stack retires surface covered by the
 [compatibility promise](../api-stability/): the notice a deprecation gives, where it is
 announced, and what a removal must ship with. It takes effect at `v1.0.0`; before that,
-breaking changes follow the pre-1.0 rule and are announced with `BREAKING:` CHANGELOG
-entries.
+breaking changes follow the pre-1.0 rule and are announced with `BREAKING:` entries and migration
+steps in stack release notes, plus an owning product CHANGELOG where one exists.
 
 ## The lifecycle of a covered element
 
@@ -40,11 +40,11 @@ A deprecation is announced in every channel a consumer of that element reads:
   entry naming the element, the replacement, and the earliest release that may remove it.
   Products that keep their own CHANGELOG (Registry Manifest and the platform crates) carry the
   same entry there.
-- An HTTP route or field that a committed OpenAPI document describes is marked
-  `deprecated: true` in that document. Evidence Gateway's committed document is the one such
-  artifact the stack publishes. Relay publishes no product-level document, so a Relay route
-  deprecation is announced in the release note and marked on the reference page for the route
-  inventory instead.
+- An HTTP route or field that a committed OpenAPI document for a covered surface describes is
+  marked `deprecated: true` in that document. Evidence Gateway currently has the only such document.
+  The committed OID4VCI supporting-service document remains exempt until that service enters the
+  covered-surfaces table. Relay publishes no product-level document, so a Relay route deprecation is
+  announced in the release note and marked on the reference page for the route inventory instead.
 - A config key or authoring-grammar key that is renamed keeps working through the deprecation
   window. Relay's `registry.yaml` and `runtime.yaml` grammars reject unknown keys, so the
   removal release turns the retired key into a startup refusal rather than a silently ignored

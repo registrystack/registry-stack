@@ -18,24 +18,26 @@ Its client registration commands manage local development only.
 
 ## Contract status
 
-Evidencectl is outside the frozen Evidence Gateway Version 1 runtime contract. Its command line can change
-before a compatibility promise covers it. The `evidence` runtime remains the authority for bundle
-compilation, fixture evaluation, secret validation, and startup acceptance.
+Evidencectl is outside the frozen Evidence Gateway Version 1 runtime contract. Its command line can
+change before a compatibility promise covers it. Evidencectl compiles editable authoring input into
+a closed bundle. The `evidence` runtime remains the authority for bundle validation and semantic
+acceptance, fixture evaluation, secret validation, and startup acceptance.
 
 ## Production build commands
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
 | `evidencectl build --project <project> --target <target> --output <new-candidate>` | Editable project and one explicit production target | Creates a new candidate with `runtime.yaml` and closed `bundle/` | Overwrite output, contact source services, OIDC, or Mint, create production secrets, or start a listener |
-| `evidencectl doctor --project <candidate>` | Completed candidate on its target host | Reports runtime, bundle, secret, and audit file posture | Change project files or replace `evidence check` |
+| `evidencectl doctor --project <candidate>` | Completed candidate on its target host | Advises on runtime, bundle, secret, audit, acquisition capability, and ordered acquisition-plan posture | Change project files or replace `evidence check` |
 | `evidencectl doctor --project <candidate> --mint-config <mint.yaml>` | Completed candidate and separately authored Mint configuration | Adds read-only mechanical protocol compatibility checks | Register callers, copy Mint files, infer authority, or mint a token |
-| `evidencectl fixtures run --project <candidate>` | Completed candidate and referenced synthetic fixtures | Runs `evidence check` and every referenced fixture | Start HTTP, call a source, or write a production audit entry |
+| `evidencectl fixtures run --project <project>` | A deployment project with `runtime.yaml`, or an editable project with `questions/` and `sources/`, plus referenced synthetic fixtures | Uses runtime `check` and `evaluate` for a deployment; privately compiles an editable project, then uses runtime `bundle-check` and `bundle-evaluate` | Start HTTP, call a source, or write a production audit entry |
 | `evidencectl fixtures run --project <candidate> --explain` | The same, and asks each evaluation to explain itself | Relays each fixture's stage trace beside its step, or as that fixture's `trace` field under `--json` | Print a response, fact, derived, or selector value, or explain a served request |
 
 `build` is create-only. It rejects an existing output directory, local assurance inputs,
-unauthenticated or non-HTTPS production sources, missing governance metadata or fixtures, unresolved
-review markers, unknown fields, symlink traversal, and references outside the allowed project
-directories. A failed build publishes no candidate.
+unauthenticated or non-HTTPS production HTTP sources, source transports with no stated production
+conditions, missing governance metadata or fixtures, unresolved review markers, unknown fields,
+symlink traversal, and references outside the allowed project directories. A failed build publishes
+no candidate.
 
 ## Production input reference
 
@@ -43,32 +45,44 @@ An editable project becomes a production build input only after it has:
 
 - A `fixtures/` regular file referenced by every production question.
 - Stable concept identifiers and production `governance` metadata in every question.
-- `environments/<target>/evidence/governance.yaml` with bundle-owned fields for one environment.
-- `environments/<target>/evidence/runtime.yaml` with one environment's runtime bindings.
-- `environments/<target>/evidence/public-keys/` with every active and published service JWK.
+- `<target>/governance.yaml` with bundle-owned fields for one environment.
+- `<target>/runtime.yaml` with one environment's runtime bindings.
+- Public JWK files beneath `<target>/` for every active and published service key referenced there.
 
-`governance.yaml` is strict. It must carry version `1`, `assuranceProfile: production`, service,
-issuer, authentication, audit, subject binding, rate limits, signing, optional response formats,
-and authority profiles. It cannot supply selector profiles, sources, or requirements. It accepts
-logical `secret:file/<name>` references, not values or absolute secret paths.
+`governance.yaml` is strict. It must carry version `1`, an `assuranceProfile` of `production` or
+`evidence-grade`, service, issuer, authentication, audit, subject binding, rate limits, signing,
+optional response formats, and authority profiles. It cannot supply selector profiles, sources, or
+requirements. It accepts logical `secret:file/<name>` references, not values or absolute secret
+paths.
 
 The output runtime document is copied byte-for-byte. Its paths and secret posture are accepted only
 by the final target-host `evidence check`.
 
-Keep the editable project under `shared/evidence-project/` and each complete deployment target under
-`environments/<target>/evidence/`. Do not use overlays, environment branches, symlinks, or runtime
-substitutions. Git contains public keys and nonsecret provider configuration, but no private JWKs,
-HMAC keys, provider tokens, auto-auth credentials, access tokens, live responses, or real
-identifiers.
+The maintained reference layout keeps the editable project under `shared/evidence-project/` and each
+complete deployment target under `environments/<target>/evidence/`. That layout is a repository
+convention, not part of the `--target` path grammar. Do not use overlays, environment branches,
+symlinks, or runtime substitutions. Git contains public keys and nonsecret provider configuration,
+but no private JWKs, HMAC keys, provider tokens, auto-auth credentials, access tokens, live
+responses, or real identifiers.
 
 ## Local-only commands
 
-`evidencectl new --profile local` and `evidencectl dev` are local-authoring commands. Nothing under
-`.evidence/dev` is a production build input. `new` creates no source policy, question, fixture
-content, production target, Mint configuration, or deployable bundle. It automatically creates
-disposable, unbound Evidence Gateway key material in the ignored owner-only `secrets/` directory.
-`dev` creates session-scoped P-256 pairs for Registry Mint, the local caller, and the optional
-SD-JWT VC holder. None of those keys enters a production target.
+`evidencectl new` requires a destination and exactly one authoring source:
+
+```sh
+evidencectl new <directory> --openapi <path-or-https-url> --profile local
+evidencectl new <directory> --transport sqlite-extract --profile local
+```
+
+OpenAPI mode creates an authoring workspace whose source, question, and fixture directories remain
+empty. SQLite mode creates a synthetic source, question, query, adapters, schemas, derivation, and
+fixture. Both create disposable, unbound Evidence Gateway key material in the ignored owner-only
+`secrets/` directory. Neither creates a production target, Mint configuration, or deployable bundle.
+
+`evidencectl dev` always creates session-scoped P-256 pairs for Registry Mint and an SD-JWT VC
+holder. It creates an implicit caller pair only when the project has no explicit access
+policy; explicit local clients use their keys under `.evidence/clients/`. Nothing under
+`.evidence/dev` or `.evidence/clients` enters a production target.
 
 `evidencectl access` manages caller access for one local project:
 
@@ -78,7 +92,7 @@ SD-JWT VC holder. None of those keys enters a production target.
 | `evidencectl access policy list` | Reads `access/policies/` | Lists the governed local policies and their questions |
 | `evidencectl access client add <client> --policy <policy> --generate-local-key` | Creates `access/clients/<client>.yaml` and `.evidence/clients/<client>/private.jwk` | Registers a local client for repeated `--policy` values with non-overlapping question sets |
 | `evidencectl access client list` | Reads `access/clients/` | Lists local client status and policy membership |
-| `evidencectl access client revoke <client>` | Updates `access/clients/<client>.yaml` | Revokes the local client for new token requests |
+| `evidencectl access client revoke <client>` | Updates `access/clients/<client>.yaml` | Revokes the local client for new token requests and removes its live generated registration; retains `.evidence/clients/<client>/private.jwk` |
 
 Public, reviewable local access configuration lives under `access/`. Owner-only private client keys
 live only under `.evidence/clients/`. Generated Registry Mint registrations under

@@ -6,8 +6,9 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-relay
-  - registry-platform
   - registry-manifest
+  - registry-evidence
+  - registrystack-id
 last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
@@ -26,13 +27,14 @@ Use this page to find the machine-readable surfaces you can build against: their
 A contract is a machine-readable surface that integrators can depend on:
 
 - **OpenAPI document**: describes HTTP routes, request and response shapes, and authentication for a service.
-- **Shared crate API**: Rust library surface consumed by registry services for common behavior.
 - **Authoring grammar**: a closed YAML shape an adopter writes and a compiler accepts, such as Relay's `registry.yaml` and `runtime.yaml`.
 - **Sealed package format**: the versioned directory a compiler produces and a runtime verifies before it activates.
 - **Portable metadata schema**: the `registry-manifest/v1` YAML schema defining datasets, fields, policies, and evidence offerings.
-- **Static publication bundle**: a manifest-generated directory of catalog, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
+- **Static discovery bundle**: a manifest-generated directory of catalog, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
 
-Each contract has one owning project. When a contract changes, the owning repo is the source of truth. Shared crate APIs belong to Registry Platform; product routes and configuration behavior belong to the consuming service.
+Each contract has one owning project. When a contract changes, the owning repo is the source of
+truth. Registry Platform crates provide workspace-internal implementation reuse. Every workspace
+crate is `publish = false`, and crate APIs are not public compatibility contracts.
 
 The table is generated from `src/data/contracts.yaml`.
 
@@ -41,12 +43,14 @@ The table is generated from `src/data/contracts.yaml`.
 - **Contract** shows the display name and a stable identifier (`id`).
 - **Owner** names the repo whose source artifact defines the contract.
 - **Status** describes the maturity of the contract artifact:
-  - `current-source` means the artifact is actively maintained and release-quality.
+  - `current-source` means the artifact is present in and maintained by current source.
   - `pinned-generated-snapshot` means the artifact was generated from the owning repo and pinned here for stable publication.
 - **Source of truth** links to the module, file, or CLI that produces the artifact.
 - **Consumer note** records the current limitation or regeneration path.
 
-`pinned-generated-snapshot` artifacts are stable for integration: they were produced from the owning repo's pinned source and will not change without an explicit re-pin.
+`pinned-generated-snapshot` artifacts were produced from the owning repo's pinned source and do not
+change without an explicit re-pin. Their compatibility still follows the owning surface's published
+policy.
 
 <ContractsTable />
 
@@ -73,8 +77,8 @@ Two Relay surfaces belong in this table instead of an OpenAPI artifact:
 
 - The Registry contract grammar, `relay.registrystack.org/v2alpha1`, covering `registry.yaml`
   (`kind: RegistryContract`) and `runtime.yaml` (`kind: RelayRuntime`). Both are closed shapes: an
-  unrecognized key is a parse failure rather than an ignored field, so a document that compiles
-  today cannot silently change meaning under a later runtime.
+  unrecognized key is a parse failure rather than an ignored field. Compatibility for recognized
+  keys follows the release policy.
 - The sealed package format, `relay.registrystack.org/package/v1alpha3`, whose manifest is
   `relay-package.json`. `relayctl package` produces it and `relay serve` verifies it before
   activation. Its `packageRevision` is an integrity digest over canonical JSON, not an
@@ -83,21 +87,27 @@ Two Relay surfaces belong in this table instead of an OpenAPI artifact:
 
 ## Machine identifiers
 
-Stable machine identifiers for the registry stack resolve at `https://id.registrystack.org/`:
-RFC 9457 problem types, JSON-LD namespaces and vocabulary terms, and JSON Schemas.
-The generated `products/identifiers/generated/catalog.v1.json` file in `registry-stack` is the
-source of truth for identifiers owned by current source.
+Registry Stack defines stable machine identifiers under `https://id.registrystack.org/`: RFC 9457
+problem types, JSON-LD namespaces and vocabulary terms, and JSON Schemas. The generated
+`products/identifiers/generated/catalog.v1.json` file in `registry-stack` is the source of truth for
+identifiers owned by current source. Publication is a separate synchronization and deployment, so
+the resolver can lag until a publisher update is merged and deployed.
 
-The generator derives that catalog from the closed Relay V2 problem inventory, declared current
-JSON Schema groups, and an explicit namespace and vocabulary inventory.
+The generator derives that catalog from the declared product problem inventories, current JSON
+Schema groups, and an explicit namespace and vocabulary inventory.
 It also classifies repository references that are fixtures, external demo values, or retired
 source so an unclassified `id.registrystack.org` reference fails generation.
 Each entry records its owner, active status, compatibility line, source path, and source SHA-256 digest.
 Schema entries also bind the published artifact path and artifact SHA-256 digest.
 
-The `registrystack-id` publisher imports a catalog from one exact `registry-stack` commit and
-catalog digest. It publishes exactly that active catalog. An identifier removed from current
-source no longer resolves, and the publisher refuses to reuse the URI with another identifier kind.
+The generated catalog contains the source paths and artifact digests a downstream publisher needs
+to bind a deployment to one reviewed `registry-stack` revision. The `registrystack-id` importer,
+build, and deployment behavior live in that separate repository and are not reproduced by this
+checkout's documentation gates.
+
+The intended publisher contract rejects a kind change while an identifier remains in its current
+catalog. Permanent protection against a later remove-and-reintroduce kind change remains part of
+[registry-stack issue #636](https://github.com/registrystack/registry-stack/issues/636).
 
 The resolver describes identifiers and serves their artifacts. Runtime services do not fetch the
 resolver to make authentication, authorization, or disclosure decisions. The running service
@@ -130,11 +140,11 @@ recorded in the generated catalog.
 
 Deployment-owned terms are not stack identifiers. A Relay `application/ld+json` response carries an
 `@context` reference that the deployment's own Registry contract names, and the local vocabulary it
-describes is generated per registry. Two deployments therefore publish different contexts for the
-same route shape, which is the point: the semantics belong to the authority that runs the registry.
+describes is generated per registry. Deployments with different semantic contracts can publish
+different contexts for the same route shape, which is the point: the semantics belong to the
+authority that runs the registry.
 
-## Known gaps
+## Compatibility boundaries
 
-- Contract freshness checks are data-backed in v0 but are not yet generated from owning-repo release metadata.
 - Relay's authoring grammar and sealed package format are versioned `v2alpha1` and `v1alpha3`. Both
   are pre-1.0 and can change with a documented migration in a release note.

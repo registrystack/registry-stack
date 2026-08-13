@@ -583,9 +583,11 @@ REQ-PR-EVIDENCE-071: A successful request batch MUST validate against
 `products/evidence/contracts/request-batch-response.schema.yaml` and preserve exact request order.
 Every response item MUST be either `evidence`, carrying one flattened signed JWS, or
 `evidence_not_available`.
-Only a singular `no_match`, `ambiguous`, `required_fact_missing`, or
-`derivation_input_unresolved` outcome MAY become `evidence_not_available`; every other failure MUST
-abort the complete operation through the existing problem contract without releasing item material.
+Only a singular `no_match`, `ambiguous`, `required_fact_missing`,
+`derivation_input_unresolved`, or exact source-declared unresolved outcome at a singular or search
+stage MAY become `evidence_not_available`. A source-declared unresolved fetch or member and every
+other failure MUST abort the complete operation through the existing problem contract without
+releasing item material.
 The complete serialized envelope MUST remain within the response-byte ceiling fixed by that schema
 (invariant `V1-I50`).
 

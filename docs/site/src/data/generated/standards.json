@@ -227,16 +227,20 @@
     "name": "OpenAPI",
     "standards_body": "OpenAPI Initiative",
     "official_url": "https://spec.openapis.org/oas/latest.html",
-    "version_or_profile": "OpenAPI 3.1.0, generated per deployment",
+    "version_or_profile": "OpenAPI 3.1.0; Relay generated per deployment, Evidence services fixed generated contracts",
     "status": "used",
     "claim_level": "emits",
     "adoption_mode": "adopted",
     "used_by": [
-      "registry-relay"
+      "registry-relay",
+      "registry-evidence",
+      "registry-evidence-oid4vci"
     ],
     "surfaces": [
       "compiled deployment OpenAPI document",
-      "GET /openapi.json"
+      "GET /openapi.json",
+      "Evidence Gateway fixed HTTP contract",
+      "OID4VCI wallet delivery fixed HTTP contract"
     ],
     "evidence_docs": [
       {
@@ -248,12 +252,20 @@
         "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-relay-v2/src/api.rs"
       },
       {
+        "label": "Evidence Gateway OpenAPI generation",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-evidence/src/contracts.rs"
+      },
+      {
+        "label": "Evidence OID4VCI OpenAPI generation",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-evidence-oid4vci/src/contracts.rs"
+      },
+      {
         "label": "Registry Notary generated OpenAPI document (pinned)",
         "url": "https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/notary/openapi/registry-notary.openapi.json"
       }
     ],
     "last_checked": "2026-08-11",
-    "notes": "Relay compiles two OpenAPI 3.1.0 projections from each deployment's own registry contract and seals both into the package, an operator-only full document and the public subset it serves at `GET /openapi.json`. There is no product-level Relay OpenAPI document to pin, because two deployments of the same product describe different surfaces; fetch the document from the deployment. The Registry Notary link stays pinned as the record of a retired product, not as a surface an adopter can run."
+    "notes": "Relay compiles two OpenAPI 3.1.0 projections from each deployment's own registry contract and seals both into the package, an operator-only full document and the public subset it serves at `GET /openapi.json`. There is no product-level Relay OpenAPI document to pin because deployments with different contracts can describe different surfaces; fetch the document from the deployment. Evidence Gateway and its separate OID4VCI supporting service each generate a fixed OpenAPI 3.1.0 contract. The Registry Notary link stays pinned as the record of a retired product, not as a surface an adopter can run."
   },
   {
     "id": "shacl",
@@ -415,26 +427,38 @@
     "evidence_docs": [
       {
         "label": "Frozen Evidence OID4VCI profile",
-        "url": "https://github.com/registrystack/registry-stack/blob/9d1d3b54e3fd3f3b6e229a44ef846096c4d28916/products/evidence/contracts/oid4vci-profile.yaml"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/oid4vci-profile.yaml"
       },
       {
-        "label": "OID4VCI metadata implementation and contract tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/9d1d3b54e3fd3f3b6e229a44ef846096c4d28916/crates/registry-evidence-oid4vci/src/metadata.rs"
+        "label": "Delivery and recovery release record",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/release/notes/v0.20.0.md"
       },
       {
-        "label": "OID4VCI public route and proof tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/9d1d3b54e3fd3f3b6e229a44ef846096c4d28916/crates/registry-evidence-oid4vci/src/service.rs"
+        "label": "State-machine recovery tests",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-evidence-oid4vci/tests/state_machine_recovery.rs"
+      },
+      {
+        "label": "Inji interoperability tests",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-evidence-oid4vci/tests/inji_interoperability.rs"
+      },
+      {
+        "label": "Pinned Inji profile",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/fixtures/interoperability/inji-oid4vci/profile.json"
+      },
+      {
+        "label": "Pinned interoperability receipt",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/fixtures/interoperability/inji-oid4vci/receipt.json"
       }
     ],
     "last_checked": "2026-08-09",
-    "notes": "The separate `registry-evidence-oid4vci` supporting service implements a frozen subset of OID4VCI 1.0 Final for holder-bound Evidence credentials. The profile permits issuer-initiated anonymous pre-authorized-code delivery, a stateless nonce, ES256 JWT proofs with an inline public JWK or self-contained `did:jwk#0`, and plural `dc+sd-jwt` credentials. It excludes authorization code, PAR, DPoP, remote DID resolution, other credential formats, deferred issuance, notifications, status or revocation, persistence, and multiple replicas. This is a profile implementation claim, not full issuer certification or conformance. External Inji interoperability evidence is candidate-only until a frozen release artifact records the pinned client revisions and reproducible result."
+    "notes": "The separate `registry-evidence-oid4vci` supporting service implements a frozen subset of OID4VCI 1.0 Final for holder-bound Evidence credentials. The profile permits issuer-initiated anonymous pre-authorized-code delivery, a stateless nonce, ES256 JWT proofs with an inline public JWK or self-contained `did:jwk#0`, and plural `dc+sd-jwt` credentials. It excludes authorization code, PAR, DPoP, remote DID resolution, other credential formats, deferred issuance, notifications, status or revocation, persistence, and multiple replicas. This is a profile implementation claim, not full issuer certification or conformance. Exact pinned source-level interoperability and the sanitized Registry flow passed. This is not OpenID certification, device or UI evidence, compatibility with other revisions, or general Inji compatibility."
   },
   {
     "id": "sd-jwt-vc",
     "name": "SD-JWT VC",
     "standards_body": "IETF",
     "official_url": "https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/",
-    "version_or_profile": "Profiled subset using the `application/dc+sd-jwt` media type and `dc+sd-jwt` JWT `typ` (no specific IETF draft revision pinned by the implementation)",
+    "version_or_profile": "RFC 9901 and `draft-ietf-oauth-sd-jwt-vc-18`, under the frozen Evidence audience-scoped and holder-bound profiles",
     "status": "used",
     "claim_level": "emits",
     "adoption_mode": "profiled",
@@ -451,16 +475,20 @@
     ],
     "evidence_docs": [
       {
-        "label": "Evidence Gateway SD-JWT VC profile",
-        "url": "https://github.com/registrystack/registry-stack/blob/24f3d7a2a66edbf408f26326bed7ddba3167cbbb/products/evidence/contracts/sd-jwt-vc-profile.yaml"
+        "label": "Evidence Gateway audience-scoped profile",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/sd-jwt-vc-profile.yaml"
+      },
+      {
+        "label": "Evidence Gateway holder-bound profile",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/holder-bound-profile.yaml"
       },
       {
         "label": "Evidence Gateway strict verification policy schema",
-        "url": "https://github.com/registrystack/registry-stack/blob/24f3d7a2a66edbf408f26326bed7ddba3167cbbb/products/evidence/contracts/verification-policy.schema.yaml"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/verification-policy.schema.yaml"
       },
       {
         "label": "Evidence Gateway portable SD-JWT VC verifier",
-        "url": "https://github.com/registrystack/registry-stack/blob/24f3d7a2a66edbf408f26326bed7ddba3167cbbb/crates/registry-evidence-verifier/src/sdjwt_vc.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-evidence-verifier/src/sdjwt_vc.rs"
       },
       {
         "label": "Registry Notary SD-JWT VC conformance profile",
@@ -472,11 +500,11 @@
       },
       {
         "label": "Registry Platform SD-JWT crate",
-        "url": "https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-platform-sdjwt"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-platform-sdjwt/src/lib.rs"
       }
     ],
     "last_checked": "2026-08-08",
-    "notes": "Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers. Evidence Gateway serializes its stateless assertion as an SD-JWT VC under its own frozen profile, and that profile is the source of truth for the claim set it emits. Two subject binding modes exist. Under the default audience-scoped mode the credential is meaningful only to the relying party the assertion names, and a caller-supplied holder key is echoed into `cnf` unverified. Under the declared holder-bound mode the binding derives from the RFC 7638 thumbprint of the holder key, `cnf` is required, and possession is proven at presentation by a key-binding JWT under RFC 9901 section 4.3 rather than by the audience at issuance. Verifying a key-binding JWT proves possession at signing time over the presented bytes; comparing its nonce is not consuming it, so nothing here is replay prevention. The holder-bound profile document and its verification policy schema are not yet on a citable commit, so no evidence link pins them. Registry Notary owned the claim-to-credential workflow and the service routes that used them, and is retired; its pinned conformance profile and format constants are kept as the record of that workflow. The Registry Platform helpers stay constrained: `application/dc+sd-jwt` credentials, issuer signing with EdDSA over Ed25519 or ES256 over P-256, and EdDSA `did:jwk` holder binding. The retired product also rejected pre-rename format aliases such as `application/vc+sd-jwt` in operator configuration. Full SD-JWT VC conformance is not claimed, and the Evidence Gateway runtime implements OID4VCI in no part; wallet-facing OID4VCI delivery of an Evidence credential belongs to the separate `registry-evidence-oid4vci` front end, which this record does not cover."
+    "notes": "Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers. Evidence Gateway serializes its stateless assertion as an SD-JWT VC under its own frozen profile, and that profile is the source of truth for the claim set it emits. Two subject binding modes exist. Under the default audience-scoped mode the credential is meaningful only to the relying party the assertion names, and a caller-supplied holder key is echoed into `cnf` unverified. Under the declared holder-bound mode the binding derives from the RFC 7638 thumbprint of the holder key, `cnf` is required, and possession is proven at presentation by a key-binding JWT under RFC 9901 section 4.3 rather than by the audience at issuance. Verifying a key-binding JWT proves possession at signing time over the presented bytes; comparing its nonce is not consuming it, so nothing here is replay prevention. Both profiles and the strict verification policy are frozen and citable. Evidence signs issuer JWTs with ES256 over P-256. Evidence confirmation keys, RFC 9901 key-binding JWTs, and OID4VCI proofs use ES256 over P-256. Registry Platform also retains a generic EdDSA holder-proof helper, but that is not the Evidence holder-bound presentation path. Registry Notary is retired; its pinned conformance profile and format constants remain historical evidence. Full SD-JWT VC conformance is not claimed. Wallet-facing OID4VCI delivery belongs to the separate `registry-evidence-oid4vci` front end."
   },
   {
     "id": "verifiable-credentials",
@@ -484,22 +512,28 @@
     "standards_body": "W3C",
     "official_url": "https://www.w3.org/TR/vc-data-model-2.0/",
     "version_or_profile": "Verifiable Credentials Data Model 2.0",
-    "status": "referenced",
-    "claim_level": "aligns_with",
+    "status": "evaluated",
+    "claim_level": "compares_against",
     "adoption_mode": "not adopted",
-    "used_by": [],
+    "used_by": [
+      "registry-evidence",
+      "registry-evidence-oid4vci"
+    ],
     "surfaces": [
-      "credential issuance positioning",
-      "SD-JWT VC credential issuance"
+      "W3C VCDM boundary for the IETF SD-JWT VC response and delivery format"
     ],
     "evidence_docs": [
+      {
+        "label": "Evidence Gateway SD-JWT VC profile",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/products/evidence/contracts/sd-jwt-vc-profile.yaml"
+      },
       {
         "label": "Registry Notary README",
         "url": "https://github.com/registrystack/registry-stack/blob/d45761a0104bd3d9c2e4b4db391d4223f289bd44/products/notary/README.md"
       }
     ],
     "last_checked": "2026-05-23",
-    "notes": "No Registry Stack service in this register emits or hosts VC artifacts. Registry Notary, which issued SD-JWT VC under this alignment, is retired, and Relay does not emit or host VC artifacts. The pinned README is the record of the retired claim."
+    "notes": "Evidence emits and the OID4VCI service transports an IETF draft-18 SD-JWT VC. That format is not a W3C Verifiable Credentials Data Model 2.0 document. No maintained component emits a W3C VCDM 2.0 envelope. The retired Notary alignment remains historical evidence only."
   },
   {
     "id": "cccev",
@@ -738,17 +772,17 @@
     "name": "W3C Decentralized Identifiers (DID Core)",
     "standards_body": "W3C",
     "official_url": "https://www.w3.org/TR/did-core/",
-    "version_or_profile": "DID Core 1.0 with did:web and did:jwk methods",
+    "version_or_profile": "DID Core 1.0 boundary around self-contained did:jwk",
     "status": "used",
-    "claim_level": "emits",
+    "claim_level": "aligns_with",
     "adoption_mode": "profiled",
     "used_by": [
-      "registry-platform"
+      "registry-platform",
+      "registry-evidence-oid4vci"
     ],
     "surfaces": [
-      "did:jwk parsing for credential subjects",
-      "issuer identifier handling",
-      "shared DID validation and Ed25519 JWK helpers"
+      "local did:jwk#0 proof-key decoding",
+      "shared DID validation and JWK helpers"
     ],
     "evidence_docs": [
       {
@@ -758,9 +792,13 @@
       {
         "label": "Registry Platform crypto crate",
         "url": "https://github.com/registrystack/registry-stack/tree/d45761a0104bd3d9c2e4b4db391d4223f289bd44/crates/registry-platform-crypto"
+      },
+      {
+        "label": "Evidence OID4VCI local did:jwk handling",
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.20.0/crates/registry-platform-sdjwt/src/lib.rs"
       }
     ],
     "last_checked": "2026-06-13",
-    "notes": "Platform owns shared DID and Ed25519 JWK helpers, including did:jwk parsing. The pinned route file records how the retired Registry Notary used them for credential subjects. Relay no longer hosts a did:web document. No DID resolver, DID URL dereferencing, or DID Core conformance class is implemented, so the claim stays at emits. The site does not claim conformance to the wider DID method registry beyond did:jwk."
+    "notes": "Registry Relay no longer publishes did:web. The OID4VCI supporting service accepts a self-contained did:jwk#0 proof-key reference, decodes it locally as an ES256 P-256 public key, and never performs remote resolution. Platform retains shared DID and JWK helpers, while the pinned Notary route is historical. No current service publishes a DID document or operates a general DID resolver, and no DID Core conformance class is claimed."
   }
 ]

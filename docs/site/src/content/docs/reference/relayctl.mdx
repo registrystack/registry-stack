@@ -23,13 +23,14 @@ Relayctl is pre-1.0 adopter tooling and sits outside any frozen runtime contract
 can change before a compatibility promise covers it. The `relay` binary stays the authority for
 package verification, activation, and serving.
 
-This page records workflow boundaries from `crates/registry-relayctl/src/lib.rs` and the boundary
-tests in `crates/registry-relayctl/tests/cli_contract.rs`, at release v0.20.0. The generated exact
-syntax is published only after its source version receives a recorded human review.
+This page records current-source workflow boundaries from `crates/registry-relayctl/src/lib.rs` and
+the boundary tests in `crates/registry-relayctl/tests/cli_contract.rs`. Use the
+[generated relayctl syntax](../cli/relayctl/) for exact command, argument, option, and constraint data.
 
 ## Commands
 
-Eight commands. Seven are flat; `relayctl tooling` groups the two editor-integration subcommands.
+Eight top-level entries. Seven are flat; `relayctl tooling` groups two editor-integration
+subcommands.
 
 | Command | Inputs | Result | Does not do |
 | --- | --- | --- | --- |
@@ -40,14 +41,14 @@ Eight commands. Seven are flat; `relayctl tooling` groups the two editor-integra
 | `relayctl test <PROJECT>` | Project fixture inputs | Runs the project's offline fixture cases through the shared kernel | Start a listener, contact a network source, or start `relay` |
 | `relayctl diff <PREVIOUS> <CURRENT>` | Two project directories | Classifies meaning, disclosure, and security changes between the reviewed project and the candidate | Add or remove change classes, or decide whether the change is acceptable |
 | `relayctl package <PROJECT> --output <DIRECTORY>` | Project that compiles under the production profile | Builds a sealed package directory carrying `relay-package.json` | Sign the package, deploy it, or write into a destination that already exists |
-| `relayctl tooling editor [PROJECT]` | Authoring project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports each file written | Install an extension, change editor settings outside the project, or read any database |
+| `relayctl tooling editor [PROJECT]` | Authoring project directory, defaulting to the current directory | Writes the project-local schema mappings VS Code and Zed read, and reports all six managed files | Install an extension, change editor settings outside the project, or read any database |
 | `relayctl tooling language-server` | No arguments; speaks the Language Server Protocol over standard input and output | Reports Relay V2 authoring diagnostics from the shared in-memory authoring compiler, as an editor types | Open a socket, observe SQLite, or read source values |
 
 ## Global options
 
 | Option | Effect |
 | --- | --- |
-| `--json` | Emits the shared report as best-effort JSON for local automation, with no header line. Accepted before or after the subcommand. |
+| `--json` | The seven shared workflow commands emit `relayctl.report.v1` JSON with no header. `tooling editor` emits `relayctl.editor.v1`. `tooling language-server` continues to speak LSP and does not use this flag for report output. Accepted before or after the subcommand. |
 | `--version` | Prints `relayctl <version>`, matching the release version of the asset. |
 | `--help` | Prints usage on standard output and exits with status `0`. |
 
@@ -67,8 +68,9 @@ Eight commands. Seven are flat; `relayctl tooling` groups the two editor-integra
 
 A directory that already contains entries is a domain refusal with the diagnostic code
 `project.destination_not_empty`. A symlinked project root is an unsafe path and is an operational
-failure. Every starter document is marked as suggested rather than reviewed, so
-`relayctl check --production` refuses the project until an institution reviews it.
+failure. Generated governance judgments and classification defaults are marked suggested rather
+than reviewed, so `relayctl check <PROJECT> --production` refuses the project until an institution
+reviews them. `runtime.yaml` does not carry that review marker.
 
 ### inspect
 
@@ -134,9 +136,10 @@ destination, and its `sha256:` digest.
 | --- | --- | --- |
 | `--fixture <IDENTIFIER>` | Every step, in order | Runs the one step whose identifier matches exactly. |
 
-Fixture evaluation reads the project's `fixture.sql`, `runtime.yaml`, and `expected-http.yaml`. A
-missing or invalid fixture input is a domain refusal with a `fixture.*` diagnostic code rather than
-a crash.
+Fixture evaluation first compiles the complete authoring project, then requires `runtime.yaml`,
+`expected-http.yaml`, and `fixture.sql`. A missing or unreadable fixture input is an operational
+failure with exit code `3`. Invalid fixture YAML or SQL is a domain refusal with exit code `1` and a
+`fixture.*` diagnostic code.
 
 `--fixture` selects one step and expands no prerequisite. The plan keeps only the step whose
 identifier matches, and the journey runs that step alone, so a step that reads another step's
@@ -190,8 +193,8 @@ the [compatibility promise](../api-stability/) does not cover adopter tooling.
 | `2` | Usage error. The command line did not parse, and nothing reached the shared tooling facade. |
 | `3` | Operational failure. An input could not be read, an output could not be written, a path was unsafe, or inspection, generation, or packaging could not be completed. |
 
-An operational failure writes one line to standard error, `relayctl: <message>`, using one of six
-categorical messages:
+For the seven shared workflow commands, an operational failure writes one line to standard error,
+`relayctl: <message>`, using one of six categorical messages:
 
 - `the requested authoring input could not be read`
 - `the requested authoring output could not be written`
@@ -216,13 +219,16 @@ release:
   `--limit`.
 - A usage error discloses no project content. `relayctl package <project>` without `--output` exits
   `2` with empty standard output and an error that names `--output` and nothing about the project.
-- All seven commands print help successfully with an empty standard error, so the adopter workflow
-  is exposed by one binary.
+- All seven flat workflow commands and both tooling subcommands print help successfully with an
+  empty standard error, so the adopter workflow is exposed by one binary.
 
-Relayctl reads no environment variables. Every input is a positional path or an explicit flag, and
-every secret reference stays inside the project's `runtime.yaml` as a `secret:env/<NAME>` or
+Relayctl defines no product-specific environment-variable configuration. Every governed input is a
+positional path, an explicit flag, a project file, the documented current-directory default for
+`tooling editor`, or a language-server document. The fixture runner derives its owner-only transient
+workspace from the explicit project path and ignores host temporary-directory configuration.
+Every secret reference stays inside the project's `runtime.yaml` as a `secret:env/<NAME>` or
 `secret:file/<name>` reference that only `relay` resolves. See the
-[environment variable reference](../environment-variables/) for the variables the runtime does read.
+[environment variable reference](../environment-variables/) for the variables the runtime may read.
 
 ## Install
 

@@ -100,32 +100,68 @@ function generatedEvidenceUrls(data, kind) {
 function readEvidenceUrls(dataDir) {
   const urls = [];
   for (const kind of ['contracts', 'standards']) {
-    const yamlUrls = extractEvidenceUrlsFromYaml(
-      readFileSync(resolve(dataDir, `${kind}.yaml`), 'utf8'),
-      kind,
+    const yamlText = readFileSync(resolve(dataDir, `${kind}.yaml`), 'utf8');
+    const yamlUrls = extractEvidenceUrlsFromYaml(yamlText, kind);
+    const generatedData = JSON.parse(
+      readFileSync(resolve(dataDir, 'generated', `${kind}.json`), 'utf8'),
     );
-    const generatedUrls = generatedEvidenceUrls(
-      JSON.parse(readFileSync(resolve(dataDir, 'generated', `${kind}.json`), 'utf8')),
-      kind,
-    );
+    const generatedUrls = generatedEvidenceUrls(generatedData, kind);
     if (JSON.stringify(yamlUrls) !== JSON.stringify(generatedUrls)) {
       throw new Error(
         `${kind}.yaml evidence URLs differ from generated/${kind}.json; run npm run generate`,
       );
     }
-    urls.push(...yamlUrls.map((url, index) => ({ location: `${kind}[${index + 1}]`, url })));
+    if (kind === 'contracts') {
+      const yamlData = YAML.parse(yamlText) ?? [];
+      if (!Array.isArray(yamlData) || !Array.isArray(generatedData)) {
+        throw new Error('contracts evidence data must contain a top-level list');
+      }
+      const yamlStatuses = yamlData.map((entry) => entry?.status);
+      const generatedStatuses = generatedData.map((entry) => entry?.status);
+      if (JSON.stringify(yamlStatuses) !== JSON.stringify(generatedStatuses)) {
+        throw new Error(
+          'contracts.yaml statuses differ from generated/contracts.json; run npm run generate',
+        );
+      }
+      for (const [index, status] of yamlStatuses.entries()) {
+        if (!['current-source', 'pinned-generated-snapshot'].includes(status)) {
+          throw new Error(`contracts.yaml entry ${index + 1} has invalid status ${status}`);
+        }
+      }
+      urls.push(
+        ...yamlUrls.map((url, index) => ({
+          location: `${kind}[${index + 1}]`,
+          url,
+          currentSource: yamlStatuses[index] === 'current-source',
+        })),
+      );
+    } else {
+      urls.push(...yamlUrls.map((url, index) => ({ location: `${kind}[${index + 1}]`, url })));
+    }
   }
   return urls;
 }
 
-function gitObjectExists(repoRoot, object, gitCommand) {
+function gitCommandSucceeds(repoRoot, args, gitCommand) {
   return (
-    spawnSync(gitCommand, ['cat-file', '-e', object], {
+    spawnSync(gitCommand, args, {
       cwd: repoRoot,
       encoding: 'utf8',
       env: { ...process.env, GIT_NO_LAZY_FETCH: '1' },
       stdio: 'pipe',
     }).status === 0
+  );
+}
+
+function gitObjectExists(repoRoot, object, gitCommand) {
+  return gitCommandSucceeds(repoRoot, ['cat-file', '-e', object], gitCommand);
+}
+
+function gitCommitIsAncestor(repoRoot, ancestor, descendant, gitCommand) {
+  return gitCommandSucceeds(
+    repoRoot,
+    ['merge-base', '--is-ancestor', `${ancestor}^{commit}`, `${descendant}^{commit}`],
+    gitCommand,
   );
 }
 
@@ -209,7 +245,7 @@ function checkRepositoryEvidence(
   repoRoot,
   rawUrl,
   gitCommand,
-  { candidateTag, sourceRef } = {},
+  { candidateTag, sourceRef, currentSource = false } = {},
 ) {
   let url;
   try {
@@ -259,6 +295,17 @@ function checkRepositoryEvidence(
   const path = repositoryPath.join('/');
   if (!gitObjectExists(repoRoot, `${commitish}^{commit}:${path}`, gitCommand)) {
     return `references missing path ${path} at ${ref}`;
+  }
+  if (currentSource) {
+    if (!gitObjectExists(repoRoot, `${sourceRef}^{commit}`, gitCommand)) {
+      return `cannot resolve selected current source ${sourceRef}`;
+    }
+    if (!gitCommitIsAncestor(repoRoot, commitish, sourceRef, gitCommand)) {
+      return `references ${ref}, which is not reachable from selected current source ${sourceRef}`;
+    }
+    if (!gitObjectExists(repoRoot, `${sourceRef}^{commit}:${path}`, gitCommand)) {
+      return `references path ${path}, which is absent from selected current source ${sourceRef}`;
+    }
   }
   return undefined;
 }
@@ -322,7 +369,11 @@ export function checkEvidenceLinks({
   for (const item of evidence) {
     const error = item.url.startsWith('/')
       ? checkCurrentDocsEvidence(repoRoot, sourceRef, item.url, gitCommand)
-      : checkRepositoryEvidence(repoRoot, item.url, gitCommand, { candidateTag, sourceRef });
+      : checkRepositoryEvidence(repoRoot, item.url, gitCommand, {
+          candidateTag,
+          sourceRef,
+          currentSource: item.currentSource,
+        });
     if (error) {
       errors.push(`${item.location}: ${item.url}: ${error}`);
     }
