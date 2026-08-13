@@ -10,6 +10,7 @@ use std::os::unix::fs::PermissionsExt;
 use tempfile::TempDir;
 
 const TEST_VERSION: &str = "v9.8.7";
+const BINARIES: [&str; 2] = ["relay", "relayctl"];
 
 #[cfg(unix)]
 #[test]
@@ -44,7 +45,7 @@ fn installer_rejects_noncanonical_release_tags_before_download() {
 
 #[cfg(unix)]
 #[test]
-fn installer_help_describes_download_and_verification_contract() {
+fn installer_help_describes_toolset_and_verification_contract() {
     let fixture = InstallerFixture::new();
     let mut command = fixture.command_without_version();
     command.arg("--help");
@@ -52,7 +53,7 @@ fn installer_help_describes_download_and_verification_contract() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     for expected in [
-        "Registry Stack Relay runtime",
+        "Registry Stack Relay runtime and relayctl adopter tooling",
         "releases/latest/download/relay-install.sh | bash",
         "SHA256SUMS",
         "RELAY_ASSET_DIR",
@@ -77,7 +78,7 @@ fn versioned_installer_selects_its_filename_release() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    fixture.assert_relay_installed();
+    fixture.assert_toolset_installed();
 }
 
 #[cfg(unix)]
@@ -92,9 +93,11 @@ fn published_installer_supports_curl_pipe_and_rejects_mismatched_override() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    fixture.assert_relay_installed();
+    fixture.assert_toolset_installed();
 
-    fs::remove_file(fixture.install_dir.join("relay")).unwrap();
+    for binary in BINARIES {
+        fs::remove_file(fixture.install_dir.join(binary)).unwrap();
+    }
     let mut mismatch = fixture.command_from_stdin(&rendered);
     mismatch.env("RELAY_VERSION", "v1.2.3");
     let output = mismatch.output().unwrap();
@@ -104,7 +107,7 @@ fn published_installer_supports_curl_pipe_and_rejects_mismatched_override() {
 
 #[cfg(unix)]
 #[test]
-fn installer_checksum_verifies_and_installs_relay() {
+fn installer_checksum_verifies_and_installs_the_complete_toolset() {
     let fixture = InstallerFixture::new();
     let output = fixture.run();
     assert!(
@@ -112,10 +115,10 @@ fn installer_checksum_verifies_and_installs_relay() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    fixture.assert_relay_installed();
+    fixture.assert_toolset_installed();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("Integrity check passed"),
+        stdout.contains("Integrity checks passed"),
         "stdout: {stdout}"
     );
     assert!(
@@ -136,7 +139,7 @@ fn verified_local_asset_mode_installs_without_network_downloads() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    fixture.assert_relay_installed();
+    fixture.assert_toolset_installed();
     assert!(!fixture.fake_curl_log().exists());
 }
 
@@ -156,36 +159,52 @@ fn unsupported_platform_fails_before_download_or_install() {
 
 #[cfg(unix)]
 #[test]
-fn checksum_refusals_preserve_an_existing_relay() {
-    for mutation in [ChecksumMutation::Missing, ChecksumMutation::Mismatch] {
-        let fixture = InstallerFixture::new();
-        fixture.preinstall_relay();
-        match mutation {
-            ChecksumMutation::Missing => {
-                fs::write(fixture.release_dir.join("SHA256SUMS"), b"").unwrap();
-            }
-            ChecksumMutation::Mismatch => {
-                fs::write(
-                    fixture.release_dir.join(fixture.asset_name()),
-                    b"tampered\n",
-                )
-                .unwrap();
-            }
-        }
-        let output = fixture.run();
-        assert!(!output.status.success());
-        assert_eq!(
-            fs::read(fixture.install_dir.join("relay")).unwrap(),
-            b"previous relay\n"
-        );
-    }
+fn missing_checksum_entry_refuses_the_whole_install() {
+    let fixture = InstallerFixture::new();
+    fixture.rewrite_sums_without("relayctl");
+    let output = fixture.run();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("SHA256SUMS has no entry"),
+        "stderr: {stderr}"
+    );
+    fixture.assert_nothing_installed();
 }
 
 #[cfg(unix)]
-#[derive(Clone, Copy)]
-enum ChecksumMutation {
-    Missing,
-    Mismatch,
+#[test]
+fn checksum_failure_preserves_the_existing_toolset() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_previous_toolset();
+    fixture.corrupt_release_asset("relayctl");
+    let output = fixture.run();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Checksum verification failed"),
+        "stderr: {stderr}"
+    );
+    fixture.assert_previous_toolset_intact();
+}
+
+#[cfg(unix)]
+#[test]
+fn partial_replacement_rolls_back_the_previous_toolset() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_previous_toolset();
+    let output = fixture.run_with_second_mv_failure();
+    assert!(!output.status.success());
+    fixture.assert_previous_toolset_intact();
+}
+
+#[cfg(unix)]
+#[test]
+fn partial_fresh_install_removes_the_incomplete_toolset() {
+    let fixture = InstallerFixture::new();
+    let output = fixture.run_with_second_mv_failure();
+    assert!(!output.status.success());
+    fixture.assert_nothing_installed();
 }
 
 #[cfg(unix)]
@@ -245,35 +264,112 @@ esac
     }
 
     fn write_release_assets(&self) {
-        let asset = self.release_dir.join(self.asset_name());
-        fs::write(&asset, b"relay release binary\n").unwrap();
-        fs::write(
-            self.release_dir.join("SHA256SUMS"),
-            format!("{}  {}\n", sha256(&asset), self.asset_name()),
-        )
-        .unwrap();
+        let mut checksums = Vec::new();
+        for binary in BINARIES {
+            let asset = self.asset_name(binary);
+            let path = self.release_dir.join(&asset);
+            fs::write(&path, format!("{binary} release binary\n")).unwrap();
+            checksums.push(format!("{}  {}\n", sha256(&path), asset));
+        }
+        fs::write(self.release_dir.join("SHA256SUMS"), checksums.concat()).unwrap();
     }
 
-    fn asset_name(&self) -> String {
-        format!("relay-{TEST_VERSION}-linux-amd64")
+    fn asset_name(&self, binary: &str) -> String {
+        format!("{binary}-{TEST_VERSION}-linux-amd64")
     }
 
-    fn preinstall_relay(&self) {
+    fn rewrite_sums_without(&self, excluded: &str) {
+        let mut checksums = Vec::new();
+        for binary in BINARIES {
+            if binary == excluded {
+                continue;
+            }
+            let asset = self.asset_name(binary);
+            let path = self.release_dir.join(&asset);
+            checksums.push(format!("{}  {}\n", sha256(&path), asset));
+        }
+        fs::write(self.release_dir.join("SHA256SUMS"), checksums.concat()).unwrap();
+    }
+
+    fn corrupt_release_asset(&self, binary: &str) {
+        let path = self.release_dir.join(self.asset_name(binary));
+        fs::write(&path, b"tampered bytes\n").unwrap();
+    }
+
+    fn preinstall_previous_toolset(&self) {
         fs::create_dir_all(&self.install_dir).unwrap();
-        fs::write(self.install_dir.join("relay"), b"previous relay\n").unwrap();
+        for binary in BINARIES {
+            fs::write(
+                self.install_dir.join(binary),
+                format!("{binary} previous binary\n"),
+            )
+            .unwrap();
+        }
     }
 
-    fn assert_relay_installed(&self) {
-        let path = self.install_dir.join("relay");
-        assert_eq!(fs::read(&path).unwrap(), b"relay release binary\n");
-        assert_eq!(
-            fs::metadata(path).unwrap().permissions().mode() & 0o777,
-            0o755
-        );
+    fn assert_previous_toolset_intact(&self) {
+        for binary in BINARIES {
+            let contents = fs::read_to_string(self.install_dir.join(binary)).unwrap();
+            assert_eq!(
+                contents,
+                format!("{binary} previous binary\n"),
+                "{binary} must keep its previous contents"
+            );
+        }
+    }
+
+    fn assert_toolset_installed(&self) {
+        for binary in BINARIES {
+            let path = self.install_dir.join(binary);
+            let contents = fs::read_to_string(&path).unwrap();
+            assert_eq!(contents, format!("{binary} release binary\n"));
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o755,
+                "{binary} must be executable"
+            );
+        }
+    }
+
+    fn assert_nothing_installed(&self) {
+        for binary in BINARIES {
+            assert!(
+                !self.install_dir.join(binary).exists(),
+                "{binary} must not be installed"
+            );
+        }
     }
 
     fn run(&self) -> std::process::Output {
         self.command().output().unwrap()
+    }
+
+    fn run_with_second_mv_failure(&self) -> std::process::Output {
+        self.mv_failure_command().output().unwrap()
+    }
+
+    fn mv_failure_command(&self) -> Command {
+        write_executable(
+            &self.fake_bin.join("mv"),
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+count=0
+if [[ -f "$FAKE_MV_COUNT_FILE" ]]; then
+  read -r count < "$FAKE_MV_COUNT_FILE"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$FAKE_MV_COUNT_FILE"
+if [[ "$count" -eq 2 ]]; then
+  exit 73
+fi
+exec "$REAL_MV" "$@"
+"#,
+        );
+        let mut command = self.command();
+        command
+            .env("FAKE_MV_COUNT_FILE", self._temp.path().join("mv-count"))
+            .env("REAL_MV", "/bin/mv");
+        command
     }
 
     fn temp_path(&self) -> &Path {

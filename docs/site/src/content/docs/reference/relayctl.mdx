@@ -226,7 +226,15 @@ every secret reference stays inside the project's `runtime.yaml` as a `secret:en
 
 ## Install
 
-There is no relayctl installer. Take the plain binary asset from the release, or build from source.
+On Linux amd64, the Relay installer downloads, verifies, and installs the matching `relay` and
+`relayctl` binaries together:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
+```
+
+For Linux arm64 or macOS arm64, take the plain `relayctl` binary asset from the release. You can
+also use a plain asset on Linux amd64 or build from source.
 
 The release publishes three relayctl assets:
 

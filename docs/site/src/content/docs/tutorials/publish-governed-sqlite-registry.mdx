@@ -54,24 +54,13 @@ boundary, and `registeredAddress` never crosses the second.
 
 ## Install Registry Relay
 
-You need two binaries, and they install separately. `relay` serves a sealed package and has an
-installer. `relayctl` authors and checks a project and does not.
-
-The installer accepts Linux amd64 only, and places `relay` in `~/.local/bin` unless you set
+You need two binaries: `relay` serves a sealed package, while `relayctl` authors and checks a
+project. The installer accepts Linux amd64 only and places both in `~/.local/bin` unless you set
 `RELAY_INSTALL_DIR`:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 relay --version
-```
-
-Take `relayctl` as a plain release asset. Substitute the released tag, and the platform you are
-on, one of `linux-amd64`, `linux-arm64`, or `macos-arm64`:
-
-```sh
-curl -fsSL -o ~/.local/bin/relayctl \
-  "https://github.com/registrystack/registry-stack/releases/download/<released-tag>/relayctl-<released-tag>-linux-amd64"
-chmod 0755 ~/.local/bin/relayctl
 relayctl --version
 ```
 
