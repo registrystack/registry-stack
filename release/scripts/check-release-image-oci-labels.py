@@ -19,6 +19,10 @@ OCI_LABELS = {
     "revision": "org.opencontainers.image.revision",
     "version": "org.opencontainers.image.version",
 }
+RUNTIME_IDENTITY_LABELS = {
+    "org.registrystack.runtime.uid": "65532",
+    "org.registrystack.runtime.gid": "65532",
+}
 
 
 class CheckError(RuntimeError):
@@ -183,6 +187,11 @@ def require_oci_labels(
             f"image config Labels for {image_ref!r} must be a JSON object, "
             f"got {type(labels).__name__}"
         )
+    if config.get("User") != RUNTIME_IDENTITY_LABELS["org.registrystack.runtime.uid"]:
+        raise CheckError(
+            f"image config User for {image_ref!r} must be exactly "
+            f"{RUNTIME_IDENTITY_LABELS['org.registrystack.runtime.uid']!r}"
+        )
 
     for identity, label in OCI_LABELS.items():
         if label not in labels:
@@ -196,6 +205,13 @@ def require_oci_labels(
             raise CheckError(
                 f"image OCI label {label!r} for {image_ref!r} has value "
                 f"{actual!r}; expected exactly {wanted!r}"
+            )
+
+    for label, wanted in RUNTIME_IDENTITY_LABELS.items():
+        if labels.get(label) != wanted:
+            raise CheckError(
+                f"image config Labels for {image_ref!r} must declare "
+                f"{label!r} as exactly {wanted!r}"
             )
 
     for label, wanted in expected_labels.items():

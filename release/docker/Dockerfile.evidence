@@ -20,6 +20,9 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
 
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
 
+LABEL org.registrystack.runtime.uid="65532" \
+      org.registrystack.runtime.gid="65532"
+
 COPY --from=runtime-root /workspace/runtime-root/ /
 
 WORKDIR /var/lib/registry-evidence
