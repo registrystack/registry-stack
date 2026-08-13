@@ -73,10 +73,13 @@ fn run(cli: Cli) -> Result<(), String> {
                 .build()
                 .map_err(|error| format!("the async runtime could not start: {error}"))?;
             let clients = if require_runtime_dependencies {
-                runtime
+                let service = runtime
                     .block_on(MintService::load(config))
-                    .map_err(|error| format!("the runtime dependencies are not ready: {error}"))?
-                    .client_count()
+                    .map_err(|error| format!("the runtime dependencies are not ready: {error}"))?;
+                if !runtime.block_on(service.ready()) {
+                    return Err("the runtime dependencies are not ready".to_owned());
+                }
+                service.client_count()
             } else {
                 runtime
                     .block_on(MintService::check(&config))

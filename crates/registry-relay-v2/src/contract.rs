@@ -1441,9 +1441,6 @@ impl IssuerRuntime {
                     )?;
                     let jwks_url =
                         canonical_issuer_transport_url(jwks_url, allow_supervised_loopback)?;
-                    if jwks_url.path() == "/" {
-                        return None;
-                    }
                     (
                         issuer_identifier,
                         IssuerKeyTransport::Jwks(jwks_url.to_string()),
@@ -1755,6 +1752,20 @@ disclosureProfiles: {}
         assert_eq!(
             profile.key_transport,
             IssuerKeyTransport::Jwks("https://keys.example.invalid/issuer.jwks.json".to_owned())
+        );
+
+        let root_jwks =
+            RelayRuntime::parse_yaml(&runtime("    jwksUrl: https://keys.example.invalid/\n"))
+                .expect("canonical root JWKS transport parses");
+        assert_eq!(
+            root_jwks
+                .authentication
+                .issuer
+                .as_ref()
+                .and_then(IssuerRuntime::profile)
+                .expect("canonical root JWKS transport validates")
+                .key_transport,
+            IssuerKeyTransport::Jwks("https://keys.example.invalid/".to_owned())
         );
 
         for trusted_issuer in [

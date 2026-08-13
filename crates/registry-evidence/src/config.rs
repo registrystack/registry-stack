@@ -1350,7 +1350,21 @@ impl MetricsListenerConfig {
         // Sharing the evidence binding would publish the counters on the
         // listener the public contract describes, which is the separation this
         // block exists to enforce.
-        if self.bind_host == evidence_listener.bind_host && self.port == evidence_listener.port {
+        let metrics_ip: IpAddr = self
+            .bind_host
+            .parse()
+            .expect("validated metrics listener address is numeric");
+        let evidence_ip: IpAddr = evidence_listener
+            .bind_host
+            .parse()
+            .expect("validated evidence listener address is numeric");
+        let same_family = matches!(
+            (metrics_ip, evidence_ip),
+            (IpAddr::V4(_), IpAddr::V4(_)) | (IpAddr::V6(_), IpAddr::V6(_))
+        );
+        let binding_overlaps =
+            metrics_ip == evidence_ip || (evidence_ip.is_unspecified() && same_family);
+        if binding_overlaps && self.port == evidence_listener.port {
             return invalid("metricsListener must not share the evidence listener binding");
         }
         Ok(())
@@ -7491,6 +7505,21 @@ outboundTls:
                 "metricsListener must not share the evidence listener binding"
             ))
         ));
+
+        for (wildcard, private) in [("0.0.0.0", "10.0.0.10"), ("::", "fd00::10")] {
+            let wildcard_base = base.replace(
+                "bindHost: 127.0.0.1",
+                &format!("bindHost: '{wildcard}'\n  networkExposure: container-private"),
+            );
+            let shared =
+                format!("{wildcard_base}metricsListener:\n  bindHost: {private}\n  port: 8080\n");
+            assert!(matches!(
+                RuntimeConfig::parse_yaml(shared.as_bytes()),
+                Err(ConfigError::Invalid(
+                    "metricsListener must not share the evidence listener binding"
+                ))
+            ));
+        }
 
         // The block is closed like every other level of the document.
         let unknown = format!(
