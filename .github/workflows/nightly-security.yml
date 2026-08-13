@@ -13,99 +13,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  changes:
-    name: Changed security surfaces
-    runs-on: ubuntu-24.04
-    outputs:
-      run: ${{ steps.classify.outputs.run }}
-      head_sha: ${{ steps.classify.outputs.head_sha }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          submodules: false
-
-      - name: Restore last successful nightly state
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .nightly-security-state
-          key: nightly-security-state-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            nightly-security-state-
-
-      - name: Classify changed paths
-        id: classify
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          head_sha="$(git rev-parse HEAD)"
-          run=false
-
-          changed_files="${RUNNER_TEMP}/registry-stack-nightly-security-files"
-          : > "${changed_files}"
-
-          is_relevant_path() {
-            local path="$1"
-            case "${path}" in
-              .github/workflows/*|.github/dependabot.yml)
-                return 0
-                ;;
-              Cargo.toml|Cargo.lock|deny.toml|rust-toolchain*)
-                return 0
-                ;;
-              crates/registry-platform-authcommon/*|crates/registry-platform-crypto/*)
-                return 0
-                ;;
-              crates/registry-platform-sdjwt/*)
-                return 0
-                ;;
-              crates/registry-manifest-core/*|crates/registry-manifest-cli/*)
-                return 0
-                ;;
-              products/platform/*|products/manifest/*|release/docker/*)
-                return 0
-                ;;
-              docker/*|.dockerignore)
-                return 0
-                ;;
-              *)
-                return 1
-                ;;
-            esac
-          }
-
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            run=true
-          elif [[ ! -f .nightly-security-state/last-success-sha ]]; then
-            run=true
-          else
-            base_sha="$(tr -d '[:space:]' < .nightly-security-state/last-success-sha)"
-            if [[ -z "${base_sha}" ]] ||
-               ! git cat-file -e "${base_sha}^{commit}" 2>/dev/null; then
-              run=true
-            elif [[ "${base_sha}" != "${head_sha}" ]]; then
-              git diff --name-only -z "${base_sha}" "${head_sha}" > "${changed_files}"
-              while IFS= read -r -d '' path; do
-                if is_relevant_path "${path}"; then
-                  run=true
-                  break
-                fi
-              done < "${changed_files}"
-            fi
-          fi
-
-          {
-            echo "run=${run}"
-            echo "head_sha=${head_sha}"
-          } >> "${GITHUB_OUTPUT}"
-
   assurance:
     name: Security assurance manifests
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -153,8 +62,6 @@ jobs:
 
   platform-fuzz:
     name: Platform fuzz smoke
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -184,7 +91,8 @@ jobs:
           for target in \
             authcommon_parsers \
             sdjwt_holder_proof \
-            sdjwt_issuance
+            sdjwt_issuance \
+            sqlite_statement
           do
             mkdir -p "fuzz/artifacts/${target}"
             cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${target}" -- \
@@ -204,8 +112,6 @@ jobs:
 
   manifest-fuzz:
     name: Manifest fuzz smoke
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -251,24 +157,3 @@ jobs:
           name: nightly-manifest-fuzz-artifacts
           path: products/manifest/fuzz/artifacts
           if-no-files-found: ignore
-
-  save-state:
-    name: Save successful nightly state
-    needs:
-      - changes
-      - assurance
-      - platform-fuzz
-      - manifest-fuzz
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Write successful head
-        run: |
-          mkdir -p .nightly-security-state
-          printf '%s\n' "${{ needs.changes.outputs.head_sha }}" > .nightly-security-state/last-success-sha
-
-      - name: Save last successful nightly state
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .nightly-security-state
-          key: nightly-security-state-${{ github.run_id }}-${{ github.run_attempt }}

@@ -304,6 +304,19 @@ REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
     ".github/workflows/scorecard.yml": frozenset({"release_tool"}),
 }
 
+REQUIRED_NIGHTLY_FUZZ_TARGETS: dict[str, tuple[str, ...]] = {
+    "platform-fuzz": (
+        "authcommon_parsers",
+        "sdjwt_holder_proof",
+        "sdjwt_issuance",
+        "sqlite_statement",
+    ),
+    "manifest-fuzz": (
+        "metadata_manifest_yaml",
+        "rendered_artifact_json",
+    ),
+}
+
 # The compact v2 release contract is the active release inventory.
 REQUIRED_RELEASE_SECURITY_GATES = (
     (
@@ -898,6 +911,62 @@ def yaml_step_blocks(workflow: str) -> list[str]:
     return blocks
 
 
+def shell_loop_targets(job: str) -> tuple[str, ...]:
+    """Return the ordered target names from the nightly fuzz shell loop."""
+
+    start_marker = "          for target in \\\n"
+    end_marker = "\n          do"
+    if job.count(start_marker) != 1:
+        return ()
+    target_block = job.split(start_marker, 1)[1].split(end_marker, 1)
+    if len(target_block) != 2:
+        return ()
+    targets = tuple(
+        line.strip().removesuffix("\\").strip()
+        for line in target_block[0].splitlines()
+    )
+    if not targets or any(not target or " " in target for target in targets):
+        return ()
+    return targets
+
+
+def nightly_security_sweep_violations(workflow: str | None) -> list[str]:
+    """Require every scheduled/manual security sweep to run its full roster."""
+
+    gate = "Nightly security sweep completeness"
+    if workflow is None:
+        return [gate]
+
+    jobs = {
+        job_id: yaml_job_block(workflow, job_id)
+        for job_id in ("assurance", *REQUIRED_NIGHTLY_FUZZ_TARGETS)
+    }
+    path_suppression_markers = (
+        "\n  changes:",
+        "\n  save-state:",
+        "needs.changes.outputs.run",
+        ".nightly-security-state",
+        "is_relevant_path",
+        "last-success-sha",
+    )
+    if any(job is None for job in jobs.values()) or any(
+        marker in workflow for marker in path_suppression_markers
+    ):
+        return [gate]
+    if any(
+        "\n    needs:" in job or "\n    if:" in job
+        for job in jobs.values()
+        if job is not None
+    ):
+        return [gate]
+    if any(
+        shell_loop_targets(jobs[job_id] or "") != required_targets
+        for job_id, required_targets in REQUIRED_NIGHTLY_FUZZ_TARGETS.items()
+    ):
+        return [gate]
+    return []
+
+
 def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[str]:
     """Confine coverage OIDC upload to an exact protected-main push."""
 
@@ -1305,6 +1374,11 @@ def main() -> int:
         platform_coverage_oidc_isolation_violations(workflow_text)
     )
     policy_violations.extend(
+        nightly_security_sweep_violations(
+            policy_texts.get(".github/workflows/nightly-security.yml")
+        )
+    )
+    policy_violations.extend(
         candidate_build_isolation_violations(
             policy_texts.get(".github/workflows/release-candidate.yml")
         )
@@ -1361,7 +1435,7 @@ def main() -> int:
         + len(ORDERED_RELEASE_SECURITY_GATES)
         + len(FORBIDDEN_RELEASE_SECURITY_GATES)
         + len(REQUIRED_SECURITY_WORKFLOW_SELECTIONS)
-        + 6  # Structural permission, isolation, retention, rebuild, and destination gates.
+        + 7  # Structural permission, sweep, isolation, retention, rebuild, and destination gates.
     )
     print(
         f"gate inventory check passed for {declared_gate_count} gates; "

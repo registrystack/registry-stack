@@ -44,6 +44,9 @@ class GateInventoryTest(unittest.TestCase):
         self.classifier = (ROOT / ".github" / "scripts" / "ci_changes.py").read_text(
             encoding="utf-8"
         )
+        self.nightly_security = (
+            ROOT / ".github" / "workflows" / "nightly-security.yml"
+        ).read_text(encoding="utf-8")
         self.gitleaks_config = (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
         parsed_gitleaks = tomllib.loads(self.gitleaks_config)
         self.gitleaks_paths = {
@@ -74,6 +77,12 @@ class GateInventoryTest(unittest.TestCase):
             self.module.security_workflow_classification_violations(
                 self.module.RELEASE_SECURITY_POLICY_PATHS,
                 self.module.classifier_security_workflow_gates(),
+            ),
+        )
+        self.assertEqual(
+            [],
+            self.module.nightly_security_sweep_violations(
+                policy_texts[".github/workflows/nightly-security.yml"]
             ),
         )
         self.assertEqual(
@@ -139,6 +148,68 @@ class GateInventoryTest(unittest.TestCase):
                         required,
                     ),
                 )
+
+    def test_nightly_security_sweep_covers_every_declared_fuzz_target(self) -> None:
+        fuzz_manifests = {
+            "platform-fuzz": ROOT / "products" / "platform" / "fuzz" / "Cargo.toml",
+            "manifest-fuzz": ROOT / "products" / "manifest" / "fuzz" / "Cargo.toml",
+        }
+        for job_id, manifest in fuzz_manifests.items():
+            with self.subTest(job_id=job_id):
+                parsed = tomllib.loads(manifest.read_text(encoding="utf-8"))
+                declared_targets = tuple(entry["name"] for entry in parsed["bin"])
+                self.assertEqual(
+                    self.module.REQUIRED_NIGHTLY_FUZZ_TARGETS[job_id],
+                    declared_targets,
+                )
+        self.assertEqual(
+            [],
+            self.module.nightly_security_sweep_violations(self.nightly_security),
+        )
+
+    def test_nightly_security_sweep_cannot_be_path_suppressed_or_partial(self) -> None:
+        gate = ["Nightly security sweep completeness"]
+        mutations = {
+            "changed-path job": self.nightly_security.replace(
+                "jobs:\n",
+                "jobs:\n"
+                "  changes:\n"
+                "    name: Changed security surfaces\n"
+                "    runs-on: ubuntu-24.04\n"
+                "    steps: []\n\n",
+                1,
+            ),
+            "conditional assurance": self.nightly_security.replace(
+                "  assurance:\n",
+                "  assurance:\n    if: needs.changes.outputs.run == 'true'\n",
+                1,
+            ),
+            "dependent platform fuzz": self.nightly_security.replace(
+                "  platform-fuzz:\n",
+                "  platform-fuzz:\n    needs: changes\n",
+                1,
+            ),
+            "cached sweep state": self.nightly_security.replace(
+                "jobs:\n",
+                "jobs:\n  # .nightly-security-state/last-success-sha\n",
+                1,
+            ),
+        }
+        for job_targets in self.module.REQUIRED_NIGHTLY_FUZZ_TARGETS.values():
+            for target in job_targets:
+                mutations[f"missing fuzz target {target}"] = (
+                    self.nightly_security.replace(target, f"removed_{target}", 1)
+                )
+        for mutation, workflow in mutations.items():
+            with self.subTest(mutation=mutation):
+                self.assertEqual(
+                    gate,
+                    self.module.nightly_security_sweep_violations(workflow),
+                )
+        self.assertEqual(
+            gate,
+            self.module.nightly_security_sweep_violations(None),
+        )
 
     def test_each_release_security_marker_is_fail_closed(self) -> None:
         policy_texts = self.module.policy_file_texts(
