@@ -274,6 +274,85 @@ class GateInventoryTest(unittest.TestCase):
                 self.module.candidate_build_isolation_violations(mutated),
             )
 
+    def test_only_protected_main_push_coverage_can_receive_oidc_permission(
+        self,
+    ) -> None:
+        self.assertEqual(
+            [],
+            self.module.platform_coverage_oidc_isolation_violations(self.workflow),
+        )
+        protected_push = (
+            "if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
+        )
+        upload_if = (
+            f"{protected_push} && needs.changes.outputs.platform == 'true'"
+        )
+        mutations = (
+            (
+                "    steps:\n      - name: Checkout",
+                "    permissions:\n      contents: read\n      id-token: write\n"
+                "    steps:\n      - name: Checkout",
+            ),
+            (
+                upload_if,
+                "if: needs.changes.outputs.platform == 'true'",
+            ),
+            (
+                upload_if,
+                "if: github.event_name != 'pull_request' && needs.changes.outputs.platform == 'true'",
+            ),
+            (
+                upload_if,
+                "if: github.ref == 'refs/heads/main' && needs.changes.outputs.platform == 'true'",
+            ),
+            (
+                upload_if,
+                "if: github.event_name == 'push' && needs.changes.outputs.platform == 'true'",
+            ),
+            (
+                protected_push,
+                "if: github.event_name != 'pull_request'",
+            ),
+            (
+                protected_push,
+                "if: github.ref == 'refs/heads/main'",
+            ),
+            (
+                protected_push,
+                "if: github.event_name == 'push'",
+            ),
+            (
+                "      - name: Download platform coverage",
+                "      - name: Execute repository code\n        run: cargo test\n\n"
+                "      - name: Download platform coverage",
+            ),
+            (
+                "    steps:\n      - name: Download platform coverage",
+                "    steps:\n"
+                "      - uses: ./.github/actions/untrusted\n"
+                "      - name: Download platform coverage",
+            ),
+            (
+                "permissions:\n  contents: read",
+                "permissions: write-all",
+            ),
+            (
+                "      id-token: write\n    steps:",
+                "      id-token: write\n      issues: write\n    steps:",
+            ),
+            (
+                "      - platform-coverage-upload\n",
+                "",
+            ),
+        )
+        for before, after in mutations:
+            with self.subTest(before=before):
+                mutated = self.workflow.replace(before, after, 1)
+                self.assertEqual(
+                    ["Platform coverage OIDC permission isolation"],
+                    self.module.platform_coverage_oidc_isolation_violations(mutated),
+                )
+
     def test_candidate_verification_cannot_gain_oidc_or_attestation_writes(
         self,
     ) -> None:
