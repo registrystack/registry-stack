@@ -120,14 +120,16 @@ pub(crate) enum EditorError {
     NotProject,
     #[error("editor setup found files it does not own and changed nothing: {0}")]
     Conflict(String),
-    #[error("editor setup refused a symbolic link at {0}")]
-    Symlink(String),
+    #[error("editor setup refused a symbolic link in its managed file set")]
+    Symlink,
     #[error("editor setup could not read the managed project state")]
     Read,
     #[error("editor setup could not publish its complete managed file set")]
     Write,
-    #[error("editor setup publication failed; recoverable transaction files remain at {0}")]
-    Recovery(String),
+    #[error(
+        "editor setup publication failed; recoverable transaction files remain in the project directory"
+    )]
+    Recovery,
     #[error("editor setup could not render its deterministic configuration")]
     Render,
 }
@@ -154,10 +156,8 @@ pub(crate) fn setup_project_editor(project: &Path) -> Result<EditorSetupReport, 
     }
 
     if publish(&root, staging.path(), &files, &states).is_err() {
-        let recovery = staging.keep();
-        return Err(EditorError::Recovery(
-            recovery.to_string_lossy().into_owned(),
-        ));
+        let _ = staging.keep();
+        return Err(EditorError::Recovery);
     }
     let mut paths = files
         .iter()
@@ -504,7 +504,7 @@ fn ensure_directories(
         current.push(component);
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(EditorError::Symlink(current.to_string_lossy().into_owned()));
+                return Err(EditorError::Symlink);
             }
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => return Err(EditorError::Write),
@@ -515,9 +515,7 @@ fn ensure_directories(
                         let metadata =
                             fs::symlink_metadata(&current).map_err(|_| EditorError::Write)?;
                         if metadata.file_type().is_symlink() {
-                            return Err(EditorError::Symlink(
-                                current.to_string_lossy().into_owned(),
-                            ));
+                            return Err(EditorError::Symlink);
                         }
                         if !metadata.is_dir() {
                             return Err(EditorError::Write);
@@ -547,6 +545,13 @@ fn maybe_change_target(root: &Path, relative: &Path) -> Result<(), EditorError> 
     })
 }
 
+#[cfg(test)]
+pub(crate) fn change_target_during_publication(relative: PathBuf, bytes: Vec<u8>) {
+    TEST_TARGET_CHANGE.with(|change| {
+        *change.borrow_mut() = Some((relative, bytes));
+    });
+}
+
 #[cfg(not(test))]
 fn maybe_change_target(_root: &Path, _relative: &Path) -> Result<(), EditorError> {
     Ok(())
@@ -562,7 +567,7 @@ fn read_regular_bounded(root: &Path, path: &Path) -> Result<Option<Vec<u8>>, Edi
         Err(_) => return Err(EditorError::Read),
     };
     if metadata.file_type().is_symlink() {
-        return Err(EditorError::Symlink(path.to_string_lossy().into_owned()));
+        return Err(EditorError::Symlink);
     }
     if !metadata.is_file() || metadata.len() > MAX_MANAGED_BYTES {
         return Err(EditorError::Read);
@@ -579,7 +584,7 @@ fn reject_symlink_ancestors(root: &Path, relative: &Path) -> Result<(), EditorEr
         current.push(component);
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(EditorError::Symlink(current.to_string_lossy().into_owned()));
+                return Err(EditorError::Symlink);
             }
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
@@ -727,10 +732,22 @@ mod tests {
 
         let error = setup_project_editor(project.path()).unwrap_err();
 
-        assert!(matches!(error, EditorError::Recovery(_)));
+        assert!(matches!(error, EditorError::Recovery));
         assert_eq!(fs::read(project.path().join(relative)).unwrap(), concurrent);
         assert!(!project.path().join(EDITOR_ROOT).exists());
         assert!(!project.path().join(".vscode/settings.json").exists());
+        let recovery_directories = fs::read_dir(project.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".relay-v2-editor-transaction-")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(recovery_directories.len(), 1);
+        assert!(recovery_directories[0].path().join(MANIFEST_PATH).is_file());
     }
 
     #[cfg(unix)]
@@ -742,7 +759,7 @@ mod tests {
 
         let error = setup_project_editor(project.path()).unwrap_err();
 
-        assert!(matches!(error, EditorError::Symlink(_)));
+        assert!(matches!(error, EditorError::Symlink));
         assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
         assert!(!project.path().join(EDITOR_ROOT).exists());
     }
