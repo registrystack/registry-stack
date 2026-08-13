@@ -156,6 +156,86 @@ fn happy_path_runs_check_then_each_fixture_and_reports_pass() {
 }
 
 #[test]
+fn fixture_selection_runs_only_one_exact_referenced_fixture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml", "fixtures/ab.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .args(["--fixture", "fixtures/a.yaml"])
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "3")
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run selected fixture");
+
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+    assert_eq!(report["passed"], serde_json::Value::Bool(true));
+    assert_eq!(report["evaluated_cases"], serde_json::json!(3));
+    let fixtures = report["fixtures"].as_array().expect("fixtures array");
+    assert_eq!(fixtures.len(), 1);
+    assert_eq!(fixtures[0]["path"], "fixtures/a.yaml");
+
+    let runtime_path = project.join("runtime.yaml");
+    let runtime_path = runtime_path.to_str().expect("runtime path is utf8");
+    assert_eq!(
+        read_argv_log(&argv_log),
+        vec![
+            vec!["--runtime", runtime_path, "check"],
+            vec![
+                "--runtime",
+                runtime_path,
+                "evaluate",
+                "--fixture",
+                "fixtures/a.yaml",
+            ],
+        ]
+    );
+}
+
+#[test]
+fn fixture_selection_refuses_non_exact_names_without_rendering_them() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+    let unreferenced = "fixtures/a.yaml-private-canary";
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .args(["--fixture", unreferenced])
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", &argv_log)
+        .output()
+        .expect("refuse unreferenced fixture");
+
+    assert!(!output.status.success());
+    let stdout = stdout_of(&output);
+    let stderr = stderr_of(&output);
+    assert!(stdout.is_empty(), "unexpected report: {stdout}");
+    assert!(
+        stderr.contains("selected fixture is not referenced by the project"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(unreferenced), "selector leaked: {stderr}");
+    assert!(
+        read_argv_log(&argv_log).is_empty(),
+        "an invalid selection must not reach Evidence"
+    );
+}
+
+#[test]
 fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("sqlite-project");

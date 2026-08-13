@@ -1508,6 +1508,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--fixture <FIXTURE>",
+                  "description": "Run only the exact bundle-relative fixture path named here",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--json",
                   "description": "Emit one machine-readable JSON report on standard output",
                   "always_required": false,

@@ -31,6 +31,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub evidence_bin: Option<PathBuf>,
 
+    /// Run only the exact bundle-relative fixture path named here.
+    #[arg(long)]
+    pub fixture: Option<String>,
+
     /// Emit one machine-readable JSON report on standard output.
     #[arg(long)]
     pub json: bool,
@@ -130,7 +134,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
             _staging: staging,
         }
     };
-    let fixture_paths = target.fixture_paths();
+    let fixture_paths = select_fixture_paths(target.fixture_paths(), args.fixture.as_deref())?;
 
     let check_outcome = target.check(&evidence_bin);
     let check_passed = check_outcome.passed;
@@ -179,6 +183,23 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// Preserve the bundle's declared order for a full run, or select one exact
+/// referenced path. The rejected value is deliberately absent from the error:
+/// fixture selectors are operator input and diagnostics stay value-free.
+fn select_fixture_paths<'a>(
+    fixture_paths: &'a [String],
+    selected: Option<&str>,
+) -> Result<Vec<&'a str>> {
+    match selected {
+        None => Ok(fixture_paths.iter().map(String::as_str).collect()),
+        Some(selected) => fixture_paths
+            .iter()
+            .find(|fixture| fixture.as_str() == selected)
+            .map(|fixture| vec![fixture.as_str()])
+            .ok_or_else(|| anyhow!("selected fixture is not referenced by the project")),
+    }
 }
 
 /// The two project shapes adopters work with. Deployment projects carry a
