@@ -1404,8 +1404,8 @@ fn trusted_keys(jwks: &JwksDocument) -> Result<BTreeMap<String, PublicJwk>, Veri
         if members.keys().map(String::as_str).collect::<BTreeSet<_>>() != exact_members {
             return Err(VerificationError::Key);
         }
-        let key: PublicJwk =
-            serde_json::from_value(value.clone()).map_err(|_| VerificationError::Key)?;
+        let serialized = serde_json::to_string(value).map_err(|_| VerificationError::Key)?;
+        let key = PublicJwk::parse(&serialized).map_err(|_| VerificationError::Key)?;
         let kid = key.kid.clone().ok_or(VerificationError::Key)?;
         if !key_identifier_is_thumbprint(&kid)
             || key.algorithm().ok() != Some(SigningAlgorithm::Es256)
@@ -3015,6 +3015,14 @@ mod tests {
             .remove("kid");
         let mut empty_kid = one_key.clone();
         empty_kid["kid"] = serde_json::json!("");
+        let mut malformed_point = one_key.clone();
+        malformed_point["x"] = serde_json::json!(URL_SAFE_NO_PAD.encode([0_u8; 32]));
+        malformed_point["y"] = serde_json::json!(URL_SAFE_NO_PAD.encode([0_u8; 32]));
+        let malformed_key: PublicJwk = serde_json::from_value(malformed_point.clone())
+            .expect("the structurally complete malformed key deserializes");
+        malformed_point["kid"] = serde_json::json!(malformed_key
+            .jkt()
+            .expect("the malformed coordinates still have a thumbprint"));
         for keys in [
             // Nothing to verify against.
             vec![],
@@ -3023,6 +3031,8 @@ mod tests {
             // No identifier to select the key by.
             vec![absent_kid],
             vec![empty_kid],
+            // Structurally complete ES256 coordinates that are not a curve point.
+            vec![malformed_point],
             // Two keys claiming one identifier.
             vec![one_key.clone(), one_key.clone()],
             // Not the signature algorithm the profile fixes.
