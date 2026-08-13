@@ -108,9 +108,11 @@ Relay provides the equivalent `relay check --runtime
 combination of the three official products, use
 `docker/runtime-preflight.py` to verify the common container posture first and
 then run each product's native check in its actual mounts and network. The
-preflight rejects host networking, entrypoint overrides, added capabilities,
-writable configuration or secret trees, and anonymous audit volumes. Audit
-storage must be an explicit named volume or bind mount.
+preflight rejects host or shared network namespaces, entrypoint or command
+overrides, alternate Evidence or Mint configuration paths, privileged mode,
+added capabilities, inherited mounts, writable configuration or secret trees,
+anonymous audit volumes, and named volumes backed by tmpfs. Audit storage must
+be an explicit durable named volume or bind mount.
 
 ## Health probes
 

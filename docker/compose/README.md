@@ -53,8 +53,9 @@ docker compose -f docker-compose.yaml run --rm evidence \
 
 Or run the supported container preflight from the repository root. It first
 checks the digest-pinned image, nonroot/read-only posture, secret declaration,
-explicit persistent audit mount, capability set, entrypoint, network mode, and
-published ports. It then invokes the native Evidence dependency check without
+explicit persistent audit mount and backend, capability and privilege posture,
+entrypoint and command, configuration path, inherited mounts, network mode,
+and published ports. It then invokes the native Evidence dependency check without
 printing Compose output or secret values:
 
 ```sh

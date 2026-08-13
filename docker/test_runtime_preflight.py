@@ -61,6 +61,13 @@ def service(product: str) -> dict[str, object]:
     }
 
 
+def deployment(services: dict[str, dict[str, object]]) -> dict[str, object]:
+    return {
+        "services": services,
+        "volumes": {f"{product}-audit": {} for product in services},
+    }
+
+
 class RuntimePreflightTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
@@ -103,13 +110,13 @@ class RuntimePreflightTest(unittest.TestCase):
     def test_all_products_use_native_checks_after_complete_static_preflight(
         self,
     ) -> None:
-        document = {
-            "services": {
+        document = deployment(
+            {
                 "evidence": service("evidence"),
                 "mint": service("mint"),
                 "relay": service("relay"),
             }
-        }
+        )
         result, stdout, stderr, run = self.run_main(document)
         self.assertEqual(0, result, stderr)
         self.assertEqual("runtime preflight passed for 3 service(s)\n", stdout)
@@ -144,11 +151,23 @@ class RuntimePreflightTest(unittest.TestCase):
             ),
             "root user": lambda item: item.update(user="0:0"),
             "writable root": lambda item: item.update(read_only=False),
+            "privileged container": lambda item: item.update(privileged=True),
             "capabilities": lambda item: item.update(cap_drop=[]),
             "added capability": lambda item: item.update(cap_add=["SYS_ADMIN"]),
             "privilege escalation": lambda item: item.update(security_opt=[]),
             "entrypoint override": lambda item: item.update(entrypoint=["/bin/true"]),
+            "command override": lambda item: item.update(command=["serve"]),
             "host network": lambda item: item.update(network_mode="host"),
+            "shared service network": lambda item: item.update(
+                network_mode="service:proxy"
+            ),
+            "shared container network": lambda item: item.update(
+                network_mode="container:proxy"
+            ),
+            "inherited mounts": lambda item: item.update(volumes_from=["proxy"]),
+            "runtime path override": lambda item: item.update(
+                environment={"REGISTRY_EVIDENCE_RUNTIME": "/tmp/runtime.yaml"}
+            ),
             "public port": lambda item: item.update(
                 ports=[{"target": 8080, "published": 8080}]
             ),
@@ -160,7 +179,7 @@ class RuntimePreflightTest(unittest.TestCase):
                 render = subprocess.CompletedProcess(
                     args=[],
                     returncode=0,
-                    stdout=json.dumps({"services": {"evidence": selected}}),
+                    stdout=json.dumps(deployment({"evidence": selected})),
                     stderr="",
                 )
                 run = unittest.mock.Mock(return_value=render)
@@ -182,7 +201,7 @@ class RuntimePreflightTest(unittest.TestCase):
             selected["secrets"][0]["mode"] = mode  # type: ignore[index]
             self.module.validate_service(
                 self.module.ServiceSelection("evidence", "evidence"),
-                {"services": {"evidence": selected}},
+                deployment({"evidence": selected}),
             )
         for mode in (0o440, 0o604, "0640"):
             selected = service("evidence")
@@ -190,28 +209,39 @@ class RuntimePreflightTest(unittest.TestCase):
             with self.assertRaises(self.module.PreflightError):
                 self.module.validate_service(
                     self.module.ServiceSelection("evidence", "evidence"),
-                    {"services": {"evidence": selected}},
+                    deployment({"evidence": selected}),
                 )
         selected = service("evidence")
         selected["volumes"][1]["read_only"] = True  # type: ignore[index]
         with self.assertRaises(self.module.PreflightError):
             self.module.validate_service(
                 self.module.ServiceSelection("evidence", "evidence"),
-                {"services": {"evidence": selected}},
+                deployment({"evidence": selected}),
             )
         selected = service("evidence")
         selected["volumes"][1]["type"] = "tmpfs"  # type: ignore[index]
         with self.assertRaises(self.module.PreflightError):
             self.module.validate_service(
                 self.module.ServiceSelection("evidence", "evidence"),
-                {"services": {"evidence": selected}},
+                deployment({"evidence": selected}),
             )
         selected = service("evidence")
         selected["volumes"][1].pop("source")  # type: ignore[index]
         with self.assertRaises(self.module.PreflightError):
             self.module.validate_service(
                 self.module.ServiceSelection("evidence", "evidence"),
-                {"services": {"evidence": selected}},
+                deployment({"evidence": selected}),
+            )
+
+        selected = service("evidence")
+        ephemeral = deployment({"evidence": selected})
+        ephemeral["volumes"]["evidence-audit"] = {  # type: ignore[index]
+            "driver": "local",
+            "driver_opts": {"type": "tmpfs", "device": "tmpfs"},
+        }
+        with self.assertRaises(self.module.PreflightError):
+            self.module.validate_service(
+                self.module.ServiceSelection("evidence", "evidence"), ephemeral
             )
 
     def test_writable_mounts_cannot_overlap_configuration_or_secrets(self) -> None:
@@ -229,17 +259,40 @@ class RuntimePreflightTest(unittest.TestCase):
                 with self.assertRaises(self.module.PreflightError):
                     self.module.validate_service(
                         self.module.ServiceSelection("evidence", "evidence"),
-                        {"services": {"evidence": selected}},
+                        deployment({"evidence": selected}),
+                    )
+
+    def test_official_configuration_paths_may_not_be_overridden(self) -> None:
+        fixed = {
+            "evidence": (
+                "REGISTRY_EVIDENCE_RUNTIME",
+                "/etc/registry-evidence/runtime.yaml",
+            ),
+            "mint": ("MINT_CONFIG", "/etc/registry-mint/config.yaml"),
+        }
+        for product, (name, expected) in fixed.items():
+            with self.subTest(product=product):
+                selected = service(product)
+                selected["environment"] = {name: expected}
+                self.module.validate_service(
+                    self.module.ServiceSelection(product, product),
+                    deployment({product: selected}),
+                )
+                selected["environment"] = {name: "/tmp/alternate.yaml"}
+                with self.assertRaises(self.module.PreflightError):
+                    self.module.validate_service(
+                        self.module.ServiceSelection(product, product),
+                        deployment({product: selected}),
                     )
 
     def test_native_failure_is_value_free(self) -> None:
-        document = {
-            "services": {
+        document = deployment(
+            {
                 "evidence": service("evidence"),
                 "mint": service("mint"),
                 "relay": service("relay"),
             }
-        }
+        )
         result, stdout, stderr, _ = self.run_main(document, native_returncode=1)
         self.assertEqual(1, result)
         self.assertEqual("", stdout)
