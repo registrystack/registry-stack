@@ -5794,6 +5794,82 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn coequal_fixture_selection_evaluates_one_exact_case_value_free() {
+        let directory = tempfile::tempdir().expect("temporary bundle");
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/fixtures/acceptance/adult-status");
+        copy_tree(&source, directory.path());
+        set_tree_mode(directory.path(), 0o555, 0o444);
+
+        let bundle = Arc::new(Bundle::load(directory.path()).expect("acceptance bundle loads"));
+        let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
+        let source_plans = compile_source_plans_with_runtime(
+            &bundle.config,
+            &source_statements(&bundle, None).expect("statement sources bind"),
+            "/run/secrets/evidence",
+            &OutboundTlsConfig {
+                system_roots: true,
+                trust_profiles: Default::default(),
+            },
+            &Default::default(),
+        )
+        .expect("source plans compile");
+        let fixture = Path::new(
+            bundle.config.requirements[0]
+                .fixtures
+                .as_ref()
+                .expect("acceptance fixture is declared")
+                .as_str(),
+        );
+
+        let mut trace = FixtureTrace::default();
+        assert_eq!(
+            evaluate_fixture(
+                &bundle,
+                &kernel,
+                &source_plans,
+                fixture,
+                Some("positive"),
+                true,
+                &mut trace,
+            )
+            .await,
+            Ok(FixtureSummary { evaluated_cases: 1 })
+        );
+        let rendered = trace.render();
+        assert!(
+            rendered.contains("positive"),
+            "selected case is absent: {rendered}"
+        );
+        assert!(
+            !rendered.contains("negative-false-is-success"),
+            "another case ran: {rendered}"
+        );
+
+        let unknown = "private-case-selector-canary";
+        let error = evaluate_fixture(
+            &bundle,
+            &kernel,
+            &source_plans,
+            fixture,
+            Some(unknown),
+            true,
+            &mut FixtureTrace::default(),
+        )
+        .await
+        .expect_err("unknown case must be refused");
+        assert_eq!(error, CliError("selected fixture case is unavailable"));
+        assert!(
+            !error.0.contains(unknown),
+            "case selector leaked: {}",
+            error.0
+        );
+
+        set_tree_mode(directory.path(), 0o755, 0o444);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn offline_cli_evaluates_the_combined_acceptance_bundle() {
         let directory = tempfile::tempdir().expect("temporary bundle");
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
