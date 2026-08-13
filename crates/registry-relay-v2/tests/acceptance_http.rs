@@ -2028,6 +2028,107 @@ async fn real_jwt_path_rejects_malformed_audience_time_and_expired_tokens() {
 }
 
 #[tokio::test]
+async fn real_jwt_path_uses_trusted_issuer_not_the_jwks_transport_host() {
+    const TRUSTED_ISSUER: &str = "https://trusted-issuer.example.invalid/tenant";
+
+    let mut harness = ProjectHarness::open("social-assistance").await;
+    let journey = project_journey("social-assistance");
+    let step = journey
+        .steps
+        .iter()
+        .find(|step| step.id == "lookup-success")
+        .expect("protected lookup journey exists");
+    let fixture_id = step
+        .authorization_fixture
+        .as_deref()
+        .expect("lookup has authorization fixture");
+    let fixture = journey
+        .authorizations
+        .get(fixture_id)
+        .expect("authorization fixture resolves");
+
+    let transport_issuer = harness
+        .idp
+        .as_ref()
+        .expect("protected project has a JWKS host")
+        .issuer();
+    let jwks_url = harness
+        .idp
+        .as_ref()
+        .expect("protected project has a JWKS host")
+        .jwks_uri();
+    assert_ne!(TRUSTED_ISSUER, transport_issuer);
+
+    let mut issuer = harness
+        .runtime
+        .authentication
+        .issuer
+        .clone()
+        .expect("social-assistance declares an issuer");
+    issuer.trusted_issuer = Some(TRUSTED_ISSUER.into());
+    issuer.discovery_url = None;
+    issuer.jwks_url = Some(jwks_url);
+    issuer.algorithms = vec!["EdDSA".into()];
+    let audience = issuer.audience.clone();
+    let authenticator = build_authenticator_for_supervised_local_development(&issuer)
+        .await
+        .expect("Relay loads the direct JWKS transport");
+    harness.replace_authenticator(authenticator);
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock is valid")
+        .as_secs();
+    let trusted_token = harness.signed_token_with_issuer(
+        TRUSTED_ISSUER,
+        fixture_id,
+        fixture,
+        json!(audience),
+        now,
+        now,
+        now.saturating_add(900),
+    );
+    let accepted = harness
+        .app
+        .clone()
+        .oneshot(request_with_bearer(
+            &harness,
+            step,
+            &journey.authorizations,
+            &trusted_token,
+        ))
+        .await
+        .expect("router responds to the trusted issuer");
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let transport_host_token = harness.signed_token_with_issuer(
+        &transport_issuer,
+        fixture_id,
+        fixture,
+        json!(audience),
+        now,
+        now,
+        now.saturating_add(900),
+    );
+    assert_problem_code(
+        harness
+            .app
+            .clone()
+            .oneshot(request_with_bearer(
+                &harness,
+                step,
+                &journey.authorizations,
+                &transport_host_token,
+            ))
+            .await
+            .expect("router responds to the transport-host issuer"),
+        StatusCode::UNAUTHORIZED,
+        "auth.invalid_credential",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn operation_bound_metadata_is_no_store_and_links_only_visible_artifacts() {
     let harness = ProjectHarness::open("social-assistance").await;
     let journey = project_journey("social-assistance");
@@ -3696,9 +3797,28 @@ impl ProjectHarness {
         not_before: u64,
         expires_at: u64,
     ) -> String {
-        let issuer = self.idp.as_ref().expect("protected project has an IdP");
+        let issuer = self
+            .idp
+            .as_ref()
+            .expect("protected project has an IdP")
+            .issuer();
+        self.signed_token_with_issuer(
+            &issuer, fixture, definition, audience, issued_at, not_before, expires_at,
+        )
+    }
+
+    fn signed_token_with_issuer(
+        &self,
+        issuer: &str,
+        fixture: &str,
+        definition: &AuthorizationFixture,
+        audience: Value,
+        issued_at: u64,
+        not_before: u64,
+        expires_at: u64,
+    ) -> String {
         let mut claims = serde_json::Map::new();
-        claims.insert("iss".into(), json!(issuer.issuer()));
+        claims.insert("iss".into(), json!(issuer));
         claims.insert("aud".into(), audience);
         claims.insert("sub".into(), json!(definition.principal));
         claims.insert(

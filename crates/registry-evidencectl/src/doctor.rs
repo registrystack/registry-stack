@@ -257,10 +257,12 @@ fn check_secrets(
         // Secrets are the one artifact the runtime pins to an exact mode
         // rather than to a bound, so report the exact mode back.
         let mode = metadata.permissions().mode() & 0o7777;
-        if mode != 0o600 {
+        if !matches!(mode, 0o400 | 0o600) {
             secret_run.refuse(
                 &path,
-                format!("has mode {mode:04o}; the runtime requires exactly 0600 (chmod 600)"),
+                format!(
+                    "has mode {mode:04o}; the runtime requires exactly 0400 or 0600 (chmod 400 or 600)"
+                ),
             );
         }
         require_sole_owner(&mut secret_run, &path, &metadata);

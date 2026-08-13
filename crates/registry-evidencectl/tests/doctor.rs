@@ -138,6 +138,45 @@ fn doctor_names_every_artifact_whose_mode_the_runtime_refuses() {
 }
 
 #[test]
+fn doctor_accepts_only_the_runtime_owner_only_secret_modes() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = workspace.path().join("project");
+    provision(&project);
+    provision_bearer_token(&project);
+    freeze(&project);
+    let secret = project.join("secrets/audit-hmac-key");
+
+    for mode in [0o400, 0o600] {
+        set_mode(&secret, mode);
+        let output = doctor(&project, &[]);
+        assert!(
+            output.status.success(),
+            "doctor rejected runtime-supported secret mode {mode:04o}:\n{}{}",
+            stdout_of(&output),
+            stderr_of(&output)
+        );
+    }
+
+    for mode in [0o000, 0o200, 0o440, 0o500, 0o604, 0o700] {
+        set_mode(&secret, mode);
+        let output = doctor(&project, &[]);
+        let diagnostics = format!("{}{}", stdout_of(&output), stderr_of(&output));
+        assert!(
+            !output.status.success(),
+            "doctor accepted unsupported secret mode {mode:04o}:\n{diagnostics}"
+        );
+        assert!(
+            diagnostics.contains("secrets/audit-hmac-key")
+                && diagnostics.contains("requires exactly 0400 or 0600"),
+            "doctor did not report unsupported secret mode {mode:04o}:\n{diagnostics}"
+        );
+    }
+
+    set_mode(&secret, 0o600);
+    unfreeze(&project);
+}
+
+#[test]
 fn doctor_reports_a_secret_the_bundle_references_and_the_project_does_not_hold() {
     let workspace = tempfile::tempdir().expect("tempdir");
     let project = workspace.path().join("project");
