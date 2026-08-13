@@ -2764,7 +2764,7 @@
       "options": [
         {
           "display": "--json",
-          "description": "Emit the shared report as best-effort JSON for local automation",
+          "description": "Emit the selected command's report as best-effort JSON when it has one",
           "always_required": false,
           "repeatable": false,
           "default_values": [],
@@ -2812,7 +2812,7 @@
           "options": [
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2911,7 +2911,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2998,7 +2998,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3047,7 +3047,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3096,7 +3096,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3145,7 +3145,7 @@
           "options": [
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3194,7 +3194,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3224,7 +3224,7 @@
           "options": [
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3265,7 +3265,7 @@
               "options": [
                 {
                   "display": "--json",
-                  "description": "Emit the shared report as best-effort JSON for local automation",
+                  "description": "Emit the selected command's report as best-effort JSON when it has one",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -3295,7 +3295,7 @@
               "options": [
                 {
                   "display": "--json",
-                  "description": "Emit the shared report as best-effort JSON for local automation",
+                  "description": "Emit the selected command's report as best-effort JSON when it has one",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

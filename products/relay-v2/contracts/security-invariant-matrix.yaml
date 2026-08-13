@@ -301,8 +301,8 @@ invariants:
       - {path: crates/registry-relay-v2/src/tooling.rs, name: fixture_workspace_is_owner_only}
       - {path: crates/registry-relay-v2/src/tooling.rs, name: fixture_workspace_parent_requires_trusted_ownership_and_mode}
       - {path: crates/registry-relay-v2/src/tooling.rs, name: fixture_execution_is_isolated_and_reports_no_row_values}
-      - {path: crates/registry-relayctl/src/tooling_editor.rs, name: every_editor_operational_error_has_a_fixed_value_free_message}
-      - {path: crates/registry-relayctl/tests/editor.rs, name: editor_operational_failures_are_value_free_in_every_output_mode}
+      - {path: crates/registry-relayctl/src/lib.rs, name: editor_symlink_stderr_contains_neither_absolute_project_path_nor_source_content}
+      - {path: crates/registry-relayctl/src/lib.rs, name: editor_recovery_stderr_contains_neither_absolute_project_path_nor_source_content}
   - id: sec-value-free-operational-logs
     threat: Request paths, identifiers, query values, or dependency traces enter operational logs.
     enforcementPoint: Closed Relay-owned log filter plus fixed method, route-template, status, latency, and trace dimensions.

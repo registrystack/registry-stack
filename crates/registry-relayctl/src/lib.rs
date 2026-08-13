@@ -26,7 +26,7 @@ const OPERATIONAL_FAILURE_EXIT: u8 = 3;
     about = "Relay V2 project authoring, validation, and packaging"
 )]
 pub struct Cli {
-    /// Emit the shared report as best-effort JSON for local automation.
+    /// Emit the selected command's report as best-effort JSON when it has one.
     #[arg(long, global = true)]
     json: bool,
 
