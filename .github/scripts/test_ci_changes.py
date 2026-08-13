@@ -17,7 +17,7 @@ from ci_changes import (
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
-    RELEASE_SECURITY_WORKFLOWS,
+    SECURITY_WORKFLOW_GATES,
     SHARDS,
     Workspace,
     classify,
@@ -951,24 +951,54 @@ on:
         self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
 
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
-        for workflow in sorted(RELEASE_SECURITY_WORKFLOWS):
+        gate_outputs = {
+            "docs",
+            "platform",
+            "release_source_proof",
+            "release_tool",
+        }
+        for workflow, gates in sorted(SECURITY_WORKFLOW_GATES.items()):
             with self.subTest(workflow=workflow):
                 outputs = classify(
                     self.workspace,
                     (workflow,),
                 )
                 self.assertFalse(outputs["rust"])
+                for output in gate_outputs:
+                    self.assertEqual(output in gates, outputs[output], output)
+                self.assertTrue(outputs["release_tool"])
+                self.assertFalse(outputs["docs_archives"])
+
+    def test_every_tracked_root_workflow_selects_release_checks(self) -> None:
+        workflows = sorted(Path(".github/workflows").glob("*.y*ml"))
+        self.assertTrue(workflows)
+        for workflow in workflows:
+            with self.subTest(workflow=workflow):
+                outputs = classify(self.workspace, (workflow.as_posix(),))
+                self.assertTrue(outputs["release_tool"])
+
+    def test_unclassified_root_workflow_fails_closed_to_release_checks(self) -> None:
+        for workflow in (
+            ".github/workflows/dco.yml",
+            ".github/workflows/new-privileged.yml",
+            ".github/workflows/new-privileged.yaml",
+        ):
+            with self.subTest(workflow=workflow):
+                outputs = classify(self.workspace, (workflow,))
                 self.assertTrue(outputs["release_tool"])
                 self.assertTrue(outputs["release_source_proof"])
-                self.assertFalse(outputs["docs"])
+                self.assertTrue(outputs["docs"])
+                self.assertTrue(outputs["platform"])
+                self.assertTrue(outputs["rust"])
 
-    def test_unrelated_workflow_does_not_select_release_checks(self) -> None:
+    def test_non_workflow_file_under_workflow_directory_stays_unselected(
+        self,
+    ) -> None:
         outputs = classify(
             self.workspace,
-            (".github/workflows/docs-pages.yml",),
+            (".github/workflows/README.md",),
         )
         self.assertFalse(outputs["release_tool"])
-        self.assertFalse(outputs["release_source_proof"])
 
 class RunCargoPackagesTest(unittest.TestCase):
     def test_builds_a_direct_cargo_argument_vector(self) -> None:
