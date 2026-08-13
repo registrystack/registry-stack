@@ -1,0 +1,13 @@
+annotations:
+  - checks:
+      - code-review
+    reasons:
+      # The project currently has one human maintainer. Requiring an
+      # independent human approval would make routine maintenance impossible.
+      - reason: not-applicable
+  - checks:
+      - pinned-dependencies
+    reasons:
+      # The two reported npm commands install tarballs built and validated in
+      # the same workflow; they do not fetch mutable packages from a registry.
+      - reason: not-applicable
