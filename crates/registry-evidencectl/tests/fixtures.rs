@@ -166,6 +166,7 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
         .args(["fixtures", "run", "--project"])
         .arg(&project)
         .args(["--fixture", "fixtures/a.yaml"])
+        .args(["--case", "positive"])
         .arg("--evidence-bin")
         .arg(&stub)
         .arg("--json")
@@ -196,6 +197,8 @@ fn fixture_selection_runs_only_one_exact_referenced_fixture() {
                 "evaluate",
                 "--fixture",
                 "fixtures/a.yaml",
+                "--case",
+                "positive",
             ],
         ]
     );

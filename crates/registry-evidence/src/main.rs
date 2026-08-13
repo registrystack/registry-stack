@@ -205,6 +205,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::Evaluate {
             fixture,
+            case,
             explain,
             explain_format,
         } => {
@@ -216,8 +217,16 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             })?;
             let source_plans = compile_source_plans(&bundle, &runtime)?;
             let mut trace = FixtureTrace::default();
-            let summary =
-                evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, true, &mut trace).await;
+            let summary = evaluate_fixture(
+                &bundle,
+                &kernel,
+                &source_plans,
+                &fixture,
+                case.as_deref(),
+                true,
+                &mut trace,
+            )
+            .await;
             // Checked here rather than at the end of the evaluation, and before
             // the render below. A run that stopped on an error never reaches
             // that end, and it is the run whose trace gets read; a trace found
@@ -269,6 +278,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         Command::BundleEvaluate {
             bundle,
             fixture,
+            case,
             explain,
         } => {
             let bundle = Arc::new(Bundle::load(&bundle).map_err(deployment_load_error)?);
@@ -280,9 +290,16 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // type and privacy-canary gate as deployment evaluation so an
             // editable project can be diagnosed before it has a runtime file.
             let mut trace = FixtureTrace::default();
-            let summary =
-                evaluate_fixture(&bundle, &kernel, &source_plans, &fixture, false, &mut trace)
-                    .await;
+            let summary = evaluate_fixture(
+                &bundle,
+                &kernel,
+                &source_plans,
+                &fixture,
+                case.as_deref(),
+                false,
+                &mut trace,
+            )
+            .await;
             validate_trace_canaries(&trace)?;
             if explain {
                 if let Err(error) = &summary {
@@ -1106,6 +1123,7 @@ async fn evaluate_fixture(
     kernel: &OfflineKernel,
     source_plans: &BTreeMap<String, SourceExecutor>,
     fixture_path: &Path,
+    selected_case: Option<&str>,
     exercise_signing: bool,
     trace: &mut FixtureTrace,
 ) -> Result<FixtureSummary, CliError> {
@@ -1156,7 +1174,7 @@ async fn evaluate_fixture(
                 source_plans,
                 signer.as_ref(),
                 requirement,
-                object,
+                (object, selected_case),
                 trace,
             )
             .await;
@@ -1178,6 +1196,13 @@ async fn evaluate_fixture(
     if cases.is_empty() || cases.len() > 256 {
         return Err(CliError("fixture case count is invalid"));
     }
+    if selected_case.is_some_and(|selected| {
+        !cases
+            .iter()
+            .any(|case| case.get("id").and_then(Value::as_str) == Some(selected))
+    }) {
+        return Err(CliError("selected fixture case is unavailable"));
+    }
 
     let mut summary = FixtureSummary::default();
     let mut successful_values = Vec::new();
@@ -1190,6 +1215,9 @@ async fn evaluate_fixture(
             .and_then(Value::as_str)
             .filter(|value| is_renderable_case_identifier(value))
             .ok_or(CliError("fixture case identifier is invalid"))?;
+        if selected_case.is_some_and(|selected| selected != id) {
+            continue;
+        }
         trace.begin_case(id);
 
         if case.get("subjects").is_some() {
@@ -2003,9 +2031,10 @@ async fn evaluate_reference_fixture(
     source_plans: &BTreeMap<String, SourceExecutor>,
     signer: Option<&EvidenceSigner>,
     requirement: &registry_evidence::config::RequirementConfig,
-    fixture: &JsonMap<String, Value>,
+    fixture_selection: (&JsonMap<String, Value>, Option<&str>),
     trace: &mut FixtureTrace,
 ) -> Result<FixtureSummary, CliError> {
+    let (fixture, selected_case) = fixture_selection;
     // Asked before the fixture is read at all, because the requirement decides
     // this on its own and an author who has written an unprovable stage should
     // be told that, not that some key their case shape cannot supply is missing.
@@ -2083,6 +2112,14 @@ async fn evaluate_reference_fixture(
     let mut successful_values = Vec::new();
     let mut summary = FixtureSummary::default();
 
+    if selected_case.is_some_and(|selected| {
+        !cases
+            .iter()
+            .any(|case| case.get("id").and_then(Value::as_str) == Some(selected))
+    }) {
+        return Err(CliError("selected fixture case is unavailable"));
+    }
+
     for case in cases {
         let case = case
             .as_object()
@@ -2112,6 +2149,9 @@ async fn evaluate_reference_fixture(
             .and_then(Value::as_str)
             .filter(|id| is_renderable_case_identifier(id) && identifiers.insert(*id))
             .ok_or(CliError("reference fixture case identifier is invalid"))?;
+        if selected_case.is_some_and(|selected| selected != id) {
+            continue;
+        }
         trace.begin_case(id);
         let expected = case
             .get("expected")
@@ -4847,13 +4887,47 @@ mod tests {
                 &source_plans,
                 Some(&signer),
                 requirement,
-                fixture.as_object().expect("fixture is an object"),
+                (fixture.as_object().expect("fixture is an object"), None),
                 &mut trace,
             )
             .await,
             Ok(FixtureSummary {
                 evaluated_cases: expected_cases,
             })
+        );
+
+        let selected = fixture["cases"][0]["id"].as_str().expect("case id");
+        assert_eq!(
+            evaluate_reference_fixture(
+                &bundle,
+                &kernel,
+                &source_plans,
+                Some(&signer),
+                requirement,
+                (
+                    fixture.as_object().expect("fixture is an object"),
+                    Some(selected)
+                ),
+                &mut FixtureTrace::default(),
+            )
+            .await,
+            Ok(FixtureSummary { evaluated_cases: 1 })
+        );
+        assert_eq!(
+            evaluate_reference_fixture(
+                &bundle,
+                &kernel,
+                &source_plans,
+                Some(&signer),
+                requirement,
+                (
+                    fixture.as_object().expect("fixture is an object"),
+                    Some("private-case-canary")
+                ),
+                &mut FixtureTrace::default(),
+            )
+            .await,
+            Err(CliError("selected fixture case is unavailable"))
         );
 
         let rendered = serde_json::to_string(&trace).expect("trace is representable");
@@ -5138,7 +5212,7 @@ mod tests {
                 &BTreeMap::new(),
                 None,
                 requirement,
-                fixture.as_object().expect("the fixture is an object"),
+                (fixture.as_object().expect("the fixture is an object"), None),
                 &mut FixtureTrace::default(),
             )
             .await
@@ -5560,6 +5634,7 @@ mod tests {
                 &kernel,
                 &source_plans,
                 fixture,
+                None,
                 true,
                 &mut FixtureTrace::default(),
             )
@@ -5702,6 +5777,7 @@ mod tests {
                     &kernel,
                     &source_plans,
                     fixture,
+                    None,
                     true,
                     &mut FixtureTrace::default()
                 )
@@ -5752,6 +5828,7 @@ mod tests {
                     &kernel,
                     &source_plans,
                     fixture,
+                    None,
                     true,
                     &mut FixtureTrace::default()
                 )
@@ -5818,6 +5895,7 @@ mod tests {
                     &kernel,
                     &source_plans,
                     fixture,
+                    None,
                     true,
                     &mut FixtureTrace::default()
                 )
@@ -5898,6 +5976,7 @@ mod tests {
                         &kernel,
                         &source_plans,
                         fixture,
+                        None,
                         true,
                         &mut FixtureTrace::default()
                     )

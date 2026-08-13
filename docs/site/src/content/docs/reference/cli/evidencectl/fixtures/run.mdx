@@ -26,6 +26,12 @@ This page is generated from the public Clap command tree for Registry Stack sour
 evidencectl fixtures run [OPTIONS] --project <PROJECT>
 ```
 
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| `--case <CASE>` is present | `--fixture <FIXTURE>` is required. |
+
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
@@ -33,6 +39,7 @@ evidencectl fixtures run [OPTIONS] --project <PROJECT>
 | `--project <PROJECT>` | Yes | n/a | n/a | n/a | Deployment project directory containing runtime.yaml and bundle/ |
 | `--evidence-bin <EVIDENCE_BIN>` | No | n/a | n/a | n/a | Path to the evidence binary; defaults to `evidence` on PATH |
 | `--fixture <FIXTURE>` | No | n/a | n/a | n/a | Run only the exact bundle-relative fixture path named here |
+| `--case <CASE>` | No | n/a | n/a | n/a | Run only the exact case identifier in the selected fixture |
 | `--json` | No | n/a | n/a | n/a | Emit one machine-readable JSON report on standard output |
 | `--explain` | No | n/a | n/a | n/a | Ask `evidence` to explain each evaluation, and relay the trace it prints. The trace can name what a source returned, so it is relayed only when it is asked for. For the structured form, run `evidence evaluate --explain --explain-format json` against the fixture directly. |
 | `-h, --help` | No | n/a | n/a | n/a | Print help (see a summary with '-h') |

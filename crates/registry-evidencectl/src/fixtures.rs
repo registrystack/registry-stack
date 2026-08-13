@@ -35,6 +35,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub fixture: Option<String>,
 
+    /// Run only the exact case identifier in the selected fixture.
+    #[arg(long, requires = "fixture")]
+    pub case: Option<String>,
+
     /// Emit one machine-readable JSON report on standard output.
     #[arg(long)]
     pub json: bool,
@@ -144,7 +148,12 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
     let mut fixtures = Vec::new();
     if check_passed {
         for fixture_path in fixture_paths {
-            let outcome = target.evaluate(&evidence_bin, fixture_path, args.explain);
+            let outcome = target.evaluate(
+                &evidence_bin,
+                fixture_path,
+                args.case.as_deref(),
+                args.explain,
+            );
             fixtures.push(FixtureReport {
                 path: fixture_path.to_owned(),
                 passed: outcome.passed,
@@ -240,10 +249,19 @@ impl FixtureTarget {
         }
     }
 
-    fn evaluate(&self, evidence_bin: &Path, fixture: &str, explain: bool) -> StepOutcome {
+    fn evaluate(
+        &self,
+        evidence_bin: &Path,
+        fixture: &str,
+        case: Option<&str>,
+        explain: bool,
+    ) -> StepOutcome {
         match self {
             Self::Deployment { runtime_path, .. } => {
                 let mut args = vec!["evaluate", "--fixture", fixture];
+                if let Some(case) = case {
+                    args.extend(["--case", case]);
+                }
                 if explain {
                     args.push("--explain");
                 }
@@ -251,6 +269,9 @@ impl FixtureTarget {
             }
             Self::Editable { compilation, .. } => {
                 let mut args = vec!["--fixture", fixture];
+                if let Some(case) = case {
+                    args.extend(["--case", case]);
+                }
                 if explain {
                     args.push("--explain");
                 }
