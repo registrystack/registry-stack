@@ -130,6 +130,9 @@ jobs:
       - name: Test container runtime preflight
         run: python3 -m unittest docker/test_runtime_preflight.py
 
+      - name: Test advisory baseline exposure policy
+        run: python3 -m unittest release/scripts/test_check_advisory_baselines.py
+
       - name: Test Mint demonstration support scripts
         run: |
           python3 -m unittest discover \

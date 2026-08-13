@@ -131,7 +131,28 @@ reports and Grype reports for `evidence`, `mint`, and `relay`; `v0.19.x` and
 `v0.20.x` archives contain those reports for `relay` only. The archive also
 contains the advisory verdict used for candidate acceptance. Each report names
 the exact candidate digest that was promoted. The archive hash is covered by
-the authenticated checksum chain.
+the authenticated checksum chain. The candidate workflow also evaluates any
+version-4 exception against a temporary export of that exact image rootfs and
+requires each inspected file to match the native Syft SHA-256 evidence. The
+workflow independently resolves the current candidate digest, cross-checks it
+against both scan reports, and verifies the protected source revision in the OCI
+labels. The checker also requires the full OCI config's authoritative ordered
+`.rootfs.diff_ids` to equal both reports. The libc exceptions then require that
+complete ordered DiffID list, the closed production runtime configuration
+(`User`, `Entrypoint`, `Cmd`, `WorkingDir`, `Env`, `Healthcheck`, `ArgsEscaped`,
+`ExposedPorts`, `StopSignal`, the three current OCI identity labels, and the
+fixed runtime UID/GID labels), and each
+reviewed file digest in both Syft and the exported rootfs. These are uncompressed
+rootfs DiffIDs, not compressed manifest layer digests, and they cover the complete
+filesystem, including libraries, interpreters, loader inputs, and symlinks. The
+Relay reference is an official v0.20.1 candidate; the Evidence and Mint references
+are explicitly identified local reproductions from the recorded source revision
+because v0.20.x retained official image reports only for Relay. A changed DiffID,
+configuration, path, or digest requires a fresh review and renewed definition
+digest. This DiffID-based contract avoids an in-tree manifest-digest self-reference
+when the source revision label changes. The temporary rootfs is deleted after the
+decision and is not a release asset. `release/OPERATIONS.md` gives the exact
+private-candidate recovery and evidence-regeneration procedure for a failed gate.
 
 ## Verify client registries
 

@@ -845,7 +845,7 @@ jobs:
         run: |
           set -euo pipefail
           canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p candidate/security/{image-sbom,syft,grype}
+          mkdir -p candidate/security/{image-sbom,syft,grype,oci-config,rootfs}
           grype db update
           grype db status -o json \
             > candidate/security/grype/grype-db-status.json
@@ -925,6 +925,17 @@ jobs:
               --source "https://github.com/${GITHUB_REPOSITORY}" \
               --revision "${{ needs.validate.outputs.source_sha }}" \
               --version "${{ needs.validate.outputs.version }}"
+            crane config "${candidate_ref}" \
+              > "candidate/security/oci-config/${name}.json"
+            jq -e '
+              type == "object" and
+              .architecture == "amd64" and
+              .os == "linux" and
+              (.config | type == "object") and
+              (.rootfs.type == "layers") and
+              ((.rootfs.diff_ids | type) == "array") and
+              (.rootfs.diff_ids | length > 0)
+            ' "candidate/security/oci-config/${name}.json" >/dev/null
             observed="$(
               docker run --rm \
                 --network none \
@@ -934,14 +945,29 @@ jobs:
                 "${candidate_ref}" --version
             )"
             test "${observed}" = "${name} ${{ needs.validate.outputs.version }}"
+            SYFT_FILE_METADATA_SELECTION=all \
+            SYFT_FILE_METADATA_DIGESTS=sha256 \
             syft "${candidate_ref}" \
               -o "spdx-json=candidate/security/image-sbom/${name}.spdx.json" \
               -o "syft-json=candidate/security/syft/${name}.syft.json"
+            mkdir -p "candidate/security/rootfs/${name}"
+            crane export "${candidate_ref}" - \
+              | tar --extract --file=- \
+                  --directory="candidate/security/rootfs/${name}" \
+                  --no-same-owner --no-same-permissions
+            if find "candidate/security/rootfs/${name}" \
+                \( -type b -o -type c -o -type p -o -type s \) \
+                -print -quit | grep -q .; then
+              echo "Exported rootfs ${name} contains a forbidden special file" >&2
+              exit 1
+            fi
             scan_image \
               "${candidate_ref}" \
               "candidate/security/grype/${name}.grype.json"
           done
           for name in ${RELEASE_IMAGE_NAMES}; do
+            candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
+            digest="${candidate_ref##*@}"
             if [[ "${name}" == "relay" ]]; then
               baseline=products/relay-v2/security/advisory-baseline.json
             else
@@ -951,8 +977,13 @@ jobs:
               grype "candidate/security/grype/${name}.grype.json" \
               --baseline "${baseline}" \
               --syft-report "candidate/security/syft/${name}.syft.json" \
+              --rootfs "candidate/security/rootfs/${name}" \
+              --candidate-image-digest "${digest}" \
+              --source-revision "${{ needs.validate.outputs.source_sha }}" \
+              --oci-config "candidate/security/oci-config/${name}.json" \
               --subject "${name}-image"
           done
+          rm -rf candidate/security/rootfs
           advisory_subjects="$(
             for name in ${RELEASE_IMAGE_NAMES}; do
               printf '%s-image\n' "${name}"

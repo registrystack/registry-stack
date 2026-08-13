@@ -72,6 +72,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Debian 13 image contract",
         "run: python3 release/scripts/check-debian13-images.py",
     ),
+    (
+        "Advisory exposure policy tests",
+        "run: python3 -m unittest release/scripts/test_check_advisory_baselines.py",
+    ),
     ("Cargo metadata", "cargo metadata --locked --format-version 1"),
     (
         "Manifest profile validation",
@@ -558,7 +562,17 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "--visibility private",
             "name: Verify and scan exact candidate images",
             'scan_image \\\n              "${candidate_ref}"',
+            "SYFT_FILE_METADATA_SELECTION=all",
+            'crane config "${candidate_ref}"',
+            "candidate/security/oci-config/${name}.json",
+            '(.rootfs.diff_ids | type) == "array"',
+            '.rootfs.diff_ids | length > 0',
+            'crane export "${candidate_ref}" -',
             "check-advisory-baselines.py",
+            '--rootfs "candidate/security/rootfs/${name}"',
+            '--candidate-image-digest "${digest}"',
+            '--source-revision "${{ needs.validate.outputs.source_sha }}"',
+            '--oci-config "candidate/security/oci-config/${name}.json"',
         ),
     ),
     (
