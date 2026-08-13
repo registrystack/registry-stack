@@ -41,7 +41,7 @@ async function markdownFiles(directory) {
   for (const entry of entries) {
     const path = resolve(directory, entry.name);
     if (entry.isDirectory()) paths.push(...(await markdownFiles(path)));
-    else if (entry.isFile() && entry.name.endsWith('.mdx')) paths.push(path);
+    else if (entry.isFile() && /\.mdx?$/u.test(entry.name)) paths.push(path);
   }
   return paths;
 }
@@ -98,7 +98,7 @@ function isProductSurface(status) {
 function isHistoryPage(siteRelative) {
   return (
     siteRelative.startsWith('src/content/docs/decisions/') ||
-    /\/(?:changelog|release-notes)(?:\/index)?\.mdx$/u.test(siteRelative)
+    /\/(?:changelog|release-notes)(?:\/index)?\.mdx?$/u.test(siteRelative)
   );
 }
 

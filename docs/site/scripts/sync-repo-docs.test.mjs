@@ -1,17 +1,20 @@
-// Unit tests for the Page-type banner stripper (scripts/sync-repo-docs.mjs).
-// Run with `npm test` (node --test). The product repos carry a leading
-// "> **Page type:** ..." banner under the H1 as a GitHub navigation aid; the
-// aggregation pipeline drops it so it does not render on the docs site.
+// Focused unit tests for the product-document aggregation transformations.
+// Run with `npm test` (node --test).
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createMarkdownProcessor } from '@astrojs/markdown-remark';
+import remarkGfm from 'remark-gfm';
 
 import {
-  adaptCommentsForMdx,
   applyDocsetMetadataOverrides,
   applyRepoDisplayName,
   frontmatterBlock,
+  GENERATED_PRODUCT_DOC_EXTENSION,
+  rewriteLinks,
   stripPageTypeBanner,
+  validateInertMarkdown,
+  validateRenderedMarkdownLinks,
   validateLastReviewed,
   validateRepoDocsMetadata,
   validateStandardsReferenced,
@@ -62,7 +65,7 @@ test('leaves other product documentation unchanged', () => {
   assert.equal(applyRepoDisplayName(md, 'registry-relay'), md);
 });
 
-test('adapts standalone HTML comments for MDX without changing fenced examples', () => {
+test('keeps inert HTML comments and fenced examples in plain Markdown', () => {
   const md = [
     '<!-- generated:start -->',
     '',
@@ -73,18 +76,184 @@ test('adapts standalone HTML comments for MDX without changing fenced examples',
     '<!-- generated:end -->',
   ].join('\n');
 
-  assert.equal(
-    adaptCommentsForMdx(md),
-    [
-      '{/* generated:start */}',
-      '',
-      '```markdown',
-      '<!-- example -->',
-      '```',
-      '',
-      '{/* generated:end */}',
-    ].join('\n'),
+  assert.equal(validateInertMarkdown(md), md);
+});
+
+test('emits plain Markdown so MDX modules and expressions remain inert text', () => {
+  const md = [
+    "import childProcess from 'node:child_process';",
+    "export const value = childProcess.execSync('id');",
+    '',
+    '{globalThis.process.env}',
+  ].join('\n');
+
+  assert.equal(GENERATED_PRODUCT_DOC_EXTENSION, '.md');
+  assert.equal(validateInertMarkdown(md), md);
+});
+
+test('rejects JSX and active HTML outside code examples', () => {
+  for (const hostile of [
+    '<Component value={globalThis.process.env} />',
+    '<script>globalThis.alert(1)</script>',
+    '<img src="x" onerror="globalThis.alert(1)">',
+    '<iframe\nsrcdoc="<script>globalThis.alert(1)</script>">',
+    '<!DOCTYPE html>',
+  ]) {
+    assert.throws(
+      () => validateInertMarkdown(hostile, 'registry-example: docs/hostile.md'),
+      /registry-example: docs\/hostile\.md: raw HTML is not allowed outside code examples/u,
+    );
+  }
+});
+
+test('preserves HTML-shaped text in inline and fenced code examples', () => {
+  const md = [
+    'Use `<Component />` as a literal example.',
+    'A multiline code span starts with `command <input>',
+    '  --output <output>` and remains inert.',
+    '',
+    '```html',
+    '<script>example only</script>',
+    '```',
+  ].join('\n');
+
+  assert.equal(validateInertMarkdown(md), md);
+});
+
+test('renders four-space and tab-indented HTML-shaped examples as escaped code', async () => {
+  const examples = [
+    '    <script>example only</script>',
+    '\t<img src=x onerror=alert(1)>',
+  ];
+  const processor = await createMarkdownProcessor({
+    remarkPlugins: [remarkGfm],
+    syntaxHighlight: false,
+  });
+
+  for (const md of examples) {
+    assert.equal(validateInertMarkdown(md), md);
+    const rendered = await processor.render(md);
+    assert.match(rendered.code, /<pre><code>&#x3C;/u);
+    assert.doesNotMatch(rendered.code, /<(?:script|img)\b/u);
+  }
+});
+
+test('rejects HTML that continues a Markdown paragraph', () => {
+  const md = ['Paragraph text', '    <span>active</span>'].join('\n');
+
+  assert.throws(
+    () => validateInertMarkdown(md),
+    /raw HTML is not allowed outside code examples \(line 2\)/u,
   );
+});
+
+test('rejects indented active HTML parsed as GFM footnote content', () => {
+  for (const hostile of [
+    '<img src=x onerror=globalThis.alert(1)>',
+    '<svg onload=globalThis.alert(1)>',
+    '<iframe srcdoc="<script>globalThis.alert(1)</script>"></iframe>',
+  ]) {
+    const md = `[^x]:\n\n    ${hostile}\n\nuse[^x]`;
+    assert.throws(
+      () => validateInertMarkdown(md),
+      /raw HTML is not allowed outside code examples \(line 3\)/u,
+    );
+  }
+});
+
+test('rejects inline HTML comments while allowing standalone comment lines', () => {
+  const standalone = '  <!-- generated:marker -->\t';
+  assert.equal(validateInertMarkdown(standalone), standalone);
+  assert.throws(
+    () => validateInertMarkdown('Text <!-- hidden marker -->'),
+    /raw HTML is not allowed outside code examples \(line 1\)/u,
+  );
+});
+
+test('does not let an unmatched code span hide a later HTML block', () => {
+  const md = ['An unmatched ` delimiter.', '<script>globalThis.alert(1)</script>'].join('\n');
+
+  assert.throws(
+    () => validateInertMarkdown(md),
+    /raw HTML is not allowed outside code examples \(line 2\)/u,
+  );
+});
+
+test('does not let escaped code delimiters or comments hide active HTML', () => {
+  for (const md of [
+    '\\`<script>globalThis.alert(1)</script>\\`',
+    '<!-- ` --> <script>globalThis.alert(1)</script> `',
+  ]) {
+    assert.throws(
+      () => validateInertMarkdown(md),
+      /raw HTML is not allowed outside code examples/u,
+    );
+  }
+});
+
+test('preserves ordinary Markdown while rewriting allowlisted links', () => {
+  const md = '# Start\n\nRead the **[guide](guide.md)** or visit <https://example.test/docs>.';
+  const assetsToCopy = [];
+  const rewritten = rewriteLinks(validateInertMarkdown(md), {
+    repo: {
+      id: 'registry-example',
+      remote: 'https://github.com/registrystack/registry-example',
+      ref: '0123456789abcdef',
+    },
+    entry: {
+      src: 'docs/index.md',
+      dest: 'products/registry-example/index',
+    },
+    destIndex: new Map([
+      ['docs/guide.md', { dest: 'products/registry-example/guide' }],
+    ]),
+    sourceFileDir: '/repo/docs',
+    repoRoot: '/repo',
+    assetsToCopy,
+  });
+
+  assert.equal(
+    rewritten,
+    '# Start\n\nRead the **[guide](./guide/)** or visit <https://example.test/docs>.',
+  );
+  assert.deepEqual(assetsToCopy, []);
+});
+
+test('does not manufacture raw HTML from text adjacent to safe autolinks', async () => {
+  const md = [
+    'A URL stays authorable in <<https://example.test>script> prose.',
+    'An email stays authorable in <<docs@example.test>iframe> prose.',
+  ].join('\n');
+
+  assert.equal(validateInertMarkdown(md), md);
+  const processor = await createMarkdownProcessor({
+    remarkPlugins: [remarkGfm],
+    syntaxHighlight: false,
+  });
+  const rendered = await processor.render(md);
+  assert.match(rendered.code, /href="https:\/\/example\.test"/u);
+  assert.match(rendered.code, /href="mailto:docs@example\.test"/u);
+  assert.equal(await validateRenderedMarkdownLinks(md, undefined, processor), md);
+});
+
+test('rejects executable reference destinations rendered by Astro', async () => {
+  const processor = await createMarkdownProcessor({
+    remarkPlugins: [remarkGfm],
+    syntaxHighlight: false,
+  });
+  for (const hostile of [
+    '<javascript:alert(1)>',
+    '[click][payload]\n\n[payload]: javascript:alert(1)',
+    '[click][]\n\n[click]: &#106;avascript&#x3A;alert(1)',
+    '[payload]\n\n[payload]: &#x6a;avascript&colon;alert(1)',
+  ]) {
+    const rendered = await processor.render(hostile);
+    assert.match(rendered.code, /href="javascript:alert\(1\)"/u);
+    await assert.rejects(
+      () => validateRenderedMarkdownLinks(hostile, 'registry-example: docs/hostile.md', processor),
+      /registry-example: docs\/hostile\.md: rendered Markdown contains an unsafe a href destination/u,
+    );
+  }
 });
 
 test('strips a leading Page-type banner and its trailing blank line', () => {
