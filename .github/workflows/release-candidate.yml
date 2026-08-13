@@ -610,7 +610,7 @@ jobs:
               cp "${client_dir}/${client}-client.${{ matrix.napi_platform }}.node" \
                 "${platform_dir}/"
               (cd "${client_dir}" && npm pack \
-                "npm/${{ matrix.napi_platform }}" \
+                "./npm/${{ matrix.napi_platform }}" \
                 --ignore-scripts --pack-destination "${RUNNER_TEMP}")
               platform_package="registrystack-${client}-client-${{ matrix.napi_platform }}-${CLIENT_VERSION}.tgz"
               test -f "${RUNNER_TEMP}/${platform_package}"

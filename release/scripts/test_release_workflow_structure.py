@@ -569,6 +569,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             "package/${client}-client.${{ matrix.napi_platform }}.node",
             node,
         )
+        self.assertIn('"./npm/${{ matrix.napi_platform }}"', node)
         self.assertIn("registry-${client}-client-node", node)
         for name in ("Smoke Python client wheels", "Smoke Node client packages"):
             smoke = step_run(document, "clients", name)
