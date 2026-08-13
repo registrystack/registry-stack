@@ -2277,6 +2277,14 @@ async fn evaluate_reference_fixture(
                 StageStatus::Ok,
                 format!("the {mutation:?} bundle mutation is refused, as the case requires"),
             );
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                bundle,
+                requirement,
+                ResultClass::BundleRefused,
+                ReasonCode::BundleRefused,
+            )?;
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -2291,6 +2299,14 @@ async fn evaluate_reference_fixture(
                 StageStatus::Ok,
                 format!("the {mutation:?} statement mutation is refused, as the case requires"),
             );
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                bundle,
+                requirement,
+                ResultClass::BundleRefused,
+                ReasonCode::BundleRefused,
+            )?;
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -2309,6 +2325,14 @@ async fn evaluate_reference_fixture(
                 StageStatus::Ok,
                 format!("the {mutation:?} request mutation is refused, as the case requires"),
             );
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                bundle,
+                requirement,
+                ResultClass::SelectorRefused,
+                ReasonCode::SelectorRefused,
+            )?;
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -2342,13 +2366,14 @@ async fn evaluate_reference_fixture(
                     StageStatus::Failed,
                     "the overridden selectors are refused before the credential boundary",
                 );
-                validate_reference_error(expected, error, false)?;
+                validate_reference_error(expected, error.clone(), false)?;
                 if expected.get("rejectedBefore").and_then(Value::as_str) != Some("credential") {
                     return Err(CliError(
                         "reference preparation rejection boundary did not match",
                     ));
                 }
                 require_reference_request_count(expected, 0)?;
+                diagnose_reference_kernel_error(trace, expected, bundle, requirement, error)?;
                 summary.evaluated_cases += 1;
                 trace.pass_case();
                 continue;
@@ -2396,6 +2421,14 @@ async fn evaluate_reference_fixture(
                 ));
             }
             require_reference_request_count(expected, 1)?;
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                bundle,
+                requirement,
+                ResultClass::Match,
+                ReasonCode::UniqueMatch,
+            )?;
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -2418,6 +2451,14 @@ async fn evaluate_reference_fixture(
                 StageStatus::Failed,
                 format!("the source failed as {failure:?}, which the case states"),
             );
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                bundle,
+                requirement,
+                ResultClass::SourceUnavailable,
+                ReasonCode::SourceFailureFixture,
+            )?;
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -2429,6 +2470,14 @@ async fn evaluate_reference_fixture(
                 StageStatus::Unresolved,
                 "the source returned its exact declared unresolved outcome",
             );
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                bundle,
+                requirement,
+                ResultClass::EvidenceUnavailable,
+                ReasonCode::SourceProtocolRefused,
+            )?;
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -2446,6 +2495,14 @@ async fn evaluate_reference_fixture(
                 StageStatus::Ok,
                 format!("the {mutation:?} derivation mutation is refused, as the case requires"),
             );
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                bundle,
+                requirement,
+                ResultClass::ServiceUnavailable,
+                ReasonCode::OutputRefused,
+            )?;
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -2471,6 +2528,14 @@ async fn evaluate_reference_fixture(
                     name_list(&mutation.keys().cloned().collect::<Vec<_>>())
                 ),
             );
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                bundle,
+                requirement,
+                ResultClass::ServiceUnavailable,
+                ReasonCode::OutputRefused,
+            )?;
             summary.evaluated_cases += 1;
             trace.pass_case();
             continue;
@@ -2511,6 +2576,14 @@ async fn evaluate_reference_fixture(
                                 );
                                 validate_reference_source_error(expected, &error)?;
                                 require_reference_request_count(expected, 1)?;
+                                diagnose_reference_fixed(
+                                    trace,
+                                    expected,
+                                    bundle,
+                                    requirement,
+                                    ResultClass::SourceUnavailable,
+                                    ReasonCode::SourceFailureFixture,
+                                )?;
                                 summary.evaluated_cases += 1;
                                 trace.pass_case();
                                 continue;
@@ -2571,9 +2644,25 @@ async fn evaluate_reference_fixture(
                     Err(settled) => {
                         match settled {
                             Ok(KernelOutcome::NoMatch) => {
+                                diagnose_reference_fixed(
+                                    trace,
+                                    expected,
+                                    bundle,
+                                    requirement,
+                                    ResultClass::NoMatch,
+                                    ReasonCode::NoMatch,
+                                )?;
                                 validate_reference_unresolved(expected, "no_match")?
                             }
                             Ok(KernelOutcome::Ambiguous) => {
+                                diagnose_reference_fixed(
+                                    trace,
+                                    expected,
+                                    bundle,
+                                    requirement,
+                                    ResultClass::Ambiguous,
+                                    ReasonCode::Ambiguous,
+                                )?;
                                 validate_reference_unresolved(expected, "ambiguous")?
                             }
                             Ok(KernelOutcome::Match(_)) => {
@@ -2581,7 +2670,16 @@ async fn evaluate_reference_fixture(
                                     "reference search settled on an unreachable outcome",
                                 ));
                             }
-                            Err(error) => validate_reference_error(expected, error, false)?,
+                            Err(error) => {
+                                diagnose_reference_kernel_error(
+                                    trace,
+                                    expected,
+                                    bundle,
+                                    requirement,
+                                    error.clone(),
+                                )?;
+                                validate_reference_error(expected, error, false)?
+                            }
                         }
                         require_reference_request_count(expected, 1)?;
                         summary.evaluated_cases += 1;
@@ -2641,6 +2739,13 @@ async fn evaluate_reference_fixture(
                                     name_list(&object_keys(&projected_fetch))
                                 )],
                             );
+                            diagnose_reference_kernel_error(
+                                trace,
+                                expected,
+                                bundle,
+                                requirement,
+                                KernelError::SourceProtocol,
+                            )?;
                             validate_reference_error(expected, KernelError::SourceProtocol, false)?;
                             require_reference_request_count(expected, 2)?;
                             summary.evaluated_cases += 1;
@@ -2658,6 +2763,13 @@ async fn evaluate_reference_fixture(
                                     name_list(&object_keys(&projected_fetch))
                                 )],
                             );
+                            diagnose_reference_kernel_error(
+                                trace,
+                                expected,
+                                bundle,
+                                requirement,
+                                error.clone(),
+                            )?;
                             validate_reference_error(expected, error, false)?;
                             require_reference_request_count(expected, 2)?;
                             summary.evaluated_cases += 1;
@@ -2751,10 +2863,26 @@ async fn validate_reference_lookup(
     let facts = match record_lookup(trace, lookup, protected_response) {
         Ok(facts) => facts,
         Err(Ok(KernelOutcome::NoMatch)) => {
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                context.bundle,
+                context.requirement,
+                ResultClass::NoMatch,
+                ReasonCode::NoMatch,
+            )?;
             validate_reference_unresolved(expected, "no_match")?;
             return Ok(None);
         }
         Err(Ok(KernelOutcome::Ambiguous)) => {
+            diagnose_reference_fixed(
+                trace,
+                expected,
+                context.bundle,
+                context.requirement,
+                ResultClass::Ambiguous,
+                ReasonCode::Ambiguous,
+            )?;
             validate_reference_unresolved(expected, "ambiguous")?;
             return Ok(None);
         }
@@ -2764,6 +2892,13 @@ async fn validate_reference_lookup(
             ));
         }
         Err(Err(error)) => {
+            diagnose_reference_kernel_error(
+                trace,
+                expected,
+                context.bundle,
+                context.requirement,
+                error.clone(),
+            )?;
             validate_reference_error(expected, error, false)?;
             return Ok(None);
         }
@@ -2803,15 +2938,38 @@ async fn validate_reference_lookup(
             ));
         }
         Err(error) => {
+            diagnose_reference_kernel_error(
+                trace,
+                expected,
+                context.bundle,
+                context.requirement,
+                error.clone(),
+            )?;
             validate_reference_error(expected, error, true)?;
             return Ok(None);
         }
     };
+    diagnose_reference_match(
+        trace,
+        expected,
+        context.bundle,
+        context.requirement,
+        &values,
+        None,
+    )?;
     if expected.get("derivationRuns").and_then(Value::as_bool) != Some(true) {
         return Err(CliError("reference derivation execution did not match"));
     }
     if let Some(exact) = expected.get("value") {
         if values.as_slice().len() != 1 || public_json(&values.as_slice()[0].value)? != *exact {
+            diagnose_reference_match(
+                trace,
+                expected,
+                context.bundle,
+                context.requirement,
+                &values,
+                Some(FindingCode::ResultValueMismatch),
+            )?;
             return Err(CliError("reference scalar value did not match"));
         }
     }
@@ -2820,6 +2978,14 @@ async fn validate_reference_lookup(
             .as_object()
             .ok_or(CliError("reference concept map is invalid"))?;
         if values.as_slice().len() != exact.len() {
+            diagnose_reference_match(
+                trace,
+                expected,
+                context.bundle,
+                context.requirement,
+                &values,
+                Some(FindingCode::ResultShapeMismatch),
+            )?;
             return Err(CliError("reference concept value did not match"));
         }
         for (concept, expected_value) in exact {
@@ -2829,6 +2995,14 @@ async fn validate_reference_lookup(
                 .find(|value| value.provides_value_for == *concept)
                 .ok_or(CliError("reference concept value did not match"))?;
             if public_json(&disclosed.value)? != *expected_value {
+                diagnose_reference_match(
+                    trace,
+                    expected,
+                    context.bundle,
+                    context.requirement,
+                    &values,
+                    Some(FindingCode::ResultValueMismatch),
+                )?;
                 return Err(CliError("reference concept value did not match"));
             }
         }
@@ -3889,6 +4063,136 @@ fn classify_expected_result(
     Ok(ResultClassification::new(class, values).with_category_classes(category_classes))
 }
 
+/// Reduce the current reference-fixture `expected` object to the same closed
+/// vocabulary used for legacy coequal fixtures. The two fixture dialects are
+/// authoring surfaces only; they share one authoritative result taxonomy.
+fn classify_reference_expected_result(
+    expected: &JsonMap<String, Value>,
+    categories: &[CategoryDiagnosticEntry],
+) -> Result<ResultClassification, CliError> {
+    let lookup = expected.get("lookup").and_then(Value::as_str);
+    let public_problem = expected.get("publicProblem").and_then(Value::as_str);
+    let class = match lookup {
+        Some("no_match") => ResultClass::NoMatch,
+        Some("ambiguous") => ResultClass::Ambiguous,
+        Some("match") | None => match public_problem {
+            Some("evidence.unavailable") => ResultClass::EvidenceUnavailable,
+            Some("source.unavailable") => ResultClass::SourceUnavailable,
+            Some("service.unavailable") => ResultClass::ServiceUnavailable,
+            Some(_) => return Err(CliError("reference public problem expectation is invalid")),
+            None if expected.get("bundle").and_then(Value::as_str) == Some("rejected") => {
+                ResultClass::BundleRefused
+            }
+            None if expected.contains_key("rejectedBefore") => ResultClass::SelectorRefused,
+            None if expected.contains_key("outputGate") || expected.contains_key("error") => {
+                ResultClass::ServiceUnavailable
+            }
+            None => ResultClass::Match,
+        },
+        Some(_) => return Err(CliError("reference lookup expectation is invalid")),
+    };
+    let mut values = Vec::new();
+    let mut category_classes = Vec::new();
+    if class == ResultClass::Match {
+        if let Some(value) = expected.get("value") {
+            values.push(classify_json_value(value));
+            if categories.len() == 1 {
+                if let Some(category) = classify_expected_category(&categories[0], value) {
+                    category_classes.push(category);
+                }
+            }
+        }
+        if let Some(map) = expected.get("values").and_then(Value::as_object) {
+            values.extend(map.values().map(classify_json_value));
+            category_classes.extend(categories.iter().filter_map(|category| {
+                map.get(&category.concept_id)
+                    .and_then(|value| classify_expected_category(category, value))
+            }));
+        }
+        if expected.contains_key("entityReferenceCount") {
+            values.push(ValueClass::List);
+        }
+    }
+    Ok(ResultClassification::new(class, values).with_category_classes(category_classes))
+}
+
+fn reference_diagnostic_finding(
+    expected: &ResultClassification,
+    observed: &ResultClassification,
+) -> Option<FindingCode> {
+    if expected == observed {
+        return None;
+    }
+    if expected.class != observed.class {
+        return Some(
+            if matches!(
+                expected.class,
+                ResultClass::NoMatch | ResultClass::Ambiguous
+            ) || matches!(
+                observed.class,
+                ResultClass::NoMatch | ResultClass::Ambiguous
+            ) {
+                FindingCode::LookupOutcomeMismatch
+            } else {
+                FindingCode::PublicProblemMismatch
+            },
+        );
+    }
+    Some(if expected.value_classes != observed.value_classes {
+        FindingCode::ResultShapeMismatch
+    } else {
+        FindingCode::ResultValueMismatch
+    })
+}
+
+fn diagnose_reference_fixed(
+    trace: &mut FixtureTrace,
+    expected: &JsonMap<String, Value>,
+    bundle: &Bundle,
+    requirement: &RequirementConfig,
+    observed_class: ResultClass,
+    reason: ReasonCode,
+) -> Result<(), CliError> {
+    let categories = category_diagnostic_catalog(bundle, requirement);
+    let expected = classify_reference_expected_result(expected, &categories)?;
+    let observed = ResultClassification::new(observed_class, Vec::new());
+    let finding = reference_diagnostic_finding(&expected, &observed);
+    trace.diagnose(expected, observed, reason, finding);
+    Ok(())
+}
+
+fn diagnose_reference_kernel_error(
+    trace: &mut FixtureTrace,
+    expected: &JsonMap<String, Value>,
+    bundle: &Bundle,
+    requirement: &RequirementConfig,
+    error: KernelError,
+) -> Result<(), CliError> {
+    let categories = category_diagnostic_catalog(bundle, requirement);
+    let expected = classify_reference_expected_result(expected, &categories)?;
+    let (observed, reason) = classify_observed_result(&Err(error), &categories);
+    let finding = reference_diagnostic_finding(&expected, &observed);
+    trace.diagnose(expected, observed, reason, finding);
+    Ok(())
+}
+
+fn diagnose_reference_match(
+    trace: &mut FixtureTrace,
+    expected: &JsonMap<String, Value>,
+    bundle: &Bundle,
+    requirement: &RequirementConfig,
+    values: &ValidatedValues,
+    finding_override: Option<FindingCode>,
+) -> Result<(), CliError> {
+    let categories = category_diagnostic_catalog(bundle, requirement);
+    let expected = classify_reference_expected_result(expected, &categories)?;
+    let (observed, reason) =
+        classify_observed_result(&Ok(KernelOutcome::Match(values.clone())), &categories);
+    let finding = finding_override.or_else(|| reference_diagnostic_finding(&expected, &observed));
+    trace.diagnose(expected, observed, reason, finding);
+    Ok(())
+}
+
 fn classify_observed_result(
     outcome: &Result<KernelOutcome, registry_evidence::kernel::KernelError>,
     categories: &[CategoryDiagnosticEntry],
@@ -4888,6 +5192,37 @@ mod tests {
             .expect("a generic string remains classifiable");
         assert_eq!(classified.value_classes, vec![ValueClass::String]);
         assert!(classified.category_classes.is_empty());
+    }
+
+    #[test]
+    fn nested_reference_expectations_use_governed_category_ordinals() {
+        let category = CategoryDiagnosticEntry {
+            concept_id: "urn:example:concept:category".to_owned(),
+            concept_ordinal: 2,
+            allowed_outputs: vec!["approved".to_owned(), "pending".to_owned()],
+        };
+        let expected = serde_json::json!({
+            "lookup": "match",
+            "value": "pending",
+            "derivationRuns": true,
+            "signed": true
+        });
+        let classified =
+            classify_reference_expected_result(expected.as_object().expect("object"), &[category])
+                .expect("the nested reference expectation is classifiable");
+        assert_eq!(classified.class, ResultClass::Match);
+        assert_eq!(classified.value_classes, vec![ValueClass::String]);
+        assert_eq!(
+            classified.category_classes,
+            vec![CategoryClass {
+                concept_ordinal: 2,
+                value_ordinal: 1,
+            }]
+        );
+        let serialized = serde_json::to_string(&classified).expect("classification serializes");
+        assert!(!serialized.contains("approved"));
+        assert!(!serialized.contains("pending"));
+        assert!(!serialized.contains("urn:example:concept:category"));
     }
 
     #[test]
