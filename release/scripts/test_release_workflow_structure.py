@@ -1029,6 +1029,12 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
             ".github/workflows/release.yml@refs/heads/main",
             text,
         )
+        cosign = next(
+            step
+            for step in document["jobs"]["build"]["steps"]
+            if step.get("name") == "Install cosign"
+        )
+        self.assertEqual(cosign["with"]["cosign-release"], "v3.0.6")
         deploy_steps = document["jobs"]["deploy"]["steps"]
         recheck = next(
             index

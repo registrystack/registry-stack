@@ -47,7 +47,7 @@ jobs:
       image_names: ${{ steps.request.outputs.image_names }}
     steps:
       - name: Checkout protected workflow revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -250,7 +250,7 @@ jobs:
       RELEASE_IMAGE_NAMES: ${{ needs.validate.outputs.image_names }}
     steps:
       - name: Checkout exact candidate source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 1
@@ -258,7 +258,7 @@ jobs:
           submodules: false
 
       - name: Restore reusable Cargo cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .cargo-home/registry
@@ -280,7 +280,7 @@ jobs:
 
       - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v3.11.1
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         with:
           version: ${{ env.RELEASE_BUILDX_VERSION }}
           driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}
@@ -313,7 +313,7 @@ jobs:
           done
 
       - name: Setup Node for exact release docs archive
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.12.0
           cache: npm
@@ -372,7 +372,7 @@ jobs:
             asset: linux-arm64
     steps:
       - name: Checkout exact candidate source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 1
@@ -450,7 +450,7 @@ jobs:
             napi_platform: darwin-arm64
     steps:
       - name: Checkout exact candidate source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 1
@@ -458,7 +458,7 @@ jobs:
           submodules: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # napi-rs CLI 3.8.2 requires Node 22.13 or later. Runtime compatibility
           # remains independently proven on the pinned Node 22.12 image below.
@@ -469,7 +469,7 @@ jobs:
             crates/registry-relay-client-node/package-lock.json
 
       - name: Restore native client Cargo cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -705,7 +705,7 @@ jobs:
       RELEASE_IMAGE_NAMES: ${{ needs.validate.outputs.image_names }}
     steps:
       - name: Checkout exact candidate source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 1
@@ -713,7 +713,7 @@ jobs:
           submodules: false
 
       - name: Setup Node for deterministic package assembly
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.12.0
           cache: npm
@@ -1293,7 +1293,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout exact candidate verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.workflow_revision }}
           fetch-depth: 1
