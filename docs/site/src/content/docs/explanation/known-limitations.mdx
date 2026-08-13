@@ -344,9 +344,7 @@ that narrowness rather than an unfinished feature. Its boundaries are covered in
 - Linux amd64 binaries only: the published `relay` binary and its installer target Linux amd64.
   The installer refuses any other platform before it downloads anything. There is no macOS,
   Windows, or ARM asset.
-- No `relayctl` installer: the authoring tool has no install script of its own. Obtain it from the
-  release assets or build it from source.
-- The installer checks integrity, not authenticity: it verifies the downloaded binary against
+- The installer checks integrity, not authenticity: it verifies the downloaded binaries against
   `SHA256SUMS` and states plainly that it performs no authenticity check. Use the release
   verification procedure for that.
 

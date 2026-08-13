@@ -489,6 +489,11 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         )
         self.assertIn('RELAY_INSTALL_DIR="${relay_install_dir}"', assemble)
         self.assertIn('"${relay_install_dir}/relay" --version', assemble)
+        self.assertIn('"${relay_install_dir}/relayctl" --version', assemble)
+        self.assertIn(
+            '"relayctl-${{ needs.validate.outputs.tag }}-linux-amd64"',
+            assemble,
+        )
         self.assertIn("relay_patch >= 1", assemble)
 
     def test_builds_and_smokes_stable_native_client_packages(self) -> None:

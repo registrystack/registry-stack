@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
+binaries=(relay relayctl)
 # Publication packaging replaces this empty value with the asset's canonical tag.
 default_version=""
 script_name="${BASH_SOURCE[0]:-}"
@@ -29,18 +30,18 @@ asset_dir="${RELAY_ASSET_DIR:-}"
 
 usage() {
 	cat <<EOF
-Install the Registry Stack Relay runtime.
+Install the Registry Stack Relay runtime and relayctl adopter tooling.
 
 Published binary platform: Linux amd64.
 
 Quick install:
   curl -fsSL https://github.com/${repo}/releases/latest/download/relay-install.sh | bash
 
-The installer verifies the downloaded Relay binary against the release's
-SHA256SUMS before anything reaches the install directory. It does not verify
-release authenticity. For a higher-assurance installation, follow the release
-verification guide for the pinned tag, then rerun with RELAY_ASSET_DIR set to
-the verified directory:
+The installer verifies both downloaded release assets against the release's
+SHA256SUMS before anything reaches the install directory, and installs both
+binaries together or not at all. It does not verify release authenticity. For
+a higher-assurance installation, follow the release verification guide for the
+pinned tag, then rerun with RELAY_ASSET_DIR set to the verified directory:
   https://github.com/${repo}/blob/<version>/release/VERIFY.md
 
 Environment:
@@ -98,7 +99,6 @@ Linux/x86_64 | Linux/amd64)
 	;;
 esac
 
-asset="relay-${version}-${os_label}-${arch_label}"
 base_url="https://github.com/${repo}/releases/download/${version}"
 verify_url="https://github.com/${repo}/blob/${version}/release/VERIFY.md"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t relay)"
@@ -125,20 +125,23 @@ download() {
 }
 
 if [ -n "$asset_dir" ]; then
-	printf 'Installing verified local Relay %s asset for %s/%s...\n' \
+	printf 'Installing verified local Relay %s assets for %s/%s...\n' \
 		"$version" "$os_label" "$arch_label"
 else
-	printf 'Downloading Relay %s for %s/%s...\n' \
+	printf 'Downloading the Relay toolset %s for %s/%s...\n' \
 		"$version" "$os_label" "$arch_label"
 fi
 
-if ! download "$base_url/$asset" "$tmpdir/$asset"; then
-	printf 'Could not read the published Relay %s binary for %s/%s.\n' \
-		"$version" "$os_label" "$arch_label" >&2
-	printf 'Check the published assets at https://github.com/%s/releases/tag/%s\n' \
-		"$repo" "$version" >&2
-	exit 1
-fi
+for binary in "${binaries[@]}"; do
+	asset="${binary}-${version}-${os_label}-${arch_label}"
+	if ! download "$base_url/$asset" "$tmpdir/$asset"; then
+		printf 'Could not read the published %s %s binary for %s/%s.\n' \
+			"$binary" "$version" "$os_label" "$arch_label" >&2
+		printf 'Check the published assets at https://github.com/%s/releases/tag/%s\n' \
+			"$repo" "$version" >&2
+		exit 1
+	fi
+done
 if ! download "$base_url/SHA256SUMS" "$tmpdir/SHA256SUMS"; then
 	echo "Could not download SHA256SUMS for checksum verification." >&2
 	exit 1
@@ -158,20 +161,27 @@ sha256_file() {
 	printf '%s\n' "${result%% *}"
 }
 
-expected_hash="$(awk -v expected_asset="$asset" '$2 == expected_asset {print $1}' "$tmpdir/SHA256SUMS")"
-if [ -z "$expected_hash" ]; then
-	echo "SHA256SUMS has no entry for $asset" >&2
-	exit 1
-fi
-actual_hash="$(sha256_file "$tmpdir/$asset")"
-if [ "$actual_hash" != "$expected_hash" ]; then
-	echo "Checksum verification failed for $asset" >&2
-	echo "Expected: $expected_hash" >&2
-	echo "Actual:   $actual_hash" >&2
-	exit 1
-fi
+verify_asset() {
+	local name="$1"
+	local expected_hash actual_hash
+	expected_hash="$(awk -v asset="$name" '$2 == asset {print $1}' "$tmpdir/SHA256SUMS")"
+	if [ -z "$expected_hash" ]; then
+		echo "SHA256SUMS has no entry for $name" >&2
+		exit 1
+	fi
+	actual_hash="$(sha256_file "$tmpdir/$name")"
+	if [ "$actual_hash" != "$expected_hash" ]; then
+		echo "Checksum verification failed for $name" >&2
+		echo "Expected: $expected_hash" >&2
+		echo "Actual:   $actual_hash" >&2
+		exit 1
+	fi
+}
 
-printf 'Integrity check passed: %s matched SHA256SUMS.\n' "$asset"
+for binary in "${binaries[@]}"; do
+	verify_asset "${binary}-${version}-${os_label}-${arch_label}"
+done
+printf 'Integrity checks passed: %s binaries matched SHA256SUMS.\n' "${#binaries[@]}"
 cat <<EOF
 Authenticity check not performed by this installer.
 For a higher-assurance installation, follow the tag-frozen release verification
@@ -183,16 +193,49 @@ EOF
 
 mkdir -p "$install_dir"
 stage_dir="$(mktemp -d "$install_dir/.relay-install.XXXXXX")"
-trap 'rm -rf "$stage_dir"; cleanup' EXIT
-cp "$tmpdir/$asset" "$stage_dir/relay"
-chmod 0755 "$stage_dir/relay"
-mv -f "$stage_dir/relay" "$install_dir/relay"
-rm -rf "$stage_dir"
+install_started=0
+install_complete=0
+rollback_install() {
+	set +e
+	if [ "$install_started" -eq 1 ] && [ "$install_complete" -eq 0 ]; then
+		local binary
+		for binary in "${binaries[@]}"; do
+			if [ -f "$tmpdir/${binary}.previous" ]; then
+				cp -p "$tmpdir/${binary}.previous" "$install_dir/$binary"
+			else
+				rm -f "$install_dir/$binary"
+			fi
+		done
+	fi
+	rm -rf "$stage_dir"
+}
+trap 'rollback_install; cleanup' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-printf 'relay installed to %s\n' "$install_dir/relay"
+for binary in "${binaries[@]}"; do
+	cp "$tmpdir/${binary}-${version}-${os_label}-${arch_label}" "$stage_dir/$binary"
+	chmod 0755 "$stage_dir/$binary"
+	if [ -e "$install_dir/$binary" ]; then
+		cp -p "$install_dir/$binary" "$tmpdir/${binary}.previous"
+	fi
+done
+
+# Replace both binaries only after each one is staged and verified, so an
+# interrupted update never leaves a mixed-version Relay toolset.
+install_started=1
+for binary in "${binaries[@]}"; do
+	mv -f "$stage_dir/$binary" "$install_dir/$binary"
+done
+install_complete=1
+
+for binary in "${binaries[@]}"; do
+	printf '%s installed to %s\n' "$binary" "$install_dir/$binary"
+done
 cat <<EOF
 
 Try it:
+  relayctl --help
   relay --help
   relay healthcheck --help
 

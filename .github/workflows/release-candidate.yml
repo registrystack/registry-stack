@@ -1083,6 +1083,7 @@ jobs:
               cd candidate/bundle-root
               sha256sum -- \
                 "relay-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                "relayctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 > SHA256SUMS
             )
             relay_install_dir="${RUNNER_TEMP}/candidate-relay-install"
@@ -1092,6 +1093,9 @@ jobs:
             observed="$("${relay_install_dir}/relay" --version)"
             test "${observed}" = \
               "relay ${{ needs.validate.outputs.version }}"
+            observed="$("${relay_install_dir}/relayctl" --version)"
+            test "${observed}" = \
+              "relayctl ${{ needs.validate.outputs.version }}"
             rm candidate/bundle-root/SHA256SUMS
           fi
           evidencectl_installer="evidencectl-${{ needs.validate.outputs.tag }}-install.sh"
