@@ -25,6 +25,10 @@ REVISION = "b" * 40
 VERSION = "v0.19.1"
 EXPECTED_POLICY_LABEL = "org.registrystack.release.policy"
 EXPECTED_POLICY = "verified"
+RUNTIME_IDENTITY_LABELS = {
+    "org.registrystack.runtime.uid": "65532",
+    "org.registrystack.runtime.gid": "65532",
+}
 BUILDKIT_IMAGE = (
     "moby/buildkit:v0.31.2@sha256:"
     "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
@@ -43,11 +47,14 @@ def load_module():
     return module
 
 
-def config_json(labels: object) -> str:
-    return json.dumps({"User": "65532", "Labels": labels})
+def config_json(labels: object, *, user: str = "65532") -> str:
+    if isinstance(labels, dict):
+        labels = {**RUNTIME_IDENTITY_LABELS, **labels}
+    return json.dumps({"User": user, "Labels": labels})
 
 
 def write_oci_layout(layout: Path, labels: dict[str, str]) -> Path:
+    labels = {**RUNTIME_IDENTITY_LABELS, **labels}
     blobs = layout / "blobs/sha256"
     blobs.mkdir(parents=True)
 
@@ -264,7 +271,7 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
                 IMAGE_REF, self.module.DEFAULT_FORMAT_TEMPLATE
             )
 
-        self.assertEqual(labels, config["Labels"])
+        self.assertEqual({**RUNTIME_IDENTITY_LABELS, **labels}, config["Labels"])
         self.assertEqual(3, run.call_count)
         self.assertEqual(
             ["docker", "buildx", "imagetools", "inspect", "--raw", IMAGE_REF],
@@ -286,6 +293,26 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
 
         self.assertEqual(1, result)
         self.assertIn("missing the Labels object", stderr)
+
+    def test_runtime_identity_must_match_the_declared_nonroot_user(self) -> None:
+        labels = {
+            "org.opencontainers.image.source": SOURCE,
+            "org.opencontainers.image.revision": REVISION,
+            "org.opencontainers.image.version": VERSION,
+        }
+        result, _, stderr, _ = self.run_with_inspect(
+            stdout=config_json(labels, user="0")
+        )
+        self.assertEqual(1, result)
+        self.assertIn("config User", stderr)
+
+        for label in RUNTIME_IDENTITY_LABELS:
+            mismatched = {**labels, **RUNTIME_IDENTITY_LABELS, label: "1000"}
+            result, _, stderr, _ = self.run_with_inspect(
+                stdout=json.dumps({"User": "65532", "Labels": mismatched})
+            )
+            self.assertEqual(1, result)
+            self.assertIn(label, stderr)
 
     def test_non_object_labels_are_rejected(self) -> None:
         result, _, stderr, _ = self.run_with_inspect(stdout=config_json(None))
