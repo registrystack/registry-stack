@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -36,27 +37,27 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Release workflow change classification",
-        '".github/workflows/release.yml",',
+        '".github/workflows/release.yml": frozenset(',
     ),
     (
         "Evidence development workflow change classification",
-        '".github/workflows/evidence-dev.yml",',
+        '".github/workflows/evidence-dev.yml": frozenset(',
     ),
     (
         "Release candidate workflow change classification",
-        '".github/workflows/release-candidate.yml",',
+        '".github/workflows/release-candidate.yml": frozenset(',
     ),
     (
         "Release repeatability workflow change classification",
-        '".github/workflows/release-repeatability.yml",',
+        '".github/workflows/release-repeatability.yml": frozenset(',
     ),
     (
         "Release candidate cleanup workflow change classification",
-        '".github/workflows/release-candidate-cleanup.yml",',
+        '".github/workflows/release-candidate-cleanup.yml": frozenset(',
     ),
     (
         "Release rehearsal workflow change classification",
-        '".github/workflows/release-rehearsal.yml",',
+        '".github/workflows/release-rehearsal.yml": frozenset(',
     ),
     ("actionlint version pin", 'ACTIONLINT_VERSION: "1.7.7"'),
     (
@@ -250,22 +251,107 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
 )
 
 RELEASE_SECURITY_POLICY_PATHS = (
+    ".github/workflows/codeql.yml",
     ".github/workflows/docs-pages.yml",
     ".github/workflows/evidence-dev.yml",
+    ".github/workflows/nightly-rust-coverage.yml",
+    ".github/workflows/nightly-security.yml",
     ".github/workflows/release.yml",
     ".github/workflows/release-candidate.yml",
     ".github/workflows/release-canary.yml",
     ".github/workflows/release-repeatability.yml",
     ".github/workflows/release-candidate-cleanup.yml",
     ".github/workflows/release-rehearsal.yml",
+    ".github/workflows/scorecard.yml",
     "release/scripts/release_candidate.py",
     "release/scripts/cleanup-release-candidates.py",
     "release/scripts/verify_latest_published_release.py",
     "release/scripts/verify_public_release.py",
 )
 
+REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
+    ".github/workflows/codeql.yml": frozenset({"release_tool"}),
+    ".github/workflows/docs-pages.yml": frozenset(
+        {"docs", "release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/evidence-dev.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/nightly-security.yml": frozenset(
+        {"platform", "release_tool"}
+    ),
+    ".github/workflows/nightly-rust-coverage.yml": frozenset(
+        {"platform", "release_tool"}
+    ),
+    ".github/workflows/release.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-candidate.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-canary.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-repeatability.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-candidate-cleanup.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-rehearsal.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/scorecard.yml": frozenset({"release_tool"}),
+}
+
 # The compact v2 release contract is the active release inventory.
 REQUIRED_RELEASE_SECURITY_GATES = (
+    (
+        "CodeQL security-and-quality analysis",
+        ".github/workflows/codeql.yml",
+        (
+            "pull_request:",
+            "security-events: write",
+            "github/codeql-action/init@",
+            "queries: security-and-quality",
+            "github/codeql-action/analyze@",
+        ),
+    ),
+    (
+        "Scheduled and manual security assurance sweep",
+        ".github/workflows/nightly-security.yml",
+        (
+            "schedule:",
+            "workflow_dispatch:",
+            "name: Security assurance manifests",
+            "name: Platform fuzz smoke",
+            "name: Manifest fuzz smoke",
+        ),
+    ),
+    (
+        "Scheduled and manual Rust coverage upload",
+        ".github/workflows/nightly-rust-coverage.yml",
+        (
+            "schedule:",
+            "workflow_dispatch:",
+            "name: Plan Rust coverage shards",
+            "name: Rust coverage (${{ matrix.name }})",
+            "id-token: write",
+            "uses: codecov/codecov-action@",
+            "use_oidc: true",
+        ),
+    ),
+    (
+        "Scheduled and manual Scorecard analysis",
+        ".github/workflows/scorecard.yml",
+        (
+            "schedule:",
+            "workflow_dispatch:",
+            "id-token: write",
+            "uses: ossf/scorecard-action@",
+            "publish_results: true",
+        ),
+    ),
     (
         "Protected-main Evidence development prerelease",
         ".github/workflows/evidence-dev.yml",
@@ -593,6 +679,39 @@ ORDERED_RELEASE_SECURITY_GATES = (
 
 FORBIDDEN_RELEASE_SECURITY_GATES = (
     (
+        "CodeQL cannot gain OIDC or repository write permission",
+        ".github/workflows/codeql.yml",
+        ("id-token: write", "contents: write", "packages: write"),
+    ),
+    (
+        "Nightly security assurance cannot gain publication permission",
+        ".github/workflows/nightly-security.yml",
+        (
+            "id-token: write",
+            "contents: write",
+            "packages: write",
+            "attestations: write",
+        ),
+    ),
+    (
+        "Nightly Rust coverage cannot run pull-request code or publish repository state",
+        ".github/workflows/nightly-rust-coverage.yml",
+        (
+            "pull_request:",
+            "push:",
+            "repository_dispatch:",
+            "contents: write",
+            "packages: write",
+            "attestations: write",
+            "security-events: write",
+        ),
+    ),
+    (
+        "Scorecard cannot run pull-request code or write repository state",
+        ".github/workflows/scorecard.yml",
+        ("push:", "pull_request:", "contents: write", "packages: write"),
+    ),
+    (
         "Evidence development publication cannot mutate an existing release or use branch workflow code",
         ".github/workflows/evidence-dev.yml",
         (
@@ -718,6 +837,33 @@ def workflow_policy_violations(
         if text is None or any(snippet in text for snippet in snippets):
             violations.append(name)
     return violations
+
+
+def security_workflow_classification_violations(
+    policy_paths: tuple[str, ...],
+    selections: dict[str, frozenset[str]],
+) -> list[str]:
+    """Keep the policy workflow inventory and CI classifier in exact parity."""
+
+    gate = "Security workflow policy classification inventory"
+    policy_workflows = {
+        path for path in policy_paths if path.startswith(".github/workflows/")
+    }
+    if (
+        policy_workflows != set(REQUIRED_SECURITY_WORKFLOW_SELECTIONS)
+        or selections != REQUIRED_SECURITY_WORKFLOW_SELECTIONS
+    ):
+        return [gate]
+    return []
+
+
+def classifier_security_workflow_gates() -> dict[str, frozenset[str]]:
+    """Load the classifier's declarative table without running its CLI."""
+
+    value = runpy.run_path(str(CI_CLASSIFIER)).get("SECURITY_WORKFLOW_GATES")
+    if not isinstance(value, dict):
+        return {}
+    return value
 
 
 def yaml_job_block(workflow: str, job_id: str) -> str | None:
@@ -1148,6 +1294,12 @@ def main() -> int:
         ordered=ORDERED_RELEASE_SECURITY_GATES,
         forbidden=FORBIDDEN_RELEASE_SECURITY_GATES,
     )
+    policy_violations.extend(
+        security_workflow_classification_violations(
+            RELEASE_SECURITY_POLICY_PATHS,
+            classifier_security_workflow_gates(),
+        )
+    )
     policy_texts = policy_file_texts(ROOT, RELEASE_SECURITY_POLICY_PATHS)
     policy_violations.extend(
         platform_coverage_oidc_isolation_violations(workflow_text)
@@ -1208,6 +1360,7 @@ def main() -> int:
         + len(REQUIRED_RELEASE_SECURITY_GATES)
         + len(ORDERED_RELEASE_SECURITY_GATES)
         + len(FORBIDDEN_RELEASE_SECURITY_GATES)
+        + len(REQUIRED_SECURITY_WORKFLOW_SELECTIONS)
         + 6  # Structural permission, isolation, retention, rebuild, and destination gates.
     )
     print(

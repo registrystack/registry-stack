@@ -179,16 +179,44 @@ ROOT_RUST_INPUTS = {
     "rustfmt.toml",
 }
 
-RELEASE_SECURITY_WORKFLOWS = frozenset(
-    {
-        ".github/workflows/evidence-dev.yml",
-        ".github/workflows/release.yml",
-        ".github/workflows/release-candidate.yml",
-        ".github/workflows/release-repeatability.yml",
-        ".github/workflows/release-candidate-cleanup.yml",
-        ".github/workflows/release-rehearsal.yml",
-    }
-)
+# Every workflow whose security properties are inspected by the release gate
+# inventory selects the additional local gates that own those properties. All
+# root workflows select release_tool below, including workflows not yet in this
+# table, so a new privileged workflow cannot silently bypass the policy gate.
+SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
+    ".github/workflows/codeql.yml": frozenset({"release_tool"}),
+    ".github/workflows/docs-pages.yml": frozenset(
+        {"docs", "release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/evidence-dev.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/nightly-security.yml": frozenset(
+        {"platform", "release_tool"}
+    ),
+    ".github/workflows/nightly-rust-coverage.yml": frozenset(
+        {"platform", "release_tool"}
+    ),
+    ".github/workflows/release.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-candidate.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-canary.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-repeatability.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-candidate-cleanup.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/release-rehearsal.yml": frozenset(
+        {"release_source_proof", "release_tool"}
+    ),
+    ".github/workflows/scorecard.yml": frozenset({"release_tool"}),
+}
 REPO_ROOT = Path(__file__).resolve().parents[2]
 IDENTIFIER_CATALOG_CONTRACT = (
     REPO_ROOT / "products/identifiers/contracts/catalog-source.json"
@@ -340,11 +368,27 @@ def matches(path: str, *patterns: str) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
+def is_root_workflow(path: str) -> bool:
+    """Return whether path is an executable GitHub workflow at the root."""
+
+    parts = path.split("/")
+    return (
+        len(parts) == 3
+        and parts[:2] == [".github", "workflows"]
+        and parts[2].endswith((".yml", ".yaml"))
+    )
+
+
 def classify(
     workspace: Workspace, changed_paths: Iterable[str], *, run_all: bool = False
 ) -> dict[str, Any]:
     paths = tuple(
         path.strip().removeprefix("./") for path in changed_paths if path.strip()
+    )
+    security_workflow_gates = frozenset(
+        gate
+        for path in paths
+        for gate in SECURITY_WORKFLOW_GATES.get(path, ())
     )
     force_all = run_all or any(
         path
@@ -353,6 +397,7 @@ def classify(
             ".github/scripts/ci_changes.py",
             ".github/scripts/run_cargo_packages.py",
         }
+        or (is_root_workflow(path) and path not in SECURITY_WORKFLOW_GATES)
         or path.startswith(".cargo/")
         or path in ROOT_RUST_INPUTS
         for path in paths
@@ -392,7 +437,7 @@ def classify(
         matches(path, *IDENTIFIER_CATALOG_INPUTS) for path in paths
     )
 
-    platform = complete or any(
+    platform = complete or "platform" in security_workflow_gates or any(
         matches(
             path,
             "crates/registry-platform-*",
@@ -413,28 +458,35 @@ def classify(
         or path in {"clippy.toml", "deny.toml", "rustfmt.toml"}
         for path in paths
     )
-    release_tool = complete or any(
-        path.startswith("release/")
-        or path
-        in RELEASE_SECURITY_WORKFLOWS
-        | {
-            "docs/site/src/content/docs/reference/errors.mdx",
-        }
-        for path in paths
+    release_tool = (
+        complete
+        or "release_tool" in security_workflow_gates
+        or any(is_root_workflow(path) for path in paths)
+        or any(
+            path.startswith("release/")
+            or path
+            in {
+                "docs/site/src/content/docs/reference/errors.mdx",
+            }
+            for path in paths
+        )
     )
-    release_source_proof = complete or any(
-        path in RELEASE_SECURITY_WORKFLOWS
-        or path
-        in {
-            "Cargo.lock",
-            "Cargo.toml",
-            "release/scripts/check-release-source-model.sh",
-            "release/scripts/test_check_release_source_model.py",
-        }
-        or path.startswith("release/manifests/")
-        for path in paths
+    release_source_proof = (
+        complete
+        or "release_source_proof" in security_workflow_gates
+        or any(
+            path
+            in {
+                "Cargo.lock",
+                "Cargo.toml",
+                "release/scripts/check-release-source-model.sh",
+                "release/scripts/test_check_release_source_model.py",
+            }
+            or path.startswith("release/manifests/")
+            for path in paths
+        )
     )
-    docs = complete or any(
+    docs = complete or "docs" in security_workflow_gates or any(
         matches(
             path,
             "docs/site/*",
@@ -455,7 +507,6 @@ def classify(
         )
         or path
         in {
-            ".github/workflows/docs-pages.yml",
             # The two Relay V2 product documents the site publishes through
             # repo-docs.yaml. Relay V2 generates no docs-site page from crate
             # source: relayctl compiles a project instead of exposing a schema

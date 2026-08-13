@@ -71,6 +71,13 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertEqual(
             [],
+            self.module.security_workflow_classification_violations(
+                self.module.RELEASE_SECURITY_POLICY_PATHS,
+                self.module.classifier_security_workflow_gates(),
+            ),
+        )
+        self.assertEqual(
+            [],
             self.module.candidate_build_isolation_violations(
                 policy_texts[".github/workflows/release-candidate.yml"]
             ),
@@ -105,6 +112,33 @@ class GateInventoryTest(unittest.TestCase):
                 policy_texts[".github/workflows/release.yml"]
             ),
         )
+
+    def test_security_workflow_classifier_inventory_cannot_drift(self) -> None:
+        required = self.module.REQUIRED_SECURITY_WORKFLOW_SELECTIONS
+        for workflow in sorted(required):
+            with self.subTest(missing_classifier_workflow=workflow):
+                mutated = dict(required)
+                mutated.pop(workflow)
+                self.assertEqual(
+                    ["Security workflow policy classification inventory"],
+                    self.module.security_workflow_classification_violations(
+                        self.module.RELEASE_SECURITY_POLICY_PATHS,
+                        mutated,
+                    ),
+                )
+            with self.subTest(missing_policy_workflow=workflow):
+                policy_paths = tuple(
+                    path
+                    for path in self.module.RELEASE_SECURITY_POLICY_PATHS
+                    if path != workflow
+                )
+                self.assertEqual(
+                    ["Security workflow policy classification inventory"],
+                    self.module.security_workflow_classification_violations(
+                        policy_paths,
+                        required,
+                    ),
+                )
 
     def test_each_release_security_marker_is_fail_closed(self) -> None:
         policy_texts = self.module.policy_file_texts(
@@ -702,44 +736,6 @@ class GateInventoryTest(unittest.TestCase):
                 self.assertIn(gate, self.module.missing_gates(text))
 
 
-
-    def test_missing_release_workflow_classification_is_reported(self) -> None:
-        workflows = (
-            (
-                ".github/workflows/evidence-dev.yml",
-                "Evidence development workflow change classification",
-            ),
-            (
-                ".github/workflows/release.yml",
-                "Release workflow change classification",
-            ),
-            (
-                ".github/workflows/release-candidate.yml",
-                "Release candidate workflow change classification",
-            ),
-            (
-                ".github/workflows/release-repeatability.yml",
-                "Release repeatability workflow change classification",
-            ),
-            (
-                ".github/workflows/release-candidate-cleanup.yml",
-                "Release candidate cleanup workflow change classification",
-            ),
-            (
-                ".github/workflows/release-rehearsal.yml",
-                "Release rehearsal workflow change classification",
-            ),
-        )
-        for path, gate in workflows:
-            with self.subTest(path=path):
-                classifier = self.classifier.replace(
-                    f'"{path}",',
-                    f'"{path}.disabled",',
-                )
-                self.assertIn(
-                    gate,
-                    self.module.missing_gates(self.workflow, classifier),
-                )
 
     def test_missing_actionlint_gate_is_reported(self) -> None:
         text = self.workflow.replace(
