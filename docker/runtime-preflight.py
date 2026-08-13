@@ -161,7 +161,30 @@ def validate_secret_entries(service: dict[str, Any]) -> None:
             )
 
 
-def validate_mounts(product: str, service: dict[str, Any]) -> None:
+def named_volume_is_ephemeral(document: dict[str, Any], source: str) -> bool:
+    volumes = document.get("volumes")
+    if not isinstance(volumes, dict):
+        raise PreflightError("rendered Compose configuration has no named volumes")
+    declaration = volumes.get(source)
+    if not isinstance(declaration, dict):
+        raise PreflightError("audit volume is not declared by the Compose deployment")
+    driver = declaration.get("driver", "local")
+    options = declaration.get("driver_opts", {})
+    if not isinstance(driver, str) or not isinstance(options, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in options.items()
+    ):
+        raise PreflightError("audit volume declaration is invalid")
+    backend_facts = [driver, *options.keys(), *options.values()]
+    return any("tmpfs" in fact.lower() for fact in backend_facts)
+
+
+def validate_mounts(
+    product: str, service: dict[str, Any], document: dict[str, Any]
+) -> None:
+    volumes_from = service.get("volumes_from", [])
+    if not isinstance(volumes_from, list) or volumes_from:
+        raise PreflightError("service must not inherit mounts through volumes_from")
     volumes = service.get("volumes")
     if not isinstance(volumes, list):
         raise PreflightError("service has no runtime mounts")
@@ -188,16 +211,24 @@ def validate_mounts(product: str, service: dict[str, Any]) -> None:
         if mount_type in ("bind", "volume") and (
             target == audit_prefix or target.startswith(f"{audit_prefix}/")
         ):
-            audit_writable = (
-                not read_only and isinstance(source, str) and bool(source.strip())
-            )
+            has_source = isinstance(source, str) and bool(source.strip())
+            if mount_type == "volume" and has_source:
+                if named_volume_is_ephemeral(document, source):
+                    raise PreflightError("audit volume backend must be persistent")
+            audit_writable = not read_only and has_source
     if not audit_writable:
         raise PreflightError("service has no writable persistent audit mount")
 
 
 def validate_ports(service: dict[str, Any]) -> None:
-    if service.get("network_mode") == "host":
-        raise PreflightError("service must not use the host network namespace")
+    network_mode = service.get("network_mode")
+    if network_mode is not None and not isinstance(network_mode, str):
+        raise PreflightError("service network namespace posture is invalid")
+    if network_mode == "host" or (
+        isinstance(network_mode, str)
+        and network_mode.startswith(("service:", "container:"))
+    ):
+        raise PreflightError("service must use its own non-host network namespace")
     ports = service.get("ports", [])
     if not isinstance(ports, list):
         raise PreflightError("service published-port posture is invalid")
@@ -228,8 +259,24 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
         raise PreflightError("service user must be exactly 65532:65532")
     if service.get("read_only") is not True:
         raise PreflightError("service root filesystem must be read-only")
+    if service.get("privileged") not in (None, False):
+        raise PreflightError("service must not run as a privileged container")
     if service.get("entrypoint") is not None:
         raise PreflightError("service must not override the official image entrypoint")
+    if service.get("command") is not None:
+        raise PreflightError("service must not override the official image command")
+    environment = service.get("environment", {})
+    if not isinstance(environment, dict):
+        raise PreflightError("service environment posture is invalid")
+    fixed_config = {
+        "evidence": ("REGISTRY_EVIDENCE_RUNTIME", "/etc/registry-evidence/runtime.yaml"),
+        "mint": ("MINT_CONFIG", "/etc/registry-mint/config.yaml"),
+    }.get(selection.product)
+    if fixed_config is not None:
+        name, expected = fixed_config
+        configured = environment.get(name)
+        if configured is not None and configured != expected:
+            raise PreflightError("service must use the official runtime configuration path")
     if "ALL" not in require_string_list(service, "cap_drop"):
         raise PreflightError("service must drop all Linux capabilities")
     cap_add = service.get("cap_add", [])
@@ -243,7 +290,7 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     ):
         raise PreflightError("service must prohibit privilege escalation")
     validate_secret_entries(service)
-    validate_mounts(selection.product, service)
+    validate_mounts(selection.product, service, document)
     validate_ports(service)
 
 
