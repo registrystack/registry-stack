@@ -226,7 +226,8 @@ Registry Mint issues short-lived access tokens to registered machine clients so 
 identity provider still has one. It does not own:
 
 - End-user authentication, identity proofing, or consent. Registry Mint authenticates registered
-  machine clients through `private_key_jwt`, not people.
+  machine clients through `private_key_jwt` by default or an explicitly selected standard
+  client-secret compatibility method, not people. A secret identifies the managed installation.
 - Caller-declared authority. Token authority is written from the client registry and never from the
   caller's own request.
 - Evidence Gateway authorization. Evidence Gateway independently verifies the token and re-authorizes every request

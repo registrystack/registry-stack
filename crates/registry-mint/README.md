@@ -34,9 +34,10 @@ key no longer decides what may be said.
 
 ## Protocol
 
-Mint speaks the `client_credentials` grant with `private_key_jwt` client
-authentication (RFC 7523). A client builds a short-lived JWT assertion signed
-with its own private key, and posts it to the token endpoint:
+Mint speaks the `client_credentials` grant. `private_key_jwt` client
+authentication (RFC 7523) remains the default. A client builds a short-lived
+JWT assertion signed with its own private key, and posts it to the token
+endpoint:
 
 ```
 POST /token
@@ -51,6 +52,26 @@ The assertion must carry `iss` and `sub` equal to the client id, `aud` equal to
 the configured `clientAssertion.audience`, a `jti`, and `iat`/`exp` inside the
 configured maximum lifetime. Every `jti` is single use: presenting the same
 assertion twice is refused.
+
+A managed client that cannot sign assertions may use the explicitly selected
+client-secret compatibility profile. Mint accepts both `client_secret_basic`
+and `client_secret_post`. The registration stores one or two canonical SHA-256
+fingerprints, never the raw secret:
+
+```
+POST /token
+Authorization: Basic <base64(form-encode(client-id):form-encode(client-secret))>
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=client_credentials
+```
+
+Form-encode the client id and secret separately before joining them with the
+colon delimiter and Base64-encoding the result. The same request may carry
+`client_id` and `client_secret` in the form body for clients that implement
+`client_secret_post`. One request may use only one authentication method.
+Client-secret registrations are standard-authorization clients only; they
+cannot issue Evidence or delegated authority.
 
 The response is a signed `at+jwt` access token. Errors collapse to
 `invalid_client` so that the endpoint cannot be used to probe which client ids
@@ -150,6 +171,18 @@ single-link, owner-only files. Never commit, print, or pass them on a command
 line. Client assertion keys remain independently owned and may use EdDSA,
 ES256, or RS256 with their own identifiers.
 
+Generate every compatibility-profile secret with Mint itself:
+
+```bash
+mint client-secret generate --out /run/registry-mint/secrets/qgis-west.secret
+```
+
+The command creates a new owner-only file, refuses to replace an existing
+file, and prints only its `sha256:...` fingerprint. The raw secret never
+appears on stdout or in the registration. Copy the file to the one managed
+client installation that will use it, through the deployment's secret-delivery
+channel. Do not share one secret across people or installations.
+
 The audit key file is also owner-only and must contain at least 32 bytes. The
 audit directory, chain, and lock file must be owned by the Mint process user and
 unavailable to group and other users. For a new deployment, `openssl rand -hex
@@ -194,6 +227,16 @@ client key, reload, move the client, and retain the old public key for the
 configured maximum client-assertion lifetime plus 30 seconds before removing
 and reloading again. Remove a compromised client key immediately and reload;
 do not provide an overlap window during an incident.
+
+Client-secret rotation uses the same registry reload boundary. Generate a new
+secret, add its fingerprint beside the old fingerprint, reload, update the
+managed client, then remove the old fingerprint and reload again. A
+registration accepts at most two fingerprints so this overlap cannot become an
+unbounded secret set. Remove a revoked fingerprint only while another valid
+fingerprint remains. To revoke the last or only secret, remove the complete
+registration and reload. An empty fingerprint list is invalid and leaves the
+previous registry active after the failed reload. Access tokens already released
+remain valid until their short configured expiry.
 
 ## Registering clients
 
@@ -265,6 +308,28 @@ audience from the Relay runtime. Register only scopes and direct claims that
 the Relay contract uses for the intended operation and access profile. Mint
 remains an ordinary conforming issuer; Relay has no Mint-specific runtime
 branch.
+
+For a managed client such as one QGIS installation, explicitly select the
+client-secret compatibility profile and replace `keys` with one or two
+fingerprints:
+
+```yaml
+clientId: qgis-west
+principal: urn:example:qgis-installation:west
+authorization:
+  scopes:
+    - registry:business:read
+clientAuthentication:
+  method: client-secret
+  secretFingerprints:
+    - sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+Omitting `clientAuthentication` keeps the stronger `private-key-jwt` default.
+A secret authenticates that installation, not the person using it, and must
+therefore receive only the least authority that installation needs. Use one
+registration and secret per managed installation when independent rotation,
+revocation, or audit attribution matters.
 
 ## Delegation: a token bound to one subject
 
@@ -393,6 +458,11 @@ The key file gets the same treatment as Mint's own signing key: a regular file,
 owned by you, unreadable by group and other, reached without traversing a
 symlink.
 
+`mint token` intentionally exercises the preferred private-key method. For a
+standard OAuth client that needs a secret, use `mint client-secret generate`
+to provision it and let the client call `/token` with
+`client_secret_basic` or `client_secret_post`.
+
 For a delegated token:
 
 ```bash
@@ -435,3 +505,8 @@ Mint.
 
 `tests/token_cli.rs` runs `mint token` against a real `mint serve` as two
 processes, which is the only place the stdout contract can be observed.
+`tests/client_secret_compatibility.rs` drives both standard secret methods
+through the real router, verifies the released token with the shared OIDC
+verifier, and covers renewal, rotation, revocation, authority containment, and
+audit redaction. `tests/client_secret_cli.rs` proves the provisioning command's
+owner-only file and stdout contracts as a real process.

@@ -208,13 +208,16 @@ Registry Mint issues the short-lived access tokens a resource server such as Evi
 for deployments with no identity provider. A deployment that already has an identity provider does
 not run it. Read the full surface in the [Registry Mint reference](../../reference/mint/).
 
-- Machine clients only: the token endpoint supports the `client_credentials` grant with
-  `private_key_jwt` client authentication and nothing else. There is no authorization-code flow, no
-  user-facing login, no refresh token, and no consent surface.
+- Machine clients only: the token endpoint supports only the `client_credentials` grant.
+  `private_key_jwt` remains the registration default; a standard authorization client may
+  explicitly select `client_secret_basic` or `client_secret_post` compatibility. There is no
+  authorization-code flow, user-facing login, refresh token, or consent surface. A client secret
+  identifies one managed installation, not the person using it.
 - No revocation and no introspection: the service exposes authorization-server metadata, a token
   endpoint, a JWKS endpoint, and health and readiness probes. A minted token is accepted by its
   audience until it expires, so token lifetime inside the `60..=3600` second bound is the only
-  containment lever.
+  containment lever. A deployment with standard authorization clients has a stricter 900-second
+  ceiling.
 - Authority is registry-owned: the authority a token asserts is written from the client's registry
   entry, never from the request, and a client registration whose subject claim path would overwrite
   an authority claim refuses to load.

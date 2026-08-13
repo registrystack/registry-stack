@@ -194,8 +194,12 @@ Mint's tests drive Evidence Gateway's authenticator, and Evidence Gateway does n
 What a reviewer checks depends on which of the two shapes the deployment runs:
 
 - **With Registry Mint.** The client registry becomes part of the trust boundary. Registry
-  Mint verifies a signed client assertion against the keys registered for the client it claims
-  to be, then writes the authority from the registry and never from the request. The
+  Mint verifies the registered client's selected authentication method, a signed assertion
+  against only that client's public keys by default, or an explicitly enabled secret against
+  only that standard client's fingerprints, then writes the authority from the registry and
+  never from the request. Secret credentials must be Mint-generated, unique per managed
+  installation, delivered outside configuration, and treated as lower assurance because a
+  native client can expose them to its operator. The
   consequence is that whoever can write a registration file into `clients.directory` can mint
   a token carrying any requester tags, and the running process re-reads that directory on
   `SIGHUP` without a restart. Treat the registry directory as sensitive as the signing key.

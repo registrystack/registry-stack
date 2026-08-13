@@ -1,0 +1,177 @@
+---
+title: Use Registry Mint with QGIS and standard OAuth clients
+description: Register one managed client installation to obtain renewable short-lived Relay access tokens from Registry Mint.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-13"
+doc_type: how-to
+persona:
+  - data publisher
+  - operator
+locale: en
+standards_referenced: []
+---
+
+Register a managed QGIS installation or another standard OAuth client with Registry Mint, then let
+the client obtain a new short-lived access token without an operator copying bearer tokens.
+
+## When to use this
+
+Use this compatibility profile for a managed client that supports the OAuth 2.0 Client Credentials
+grant but cannot sign a `private_key_jwt` assertion. Register each installation separately so one
+credential can be revoked without interrupting every client.
+
+This profile identifies the client installation, not the person using it. Use an institution identity
+provider when Relay authorization must follow a person's login, role, or employment status.
+
+Registry Mint keeps `private_key_jwt` as the default authentication method. A registration enables
+client-secret authentication only when its `clientAuthentication.method` is `client-secret`.
+
+## Before you start
+
+You need:
+
+- A Registry Mint deployment with one exact Relay audience and an access-token lifetime of 900 seconds
+  or less.
+- A protected Relay access profile whose required scope is known.
+- An owner-only location for the generated client secret.
+- Transport Layer Security (TLS) endpoints for Registry Mint and Registry Relay.
+
+## Generate one installation secret
+
+Generate 32 random bytes, write the printable secret to an owner-only file, and print only its
+SHA-256 fingerprint:
+
+```sh
+mint client-secret generate --out "<owner-only-client-secret-file>"
+```
+
+```text
+sha256:<64-lowercase-hex-characters>
+```
+
+The command refuses to replace an existing file. The fingerprint is not a credential and belongs in
+the client registration. Keep the generated file outside Git, deployment configuration, logs, and
+shell history.
+
+## Register the client installation
+
+Create one file under `clients.directory`:
+
+```yaml
+clientId: qgis-jeremi-laptop
+principal: urn:example:managed-client:qgis-jeremi-laptop
+authorization:
+  scopes:
+    - registry:qgis:premises:read
+clientAuthentication:
+  method: client-secret
+  secretFingerprints:
+    - sha256:<fingerprint-from-generation>
+```
+
+Do not add `keys` to this registration. Client-secret and `private_key_jwt` authentication cannot be
+combined in one client entry. Registry Mint reads the scope and principal from the registration;
+the token request cannot add, replace, or widen either value.
+
+Check the deployment and reload the client registry:
+
+```sh
+mint check --config /etc/mint/mint.yaml
+kill -HUP "$(pgrep -x mint)"
+```
+
+The existing registry remains active when the edited registration fails to load.
+
+## Test the token exchange
+
+Ask curl to prompt for the secret so the value does not enter shell history:
+
+```sh
+curl -sS --user qgis-jeremi-laptop \
+  -d grant_type=client_credentials \
+  https://mint.example.org/token
+```
+
+```text
+Enter host password for user 'qgis-jeremi-laptop':
+```
+
+After you enter the generated value, Registry Mint returns a standard token response:
+
+```json
+{
+  "access_token": "<short-lived-token>",
+  "token_type": "Bearer",
+  "expires_in": 300,
+  "scope": "registry:qgis:premises:read"
+}
+```
+
+Registry Mint does not issue a refresh token for Client Credentials. The client obtains another
+short-lived access token with the same installation credential when the current token expires.
+QGIS implements the [Client Credentials exchange as a form-body request](https://github.com/qgis/QGIS/blob/621ced71bd795bf3deb9a53505dabfca251a15d8/src/auth/oauth2/core/qgso2.cpp#L373-L395).
+Its [OAuth2 network request hook](https://github.com/qgis/QGIS/blob/621ced71bd795bf3deb9a53505dabfca251a15d8/src/auth/oauth2/core/qgsauthoauth2method.cpp#L232-L305)
+detects the expiring token, unlinks a session that has no refresh token, and links again before
+applying authentication to the next layer request. For this grant, linking again performs another
+Client Credentials exchange.
+
+## Configure QGIS
+
+1. Open **Settings > Options > Authentication**.
+2. Set a QGIS master password if the authentication database is not initialized.
+3. Add an authentication configuration named `Relay QGIS reader`.
+4. Select **OAuth2** as the authentication method.
+5. Select **Client Credentials** as the grant flow.
+6. Set the token URL to `https://mint.example.org/token`.
+7. Set the client ID to `qgis-jeremi-laptop`.
+8. Enter the value from the owner-only client-secret file.
+9. Leave scope empty. Registry Mint assigns the registered scope.
+10. Select **Header** as the access method and save the configuration.
+11. Create the OGC API Features connection with the Relay base URL and select
+    `Relay QGIS reader` as its authentication configuration.
+
+The QGIS project stores an authentication-configuration identifier. It does not need the client
+secret or an access token in the project file. Protect the QGIS authentication database and its
+master-password or operating-system keychain configuration as credentials for this installation.
+See the official [QGIS authentication system overview](https://docs.qgis.org/latest/en/docs/user_manual/auth_system/auth_overview.html)
+for its authentication-database and OAuth2 boundaries.
+
+## Rotate or revoke the installation
+
+Generate a second secret and add its fingerprint to `secretFingerprints`. At most two fingerprints
+are accepted so an overlap cannot become an unbounded collection of old credentials. Reload Registry
+Mint, update QGIS, remove the old fingerprint, and reload again.
+
+To revoke the installation, remove its registration and reload Registry Mint. New token requests fail
+immediately. A token already issued remains valid until its bounded expiry, which is why the standard
+authorization profile cannot exceed 900 seconds.
+
+## Verify renewal and revocation
+
+Leave the QGIS connection open through two access-token expiry boundaries and reload the layer after
+each one. Both reloads must succeed without pasting a bearer token.
+
+Remove the client registration, reload Registry Mint, and reconnect after the last issued token
+expires. QGIS can no longer discover or load the protected collection. Restore the registration only
+if the installation remains authorized.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Registry Mint returns `invalid_client` | The client ID, secret, authentication method, or registration does not match. | Confirm the per-installation registration and enter the generated secret again. The response does not distinguish which credential fact failed. |
+| Registry Mint refuses the registration | The fingerprint is malformed, `keys` is also present, or the authority profile is not standard authorization. | Use the exact generated `sha256:` value, omit `keys`, and configure `authorization`. |
+| QGIS receives a token but Relay returns `404` | The registered scope does not authorize that concealed Relay resource. | Register the exact scope from the Relay access profile and reload Registry Mint. |
+| QGIS works, then prompts after expiry | The OAuth configuration is not retaining the installation credential or cannot repeat Client Credentials. | Reopen the QGIS authentication configuration, confirm Client Credentials and Header access, then save it in the authentication database. |
+| Every installation stops during rotation | Multiple installations shared one registration or the old fingerprint was removed before clients moved. | Give each installation a unique registration and keep no more than two fingerprints during a planned overlap. |
+
+## Next
+
+- [Configure Registry Mint](../mint/) for service signing, token policy, audit retention, and client
+  registry reloads.
+- [Request an access token from your own code](../request-an-access-token/) when the client can use
+  the preferred `private_key_jwt` method.
+- [Registry Mint reference](../../reference/mint/) for the complete registration and HTTP contract.

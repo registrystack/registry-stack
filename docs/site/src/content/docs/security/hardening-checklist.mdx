@@ -104,6 +104,11 @@ Relay package. It assumes you have already configured your services per
   key posture and Transit boundary as Evidence Gateway. Treat `clients.directory` as key material. Any
   file written there registers a client and the authority Registry Mint will assert for it, and a
   running process re-reads the directory on `SIGHUP` without a restart.
+- Registry Mint: keep `private-key-jwt` as the client-authentication default. When a managed
+  standard client cannot sign assertions, generate a unique installation secret with
+  `mint client-secret generate`, deliver its owner-only file outside configuration, and register
+  only the printed fingerprint. Never share one secret across people or installations. Allow no
+  more than the two-fingerprint overlap needed for a planned rotation.
 - Registry Mint: generate its audit HMAC key independently from its signing key, give it at least
   32 bytes of random material, and keep it in a separate owner-only, non-symlink file. Retain the
   key for as long as its audit chain must remain verifiable.
@@ -263,7 +268,9 @@ Relay package. It assumes you have already configured your services per
   HTTP and expects termination it does not manage, while Evidence Gateway requires the token issuer and
   its key set to be HTTPS with no loopback exception. Keep `accessTokens.lifetimeSeconds` short
   inside its `60..=3600` bound, because a minted token is accepted until it expires and no service
-  in this stack revokes one.
+  in this stack revokes one. Standard authorization is capped at 900 seconds. Apply bounded
+  request-body, connection, and rate controls at the trusted ingress for `/token`, preserving
+  Registry Mint's generic `invalid_client` response instead of exposing credential diagnostics.
 
 ## Declared posture, and why neither product has one
 
@@ -318,9 +325,11 @@ serve, and a startup that fails rather than degrades.
   issuer and consumer.
   Evidence Gateway defines no credential-status or lifecycle feature, so plan incident response
   around short assertion validity windows and service-key denylisting rather than recall.
-- Rotate a compromised source credential or Registry Mint client key at the credential's own
-  source and restart the affected process. No service in this stack reloads secret material in
-  place.
+- Rotate a compromised source credential at its own source and restart the affected process.
+  For a compromised Registry Mint client key, remove its public JWK; for a compromised client
+  secret, remove its fingerprint when another valid fingerprint remains, or remove the complete
+  registration when it is the last or only secret. Send `SIGHUP` to reload the client registry
+  immediately. Already issued bearer tokens remain valid until expiry.
 - Withdraw a Relay disclosure by publishing a new package and restarting. Relay has no admin
   endpoint, no reload signal, and no way to narrow a compiled operation at runtime, so the only
   levers during an incident are stopping the process and deploying a corrected package. Plan for

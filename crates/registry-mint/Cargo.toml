@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Minimal OAuth token issuer that authenticates clients by private key JWT."
+description = "Minimal OAuth token issuer for registered machine clients."
 repository.workspace = true
 publish = false
 
@@ -20,10 +20,12 @@ async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 clap.workspace = true
+getrandom.workspace = true
 http.workspace = true
 jsonwebtoken.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto = { workspace = true, features = ["transit"] }

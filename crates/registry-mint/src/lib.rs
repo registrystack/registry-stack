@@ -11,12 +11,14 @@
 //! directly to callers therefore makes each caller an issuer able to speak as
 //! any other.
 //!
-//! Mint keeps that binding server-side. Callers hold their own private keys and
-//! authenticate with an RFC 7523 `private_key_jwt` client assertion. Mint
-//! verifies that assertion against **only the keys registered for the asserted
-//! client**, then mints an access token whose authority claims are read from
-//! the server-side client registry and never from the assertion. A caller can
-//! prove who it is; it cannot choose what it is allowed to say.
+//! Mint keeps that binding server-side. Callers normally hold their own private
+//! keys and authenticate with an RFC 7523 `private_key_jwt` client assertion.
+//! A managed client that cannot sign assertions may instead use an explicitly
+//! registered high-entropy client secret. Mint authenticates only with the
+//! method and credential registered for that client, then mints an access token
+//! whose authority claims come from the server-side registry and never from the
+//! request. A caller can prove which client it is; it cannot choose what it is
+//! allowed to say.
 //!
 //! # Trust split
 //!
@@ -44,6 +46,7 @@ pub mod audit;
 pub mod caller;
 #[doc(hidden)]
 pub mod cli;
+pub mod client_secret;
 pub mod clients;
 pub mod config;
 pub mod error;

@@ -28,9 +28,9 @@ shape.
 Registry Mint answers a narrower question than a shared JWKS can. A pooled key set can only say
 that a token was signed by a trusted key; it cannot say which caller signed it or what that
 caller is permitted to assert. Registry Mint splits the two questions across two places: the
-client registry binds a client id to that client's own public keys and to the authority Registry
-Mint will assert for it, and the token endpoint verifies an incoming request against the keys of
-the client it claims to be, then writes the authority from the registry, never from the request.
+client registry binds a client id to its selected authentication material and to the authority
+Registry Mint will assert for it, and the token endpoint verifies an incoming request only against
+that client's registration, then writes the authority from the registry, never from the request.
 
 For the whole round trip in one picture, from a client holding only its own private key to a
 signed assertion, see
@@ -43,9 +43,11 @@ deployment. Registry Mint exists only for the case where none does; pointing Evi
 existing IdP's token endpoint and JWKS does not require Registry Mint at all.
 
 Registry Mint is also not a place to route caller identity for people. It authenticates
-registered machine clients by private key, and any token bound to one named person rides inside
-a client's own signed request rather than a separate login. If a deployment needs a person to
-authenticate directly, that is an identity provider's job, not Registry Mint's.
+registered machine clients, using a private key by default or an explicitly selected secret for
+a managed standard client. A client secret identifies that installation, not the person using it.
+Any token bound to one named person rides inside a private-key client's signed request rather than
+a separate login. If a deployment needs a person to authenticate directly, that is an identity
+provider's job, not Registry Mint's.
 
 ## Before you start
 
@@ -59,8 +61,10 @@ You need:
   local development may use an owner-only local P-256 private JWK.
 - An independently generated audit HMAC key containing at least 32 bytes, stored in another
   owner-only, non-symlink file.
-- A private JWK per client. Registry Mint only ever stores and reads each client's public half;
-  keep the private half with the client.
+- A private JWK per preferred `private-key-jwt` client. Registry Mint only ever stores and reads
+  each client's public half; keep the private half with the client. A managed client that cannot
+  sign assertions may instead use one Mint-generated, per-installation client secret with a
+  standard authorization registration.
 - A directory to hold one registration file per client.
 - An owner-only directory on durable storage for the keyed Mint audit chain. Plan its capacity,
   backup, and retention because Registry Mint rotates segments but never deletes or compacts
@@ -218,6 +222,33 @@ Registry Mint-specific authentication branch. The Relay client library's private
 provider can acquire, retain, and refresh this token; see the
 [Registry Relay client API](../../reference/relay-client-api/).
 
+Keep `private-key-jwt` as the default when the client can sign assertions. For one managed QGIS
+installation or another standard OAuth client that cannot, generate a secret and explicitly
+select the compatibility profile:
+
+```sh
+mint client-secret generate --out /run/registry-mint/secrets/qgis-west.secret
+```
+
+```yaml
+clientId: qgis-west
+principal: urn:example:managed-client:qgis-west
+authorization:
+  scopes:
+    - registry:qgis:premises:read
+clientAuthentication:
+  method: client-secret
+  secretFingerprints:
+    - sha256:<fingerprint-printed-by-the-command>
+```
+
+The command writes the raw 32-byte random credential only to a new owner-only file and prints
+only its fingerprint. A secret registration cannot contain `keys`, Evidence authority, or
+delegation. Use one registration per managed installation so its authority, rotation, and
+revocation remain independent. Follow
+[Use Registry Mint with QGIS and standard OAuth clients](../use-mint-with-qgis-and-standard-oauth-clients/)
+for provisioning, QGIS configuration, renewal, and rotation.
+
 Validate the deployment before opening a socket:
 
 ```sh
@@ -242,7 +273,7 @@ keeping the previous registry in place if the new one fails to load.
 
 ## Obtain a token
 
-A client authenticates with the `client_credentials` grant and `private_key_jwt` client
+The preferred client path uses the `client_credentials` grant and `private_key_jwt` client
 authentication (RFC 7523): it signs a short-lived JWT assertion with its own private key and
 posts it to the token endpoint.
 
@@ -312,7 +343,7 @@ records were corrupted or reordered.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The token request fails with `401 invalid_client` | Registry Mint collapses every client authentication failure, an unknown client id, a bad signature, a replayed `jti`, an expired assertion, into this one code, so the endpoint cannot be used to probe which client ids are registered. | Check the client id, the signing key, the assertion's `iat`/`exp`, and that the `jti` has not already been used. |
+| The token request fails with `401 invalid_client` | Registry Mint collapses every client authentication failure, including an unknown client id, a method mismatch, a bad signature or secret, a replayed `jti`, or an expired assertion, into this one code so the endpoint cannot probe registrations. | Check the client id and selected method. For a private-key client, check the signing key, assertion lifetime, and unused `jti`. For a secret client, re-enter the generated per-installation secret. |
 | The token request fails with `400 unsupported_grant_type` | `grant_type` is missing or is not exactly `client_credentials`. | Send `grant_type=client_credentials` in the form body. |
 | `mint check` or `mint serve` refuses to start over signing | The active public key is not an ES256 P-256 JWK with its RFC 7638 `kid`, a revoked key is published, or the signer cannot prove it matches the governed active key. | Correct the governed key set and signer configuration. In strict mode, restore the local Transit proxy and its pinned key version. |
 | `mint serve` refuses to start over audit | The audit key, directory, chain, or lock file is unsafe, another writer holds the chain, or retained records do not verify. | Check owner-only permissions, run one writer per `audit.path`, then run `mint verify-audit` before deciding whether recovery is needed. Do not discard the chain to make startup pass. |

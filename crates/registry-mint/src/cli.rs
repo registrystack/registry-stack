@@ -32,6 +32,11 @@ pub enum Command {
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
     },
+    /// Provision high-entropy credentials for compatible managed clients.
+    ClientSecret {
+        #[command(subcommand)]
+        command: ClientSecretCommand,
+    },
     /// Obtain an access token from a running token endpoint, as a client would.
     ///
     /// This authenticates. It signs a client assertion with the caller's own
@@ -71,6 +76,16 @@ pub enum Command {
         /// Print the full endpoint response instead of the access token alone.
         #[arg(long)]
         verbose: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ClientSecretCommand {
+    /// Generate one credential file and print its non-secret fingerprint.
+    Generate {
+        /// New owner-only file that receives the printable client secret.
+        #[arg(long)]
+        out: PathBuf,
     },
 }
 
@@ -119,5 +134,20 @@ mod tests {
                 .collect::<Vec<_>>(),
         )
         .is_ok());
+    }
+
+    #[test]
+    fn client_secret_generation_requires_an_output_path() {
+        assert!(Cli::try_parse_from([
+            "mint",
+            "client-secret",
+            "generate",
+            "--out",
+            "client-secret"
+        ])
+        .is_ok());
+        let error = Cli::try_parse_from(["mint", "client-secret", "generate"])
+            .expect_err("the output path is required");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
     }
 }
