@@ -202,6 +202,7 @@ impl MintService {
         let authenticator = self.authenticator();
         let authenticated = match &request.authentication {
             TokenAuthentication::PrivateKeyJwt {
+                client_id,
                 client_assertion_type,
                 client_assertion,
             } => {
@@ -210,7 +211,16 @@ impl MintService {
                         "client assertion type is not supported",
                     ));
                 }
-                authenticator.authenticate(client_assertion, now).await?
+                let authenticated = authenticator.authenticate(client_assertion, now).await?;
+                if client_id
+                    .as_deref()
+                    .is_some_and(|client_id| client_id != authenticated.client.client_id())
+                {
+                    return Err(TokenError::invalid_client(
+                        "client identifier does not match the assertion",
+                    ));
+                }
+                authenticated
             }
             TokenAuthentication::ClientSecret {
                 client_id,
@@ -400,6 +410,7 @@ fn build_metadata(config: &MintConfig) -> Value {
 /// One and only one authentication method selected from the token request.
 enum TokenAuthentication {
     PrivateKeyJwt {
+        client_id: Option<String>,
         client_assertion_type: String,
         client_assertion: String,
     },
@@ -471,7 +482,7 @@ fn parse_token_request(
 
     let grant_type =
         grant_type.ok_or_else(|| TokenError::invalid_request("grant_type is missing"))?;
-    let body_secret_present = client_id.is_some() || client_secret.is_some();
+    let body_secret_present = client_secret.is_some();
     let assertion_present = client_assertion_type.is_some() || client_assertion.is_some();
 
     let authentication = if let Some(basic) = basic {
@@ -479,6 +490,14 @@ fn parse_token_request(
             return Err(TokenError::invalid_request(
                 "multiple client authentication methods were presented",
             ));
+        }
+        if let Some(client_id) = client_id {
+            let client_id = bounded_client_id(client_id)?;
+            if client_id != basic.client_id {
+                return Err(TokenError::invalid_client(
+                    "client identifier does not match the Basic credential",
+                ));
+            }
         }
         TokenAuthentication::ClientSecret {
             client_id: basic.client_id,
@@ -501,6 +520,7 @@ fn parse_token_request(
         }
     } else {
         TokenAuthentication::PrivateKeyJwt {
+            client_id: client_id.map(bounded_client_id).transpose()?,
             client_assertion_type: client_assertion_type
                 .ok_or_else(|| TokenError::invalid_request("client_assertion_type is missing"))?,
             client_assertion: client_assertion
@@ -539,6 +559,7 @@ fn parse_basic_client_credentials(
             "basic client credentials are malformed",
         ));
     };
+    let encoded = encoded.trim_start_matches(' ');
     if !scheme.eq_ignore_ascii_case("Basic")
         || encoded.is_empty()
         || encoded.bytes().any(|byte| byte.is_ascii_whitespace())
@@ -849,7 +870,27 @@ mod tests {
             TokenAuthentication::PrivateKeyJwt {
                 client_assertion_type,
                 client_assertion,
+                ..
             } if client_assertion_type == "t" && client_assertion == "a"
+        ));
+    }
+
+    #[test]
+    fn private_key_jwt_accepts_the_rfc7523_client_identifier() {
+        let request = parse_token_request(
+            b"grant_type=client_credentials&client_id=evidence-source&client_assertion_type=t&client_assertion=a",
+            None,
+        )
+        .expect("client_id can travel beside a private-key assertion");
+        assert!(matches!(
+            request.authentication,
+            TokenAuthentication::PrivateKeyJwt {
+                client_id: Some(client_id),
+                client_assertion_type,
+                client_assertion,
+            } if client_id == "evidence-source"
+                && client_assertion_type == "t"
+                && client_assertion == "a"
         ));
     }
 
@@ -880,7 +921,6 @@ mod tests {
         ));
 
         for body in [
-            &b"grant_type=client_credentials&client_id=qgis-installation"[..],
             &b"grant_type=client_credentials&client_secret=secret-value"[..],
             &b"grant_type=client_credentials&client_id=&client_secret=secret-value"[..],
             &b"grant_type=client_credentials&client_id=qgis-installation&client_secret="[..],
@@ -914,7 +954,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Basic {credentials}")).expect("header"),
+            HeaderValue::from_str(&format!("bAsIc   {credentials}")).expect("header"),
         );
         let basic = parse_basic_client_credentials(&headers)
             .expect("basic header parses")
@@ -929,6 +969,33 @@ mod tests {
             TokenAuthentication::ClientSecret { client_id, client_secret }
                 if client_id == "qgis:installation" && client_secret.as_str() == "secret:value"
         ));
+    }
+
+    #[test]
+    fn basic_authentication_accepts_only_a_matching_body_client_identifier() {
+        let basic = BasicClientCredentials {
+            client_id: "qgis-installation".to_owned(),
+            client_secret: Zeroizing::new("secret-value".to_owned()),
+        };
+        parse_token_request(
+            b"grant_type=client_credentials&client_id=qgis-installation",
+            Some(basic),
+        )
+        .expect("a matching informational client_id is accepted");
+
+        let basic = BasicClientCredentials {
+            client_id: "qgis-installation".to_owned(),
+            client_secret: Zeroizing::new("secret-value".to_owned()),
+        };
+        assert_eq!(
+            parse_token_request(
+                b"grant_type=client_credentials&client_id=another-installation",
+                Some(basic),
+            )
+            .expect_err("a mismatched client_id is rejected")
+            .code(),
+            crate::error::TokenErrorCode::InvalidClient
+        );
     }
 
     #[test]

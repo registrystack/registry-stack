@@ -256,6 +256,12 @@ fn token_form(assertion: &str) -> Vec<(String, String)> {
     ]
 }
 
+fn token_form_with_client_id(client_id: &str, assertion: &str) -> Vec<(String, String)> {
+    let mut form = token_form(assertion);
+    form.push(("client_id".to_owned(), client_id.to_owned()));
+    form
+}
+
 /// Build the Evidence authenticator the way `Authenticator::from_config` does,
 /// but over the key set Mint actually published rather than an HTTPS fetch.
 fn evidence_authenticator(jwks: &Value) -> Authenticator {
@@ -300,7 +306,13 @@ async fn a_client_signing_with_its_own_key_receives_a_token_evidence_accepts() {
 
     let (private, _, _) = key_pair(1);
     let assertion = sign_assertion(&private, &assertion_claims("health-ministry", "jti-1"));
-    let response = http.post("/token").form(&token_form(&assertion)).await;
+    // Evidence's OAuth source sends its client identifier beside the RFC 7523
+    // assertion. This established request shape must remain compatible when
+    // Mint also supports client_secret_post.
+    let response = http
+        .post("/token")
+        .form(&token_form_with_client_id("health-ministry", &assertion))
+        .await;
     response.assert_status_ok();
     // RFC 6749 section 5.1: a token response must never be cached.
     assert_eq!(response.header("cache-control"), "no-store");
@@ -512,6 +524,25 @@ async fn a_registered_client_cannot_borrow_another_clients_authority() {
         &assertion_claims("no-such-client", "jti-x"),
     );
     let response = http.post("/token").form(&token_form(&unknown)).await;
+    assert_eq!(response.status_code(), 401);
+    assert_eq!(response.json::<Value>(), json!({"error": "invalid_client"}));
+}
+
+#[tokio::test]
+async fn a_body_client_identifier_must_match_the_verified_assertion() {
+    let deployment = deployment().await;
+    let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
+
+    let (private, _, _) = key_pair(1);
+    let assertion = sign_assertion(
+        &private,
+        &assertion_claims("health-ministry", "jti-mismatched-client-id"),
+    );
+    let response = http
+        .post("/token")
+        .form(&token_form_with_client_id("statistics-office", &assertion))
+        .await;
+
     assert_eq!(response.status_code(), 401);
     assert_eq!(response.json::<Value>(), json!({"error": "invalid_client"}));
 }
