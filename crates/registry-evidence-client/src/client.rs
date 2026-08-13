@@ -324,13 +324,14 @@ impl EvidenceClient {
             }
         };
         let now = Instant::now();
+        let (expires_at, stale_until) = cache_deadlines(
+            now,
+            snapshot.cache_seconds,
+            state.profile.maximum_metadata_cache_seconds,
+        );
         *cache = Some(CachedServiceSnapshot {
-            expires_at: now + Duration::from_secs(snapshot.cache_seconds),
-            stale_until: if snapshot.cache_seconds == 0 {
-                now
-            } else {
-                now + Duration::from_secs(snapshot.cache_seconds + 900)
-            },
+            expires_at,
+            stale_until,
             value: snapshot,
         });
         Ok(())
@@ -481,14 +482,15 @@ impl EvidenceClient {
             }
         };
         let now = Instant::now();
+        let (expires_at, stale_until) = cache_deadlines(
+            now,
+            snapshot.cache_seconds,
+            state.profile.maximum_metadata_cache_seconds,
+        );
         *cache = Some(CachedServiceSnapshot {
             value: snapshot.clone(),
-            expires_at: now + Duration::from_secs(snapshot.cache_seconds),
-            stale_until: if snapshot.cache_seconds == 0 {
-                now
-            } else {
-                now + Duration::from_secs(snapshot.cache_seconds + 900)
-            },
+            expires_at,
+            stale_until,
         });
         Ok(snapshot)
     }
@@ -666,7 +668,7 @@ impl EvidenceClient {
                 .headers()
                 .get(CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
-                .is_none_or(|value| value.split(';').next() != Some(media_type))
+                .is_none_or(|value| !essence(value).eq_ignore_ascii_case(media_type))
         {
             return Err(metadata_protocol_failure());
         }
@@ -1324,6 +1326,20 @@ fn metadata_protocol_failure() -> EvidenceClientError {
         trace_id: None,
         retry_after_seconds: None,
     }
+}
+
+fn cache_deadlines(
+    now: Instant,
+    cache_seconds: u64,
+    maximum_cache_seconds: u64,
+) -> (Instant, Instant) {
+    let expires_at = now + Duration::from_secs(cache_seconds.min(maximum_cache_seconds));
+    let stale_until = if cache_seconds == 0 {
+        now
+    } else {
+        now + Duration::from_secs(maximum_cache_seconds)
+    };
+    (expires_at, stale_until)
 }
 
 fn metadata_etag(headers: &HeaderMap) -> Result<Option<HeaderValue>, EvidenceClientError> {
@@ -3214,6 +3230,22 @@ mod tests {
     }
 
     #[test]
+    fn stale_metadata_never_outlives_the_profile_cache_ceiling() {
+        let now = Instant::now();
+        let (expires_at, stale_until) = cache_deadlines(now, 60, 600);
+        assert_eq!(expires_at.duration_since(now), Duration::from_secs(60));
+        assert_eq!(stale_until.duration_since(now), Duration::from_secs(600));
+
+        let (expires_at, stale_until) = cache_deadlines(now, 900, 600);
+        assert_eq!(expires_at.duration_since(now), Duration::from_secs(600));
+        assert_eq!(stale_until.duration_since(now), Duration::from_secs(600));
+
+        let (expires_at, stale_until) = cache_deadlines(now, 0, 600);
+        assert_eq!(expires_at, now);
+        assert_eq!(stale_until, now);
+    }
+
+    #[test]
     fn metadata_etags_are_strong_bounded_and_unambiguous() {
         let mut headers = HeaderMap::new();
         headers.insert(ETAG, HeaderValue::from_static("\"revision-1\""));
@@ -3342,7 +3374,7 @@ mod tests {
             .and(path("/metadata"))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .insert_header("content-type", "application/json")
+                    .insert_header("content-type", "Application/JSON; Charset=UTF-8")
                     .insert_header("cache-control", "public, max-age=60")
                     .insert_header("etag", "\"revision-1\"")
                     .set_body_json(serde_json::json!({"value": "retained"})),

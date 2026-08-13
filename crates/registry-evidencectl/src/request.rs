@@ -75,11 +75,11 @@ pub struct PrepareArgs {
     #[arg(long, requires = "question")]
     purpose: Option<String>,
 
-    /// Subject selector. Repeat role:field=value for a multi-subject question.
+    /// Subject selector. Repeat role:field=value for multiple roles. JSON booleans and integers keep their types.
     #[arg(long)]
     subject: Vec<String>,
 
-    /// Owner-only JSON file containing the complete subject selector set.
+    /// Owner-only JSON file containing typed role, field, and value entries.
     #[arg(long, value_name = "PATH")]
     subjects_file: Option<PathBuf>,
 
@@ -153,6 +153,38 @@ struct SubjectInputFile {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ProgressiveSubjectInputFile {
+    subjects: Vec<ProgressiveSubjectInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgressiveSubjectInput {
+    role: String,
+    field: String,
+    value: ProgressiveSelectorValue,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ProgressiveSelectorValue {
+    String(String),
+    Integer(i64),
+    Boolean(bool),
+}
+
+impl From<ProgressiveSelectorValue> for SelectorValue {
+    fn from(value: ProgressiveSelectorValue) -> Self {
+        match value {
+            ProgressiveSelectorValue::String(value) => Self::String(value),
+            ProgressiveSelectorValue::Integer(value) => Self::Integer(value),
+            ProgressiveSelectorValue::Boolean(value) => Self::Boolean(value),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SubjectInput {
     role: String,
     field: String,
@@ -201,8 +233,8 @@ fn prepare(args: PrepareArgs) -> Result<ExitCode> {
 
 fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
     validate_request_name(&args.name)?;
-    if args.client.is_some() || args.subjects_file.is_some() || args.purpose.is_some() {
-        bail!("progressive preparation accepts profile, requirement, and direct subject fields");
+    if args.client.is_some() || args.purpose.is_some() {
+        bail!("progressive preparation accepts profile, requirement, and subject fields");
     }
     let profile = args
         .profile
@@ -214,31 +246,14 @@ fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
         .requirement
         .as_deref()
         .ok_or_else(|| anyhow!("progressive preparation requires a requirement handle"))?;
-    let selectors = args
-        .subject
-        .iter()
-        .map(|input| {
-            let (field, value) = input
-                .split_once('=')
-                .filter(|(field, value)| {
-                    !field.is_empty()
-                        && !field.contains(':')
-                        && !value.is_empty()
-                        && !value.contains('=')
-                        && value.len() <= MAX_SELECTOR_VALUE_BYTES
-                        && !value.chars().any(char::is_control)
-                })
-                .ok_or_else(|| anyhow!("progressive subject must be one bounded field=value"))?;
-            Ok((field.to_owned(), SelectorValue::String(value.to_owned())))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    if selectors.len() != args.subject.len() {
-        bail!("progressive subject fields must be unique");
-    }
+    let (selectors, subjects) = progressive_subject_inputs(&args)?;
     let client = EvidenceClient::from_profile_path(profile)
         .map_err(|_| anyhow!("progressive request preparation failed"))?;
-    let request =
-        AudienceScopedRequest::new(requirement, selectors).with_response_format(args.format.into());
+    let mut request = AudienceScopedRequest::new(requirement, selectors);
+    if let Some(subjects) = subjects {
+        request = request.with_subjects(subjects);
+    }
+    let request = request.with_response_format(args.format.into());
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -294,6 +309,136 @@ fn prepare_progressive(args: PrepareArgs) -> Result<ExitCode> {
         relative.join("curl.config").display()
     );
     Ok(ExitCode::SUCCESS)
+}
+
+type ProgressiveSubjects = BTreeMap<String, BTreeMap<String, SelectorValue>>;
+
+fn progressive_subject_inputs(
+    args: &PrepareArgs,
+) -> Result<(BTreeMap<String, SelectorValue>, Option<ProgressiveSubjects>)> {
+    if let Some(path) = &args.subjects_file {
+        let parsed = read_progressive_subject_inputs(path)?;
+        let mut subjects = ProgressiveSubjects::new();
+        for input in parsed {
+            validate_progressive_name(&input.role)?;
+            validate_progressive_name(&input.field)?;
+            let value = progressive_selector_value(input.value)?;
+            if subjects
+                .entry(input.role)
+                .or_default()
+                .insert(input.field, value)
+                .is_some()
+            {
+                bail!("progressive subject role and field pairs must be unique");
+            }
+        }
+        if subjects.is_empty() || subjects.values().any(BTreeMap::is_empty) {
+            bail!("progressive subjects file must contain complete role selector fields");
+        }
+        return Ok((BTreeMap::new(), Some(subjects)));
+    }
+
+    let mut selectors = BTreeMap::new();
+    let mut subjects = ProgressiveSubjects::new();
+    let mut uses_roles = None;
+    for input in &args.subject {
+        let (binding, value) = input
+            .split_once('=')
+            .filter(|(_, value)| !value.is_empty() && !value.contains('='))
+            .ok_or_else(|| {
+                anyhow!("progressive subject must be one field=value or role:field=value pair")
+            })?;
+        let (role, field) = match binding.split_once(':') {
+            Some((role, field)) if !role.contains(':') && !field.contains(':') => {
+                (Some(role), field)
+            }
+            None => (None, binding),
+            _ => bail!("progressive subject must be one field=value or role:field=value pair"),
+        };
+        validate_progressive_name(field)?;
+        let value = parse_progressive_selector_value(value)?;
+        match (uses_roles, role) {
+            (None, Some(role)) | (Some(true), Some(role)) => {
+                uses_roles = Some(true);
+                validate_progressive_name(role)?;
+                if subjects
+                    .entry(role.to_owned())
+                    .or_default()
+                    .insert(field.to_owned(), value)
+                    .is_some()
+                {
+                    bail!("progressive subject role and field pairs must be unique");
+                }
+            }
+            (None, None) | (Some(false), None) => {
+                uses_roles = Some(false);
+                if selectors.insert(field.to_owned(), value).is_some() {
+                    bail!("progressive subject fields must be unique");
+                }
+            }
+            _ => bail!("progressive subject inputs must all include a role or all omit it"),
+        }
+    }
+    if uses_roles == Some(true) {
+        Ok((BTreeMap::new(), Some(subjects)))
+    } else {
+        Ok((selectors, None))
+    }
+}
+
+fn parse_progressive_selector_value(value: &str) -> Result<SelectorValue> {
+    if value.len() > MAX_SELECTOR_VALUE_BYTES || value.chars().any(char::is_control) {
+        bail!("progressive selector values must be bounded scalars");
+    }
+    if value == "true" {
+        return Ok(SelectorValue::Boolean(true));
+    }
+    if value == "false" {
+        return Ok(SelectorValue::Boolean(false));
+    }
+    if let Ok(integer) = value.parse::<i64>() {
+        return Ok(SelectorValue::Integer(integer));
+    }
+    if value.starts_with('"') {
+        let parsed: String = serde_json::from_str(value)
+            .map_err(|_| anyhow!("progressive selector values must be bounded scalars"))?;
+        return progressive_selector_value(ProgressiveSelectorValue::String(parsed));
+    }
+    progressive_selector_value(ProgressiveSelectorValue::String(value.to_owned()))
+}
+
+fn progressive_selector_value(value: ProgressiveSelectorValue) -> Result<SelectorValue> {
+    if let ProgressiveSelectorValue::String(value) = &value {
+        if value.is_empty()
+            || value.len() > MAX_SELECTOR_VALUE_BYTES
+            || value.chars().any(char::is_control)
+        {
+            bail!("progressive selector values must be bounded scalars");
+        }
+    }
+    Ok(value.into())
+}
+
+fn validate_progressive_name(value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || value.contains([':', '='])
+        || value.chars().any(char::is_control)
+    {
+        bail!("progressive subject roles and fields must be bounded names");
+    }
+    Ok(())
+}
+
+fn read_progressive_subject_inputs(path: &Path) -> Result<Vec<ProgressiveSubjectInput>> {
+    let bytes = read_subject_input_bytes(path)?;
+    let parsed: ProgressiveSubjectInputFile = serde_json::from_slice(&bytes).map_err(|_| {
+        anyhow!("progressive subjects file must be closed JSON with one subjects array")
+    })?;
+    if parsed.subjects.is_empty() {
+        bail!("progressive subjects file must contain at least one subject");
+    }
+    Ok(parsed.subjects)
 }
 
 fn progressive_curl_config(
@@ -542,6 +687,16 @@ fn parse_subject_argument(input: &str, question: &dev::ReadyQuestionState) -> Re
 }
 
 fn read_subject_inputs(path: &Path) -> Result<Vec<SubjectInput>> {
+    let bytes = read_subject_input_bytes(path)?;
+    let parsed: SubjectInputFile = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow!("subjects file must be closed JSON with one subjects array"))?;
+    if parsed.subjects.is_empty() {
+        bail!("subjects file must contain at least one subject");
+    }
+    Ok(parsed.subjects)
+}
+
+fn read_subject_input_bytes(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let descriptor = rustix::fs::open(
         path,
         rustix::fs::OFlags::RDONLY
@@ -566,12 +721,7 @@ fn read_subject_inputs(path: &Path) -> Result<Vec<SubjectInput>> {
     }
     validate_private_file(path, &file, expected_bytes, expected_bytes)
         .context("subjects file failed its final file-safety check")?;
-    let parsed: SubjectInputFile = serde_json::from_slice(&bytes)
-        .map_err(|_| anyhow!("subjects file must be closed JSON with one subjects array"))?;
-    if parsed.subjects.is_empty() {
-        bail!("subjects file must contain at least one subject");
-    }
-    Ok(parsed.subjects)
+    Ok(bytes)
 }
 
 fn validate_request_name(name: &str) -> Result<()> {
@@ -977,6 +1127,79 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn progressive_args(subject: Vec<&str>, subjects_file: Option<PathBuf>) -> PrepareArgs {
+        PrepareArgs {
+            question: None,
+            profile: Some(PathBuf::from("client.json")),
+            requirement: Some("relationship".to_owned()),
+            purpose: None,
+            subject: subject.into_iter().map(str::to_owned).collect(),
+            subjects_file,
+            name: "request".to_owned(),
+            client: None,
+            format: PreparedResponseFormat::SignedJws,
+            project: PathBuf::from("."),
+            evidence_bin: None,
+            mint_bin: None,
+        }
+    }
+
+    #[test]
+    fn progressive_direct_subjects_preserve_roles_and_scalar_types() {
+        let args = progressive_args(
+            vec![
+                "parent:person_id=person-123",
+                "parent:attempt=7",
+                "child:confirmed=true",
+                "child:literal=\"true\"",
+            ],
+            None,
+        );
+        let (selectors, subjects) =
+            progressive_subject_inputs(&args).expect("multi-role selectors parse");
+        assert!(selectors.is_empty());
+        assert_eq!(
+            serde_json::to_value(subjects.expect("role map")).expect("subjects serialize"),
+            serde_json::json!({
+                "parent": {"person_id": "person-123", "attempt": 7},
+                "child": {"confirmed": true, "literal": "true"}
+            })
+        );
+    }
+
+    #[test]
+    fn progressive_subject_file_preserves_explicit_json_scalar_types() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("subjects.json");
+        fs::write(
+            &path,
+            br#"{"subjects":[{"role":"person","field":"integer_string","value":"7"},{"role":"person","field":"integer","value":7},{"role":"person","field":"flag","value":false}]}"#,
+        )
+        .expect("subjects file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))
+            .expect("private mode");
+
+        let args = progressive_args(Vec::new(), Some(path));
+        let (selectors, subjects) = progressive_subject_inputs(&args).expect("typed file parses");
+        assert!(selectors.is_empty());
+        assert_eq!(
+            serde_json::to_value(subjects.expect("role map")).expect("subjects serialize"),
+            serde_json::json!({
+                "person": {"integer_string": "7", "integer": 7, "flag": false}
+            })
+        );
+    }
+
+    #[test]
+    fn progressive_subjects_refuse_mixed_role_syntax_and_duplicate_fields() {
+        for subject in [
+            vec!["person:person_id=person-123", "case_id=case-1"],
+            vec!["person:person_id=person-123", "person:person_id=person-456"],
+        ] {
+            assert!(progressive_subject_inputs(&progressive_args(subject, None)).is_err());
+        }
+    }
 
     /// `.evidence` holds a live bearer token. The scaffold ignores it from the
     /// project root, but `dev start` can create the directory in a repository

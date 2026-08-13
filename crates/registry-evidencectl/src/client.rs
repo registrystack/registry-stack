@@ -21,6 +21,7 @@ use url::Url;
 
 pub(crate) const CLIENT_PROFILE_SCHEMA_V1: &str = "registry.evidence-client-profile/v1";
 const PRIVATE_FILE_MODE: u32 = 0o600;
+const MAX_CLIENT_ID_BYTES: usize = 256;
 
 #[derive(Debug, Subcommand)]
 pub enum ClientCommand {
@@ -181,7 +182,7 @@ pub fn run(command: ClientCommand) -> Result<ExitCode> {
 fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
     validate_new_output(&args.out).context("client profile output is unsafe")?;
     validate_base_url(&args.base_url, args.local_loopback_discovery)?;
-    validate_nonempty_identifier(&args.client_id, "client identifier")?;
+    validate_bounded_identifier(&args.client_id, MAX_CLIENT_ID_BYTES, "client identifier")?;
     if !(1..=31_536_000).contains(&args.maximum_assertion_lifetime_seconds) {
         bail!("maximum assertion lifetime must be within 1..=31536000 seconds");
     }
@@ -228,7 +229,7 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
     .into_iter()
     .flatten()
     {
-        validate_nonempty_identifier(value, "expected identity")?;
+        validate_bounded_identifier(value, 2_048, "expected identity")?;
     }
     let expected =
         (expected.audience.is_some() || expected.issuer.is_some() || expected.provider.is_some())
@@ -247,6 +248,8 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
         expected,
     };
     let mut bytes = canonicalize_json(&serde_json::to_value(profile)?)?;
+    EvidenceClientProfile::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("generated client profile is invalid"))?;
     bytes.push(b'\n');
     write_owner_only_new(&args.out, &bytes).context("failed to write client profile")?;
     println!("Created client profile");
@@ -293,7 +296,13 @@ fn validate_base_url(url: &Url, allow_local_loopback: bool) -> Result<()> {
     }
     match url.scheme() {
         "https" if !allow_local_loopback => Ok(()),
-        "http" if allow_local_loopback && url.host().is_some_and(is_loopback_host) => Ok(()),
+        "http"
+            if allow_local_loopback
+                && url.host().is_some_and(is_loopback_host)
+                && url.port().is_some_and(|port| port != 0) =>
+        {
+            Ok(())
+        }
         "https" if allow_local_loopback => {
             bail!("local loopback discovery requires an HTTP loopback base URL")
         }
@@ -337,8 +346,8 @@ fn validate_environment_variable(variable: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_nonempty_identifier(value: &str, label: &str) -> Result<()> {
-    if value.is_empty() || value.len() > 2_048 || value.chars().any(char::is_control) {
+fn validate_bounded_identifier(value: &str, maximum_bytes: usize, label: &str) -> Result<()> {
+    if value.is_empty() || value.len() > maximum_bytes || value.chars().any(char::is_control) {
         bail!("{label} must be non-empty, bounded, and contain no control characters");
     }
     Ok(())

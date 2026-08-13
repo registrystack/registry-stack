@@ -2304,7 +2304,7 @@
                 },
                 {
                   "display": "--subject <SUBJECT>",
-                  "description": "Subject selector. Repeat role:field=value for a multi-subject question",
+                  "description": "Subject selector. Repeat role:field=value for multiple roles. JSON booleans and integers keep their types",
                   "always_required": false,
                   "repeatable": true,
                   "default_values": [],
@@ -2313,7 +2313,7 @@
                 },
                 {
                   "display": "--subjects-file <PATH>",
-                  "description": "Owner-only JSON file containing the complete subject selector set",
+                  "description": "Owner-only JSON file containing typed role, field, and value entries",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

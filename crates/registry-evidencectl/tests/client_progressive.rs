@@ -94,6 +94,13 @@ fn unsafe_transport_paths_and_replacement_are_refused_without_echoing_paths() {
         ),
         ("non-loopback", "http://192.0.2.1/", "key.jwk", true),
         (
+            "missing-loopback-port",
+            "http://127.0.0.1/",
+            "key.jwk",
+            true,
+        ),
+        ("zero-loopback-port", "http://127.0.0.1:0/", "key.jwk", true),
+        (
             "traversal",
             "https://evidence.example.test/",
             "../key.jwk",
@@ -135,6 +142,37 @@ fn unsafe_transport_paths_and_replacement_are_refused_without_echoing_paths() {
     let refused = profile_create(&existing);
     assert!(!refused.status.success());
     assert_eq!(fs::read(&existing).unwrap(), b"do not replace");
+}
+
+#[test]
+fn profile_creation_enforces_the_sdk_client_identifier_bound() {
+    let directory = tempfile::tempdir().unwrap();
+    for (length, accepted) in [(256, true), (257, false)] {
+        let output = directory.path().join(format!("client-{length}.json"));
+        let client_id = "a".repeat(length);
+        let result = command()
+            .args([
+                "client",
+                "profile",
+                "create",
+                "--base-url",
+                "https://evidence.example.test/",
+                "--client-id",
+                &client_id,
+                "--private-key-file",
+                "key.jwk",
+                "--out",
+            ])
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.success(), accepted, "length {length}");
+        assert_eq!(output.exists(), accepted, "length {length}");
+        if accepted {
+            registry_evidence_client::EvidenceClientProfile::from_file(&output)
+                .expect("accepted profile remains usable by the SDK");
+        }
+    }
 }
 
 #[test]

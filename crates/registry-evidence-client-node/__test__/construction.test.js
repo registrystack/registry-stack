@@ -1,6 +1,10 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { test } = require('node:test');
 
 const { EvidenceClient, EvidenceClientError } = require('..');
@@ -62,4 +66,50 @@ test('a base URL with an empty path segment is refused', () => {
   assertConfigurationRefusal(
     () => new EvidenceClient(validConfig({ baseUrl: 'https://evidence.example.org/prefix//suffix' })),
   );
+});
+
+test('fromProfile returns the public wrapper and preserves consumer subclasses', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evidence-client-node-profile-'));
+  try {
+    const profilePath = path.join(directory, 'client.json');
+    fs.writeFileSync(
+      profilePath,
+      JSON.stringify({
+        schema: 'registry.evidence-client-profile/v1',
+        baseUrl: 'https://evidence.example.org',
+        clientId: 'node-profile-test',
+        privateKey: { source: 'environment', variable: 'UNUSED_PRIVATE_JWK' },
+        trust: { type: 'https-discovery' },
+        contracts: { type: 'published' },
+        verification: {
+          maximumAssertionLifetimeSeconds: 300,
+          clockSkewSeconds: 30,
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const privateJwk = privateKey.export({ format: 'jwk' });
+    const thumbprintInput = JSON.stringify({
+      crv: privateJwk.crv,
+      kty: privateJwk.kty,
+      x: privateJwk.x,
+    });
+    privateJwk.alg = 'EdDSA';
+    privateJwk.kid = crypto.createHash('sha256').update(thumbprintInput).digest('base64url');
+
+    const client = EvidenceClient.fromProfile(profilePath, privateJwk);
+    assert.ok(client instanceof EvidenceClient);
+    assert.throws(
+      () => client.request({ requirement: 'adult-status' }),
+      (error) => error instanceof EvidenceClientError && error.kind === 'configuration',
+    );
+
+    class ApplicationEvidenceClient extends EvidenceClient {}
+    const applicationClient = ApplicationEvidenceClient.fromProfile(profilePath, privateJwk);
+    assert.ok(applicationClient instanceof ApplicationEvidenceClient);
+    assert.ok(applicationClient instanceof EvidenceClient);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

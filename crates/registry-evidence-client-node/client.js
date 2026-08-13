@@ -90,12 +90,16 @@ function wrapAsync(prototype, name) {
 function wrapProgressiveRequest(prototype) {
   const original = prototype.request;
   prototype.request = function (...args) {
-    return original.apply(this, args).then(
-      (result) => result,
-      (error) => {
-        throw normalize(error);
-      },
-    );
+    try {
+      return original.apply(this, args).then(
+        (result) => result,
+        (error) => {
+          throw normalize(error);
+        },
+      );
+    } catch (error) {
+      throw normalize(error);
+    }
   };
 }
 
@@ -202,9 +206,11 @@ class EvidenceClient extends native.EvidenceClient {
    */
   static fromProfile(path, privateKeyJwk) {
     try {
-      return privateKeyJwk === undefined
+      const client = privateKeyJwk === undefined
         ? native.EvidenceClient.fromProfile(path)
         : native.EvidenceClient.fromProfile(path, privateKeyJwk);
+      Object.setPrototypeOf(client, this.prototype);
+      return client;
     } catch (error) {
       throw normalize(error);
     }

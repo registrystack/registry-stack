@@ -512,15 +512,71 @@ pub struct ExpectedListFormDocument {
     pub list: ExpectedListDocument,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct ExpectedListDocument {
     pub items: ExpectedListItemFormDocument,
-    #[serde(deserialize_with = "read_minimum_items")]
     pub minimum_items: usize,
-    #[serde(deserialize_with = "read_maximum_items")]
     pub maximum_items: usize,
     pub unique: bool,
+}
+
+impl Serialize for ExpectedListDocument {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct as _;
+
+        let legacy = matches!(self.items, ExpectedListItemFormDocument::LegacyAny);
+        let mut state =
+            serializer.serialize_struct("ExpectedListDocument", if legacy { 2 } else { 4 })?;
+        if !legacy {
+            state.serialize_field("items", &self.items)?;
+        }
+        state.serialize_field("minimumItems", &self.minimum_items)?;
+        state.serialize_field("maximumItems", &self.maximum_items)?;
+        if !legacy {
+            state.serialize_field("unique", &self.unique)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ExpectedListDocument {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            #[serde(default)]
+            items: Option<ExpectedListItemFormDocument>,
+            #[serde(deserialize_with = "read_minimum_items")]
+            minimum_items: usize,
+            #[serde(deserialize_with = "read_maximum_items")]
+            maximum_items: usize,
+            #[serde(default)]
+            unique: Option<bool>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        let (items, unique) = match (wire.items, wire.unique) {
+            (Some(items), Some(unique)) => (items, unique),
+            (None, None) => (ExpectedListItemFormDocument::LegacyAny, false),
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "list items and unique must either both be present or both be absent",
+                ))
+            }
+        };
+        Ok(Self {
+            items,
+            minimum_items: wire.minimum_items,
+            maximum_items: wire.maximum_items,
+            unique,
+        })
+    }
 }
 
 /// The two item forms the Evidence payload contract permits inside a list.
@@ -531,6 +587,9 @@ pub struct ExpectedListDocument {
 pub enum ExpectedListItemFormDocument {
     String,
     EntityReference,
+    #[serde(skip)]
+    #[doc(hidden)]
+    LegacyAny,
 }
 
 fn read_minimum_items<'de, D>(deserializer: D) -> Result<usize, D::Error>
@@ -631,6 +690,7 @@ fn expected_value_form_document(
                 ExpectedListItemFormDocument::EntityReference => {
                     ExpectedListItemForm::EntityReference
                 }
+                ExpectedListItemFormDocument::LegacyAny => ExpectedListItemForm::LegacyAny,
             },
             minimum_items: checked_minimum_items(wrapper.list.minimum_items)?,
             maximum_items: checked_maximum_items(wrapper.list.maximum_items)?,
@@ -813,6 +873,8 @@ pub struct ExpectedOutput {
 pub enum ExpectedListItemForm {
     String,
     EntityReference,
+    #[doc(hidden)]
+    LegacyAny,
 }
 
 /// Closed expected form for one disclosed Supported Value.
@@ -1724,14 +1786,18 @@ fn output_handle_is_valid(handle: &str) -> bool {
 fn expected_form_is_valid(form: &ExpectedValueForm) -> bool {
     match form {
         ExpectedValueForm::List {
+            item_form,
             minimum_items,
             maximum_items,
             unique,
-            ..
         } => {
-            *unique
-                && (MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS)
-                    .contains(minimum_items)
+            matches!(
+                (item_form, unique),
+                (
+                    ExpectedListItemForm::String | ExpectedListItemForm::EntityReference,
+                    true
+                ) | (ExpectedListItemForm::LegacyAny, false)
+            ) && (MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS).contains(minimum_items)
                 && (MINIMUM_EXPECTED_LIST_ITEMS..=MAXIMUM_EXPECTED_LIST_ITEMS)
                     .contains(maximum_items)
                 && minimum_items <= maximum_items
@@ -1774,7 +1840,7 @@ fn value_matches_form(value: &crate::model::PublicValue, form: &ExpectedValueFor
                         ) | (
                             crate::model::ScalarOrEntityReference::EntityReference(_),
                             ExpectedListItemForm::EntityReference
-                        )
+                        ) | (_, ExpectedListItemForm::LegacyAny)
                     )
                 })
                 && (!*unique
@@ -2882,6 +2948,49 @@ mod tests {
                 |error| panic!("{minimum_items}..={maximum_items} items are read: {error}"),
             );
         }
+    }
+
+    #[test]
+    fn a_legacy_list_policy_keeps_its_original_item_and_uniqueness_semantics() {
+        let mut value = serde_json::to_value(policy_document_with_list_bounds(1, 4))
+            .expect("policy document serializes");
+        let list = value["expectedOutputs"][0]["form"]["list"]
+            .as_object_mut()
+            .expect("list policy object");
+        list.remove("items");
+        list.remove("unique");
+
+        let document: EvidenceVerificationPolicyDocument =
+            serde_json::from_value(value.clone()).expect("legacy list policy remains readable");
+        let round_trip = serde_json::to_value(&document).expect("legacy policy serializes");
+        assert_eq!(round_trip, value);
+        let policy = document
+            .try_into_policy("2026-08-02T12:00:00Z".parse().expect("time"))
+            .expect("legacy list policy remains usable");
+        let form = &policy.expected_outputs[0].form;
+        assert!(matches!(
+            form,
+            ExpectedValueForm::List {
+                item_form: ExpectedListItemForm::LegacyAny,
+                unique: false,
+                ..
+            }
+        ));
+        assert!(expected_form_is_valid(form));
+
+        let mixed: crate::model::PublicValue = serde_json::from_value(serde_json::json!([
+            "same",
+            "same",
+            {
+                "form": "audience-scoped-entity-reference",
+                "reference": "urn:example:reference"
+            }
+        ]))
+        .expect("legacy-compatible list");
+        assert!(value_matches_form(&mixed, form));
+
+        value["expectedOutputs"][0]["form"]["list"]["unique"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<EvidenceVerificationPolicyDocument>(value).is_err());
     }
 
     #[test]

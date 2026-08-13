@@ -166,7 +166,7 @@ load_spec() {
 
 	case "$1" in
 	first-evidence-assertion)
-		SPEC_FENCES=26
+		SPEC_FENCES=27
 		SPEC_STEPS=(
 			"run:2"
 			"save:Preview a synthetic source|yaml|1|tutorial-source.openapi.yaml"
@@ -178,18 +178,18 @@ load_spec() {
 			"save:Create the Evidence Gateway project|yaml|1|questions/adult-status.yaml"
 			"save:Create the Evidence Gateway project|rhai|1|derivations/adult-status.rhai"
 			"run:7"
-			"run:8"
-			"background:9"
+			"run:8-9"
+			"background:10"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:10-11"
-			# Stand in for the documented authenticated v0.20.0 SDK installs.
+			"run:11-12"
+			# Stand in for the documented authenticated v0.21.1 SDK installs.
 			"python-client"
 			"node-client"
-			"run:14-16"
+			"run:15-17"
 			"save:Request an assertion|python|1|first-assertion.py"
-			"run:17"
+			"run:18"
 			"save:Request an assertion|js|1|node-client/first-assertion.js"
-			"run:18-25"
+			"run:19-26"
 		)
 		SPEC_LITERALS=(
 			"releases/latest/download/evidencectl-install.sh | bash"
@@ -200,6 +200,7 @@ load_spec() {
 			"--case person-456"
 			"--case person-789"
 			"evidencectl source mock check --config mocks/source.yaml"
+			"cp -R adult-status adult-status-request"
 			"evidencectl access policy add first-assertion-policy --question adult-status"
 			"evidencectl access client add first-assertion-client"
 			"evidencectl client profile create"
@@ -207,7 +208,7 @@ load_spec() {
 			"--out client.json"
 			"evidencectl source mock serve --config mocks/source.yaml"
 			"evidencectl new adult-status"
-			"VERSION=0.20.0"
+			"VERSION=0.21.1"
 			'registry_evidence_client-${VERSION}-cp310-abi3-${PLATFORM}.whl'
 			'evidence-client-node-v${VERSION}-${PLATFORM}.tgz'
 			"cosign verify-blob SHA256SUMS"
@@ -225,6 +226,7 @@ load_spec() {
 			"evidencectl verify assertion.sd-jwt"
 			"evidencectl audit show --last-operation"
 			"evidencectl dev clean"
+			"cp -R .evidence/requests/first-assertion ../adult-status/.evidence/requests/"
 		)
 		SPEC_OUTPUTS=(
 			"Source mock ready: mode=ephemeral origin=http://127.0.0.1:4010"
@@ -1007,7 +1009,7 @@ run_journey_script() {
 			unset CARGO_TARGET_DIR
 			cd "$reader_dir"
 			PATH="$SHIM_DIR:$PATH" \
-				PYTHONPATH="$reader_dir/first-evidence-assertion/adult-status/python-module" \
+				PYTHONPATH="$reader_dir/first-evidence-assertion/adult-status-request/python-module" \
 				bash "$run_script"
 		)
 	elif [[ "$slug" == "request-evidence-from-an-application" ]]; then

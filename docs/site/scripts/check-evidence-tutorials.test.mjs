@@ -39,7 +39,7 @@ async function runShell(script) {
 test('the dry-run gate registers the shared Evidence start tutorials', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /first-evidence-assertion: 26 sh fences, 22 executed/u);
+  assert.match(output, /first-evidence-assertion: 27 sh fences, 23 executed/u);
   assert.match(output, /request-evidence-as-sd-jwt-vc: 16 sh fences, 16 executed/u);
   assert.match(
     output,
@@ -74,7 +74,7 @@ test('--only accepts the current first Evidence tutorial', async () => {
   assert.match(branch, /stop-background/u);
   assert.match(branch, /run:5-6/u);
   assert.match(branch, /releases\/latest\/download\/evidencectl-install\.sh/u);
-  assert.match(branch, /VERSION=0\.20\.0/u);
+  assert.match(branch, /VERSION=0\.21\.1/u);
   assert.match(branch, /evidencectl client profile create/u);
   assert.match(branch, /--local-loopback-discovery/u);
   assert.match(branch, /registry_evidence_client-\$\{VERSION\}/u);

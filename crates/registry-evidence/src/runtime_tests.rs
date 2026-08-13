@@ -6358,6 +6358,9 @@ fn expected_form_document(form: &ExpectedValueForm) -> Value {
             "items": match item_form {
                 crate::verifier::ExpectedListItemForm::String => "string",
                 crate::verifier::ExpectedListItemForm::EntityReference => "entity-reference",
+                crate::verifier::ExpectedListItemForm::LegacyAny => {
+                    panic!("legacy list policy is read-only")
+                }
             },
             "minimumItems": minimum_items,
             "maximumItems": maximum_items,

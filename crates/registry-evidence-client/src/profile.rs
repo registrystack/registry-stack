@@ -1,7 +1,9 @@
 //! Strict, application-owned configuration for the progressive client.
 
 use std::{
-    env, fmt, fs,
+    env, fmt,
+    fs::File,
+    io::Read as _,
     path::{Path, PathBuf},
 };
 
@@ -14,6 +16,10 @@ pub const EVIDENCE_CLIENT_PROFILE_SCHEMA_V1: &str = "registry.evidence-client-pr
 pub const EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1: &str = "registry.evidence-client-contracts/v1";
 pub const DEFAULT_METADATA_CACHE_SECONDS: u64 = 600;
 pub const MAXIMUM_METADATA_CACHE_SECONDS: u64 = 600;
+const MAXIMUM_PROFILE_BYTES: u64 = 256 * 1024;
+const MAXIMUM_PRIVATE_KEY_BYTES: u64 = 64 * 1024;
+const MAXIMUM_PINNED_JWKS_BYTES: u64 = 1024 * 1024;
+const MAXIMUM_REVIEWED_CONTRACTS_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -42,7 +48,7 @@ const fn default_metadata_cache_seconds() -> u64 {
 
 impl EvidenceClientProfile {
     pub fn from_slice(bytes: &[u8]) -> Result<Self, EvidenceClientError> {
-        if bytes.len() > 256 * 1024 {
+        if bytes.len() as u64 > MAXIMUM_PROFILE_BYTES {
             return Err(profile_error());
         }
         let profile: Self = serde_json::from_slice(bytes).map_err(|_| profile_error())?;
@@ -52,10 +58,7 @@ impl EvidenceClientProfile {
 
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self, EvidenceClientError> {
         let path = path.as_ref();
-        let bytes = fs::read(path).map_err(|_| profile_error())?;
-        if bytes.len() > 256 * 1024 {
-            return Err(profile_error());
-        }
+        let bytes = read_bounded_file(path, MAXIMUM_PROFILE_BYTES)?;
         let mut profile: Self = serde_json::from_slice(&bytes).map_err(|_| profile_error())?;
         profile.origin_directory = path.parent().map(Path::to_path_buf);
         profile.validate()?;
@@ -75,12 +78,7 @@ impl EvidenceClientProfile {
         {
             return Err(profile_error());
         }
-        let origin_only = base_url.path() == "/"
-            && !self.base_url.ends_with('/')
-            && base_url.query().is_none()
-            && base_url.fragment().is_none()
-            && base_url.username().is_empty()
-            && base_url.password().is_none();
+        let origin_only = self.base_url == base_url.origin().ascii_serialization();
         let local_loopback = base_url.scheme() == "http"
             && base_url.host_str() == Some("127.0.0.1")
             && base_url.port().is_some_and(|port| port != 0);
@@ -112,10 +110,15 @@ impl EvidenceClientProfile {
     pub(crate) fn load_private_key(&self) -> Result<PrivateJwk, EvidenceClientError> {
         let json = match &self.private_key {
             PrivateKeyReference::File { path } => {
-                fs::read_to_string(self.resolve(path)).map_err(|_| profile_error())?
+                let bytes = read_bounded_file(&self.resolve(path), MAXIMUM_PRIVATE_KEY_BYTES)?;
+                String::from_utf8(bytes).map_err(|_| profile_error())?
             }
             PrivateKeyReference::Environment { variable } => {
-                env::var(variable).map_err(|_| profile_error())?
+                let value = env::var(variable).map_err(|_| profile_error())?;
+                if value.len() as u64 > MAXIMUM_PRIVATE_KEY_BYTES {
+                    return Err(profile_error());
+                }
+                value
             }
         };
         PrivateJwk::parse(&json).map_err(|_| profile_error())
@@ -125,10 +128,7 @@ impl EvidenceClientProfile {
         &self,
         file: &Path,
     ) -> Result<JwksDocument, EvidenceClientError> {
-        let bytes = fs::read(self.resolve(file)).map_err(|_| profile_error())?;
-        if bytes.len() > 1024 * 1024 {
-            return Err(profile_error());
-        }
+        let bytes = read_bounded_file(&self.resolve(file), MAXIMUM_PINNED_JWKS_BYTES)?;
         serde_json::from_slice(&bytes).map_err(|_| profile_error())
     }
 
@@ -136,10 +136,7 @@ impl EvidenceClientProfile {
         &self,
         file: &Path,
     ) -> Result<crate::EvidenceDefinitionsDocument, EvidenceClientError> {
-        let bytes = fs::read(self.resolve(file)).map_err(|_| profile_error())?;
-        if bytes.len() > 4 * 1024 * 1024 {
-            return Err(profile_error());
-        }
+        let bytes = read_bounded_file(&self.resolve(file), MAXIMUM_REVIEWED_CONTRACTS_BYTES)?;
         let catalog: ReviewedContracts =
             serde_json::from_slice(&bytes).map_err(|_| profile_error())?;
         if catalog.schema != EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1 {
@@ -147,6 +144,27 @@ impl EvidenceClientProfile {
         }
         Ok(catalog.into_definitions())
     }
+}
+
+fn read_bounded_file(path: &Path, maximum_bytes: u64) -> Result<Vec<u8>, EvidenceClientError> {
+    let mut file = File::open(path).map_err(|_| profile_error())?;
+    let initial = file.metadata().map_err(|_| profile_error())?;
+    if !initial.is_file() || initial.len() > maximum_bytes {
+        return Err(profile_error());
+    }
+    let mut bytes = Vec::with_capacity(initial.len() as usize);
+    file.by_ref()
+        .take(maximum_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| profile_error())?;
+    let final_length = file.metadata().map_err(|_| profile_error())?.len();
+    if bytes.len() as u64 != initial.len()
+        || bytes.len() as u64 > maximum_bytes
+        || final_length != initial.len()
+    {
+        return Err(profile_error());
+    }
+    Ok(bytes)
 }
 
 impl fmt::Debug for EvidenceClientProfile {
@@ -283,6 +301,8 @@ pub(crate) fn profile_error() -> EvidenceClientError {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -322,5 +342,61 @@ mod tests {
         let profile: EvidenceClientProfile =
             serde_json::from_str(&excessive_lifetime).expect("profile parses");
         assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn profile_origin_must_use_its_exact_canonical_serialization() {
+        let profile = |base_url: &str| EvidenceClientProfile {
+            schema: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+            base_url: base_url.to_owned(),
+            client_id: "client".to_owned(),
+            private_key: PrivateKeyReference::Environment {
+                variable: "EVIDENCE_KEY".to_owned(),
+            },
+            trust: TrustProfile::HttpsDiscovery,
+            contracts: ContractsProfile::Published,
+            verification: VerificationProfile::default(),
+            maximum_metadata_cache_seconds: DEFAULT_METADATA_CACHE_SECONDS,
+            expected: ExpectedServiceProfile::default(),
+            origin_directory: None,
+        };
+        profile("https://evidence.example.org")
+            .validate()
+            .expect("canonical origin");
+        for rejected in [
+            "https://EVIDENCE.example.org",
+            "https://evidence.example.org:443",
+            "https://evidence.example.org/",
+        ] {
+            assert!(profile(rejected).validate().is_err(), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn profile_linked_files_are_bounded_before_their_contents_are_read() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        for (name, maximum) in [
+            ("profile.json", MAXIMUM_PROFILE_BYTES),
+            ("private.jwk", MAXIMUM_PRIVATE_KEY_BYTES),
+            ("jwks.json", MAXIMUM_PINNED_JWKS_BYTES),
+            ("contracts.json", MAXIMUM_REVIEWED_CONTRACTS_BYTES),
+        ] {
+            let path = directory.path().join(name);
+            let file = File::create(&path).expect("bounded fixture");
+            file.set_len(maximum + 1).expect("oversized sparse file");
+            assert!(read_bounded_file(&path, maximum).is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn bounded_file_reader_accepts_the_limit_and_refuses_directories() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("bounded.json");
+        fs::write(&path, vec![b'a'; 32]).expect("bounded fixture");
+        assert_eq!(
+            read_bounded_file(&path, 32).expect("exact limit"),
+            vec![b'a'; 32]
+        );
+        assert!(read_bounded_file(directory.path(), 32).is_err());
     }
 }

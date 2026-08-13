@@ -47,8 +47,8 @@ evidencectl request prepare [OPTIONS] --name <NAME> <--subject <SUBJECT>|--subje
 | `--profile <PROFILE>` | No | No | n/a | n/a | n/a | Owner-only progressive client profile |
 | `--requirement <REQUIREMENT>` | No | No | n/a | n/a | n/a | Stable public requirement handle from the selected contract catalog |
 | `--purpose <PURPOSE>` | No | No | n/a | n/a | n/a | Exact purpose declared by the question |
-| `--subject <SUBJECT>` | No | Yes | n/a | n/a | n/a | Subject selector. Repeat role:field=value for a multi-subject question |
-| `--subjects-file <PATH>` | No | No | n/a | n/a | n/a | Owner-only JSON file containing the complete subject selector set |
+| `--subject <SUBJECT>` | No | Yes | n/a | n/a | n/a | Subject selector. Repeat role:field=value for multiple roles. JSON booleans and integers keep their types |
+| `--subjects-file <PATH>` | No | No | n/a | n/a | n/a | Owner-only JSON file containing typed role, field, and value entries |
 | `--name <NAME>` | Yes | No | n/a | n/a | n/a | Safe name for this retained request |
 | `--client <CLIENT>` | No | No | n/a | n/a | n/a | Registered local application used to request authorization |
 | `--format <FORMAT>` | No | No | `signed-jws` | `signed-jws`, `sd-jwt-vc` | n/a | Response format to request and verify |
