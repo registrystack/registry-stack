@@ -652,6 +652,67 @@ class CiChangesTest(unittest.TestCase):
                 )
                 self.assertIn("registry-evidence-client-py", outputs["rust_packages"])
 
+    def test_linux_node_release_recipe_proof_follows_binding_dependency_closure(
+        self,
+    ) -> None:
+        for path in (
+            "crates/registry-evidence-client-node/src/lib.rs",
+            "crates/registry-relay-client-node/src/lib.rs",
+            "crates/registry-evidence-client/src/client.rs",
+            "crates/registry-relay-client/src/client.rs",
+            "crates/registry-platform-httputil/src/lib.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["release_linux_node_clients"]
+                )
+
+    def test_linux_node_release_recipe_inputs_select_the_proof(self) -> None:
+        for path in (
+            "Cargo.lock",
+            "Cargo.toml",
+            ".cargo/config.toml",
+            "rust-toolchain",
+            "rust-toolchain.toml",
+            "release/requirements/maturin-1.9.6.txt",
+            "release/scripts/build-linux-node-client",
+            "release/scripts/smoke-evidence-client-package.js",
+            "release/scripts/smoke-relay-client-package.js",
+            "release/scripts/test_build_linux_node_client.py",
+            "release/scripts/test_zig_glibc_compiler.py",
+            "release/scripts/zig-glibc-compiler",
+            ".github/scripts/ci_changes.py",
+            ".github/workflows/ci.yml",
+            ".github/workflows/release-candidate.yml",
+            ".github/workflows/release-rehearsal.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    classify(self.workspace, (path,))["release_linux_node_clients"]
+                )
+
+    def test_complete_matrix_alone_does_not_select_linux_node_release_recipe(
+        self,
+    ) -> None:
+        for paths in (
+            (),
+            ("release/notes/v0.22.0.md",),
+            ("docs/site/src/content/docs/reference/glossary.mdx",),
+            (".github/workflows/unrelated.yml",),
+        ):
+            with self.subTest(paths=paths):
+                outputs = classify(self.workspace, paths, run_all=True)
+                self.assertTrue(outputs["rust"])
+                self.assertFalse(outputs["release_linux_node_clients"])
+
+    def test_run_all_preserves_a_real_linux_node_recipe_trigger(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-evidence-client/src/client.rs",),
+            run_all=True,
+        )
+        self.assertTrue(outputs["release_linux_node_clients"])
+
     def test_current_contract_gates_replace_the_retired_notary_gate(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("\n  evidence-contracts:\n", workflow)

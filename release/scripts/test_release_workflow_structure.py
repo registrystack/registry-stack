@@ -14,6 +14,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 LATEST_RELEASE_HELPER = ROOT / "release/scripts/verify_latest_published_release.py"
+LINUX_NODE_BUILD_HELPER = ROOT / "release/scripts/build-linux-node-client"
 
 
 def workflow(name: str) -> tuple[str, dict]:
@@ -549,7 +550,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             if step.get("name") == "Restore native client Cargo cache"
         )
         cache_key = cargo_cache["with"]["key"]
-        self.assertIn("napi-cross-glibc-2.17", cache_key)
+        self.assertIn("zig-0.12.1-glibc-2.17", cache_key)
+        self.assertIn("release/requirements/maturin-1.9.6.txt", cache_key)
+        self.assertIn("release/scripts/zig-glibc-compiler", cache_key)
+        self.assertIn("release/scripts/build-linux-node-client", cache_key)
         self.assertIn("crates/registry-evidence-client-node/package-lock.json", cache_key)
         self.assertIn("crates/registry-relay-client-node/package-lock.json", cache_key)
         wheel = step_run(document, "clients", "Build Python client wheels")
@@ -561,49 +565,78 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("--require-hashes --only-binary=:all:", wheel)
         self.assertIn("release/requirements/maturin-1.9.6.txt", wheel)
         node = step_run(document, "clients", "Build Node client packages")
-        self.assertIn("--use-napi-cross", node)
-        self.assertIn('--target "${{ matrix.target }}"', node)
+        self.assertNotIn("--use-napi-cross", node)
         self.assertIn(
-            'export HOST_CC="${{ matrix.target }}-gcc"\n'
-            '    export HOST_CXX="${{ matrix.target }}-g++"\n'
-            "    napi_args+=(--use-napi-cross)",
+            "release/scripts/build-linux-node-client \\\n"
+            '      --client "${client}" \\\n'
+            '      --target "${{ matrix.target }}" \\\n'
+            '      --napi-platform "${{ matrix.napi_platform }}" \\\n'
+            '      --zig-python "${RUNNER_TEMP}/maturin/bin/python"',
             node,
         )
-        napi_build = (
-            '(cd "${client_dir}" && ./node_modules/.bin/napi build '
-            '"${napi_args[@]}")'
+        helper_call = "release/scripts/build-linux-node-client"
+        self.assertLess(
+            node.index('(cd "${client_dir}" && npm ci)'), node.index(helper_call)
         )
-        self.assertLess(node.index("export HOST_CC="), node.index(napi_build))
-        self.assertLess(node.index("export HOST_CXX="), node.index(napi_build))
+        self.assertLess(
+            node.index(helper_call), node.index('(cd "${client_dir}" && npm pack')
+        )
+        self.assertIn(
+            '(cd "${client_dir}" && ./node_modules/.bin/napi build \\\n'
+            '      --platform --release --target "${{ matrix.target }}")',
+            node,
+        )
+
+        helper = LINUX_NODE_BUILD_HELPER.read_text(encoding="utf-8")
+        self.assertIn('zig_version="$("${zig_python}" -m ziglang version)"', helper)
+        self.assertIn('if [[ "${zig_version}" != 0.12.1 ]]', helper)
+        for routed_variable in (
+            "HOST_CC",
+            "HOST_CXX",
+            "TARGET_CC",
+            "TARGET_CXX",
+        ):
+            self.assertIn(f"export {routed_variable}=", helper)
+        for routed_variable in (
+            'CC_${target_env}',
+            'CXX_${target_env}',
+            'CARGO_TARGET_${cargo_target_env}_LINKER',
+        ):
+            self.assertIn(f'export "{routed_variable}=', helper)
+        napi_build = "./node_modules/.bin/napi build"
+        self.assertIn('--platform --release --target "${rust_target}"', helper)
+        self.assertNotIn("--use-napi-cross", helper)
+        self.assertLess(helper.index('export HOST_CC='), helper.index(napi_build))
+        self.assertLess(helper.index('export HOST_CXX='), helper.index(napi_build))
         self.assertIn(
             'unversioned_imports="$(\n'
-            '      readelf --wide --dyn-syms "${addon}" \\\n'
-            "        | awk '$7 == \"UND\" && $5 != \"WEAK\" && "
+            '  readelf --wide --dyn-syms "${addon}" \\\n'
+            "    | awk '$7 == \"UND\" && $5 != \"WEAK\" && "
             "$8 !~ /@/ && $8 !~ /^(napi_|node_api_)/ { print $8 }' \\\n"
-            "        | sort -u\n"
-            "    )\"",
-            node,
+            "    | sort -u\n"
+            ")\"",
+            helper,
         )
         self.assertIn(
             'if [[ -n "${unversioned_imports}" ]]; then\n'
-            "      printf 'native addon has strong unversioned imports:"
+            "  printf 'native addon has strong unversioned imports:"
             "\\n%s\\n' \\\n"
-            '        "${unversioned_imports}" >&2\n'
-            "      exit 1",
-            node,
+            '    "${unversioned_imports}" >&2\n'
+            "  exit 1",
+            helper,
         )
-        guard_start = node.index('unversioned_imports="$(')
-        self.assertLess(node.index(napi_build), guard_start)
+        guard_start = helper.index('unversioned_imports="$(')
+        self.assertLess(helper.index(napi_build), guard_start)
         self.assertLess(
             guard_start,
-            node.index('(cd "${client_dir}" && npm pack'),
+            helper.index('readelf --version-info "${addon}"'),
         )
         predicate_marker = "| awk '"
-        predicate_start = node.index(predicate_marker, guard_start) + len(
+        predicate_start = helper.index(predicate_marker, guard_start) + len(
             predicate_marker
         )
-        predicate_end = node.index("' \\", predicate_start)
-        predicate = node[predicate_start:predicate_end]
+        predicate_end = helper.index("' \\", predicate_start)
+        predicate = helper[predicate_start:predicate_end]
         dynsym_fixtures = {
             "observed ISO C23 import": (
                 "  1: 0000000000000000 0 FUNC GLOBAL DEFAULT UND "
@@ -641,8 +674,8 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
                     check=True,
                 )
                 self.assertEqual(guard.stdout.splitlines(), expected)
-        self.assertIn("readelf --version-info", node)
-        self.assertIn("GLIBC_2.17", node)
+        self.assertIn("readelf --version-info", helper)
+        self.assertIn("GLIBC_2.17", helper)
         self.assertIn(
             "package/${client}-client.${{ matrix.napi_platform }}.node",
             node,

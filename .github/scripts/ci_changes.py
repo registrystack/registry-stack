@@ -153,6 +153,34 @@ RELAY_BINDING_PACKAGES = frozenset(
     {"registry-relay-client-node", "registry-relay-client-py"}
 )
 NATIVE_BINDING_PACKAGES = EVIDENCE_BINDING_PACKAGES | RELAY_BINDING_PACKAGES
+LINUX_NODE_BINDING_PACKAGES = frozenset(
+    {"registry-evidence-client-node", "registry-relay-client-node"}
+)
+
+# Inputs that can change the production Linux Node client recipe without
+# changing either binding crate. This proof is deliberately selected from the
+# actual changed paths rather than `complete`: push and merge-queue CI use
+# `--all` for their Rust matrices, and an unrelated change must not rebuild two
+# release addons merely because those matrices are complete.
+LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
+    {
+        ".github/scripts/ci_changes.py",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-candidate.yml",
+        ".github/workflows/release-rehearsal.yml",
+        "Cargo.lock",
+        "Cargo.toml",
+        "release/requirements/maturin-1.9.6.txt",
+        "release/scripts/build-linux-node-client",
+        "release/scripts/smoke-evidence-client-package.js",
+        "release/scripts/smoke-relay-client-package.js",
+        "release/scripts/test_build_linux_node_client.py",
+        "release/scripts/test_zig_glibc_compiler.py",
+        "release/scripts/zig-glibc-compiler",
+        "rust-toolchain",
+        "rust-toolchain.toml",
+    }
+)
 
 # A package is exempt from the tutorial trigger only while no tutorial runs it.
 # The Python binding is what `request-evidence-from-an-application` imports, so
@@ -433,6 +461,22 @@ def classify(
     )
     complete = run_all or force_all
 
+    # Compute this closure independently of the broad Rust selection above.
+    # In particular, `run_all=True` must not manufacture a release recipe
+    # trigger when no relevant path changed.
+    linux_node_seeds = {
+        package
+        for path in paths
+        if (package := workspace.package_for_path(path)) is not None
+    }
+    release_linux_node_clients = any(
+        path in LINUX_NODE_RELEASE_RECIPE_INPUTS or path.startswith(".cargo/")
+        for path in paths
+    ) or bool(
+        workspace.affected_packages(linux_node_seeds)
+        & LINUX_NODE_BINDING_PACKAGES
+    )
+
     identifiers = complete or any(
         matches(path, *IDENTIFIER_CATALOG_INPUTS) for path in paths
     )
@@ -597,6 +641,7 @@ def classify(
         "docs_archives": docs_archives,
         "editors": editors,
         "client_bindings": client_bindings,
+        "release_linux_node_clients": release_linux_node_clients,
         "evidence_tutorial": evidence_tutorial,
         "identifiers": identifiers,
     }
