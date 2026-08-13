@@ -558,9 +558,15 @@ Each request produces a typed access decision followed by a typed disclosure pla
 Relay is an OAuth 2.0 resource server. Protected operations accept a narrow
 registered JWT access-token profile with strict issuer, audience, subject or
 client, time, token identifier, algorithm, key, type, and scope validation.
-Version one configures at most one issuer per Registry deployment through the
-existing governed OIDC discovery path. Additional discovery modes and
-multi-issuer selection wait for demonstrated deployments.
+Version one configures at most one trusted issuer per Registry deployment. Its
+exact token `iss` value is distinct from its key transport: the deployment
+chooses exactly one OIDC discovery URL or direct JWKS URL, and that transport
+may use a different authority from the trusted issuer. Discovery metadata must
+declare the trusted issuer exactly. Direct JWKS uses the configured trusted
+issuer as the token-identity boundary, so its key endpoint is an operator-owned
+out-of-band trust decision. Existing canonical discovery URLs may derive the
+trusted issuer only from the canonical discovery suffix. Multi-issuer selection
+waits for demonstrated deployments.
 
 The token may come from an institution's existing identity provider or authorization server. Registry Mint is an optional issuer for machine-to-machine deployments that do not have one. Relay has no production runtime dependency on Mint and does not need to know which conforming issuer produced a token.
 
@@ -698,7 +704,7 @@ Relay V2 should reuse mature product-neutral primitives directly and avoid inher
 | Platform crate | Relay V2 use |
 |---|---|
 | `registry-platform-authcommon` | Strict bearer parsing and secret-safe authentication helpers. |
-| `registry-platform-oidc` | Existing OIDC discovery, JWKS caching, and strict JWT access-token verification for the one configured issuer. Add only missing product-neutral claim checks required by Relay V2; additional discovery modes are deferred. |
+| `registry-platform-oidc` | OIDC discovery or direct JWKS transport, JWKS caching, and strict JWT access-token verification for one trusted issuer. Exactly one transport is configured; its authority never changes token `iss` validation. Add only missing product-neutral claim checks required by Relay V2; multi-issuer selection is deferred. |
 | `registry-platform-httpsec` | Security headers, narrow CORS, request limits, and RFC 9457 problem responses extended by Relay with its stable code and trace ID. |
 | `registry-platform-audit` | Tamper-evident envelopes, durable sinks, chain verification, redaction, and pseudonymization primitives. Relay V2 owns its event vocabulary and does not inherit old consultation semantics. |
 | `registry-platform-config` | Environment expansion, secret references, and optional signed governed-bundle verification. Relay still owns compilation of the registry contract. |

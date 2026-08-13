@@ -99,7 +99,7 @@ into a definite reading or stop the assertion.
 ## Secrets
 
 Required secret files beneath `/run/secrets/registry-evidence`, each owned by
-the service identity with mode `0400` or `0600`, are:
+the service identity with exact mode `0400` or `0600`, are:
 
 ```text
 audit-hmac-key
