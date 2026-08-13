@@ -562,7 +562,9 @@ async fn an_acquired_credential_completes_a_verified_exchange() {
 #[tokio::test]
 async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     let issuer = start_token_issuer().await;
-    let deployment = start_trusting(resolved_source_answer(), Some(&issuer.origin)).await;
+    let deployment =
+        start_trusting_with_request_burst(resolved_source_answer(), Some(&issuer.origin), 100)
+            .await;
     let profile_directory = tempfile::tempdir().expect("create an owner-only profile directory");
     fs::set_permissions(profile_directory.path(), fs::Permissions::from_mode(0o700))
         .expect("the profile directory is owner-only");
@@ -1170,6 +1172,20 @@ async fn start(source_answer: Value) -> Deployment {
 /// signs the credentials it presents. With one, the deployment fetches keys from
 /// that origin and only credentials that server issued are accepted.
 async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> Deployment {
+    start_trusting_with_request_burst(source_answer, external_issuer, 10).await
+}
+
+/// Start a deployment with an explicit request burst ceiling.
+///
+/// The progressive profile journey deliberately performs several authenticated
+/// metadata and assertion exchanges against one deployment. Giving that test a
+/// larger budget keeps its final contract-drift assertion independent of the
+/// runtime scheduler while every ordinary deployment retains the fixture limit.
+async fn start_trusting_with_request_burst(
+    source_answer: Value,
+    external_issuer: Option<&str>,
+    request_burst: u32,
+) -> Deployment {
     let source = MockServer::start().await;
     let auth_key = generate_key(AUTH_KEY_ID);
     let issuer = match external_issuer {
@@ -1225,6 +1241,7 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
         &format!("http://127.0.0.1:{port}"),
         signing_key_id,
     );
+    rewrite_request_burst(&bundle_root, request_burst);
     fs::remove_file(
         bundle_root
             .join("public-keys")
@@ -1299,6 +1316,19 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
     .await;
     drop(port_handoff);
     deployment
+}
+
+fn rewrite_request_burst(bundle_root: &Path, request_burst: u32) {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut document =
+        fs::read_to_string(&configuration_path).expect("the staged configuration is readable");
+    replace_exact(
+        &mut document,
+        "burstPerPrincipal: 10",
+        &format!("burstPerPrincipal: {request_burst}"),
+        1,
+    );
+    fs::write(&configuration_path, document).expect("the request burst is written");
 }
 
 /// Wait until the service reports itself ready, or fail with the reason it did
