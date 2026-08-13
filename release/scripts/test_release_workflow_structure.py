@@ -673,7 +673,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(
             document["jobs"]["promote-images"]["permissions"],
-            {"actions": "read", "contents": "write", "packages": "write"},
+            {"actions": "read", "contents": "read", "packages": "write"},
         )
 
     def test_binds_an_annotated_tag_to_exact_candidate_and_main_revisions(self) -> None:
