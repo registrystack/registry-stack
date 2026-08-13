@@ -300,6 +300,42 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
         grype, syft = self.reports(**kwargs)
         return self.module.normalize_grype(grype, self.SUBJECT, syft).findings[0]
 
+    def test_syft_root_directory_is_valid_file_evidence(self):
+        grype, syft = self.reports()
+        syft["files"].append(
+            {
+                "id": "file-root",
+                "location": {"path": "/", "layerID": self.BASE_LAYER_1},
+                "metadata": {"type": "Directory"},
+            }
+        )
+
+        normalized = self.module.normalize_grype(grype, self.SUBJECT, syft)
+
+        self.assertIn("/", normalized.findings[0].syft_file_paths)
+
+    def test_reviewed_assertion_path_cannot_target_root(self):
+        with self.assertRaises(SystemExit):
+            self.module.validate_image_path("/", "reviewed assertion path")
+
+    def test_syft_file_paths_reject_unsafe_or_unnormalized_values(self):
+        for path in (
+            "app/service",
+            "/app//service",
+            "/app/service/",
+            "/app/./service",
+            "/app/../service",
+            "/app/\x00service",
+        ):
+            with self.subTest(path=repr(path)):
+                with self.assertRaises(SystemExit):
+                    self.module.syft_files({"files": [{"location": {"path": path}}]})
+
+    def test_syft_file_paths_reject_duplicates_including_root(self):
+        root_entry = {"location": {"path": "/"}}
+        with self.assertRaises(SystemExit):
+            self.module.syft_files({"files": [root_entry, copy.deepcopy(root_entry)]})
+
     def with_digest(self, definition):
         definition["definition_digest"] = self.module.definition_digest(definition)
         return definition
