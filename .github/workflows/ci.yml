@@ -127,6 +127,9 @@ jobs:
       - name: Test Debian 13 image contract
         run: python3 -m unittest release/scripts/test_check_debian13_images.py
 
+      - name: Test container runtime preflight
+        run: python3 -m unittest docker/test_runtime_preflight.py
+
       - name: Test Mint demonstration support scripts
         run: |
           python3 -m unittest discover \
