@@ -94,10 +94,16 @@ archive="${rehearsal_dir}/registry-docs-${tag}.tar.gz"
 cd docs/site
 npm run check:archive-lock -- --base-ref "${BASE_REF}"
 DOCS_ARCHIVE_OUTPUT="${archive}" DOCS_DOCSET="${tag}" npm run build:archive
-npm run archive:snapshot -- \
+if ! npm run archive:snapshot -- \
   "${tag}" \
   --output "${archive}" \
-  --verify-lock
+  --verify-lock; then
+  echo "Archive lock verification failed; reporting the computed archive identity." >&2
+  npm run archive:snapshot -- \
+    "${tag}" \
+    --output "${archive}"
+  exit 1
+fi
 npm run build:dev
 npm run check:production:built
 npm run check:archives
