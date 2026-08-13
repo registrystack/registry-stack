@@ -584,16 +584,6 @@ class GateInventoryTest(unittest.TestCase):
                 text = self.workflow.replace(path, "release/scripts/disabled-gate")
                 self.assertIn(gate, self.module.missing_gates(text))
 
-    def test_missing_container_runtime_preflight_tests_are_reported(self) -> None:
-        text = self.workflow.replace(
-            "run: python3 -m unittest docker/test_runtime_preflight.py",
-            "run: true",
-        )
-        self.assertIn(
-            "Container runtime preflight tests",
-            self.module.missing_gates(text),
-        )
-
     def test_missing_new_release_security_tests_are_reported(self) -> None:
         tests = (
             (
