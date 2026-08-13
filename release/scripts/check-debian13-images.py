@@ -58,6 +58,38 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + ADOPTER_DOCKERFILES + (
 RUST_BUILDER_DOCKERFILES = ()
 PREPARATION_DOCKERFILES = DOCKERFILES
 RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
+RELAY_RUNTIME_ROOT_STAGE = f"""\
+FROM {DEBIAN_PREPARATION} AS runtime-root
+ARG SOURCE_DATE_EPOCH
+RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\
+    --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\
+    mkdir -p \\
+        /workspace/runtime-root/licenses/relay \\
+        /workspace/runtime-root/usr/local/bin \\
+        /workspace/runtime-root/var/lib/relay/audit \\
+        /workspace/runtime-root/var/lib/relay/data \\
+    && install -d -o 0 -g 0 -m 0755 \\
+        /workspace/runtime-root \\
+        /workspace/runtime-root/etc \\
+        /workspace/runtime-root/etc/relay \\
+    && install -m 0755 /workspace/image-bin/relay /workspace/runtime-root/usr/local/bin/relay \\
+    && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/relay/LICENSE \\
+    && chown -R 65532:65532 /workspace/runtime-root/var/lib/relay \\
+    && chmod 0700 /workspace/runtime-root/var/lib/relay/audit \\
+    && find /workspace/runtime-root -exec touch -h --date="@${{SOURCE_DATE_EPOCH}}" {{}} +
+"""
+RELAY_RUNTIME_STAGE = f"""\
+FROM {DISTROLESS_RUNTIME} AS runtime
+LABEL org.registrystack.runtime.uid="65532" \\
+      org.registrystack.runtime.gid="65532"
+COPY --from=runtime-root /workspace/runtime-root/ /
+WORKDIR /var/lib/relay
+EXPOSE 8080
+ENV RELAY_HEALTHCHECK_URL=http://127.0.0.1:8080/health
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/relay", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/relay"]
+CMD ["serve", "--runtime", "/etc/relay/runtime.yaml"]
+"""
 HTTP_PROBE_DOCKERFILES = {
     Path("release/docker/Dockerfile.evidence"): {
         "binary": "evidence",
@@ -120,6 +152,61 @@ def distroless_stages(text: str) -> list[tuple[str, str]]:
         )
         stages.append((base, f"\n{instructions}"))
     return stages
+
+
+def normalized_instructions(text: str) -> tuple[str, ...]:
+    """Return Dockerfile logical instructions with insignificant layout removed."""
+    logical_text = re.sub(r"\\\r?\n[ \t]*", " ", text)
+    return tuple(
+        " ".join(line.split())
+        for line in logical_text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+def named_stage(instructions: tuple[str, ...], name: str) -> tuple[str, ...]:
+    """Return one named Dockerfile stage, including its FROM instruction."""
+    marker = f" AS {name}".upper()
+    starts = tuple(
+        index
+        for index, instruction in enumerate(instructions)
+        if instruction.upper().startswith("FROM ")
+        and instruction.upper().endswith(marker)
+    )
+    if len(starts) != 1:
+        return ()
+    start = starts[0]
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(instructions))
+            if instructions[index].upper().startswith("FROM ")
+        ),
+        len(instructions),
+    )
+    return instructions[start:end]
+
+
+def check_relay_image_shape(text: str, relative: Path, failures: list[str]) -> None:
+    """Pin the fixed Relay preparation and non-root runtime recipes."""
+    instructions = normalized_instructions(text)
+    if named_stage(instructions, "runtime-root") != normalized_instructions(
+        RELAY_RUNTIME_ROOT_STAGE
+    ):
+        failures.append(
+            f"{relative}: Relay V2 runtime preparation stage must match the "
+            "root-owned release recipe"
+        )
+
+    final_runtime_stage = named_stage(instructions, "runtime")
+    if (
+        final_runtime_stage != normalized_instructions(RELAY_RUNTIME_STAGE)
+        or instructions[-len(final_runtime_stage) :] != final_runtime_stage
+    ):
+        failures.append(
+            f"{relative}: Relay V2 runtime stage must match the non-root, "
+            "metadata-preserving release recipe"
+        )
 
 
 def check_repository(root: Path = ROOT) -> list[str]:
@@ -262,6 +349,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
 
     for relative in RELAY_V2_DOCKERFILES:
         text = texts[relative]
+        check_relay_image_shape(text, relative, failures)
         require(
             text,
             "/usr/local/bin/relay",
