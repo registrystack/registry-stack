@@ -11,7 +11,12 @@
 //! token endpoint, which then decides on its own terms. Obtaining a token still
 //! requires authenticating, in the CLI exactly as over the wire.
 
-use std::{collections::BTreeMap, path::Path, process::ExitCode, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::{Component, Path, PathBuf},
+    process::ExitCode,
+    sync::Arc,
+};
 
 use clap::Parser;
 use registry_mint::cli::{Cli, ClientSecretCommand, Command};
@@ -21,7 +26,7 @@ use registry_mint::{
     client_secret,
     config::MintConfig,
     secretfile,
-    server::{serve, MintService},
+    server::{healthcheck, serve, MintService},
     CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS,
 };
 use registry_platform_audit::OptionalHashHex;
@@ -41,7 +46,7 @@ fn main() -> ExitCode {
         .json();
     if matches!(
         cli.command,
-        Command::Token { .. } | Command::ClientSecret { .. }
+        Command::Token { .. } | Command::ClientSecret { .. } | Command::Healthcheck { .. }
     ) {
         logs.with_writer(std::io::stderr).init();
     } else {
@@ -64,9 +69,11 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::Check {
             config,
             require_runtime_dependencies,
+            require_audit_under,
         } => {
             let config = MintConfig::load(&config)
                 .map_err(|error| format!("the configuration could not be loaded: {error}"))?;
+            require_audit_path_under(&config.audit.path, require_audit_under.as_deref())?;
             let issuer = config.issuer.clone();
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -92,6 +99,15 @@ fn run(cli: Cli) -> Result<(), String> {
                 "configuration is valid"
             );
             Ok(())
+        }
+        Command::Healthcheck { url } => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|_| "the readiness probe failed".to_owned())?;
+            runtime
+                .block_on(healthcheck(&url))
+                .map_err(|_| "the readiness probe failed".to_owned())
         }
         Command::Serve { config } => {
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -192,6 +208,61 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+/// Bind Mint's already config-relative audit path to the persistent container
+/// root asserted by the deployment adapter.
+fn require_audit_path_under(
+    configured_path: &Path,
+    required_root: Option<&Path>,
+) -> Result<(), String> {
+    let Some(required_root) = required_root else {
+        return Ok(());
+    };
+    let valid_root = required_root != Path::new("/")
+        && required_root.is_absolute()
+        && required_root
+            .to_str()
+            .is_some_and(|value| !value.is_empty() && value.len() <= 512)
+        && required_root.components().all(|component| {
+            matches!(
+                component,
+                Component::RootDir | Component::Prefix(_) | Component::Normal(_)
+            )
+        });
+    let configured_path = normalized_absolute_path(configured_path);
+    if !valid_root || !configured_path.is_some_and(|path| path.starts_with(required_root)) {
+        return Err(
+            "the configured audit destination is outside the required persistent storage"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Normalize a resolved Mint path lexically without requiring the audit file
+/// to exist before the first deployment.
+fn normalized_absolute_path(path: &Path) -> Option<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+        }
+    }
+    normalized.is_absolute().then_some(normalized)
 }
 
 /// Read the delegation subject: a flat JSON object of selector fields.
@@ -346,5 +417,41 @@ async fn shutdown_signal() {
     tokio::select! {
         () = interrupt => {}
         () = terminate => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_dependency_check_rejects_audit_outside_required_persistent_root() {
+        let required = Path::new("/var/lib/registry-mint");
+        assert!(require_audit_path_under(
+            Path::new("/var/lib/registry-mint/audit/mint.jsonl"),
+            Some(required),
+        )
+        .is_ok());
+        assert!(require_audit_path_under(required, Some(required)).is_ok());
+        assert!(require_audit_path_under(
+            Path::new("/var/lib/registry-mint/state/../audit/mint.jsonl"),
+            Some(required),
+        )
+        .is_ok());
+
+        for (configured, root) in [
+            ("/tmp/audit/mint.jsonl", "/var/lib/registry-mint"),
+            (
+                "/var/lib/registry-mint-decoy/mint.jsonl",
+                "/var/lib/registry-mint",
+            ),
+            ("/var/lib/registry-mint/audit/mint.jsonl", "/"),
+            ("/var/lib/registry-mint/audit/mint.jsonl", "relative"),
+        ] {
+            assert!(
+                require_audit_path_under(Path::new(configured), Some(Path::new(root))).is_err(),
+                "accepted configured path {configured} under required root {root}"
+            );
+        }
     }
 }

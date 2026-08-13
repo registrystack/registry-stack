@@ -25,12 +25,19 @@ This page is generated from the public Clap command tree. Hidden implementation 
 mint check [OPTIONS] --config <CONFIG>
 ```
 
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| `--require-audit-under <REQUIRE_AUDIT_UNDER>` is present | `--require-runtime-dependencies` is required. |
+
 ## Options
 
 | Option | Always required | Default | Values | Environment | Description |
 | --- | --- | --- | --- | --- | --- |
 | `--config <CONFIG>` | No | n/a | n/a | `MINT_CONFIG` | n/a |
 | `--require-runtime-dependencies` | No | n/a | n/a | n/a | Claim the audit writer and prove every serving dependency is ready. Use before startup, not against a Mint process that is already serving |
+| `--require-audit-under <REQUIRE_AUDIT_UNDER>` | No | n/a | n/a | n/a | Require the resolved audit destination to be at or below this absolute persistent-storage root |
 | `-h, --help` | No | n/a | n/a | n/a | Print help |
 
 ## Generation contract

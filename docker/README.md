@@ -112,14 +112,64 @@ preflight rejects host or shared network namespaces, entrypoint or command
 overrides, alternate Evidence or Mint configuration paths, privileged mode,
 added capabilities, inherited mounts, writable configuration or secret trees,
 anonymous audit volumes, and named volumes backed by tmpfs. Audit storage must
-be an explicit durable named volume or bind mount.
+be an explicit durable named volume or bind mount. Name the exact mount target
+for every selected service so the product can prove that its resolved audit
+destination is at or below that root:
+
+```sh
+python3 docker/runtime-preflight.py \
+  --compose-file <compose.yaml> \
+  --service evidence=evidence \
+  --audit-root evidence=/var/lib/registry-evidence
+```
+
+The product owns configuration resolution and the adapter owns mount
+persistence. A decoy persistent volume does not satisfy the check when the
+configured audit sink is elsewhere. The adapter also rejects an asserted root
+that is read-only, ephemeral, duplicated, or shadowed by another mount or
+`tmpfs`.
+
+For a cold deployment in which Evidence consumes a selected Mint service,
+declare Mint as an internal dependency. When Mint binds a private Compose
+address instead of loopback, set its service environment
+`MINT_HEALTHCHECK_URL=http://<private-address>:<port>/ready`:
+
+```sh
+python3 docker/runtime-preflight.py \
+  --compose-file <compose.yaml> \
+  --service mint=mint \
+  --audit-root mint=/var/lib/registry-mint \
+  --service evidence=evidence \
+  --audit-root evidence=/var/lib/registry-evidence \
+  --dependency-service mint \
+  --native-check-timeout-seconds 600 \
+  --dependency-timeout-seconds 120
+```
+
+Repeat `--dependency-service` in startup order when more than one selected
+Mint or Relay service must serve a later check. For each declared dependency,
+the adapter runs its native check, starts only that service with `--no-deps`,
+and accepts only its product-owned readiness probe before continuing. Evidence
+cannot be a dependency because its released image has no process-local probe
+command. Undeclared Compose services are never started, and ordinary
+single-product checks retain the isolated `--no-deps` behavior.
+
+Started dependencies remain running after success or any later failure so the
+operator can inspect or route the validated deployment. The adapter performs
+no automatic cleanup. To return to a cold state, stop the exact declared
+dependency services with `docker compose stop <service>...`; do not use `down
+-v`, which would delete retained audit volumes. Native-check deadlines accept
+30 through 86,400 seconds. Dependency-readiness deadlines accept 5 through 600
+seconds. Compose output and dependency response bodies are discarded.
 
 ## Health probes
 
-Neither image declares a Docker `HEALTHCHECK`: distroless has no shell or
-curl, and neither binary has a healthcheck subcommand (the released Notary
-and Relay binaries do). Both services serve `GET /health` on their listener;
-use HTTP probes from your orchestrator.
+Neither development image declares a Docker `HEALTHCHECK`. Evidence serves
+`GET /health` for an orchestrator HTTP probe. Mint also serves `GET /health`
+and provides `mint healthcheck`, a bounded private-address probe of `/ready`
+for container and process supervisors. Set `MINT_HEALTHCHECK_URL` to the
+container's configured private listener address when it does not bind the
+loopback default.
 
 For an approved Evidence release or candidate, use the operator-owned
 [Compose adapter](compose/README.md), pin the reviewed image digest, and run

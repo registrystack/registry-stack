@@ -69,6 +69,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: access_audit_failure_blocks_credentials_and_source_access}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: disclosure_audit_failure_prevents_signed_response_release}
+      - {file: crates/registry-evidence/src/main.rs, name: runtime_dependency_check_rejects_audit_outside_required_persistent_root}
   - id: sec-source-canary-absent-everywhere
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}

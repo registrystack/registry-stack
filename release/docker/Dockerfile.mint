@@ -31,7 +31,7 @@ ENV MINT_CONFIG=/etc/registry-mint/config.yaml
 
 EXPOSE 8081
 
-# Mint serves GET /health for the platform's HTTP probe. The Distroless image
-# has no shell or HTTP client, and Mint has no healthcheck subcommand.
+# Mint provides a binary healthcheck command for process supervisors, but the
+# released image declares no one-size-fits-all listener URL.
 ENTRYPOINT ["/usr/local/bin/mint"]
 CMD ["serve"]

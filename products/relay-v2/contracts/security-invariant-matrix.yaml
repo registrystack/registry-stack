@@ -225,14 +225,15 @@ invariants:
       - {path: crates/registry-relay-v2/src/compiler.rs, name: public_record_cannot_reference_operator_only_semantics}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: all_four_registry_http_journeys_use_the_real_router}
   - id: sec-audit-release-gate
-    threat: Source access or response bytes escape without durable accountability.
-    enforcementPoint: Durable attempt before source I/O and durable refusal or release before returning exact held bytes.
-    expected: Every data operation, including public release, fails closed at the relevant audit gate.
+    threat: Source access or response bytes escape without durable accountability, or the configured audit chain is written to ephemeral container storage despite a decoy persistent mount.
+    enforcementPoint: Durable attempt before source I/O, durable refusal or release before returning exact held bytes, and a production dependency check that binds the resolved audit sink to an operator-declared persistent container root that the container adapter verifies independently.
+    expected: Every data operation, including public release, fails closed at the relevant audit gate, and container preflight refuses an audit sink outside the asserted persistent root.
     evidence: audit-ordering-tests
     negativeTest: audit_terminal_failure_discards_held_record_bytes
     tests:
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: audit_attempt_failure_prevents_source_access}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: audit_terminal_failure_discards_held_record_bytes}
+      - {path: crates/registry-relay-v2/src/startup.rs, name: runtime_check_refuses_audit_outside_required_persistent_root}
   - id: sec-audit-correlation-and-minimization
     threat: An emitted audit event cannot be correlated to the released operation or records protected request, response, source-row, or principal values.
     enforcementPoint: Relay-owned closed audit vocabulary populated from compiled and verified operation context.

@@ -59,8 +59,8 @@ COPY LICENSE /licenses/registry-mint/LICENSE
 ENV MINT_CONFIG=/etc/registry-mint/config.yaml
 EXPOSE 8081
 
-# No HEALTHCHECK: distroless has no shell or curl and the binary has no
-# healthcheck subcommand. The service serves GET /health for HTTP probes.
+# No image-level HEALTHCHECK. The binary's healthcheck command is available
+# to Compose and other process supervisors.
 ENTRYPOINT ["/usr/local/bin/mint"]
 CMD ["serve"]
 

@@ -27,6 +27,10 @@ pub enum Command {
         /// Strict deployment binding for the sealed package and local resources.
         #[arg(long, env = "RELAY_RUNTIME", default_value = DEFAULT_RUNTIME_PATH)]
         runtime: PathBuf,
+        /// Require the resolved audit destination to be at or below this
+        /// absolute persistent-storage root.
+        #[arg(long)]
+        require_audit_under: Option<PathBuf>,
     },
     /// Verify and activate one sealed Registry package, then serve it.
     Serve {
@@ -91,5 +95,23 @@ mod tests {
             runtime.get_default_values(),
             [OsStr::new(DEFAULT_RUNTIME_PATH)]
         );
+    }
+
+    #[test]
+    fn check_accepts_a_required_persistent_audit_root() {
+        let parsed = Cli::try_parse_from([
+            "relay",
+            "check",
+            "--require-audit-under",
+            "/var/lib/relay/audit",
+        ])
+        .expect("the persistent audit binding parses");
+        assert!(matches!(
+            parsed.command,
+            Command::Check {
+                require_audit_under: Some(_),
+                ..
+            }
+        ));
     }
 }

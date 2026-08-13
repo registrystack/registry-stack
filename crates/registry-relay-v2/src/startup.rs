@@ -90,8 +90,16 @@ pub struct PreparedRelay {
 
 /// Verify one runtime and construct its immutable service without listening.
 pub async fn prepare(runtime_path: &Path) -> Result<PreparedRelay, StartupError> {
+    prepare_with_audit_requirement(runtime_path, None).await
+}
+
+async fn prepare_with_audit_requirement(
+    runtime_path: &Path,
+    required_audit_root: Option<&Path>,
+) -> Result<PreparedRelay, StartupError> {
     let (runtime_root, runtime) = load_runtime(runtime_path)?;
     let paths = RuntimePaths::resolve(&runtime_root, &runtime)?;
+    require_audit_path_under(&paths.audit, required_audit_root)?;
 
     // The package is the governed trust root. Verify it before opening issuer,
     // audit, source, or listener resources.
@@ -169,10 +177,39 @@ pub async fn prepare(runtime_path: &Path) -> Result<PreparedRelay, StartupError>
 /// Validate the complete deployment exactly as startup does without binding a
 /// listener. This is the native container preflight used before traffic is
 /// routed to a new Relay instance.
-pub async fn check(runtime_path: &Path) -> Result<(), StartupError> {
-    let prepared = prepare(runtime_path).await?;
+pub async fn check(
+    runtime_path: &Path,
+    required_audit_root: Option<&Path>,
+) -> Result<(), StartupError> {
+    let prepared = prepare_with_audit_requirement(runtime_path, required_audit_root).await?;
     if !prepared.service.is_ready().await {
         return Err(StartupError::NotReady);
+    }
+    Ok(())
+}
+
+/// Bind Relay's resolved runtime audit sink to the persistent container root
+/// asserted by the deployment adapter.
+fn require_audit_path_under(
+    configured_path: &Path,
+    required_root: Option<&Path>,
+) -> Result<(), StartupError> {
+    let Some(required_root) = required_root else {
+        return Ok(());
+    };
+    let valid_root = required_root != Path::new("/")
+        && required_root.is_absolute()
+        && required_root
+            .to_str()
+            .is_some_and(|value| !value.is_empty() && value.len() <= 512)
+        && required_root.components().all(|component| {
+            matches!(
+                component,
+                Component::RootDir | Component::Prefix(_) | Component::Normal(_)
+            )
+        });
+    if !valid_root || !configured_path.starts_with(required_root) {
+        return Err(StartupError::AuditUnavailable);
     }
     Ok(())
 }
@@ -939,6 +976,33 @@ mod tests {
         assert!(probe(br#"{"status":"ok","source":"hidden"}"#)
             .await
             .is_err());
+    }
+
+    #[test]
+    fn runtime_check_refuses_audit_outside_required_persistent_root() {
+        let required = Path::new("/var/lib/relay/audit");
+        assert!(require_audit_path_under(
+            Path::new("/var/lib/relay/audit/events.jsonl"),
+            Some(required),
+        )
+        .is_ok());
+        assert!(require_audit_path_under(required, Some(required)).is_ok());
+
+        for (configured, root) in [
+            ("/tmp/audit/events.jsonl", "/var/lib/relay/audit"),
+            (
+                "/var/lib/relay/audit-decoy/events.jsonl",
+                "/var/lib/relay/audit",
+            ),
+            ("/var/lib/relay/audit/events.jsonl", "/"),
+            ("/var/lib/relay/audit/events.jsonl", "relative"),
+        ] {
+            assert_eq!(
+                require_audit_path_under(Path::new(configured), Some(Path::new(root))).err(),
+                Some(StartupError::AuditUnavailable),
+                "accepted configured path {configured} under required root {root}"
+            );
+        }
     }
 
     #[tokio::test]

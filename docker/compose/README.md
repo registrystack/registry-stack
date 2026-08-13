@@ -48,7 +48,9 @@ target-context check before starting the service:
 
 ```sh
 docker compose -f docker-compose.yaml run --rm evidence \
-  --runtime /etc/registry-evidence/runtime.yaml check --require-runtime-dependencies
+  --runtime /etc/registry-evidence/runtime.yaml check \
+  --require-runtime-dependencies \
+  --require-audit-under /var/lib/registry-evidence
 ```
 
 Or run the supported container preflight from the repository root. It first
@@ -61,7 +63,8 @@ printing Compose output or secret values:
 ```sh
 python3 docker/runtime-preflight.py \
   --compose-file docker/compose/docker-compose.yaml \
-  --service evidence=evidence
+  --service evidence=evidence \
+  --audit-root evidence=/var/lib/registry-evidence
 ```
 
 The bundle revision remains unchanged when only the container runtime changes. Run fixtures again
@@ -76,6 +79,11 @@ add an operator-owned Mint service with its configuration, public signing keys, 
 reviewed image, private listener, and dedicated Transit socket mounted independently. Mint receives
 no provider token or private signing key. Mint's configured issuer and JWKS URI remain public HTTPS
 identities. Operator routing or split DNS resolves that public identity within the Compose network.
+Select both services in `runtime-preflight.py`, assert each service's audit
+root, and pass `--dependency-service <mint-service>` to validate and start Mint
+before the Evidence dependency check. Successfully started dependencies remain
+running. Stop those exact services explicitly if the deployment must return to
+a cold state; preserve their audit volumes.
 
 This adapter does not establish image provenance, TLS, routing, client registration, or secret
 ownership. Those remain operator responsibilities.

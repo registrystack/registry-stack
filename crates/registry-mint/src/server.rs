@@ -36,6 +36,7 @@ use registry_platform_httputil::MAXIMUM_TOKEN_RESPONSE_BYTES;
 use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::net::TcpListener;
+use url::{Host, Url};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -64,6 +65,9 @@ const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 const MAXIMUM_BASIC_AUTHORIZATION_BYTES: usize = 2 * 1024;
 const MAXIMUM_CLIENT_ID_BYTES: usize = 256;
 const MAXIMUM_CLIENT_SECRET_BYTES: usize = 512;
+const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const MAXIMUM_HEALTH_BODY_BYTES: usize = 128;
+const READY_BODY: &[u8] = br#"{"status":"ready"}"#;
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -75,6 +79,8 @@ pub enum ServiceError {
     Audit(#[from] MintAuditError),
     #[error("client {0} cannot be served: {1}")]
     Registration(String, &'static str),
+    #[error("the readiness probe failed")]
+    Healthcheck,
 }
 
 /// The whole serving state: an immutable minter over a reloadable registry.
@@ -681,6 +687,73 @@ where
         .await
 }
 
+/// Probe exactly Mint's private-address readiness response.
+pub async fn healthcheck(raw_url: &str) -> Result<(), ServiceError> {
+    let url = healthcheck_url(raw_url)?;
+    let client = reqwest::Client::builder()
+        .timeout(HEALTHCHECK_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .map_err(|_| ServiceError::Healthcheck)?;
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| ServiceError::Healthcheck)?;
+    let status = response.status();
+    let content_type_is_json = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case(JSON_MEDIA_TYPE));
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| ServiceError::Healthcheck)?
+    {
+        if body.len().saturating_add(chunk.len()) > MAXIMUM_HEALTH_BODY_BYTES {
+            return Err(ServiceError::Healthcheck);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    if !healthcheck_response_is_exact(status, content_type_is_json, &body) {
+        return Err(ServiceError::Healthcheck);
+    }
+    Ok(())
+}
+
+fn healthcheck_url(raw_url: &str) -> Result<Url, ServiceError> {
+    let url = Url::parse(raw_url).map_err(|_| ServiceError::Healthcheck)?;
+    let private_address = matches!(
+        url.host(),
+        Some(Host::Ipv4(address)) if address.is_loopback() || address.is_private()
+    ) || matches!(
+        url.host(),
+        Some(Host::Ipv6(address)) if address.is_loopback() || address.is_unique_local()
+    );
+    if url.scheme() != "http"
+        || !private_address
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != MINT_READY_PATH
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ServiceError::Healthcheck);
+    }
+    Ok(url)
+}
+
+fn healthcheck_response_is_exact(
+    status: reqwest::StatusCode,
+    content_type_is_json: bool,
+    body: &[u8],
+) -> bool {
+    status == reqwest::StatusCode::OK && content_type_is_json && body == READY_BODY
+}
+
 async fn token(State(service): State<Arc<MintService>>, request: Request<Body>) -> Response {
     let operation = format!("urn:ulid:{}", ulid::Ulid::new());
     let used_http_authorization = request.headers().contains_key(AUTHORIZATION);
@@ -848,6 +921,50 @@ fn has_exact_content_type(headers: &HeaderMap, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readiness_probe_accepts_only_private_numeric_readiness_urls() {
+        for accepted in [
+            "http://127.0.0.1:8081/ready",
+            "http://10.24.0.3:8081/ready",
+            "http://[fd00::3]:8081/ready",
+        ] {
+            assert!(healthcheck_url(accepted).is_ok(), "rejected {accepted}");
+        }
+        for rejected in [
+            "http://example.com/ready",
+            "http://203.0.113.5/ready",
+            "https://127.0.0.1:8081/ready",
+            "http://127.0.0.1:8081/health",
+            "http://127.0.0.1:8081/ready?detail=true",
+        ] {
+            assert!(healthcheck_url(rejected).is_err(), "accepted {rejected}");
+        }
+    }
+
+    #[test]
+    fn readiness_probe_requires_the_exact_minimal_response() {
+        assert!(healthcheck_response_is_exact(
+            reqwest::StatusCode::OK,
+            true,
+            READY_BODY,
+        ));
+        assert!(!healthcheck_response_is_exact(
+            reqwest::StatusCode::OK,
+            true,
+            br#"{"status":"ready","issuer":"hidden"}"#,
+        ));
+        assert!(!healthcheck_response_is_exact(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+            true,
+            READY_BODY,
+        ));
+        assert!(!healthcheck_response_is_exact(
+            reqwest::StatusCode::OK,
+            false,
+            READY_BODY,
+        ));
+    }
 
     #[test]
     fn a_repeated_parameter_is_rejected() {

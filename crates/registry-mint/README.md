@@ -418,10 +418,21 @@ The ordinary check can run while Mint is serving because it does not claim the
 audit writer. Before first startup or a replacement deployment, add
 `--require-runtime-dependencies` to prove the signer and writable audit chain
 through the same initialization path as `mint serve`.
+Container adapters also pass `--require-audit-under
+<absolute-container-path>` after proving that path is a persistent mount. Mint
+resolves a relative `audit.path` against the configuration directory before it
+requires the audit destination to be at or below the asserted root. Mint owns
+configuration resolution; the container adapter owns storage persistence.
 
 ```bash
 mint serve --config /etc/mint/mint.yaml
 ```
+
+`mint healthcheck` probes a numeric loopback or private-address `/ready`
+endpoint with a bounded, proxy-free HTTP client and accepts only Mint's exact
+minimal ready response. Set `MINT_HEALTHCHECK_URL` when the container binds a
+private address instead of the loopback default. The command is for container
+and process supervision; it prints no response body.
 
 Verify the retained chain with the same configuration and audit key:
 

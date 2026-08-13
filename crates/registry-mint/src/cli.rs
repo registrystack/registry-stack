@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
+const DEFAULT_HEALTHCHECK_URL: &str = "http://127.0.0.1:8081/ready";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "mint",
@@ -25,11 +27,25 @@ pub enum Command {
         /// Use before startup, not against a Mint process that is already serving.
         #[arg(long)]
         require_runtime_dependencies: bool,
+        /// Require the resolved audit destination to be at or below this
+        /// absolute persistent-storage root.
+        #[arg(long, requires = "require_runtime_dependencies")]
+        require_audit_under: Option<PathBuf>,
     },
     /// Serve the token endpoint until terminated.
     Serve {
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
+    },
+    /// Probe a numeric private readiness endpoint without ambient proxy use.
+    Healthcheck {
+        /// Exact loopback or private-address readiness URL.
+        #[arg(
+            long,
+            env = "MINT_HEALTHCHECK_URL",
+            default_value = DEFAULT_HEALTHCHECK_URL
+        )]
+        url: String,
     },
     /// Verify the retained keyed Mint audit chain named by the configuration.
     VerifyAudit {
@@ -163,6 +179,7 @@ mod tests {
             ordinary.command,
             Command::Check {
                 require_runtime_dependencies: false,
+                require_audit_under: None,
                 ..
             }
         ));
@@ -179,8 +196,62 @@ mod tests {
             preflight.command,
             Command::Check {
                 require_runtime_dependencies: true,
+                require_audit_under: None,
                 ..
             }
         ));
+
+        let bound = Cli::try_parse_from([
+            "mint",
+            "check",
+            "--config",
+            "mint.yaml",
+            "--require-runtime-dependencies",
+            "--require-audit-under",
+            "/var/lib/registry-mint",
+        ])
+        .expect("the persistent audit binding parses");
+        assert!(matches!(
+            bound.command,
+            Command::Check {
+                require_runtime_dependencies: true,
+                require_audit_under: Some(_),
+                ..
+            }
+        ));
+
+        let missing_dependency_check = Cli::try_parse_from([
+            "mint",
+            "check",
+            "--config",
+            "mint.yaml",
+            "--require-audit-under",
+            "/var/lib/registry-mint",
+        ])
+        .expect_err("the audit root requires the runtime dependency check");
+        assert_eq!(
+            missing_dependency_check.kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn healthcheck_uses_the_process_local_readiness_endpoint() {
+        let command = command();
+        let healthcheck = command
+            .find_subcommand("healthcheck")
+            .expect("healthcheck subcommand exists");
+        let url = healthcheck
+            .get_arguments()
+            .find(|argument| argument.get_id() == "url")
+            .expect("healthcheck URL argument exists");
+        assert_eq!(
+            url.get_default_values(),
+            [std::ffi::OsStr::new(DEFAULT_HEALTHCHECK_URL)]
+        );
+        assert_eq!(
+            url.get_env(),
+            Some(std::ffi::OsStr::new("MINT_HEALTHCHECK_URL"))
+        );
     }
 }

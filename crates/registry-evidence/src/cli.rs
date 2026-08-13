@@ -35,6 +35,10 @@ pub enum Command {
         /// and access-token JWKS reachability in the target runtime context.
         #[arg(long)]
         require_runtime_dependencies: bool,
+        /// Require the resolved audit destination to be at or below this
+        /// absolute persistent-storage root.
+        #[arg(long, requires = "require_runtime_dependencies")]
+        require_audit_under: Option<PathBuf>,
     },
     /// Evaluate one bundle-owned fixture without source or credential access.
     Evaluate {
@@ -168,6 +172,7 @@ pub fn command() -> clap::Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::error::ErrorKind;
 
     #[test]
     fn public_reference_excludes_internal_evidencectl_seams() {
@@ -185,5 +190,36 @@ mod tests {
                 "{hidden} must remain hidden"
             );
         }
+    }
+
+    #[test]
+    fn audit_root_binding_requires_the_runtime_dependency_check() {
+        let missing_dependency_check = Cli::try_parse_from([
+            "evidence",
+            "check",
+            "--require-audit-under",
+            "/var/lib/registry-evidence",
+        ])
+        .expect_err("the audit root is meaningful only for a dependency check");
+        assert_eq!(
+            missing_dependency_check.kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+
+        let parsed = Cli::try_parse_from([
+            "evidence",
+            "check",
+            "--require-runtime-dependencies",
+            "--require-audit-under",
+            "/var/lib/registry-evidence",
+        ])
+        .expect("the complete container check parses");
+        assert!(matches!(
+            parsed.command,
+            Command::Check {
+                require_runtime_dependencies: true,
+                require_audit_under: Some(_),
+            }
+        ));
     }
 }

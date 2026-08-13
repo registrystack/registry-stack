@@ -160,10 +160,15 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
     match cli.command {
         Command::Check {
             require_runtime_dependencies,
+            require_audit_under,
         } => {
             let deployment = DeploymentInputs::load(&cli.runtime).map_err(deployment_load_error)?;
             let runtime = deployment.runtime;
             let bundle = Arc::new(deployment.bundle);
+            require_audit_path_under(
+                Path::new(&runtime.config.audit_storage.path),
+                require_audit_under.as_deref(),
+            )?;
             OfflineKernel::compile(Arc::clone(&bundle))
                 .map_err(|error| kernel_compile_error("bundle compilation failed", error))?;
             let source_plans = compile_source_plans(&bundle, &runtime)?;
@@ -350,6 +355,34 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::LocalAuditLastOperation => local_audit_last_operation_command(&cli.runtime),
     }
+}
+
+/// Bind the product-resolved audit destination to an operator-declared
+/// persistent container root without exposing either path in diagnostics.
+fn require_audit_path_under(
+    configured_path: &Path,
+    required_root: Option<&Path>,
+) -> Result<(), CliError> {
+    let Some(required_root) = required_root else {
+        return Ok(());
+    };
+    let valid_root = required_root != Path::new("/")
+        && required_root.is_absolute()
+        && required_root
+            .to_str()
+            .is_some_and(|value| !value.is_empty() && value.len() <= 512)
+        && required_root.components().all(|component| {
+            matches!(
+                component,
+                Component::RootDir | Component::Prefix(_) | Component::Normal(_)
+            )
+        });
+    if !valid_root || !configured_path.starts_with(required_root) {
+        return Err(CliError(
+            "the configured audit destination is outside the required persistent storage",
+        ));
+    }
+    Ok(())
 }
 
 /// Report a startup failure with the artifact diagnostic it carries.
@@ -4302,6 +4335,32 @@ mod tests {
     use registry_evidence::config::{AssuranceProfile, SubjectBindingMode};
     use registry_evidence::verifier::ExpectedValueForm;
     use std::fs;
+
+    #[test]
+    fn runtime_dependency_check_rejects_audit_outside_required_persistent_root() {
+        let required = Path::new("/var/lib/registry-evidence");
+        assert!(require_audit_path_under(
+            Path::new("/var/lib/registry-evidence/audit/events.jsonl"),
+            Some(required),
+        )
+        .is_ok());
+        assert!(require_audit_path_under(required, Some(required)).is_ok());
+
+        for (configured, root) in [
+            ("/tmp/audit/events.jsonl", "/var/lib/registry-evidence"),
+            (
+                "/var/lib/registry-evidence-decoy/events.jsonl",
+                "/var/lib/registry-evidence",
+            ),
+            ("/var/lib/registry-evidence/audit/events.jsonl", "/"),
+            ("/var/lib/registry-evidence/audit/events.jsonl", "relative"),
+        ] {
+            assert!(
+                require_audit_path_under(Path::new(configured), Some(Path::new(root))).is_err(),
+                "accepted configured path {configured} under required root {root}"
+            );
+        }
+    }
 
     /// Every command that compiles a kernel renders the same two things: the
     /// failure class it owns, and the artifact diagnostic the kernel produced.

@@ -69,3 +69,7 @@ verifies the sealed package, observed SQLite source, audit writer, secrets, and
 configured issuer discovery or JWKS transport. Exact token `iss` validation is
 bound to `authentication.issuer.trustedIssuer` when that explicit field is
 present, independent of the transport hostname.
+Container adapters add `--require-audit-under <absolute-container-path>` after
+they prove that path is a persistent mount. Relay resolves the configured audit
+sink and refuses the check unless the sink is at or below that root. Relay owns
+configuration resolution; the container adapter owns storage persistence.

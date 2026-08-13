@@ -8,22 +8,22 @@ import json
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
 
 MAXIMUM_COMPOSE_BYTES = 4 * 1024 * 1024
+MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 30
+MAXIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 24 * 60 * 60
+MINIMUM_DEPENDENCY_TIMEOUT_SECONDS = 5
+MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS = 10 * 60
 PRODUCTS = ("evidence", "mint", "relay")
 SERVICE_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
 IMAGE_PATTERNS = {
     product: re.compile(rf"ghcr\.io/registrystack/{product}@sha256:[0-9a-f]{{64}}")
     for product in PRODUCTS
-}
-AUDIT_PREFIXES = {
-    "evidence": "/var/lib/registry-evidence",
-    "mint": "/var/lib/registry-mint",
-    "relay": "/var/lib/relay/audit",
 }
 NATIVE_CHECKS = {
     "evidence": [
@@ -40,6 +40,10 @@ NATIVE_CHECKS = {
     ],
     "relay": ["check", "--runtime", "/etc/relay/runtime.yaml"],
 }
+DEPENDENCY_HEALTHCHECKS = {
+    "mint": ["/usr/local/bin/mint", "healthcheck"],
+    "relay": ["/usr/local/bin/relay", "healthcheck"],
+}
 
 
 class PreflightError(RuntimeError):
@@ -50,6 +54,12 @@ class PreflightError(RuntimeError):
 class ServiceSelection:
     product: str
     service: str
+
+
+@dataclass(frozen=True)
+class AuditRoot:
+    service: str
+    path: str
 
 
 def parse_service(raw: str) -> ServiceSelection:
@@ -63,6 +73,44 @@ def parse_service(raw: str) -> ServiceSelection:
             "service selection must be PRODUCT=SERVICE for evidence, mint, or relay"
         )
     return ServiceSelection(product, service)
+
+
+def normalized_container_path(raw: str) -> str:
+    if not raw.startswith("/") or raw.startswith("//") or len(raw) > 512:
+        raise PreflightError("container storage root must be a bounded absolute path")
+    parts = raw.split("/")[1:]
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise PreflightError("container storage root must be a bounded absolute path")
+    return f"/{'/'.join(parts)}"
+
+
+def parse_audit_root(raw: str) -> AuditRoot:
+    service, separator, path = raw.partition("=")
+    if separator != "=" or SERVICE_PATTERN.fullmatch(service) is None:
+        raise PreflightError("audit root must be SERVICE=ABSOLUTE_CONTAINER_PATH")
+    return AuditRoot(service, normalized_container_path(path))
+
+
+def parse_service_name(raw: str) -> str:
+    if SERVICE_PATTERN.fullmatch(raw) is None:
+        raise PreflightError("dependency service name is invalid")
+    return raw
+
+
+def bounded_seconds(raw: str, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(raw, 10)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("timeout must be an integer number of seconds") from error
+    if not minimum <= value <= maximum:
+        raise argparse.ArgumentTypeError(
+            f"timeout must be between {minimum} and {maximum} seconds"
+        )
+    return value
+
+
+def path_at_or_below(path: str, root: str) -> bool:
+    return path == root or path.startswith(f"{root}/")
 
 
 def closed_json(raw: str) -> dict[str, Any]:
@@ -100,7 +148,11 @@ def compose_prefix(args: argparse.Namespace) -> list[str]:
 
 
 def run_compose(
-    command: list[str], *, timeout: int, capture_output: bool = True
+    command: list[str],
+    *,
+    timeout: int,
+    capture_output: bool = True,
+    timeout_is_failure: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     output_options: dict[str, Any]
     if capture_output:
@@ -118,7 +170,13 @@ def run_compose(
             timeout=timeout,
             **output_options,
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except subprocess.TimeoutExpired as error:
+        if not timeout_is_failure:
+            return subprocess.CompletedProcess(command, 124, "", "")
+        raise PreflightError(
+            "Docker Compose could not complete the preflight"
+        ) from error
+    except OSError as error:
         raise PreflightError(
             "Docker Compose could not complete the preflight"
         ) from error
@@ -180,7 +238,7 @@ def named_volume_is_ephemeral(document: dict[str, Any], source: str) -> bool:
 
 
 def validate_mounts(
-    product: str, service: dict[str, Any], document: dict[str, Any]
+    service: dict[str, Any], document: dict[str, Any], audit_root: str
 ) -> None:
     volumes_from = service.get("volumes_from", [])
     if not isinstance(volumes_from, list) or volumes_from:
@@ -188,8 +246,8 @@ def validate_mounts(
     volumes = service.get("volumes")
     if not isinstance(volumes, list):
         raise PreflightError("service has no runtime mounts")
-    audit_prefix = AUDIT_PREFIXES[product]
-    audit_writable = False
+    persistent_audit_mount = False
+    mount_targets: list[str] = []
     for volume in volumes:
         if not isinstance(volume, dict):
             raise PreflightError("service runtime mount posture is invalid")
@@ -197,8 +255,10 @@ def validate_mounts(
         read_only = volume.get("read_only") is True
         mount_type = volume.get("type")
         source = volume.get("source")
-        if not isinstance(target, str) or not target.startswith("/"):
+        if not isinstance(target, str):
             raise PreflightError("service runtime mount target is invalid")
+        target = normalized_container_path(target)
+        mount_targets.append(target)
         protected_paths = ("/etc", "/run/secrets")
         overlaps_protected_path = target == "/" or any(
             target == protected
@@ -208,16 +268,30 @@ def validate_mounts(
         )
         if overlaps_protected_path and not read_only:
             raise PreflightError("configuration and secret mounts must be read-only")
-        if mount_type in ("bind", "volume") and (
-            target == audit_prefix or target.startswith(f"{audit_prefix}/")
-        ):
+        if target == audit_root and mount_type in ("bind", "volume"):
             has_source = isinstance(source, str) and bool(source.strip())
             if mount_type == "volume" and has_source:
                 if named_volume_is_ephemeral(document, source):
                     raise PreflightError("audit volume backend must be persistent")
-            audit_writable = not read_only and has_source
-    if not audit_writable:
-        raise PreflightError("service has no writable persistent audit mount")
+            persistent_audit_mount = not read_only and has_source
+    if not persistent_audit_mount:
+        raise PreflightError("asserted audit root is not a writable persistent mount")
+
+    if sum(target == audit_root for target in mount_targets) != 1:
+        raise PreflightError("asserted audit root must resolve to exactly one mount")
+    if any(
+        target != audit_root and path_at_or_below(target, audit_root)
+        for target in mount_targets
+    ):
+        raise PreflightError("asserted audit root is shadowed by another mount")
+
+    tmpfs = service.get("tmpfs", [])
+    if not isinstance(tmpfs, list) or not all(isinstance(item, str) for item in tmpfs):
+        raise PreflightError("service tmpfs posture is invalid")
+    for item in tmpfs:
+        target = normalized_container_path(item.split(":", 1)[0])
+        if path_at_or_below(target, audit_root):
+            raise PreflightError("asserted audit root is shadowed by tmpfs")
 
 
 def validate_ports(service: dict[str, Any]) -> None:
@@ -240,7 +314,9 @@ def validate_ports(service: dict[str, Any]) -> None:
             raise PreflightError("service ports may be published only on loopback")
 
 
-def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> None:
+def validate_service(
+    selection: ServiceSelection, document: dict[str, Any], audit_root: str
+) -> None:
     services = document.get("services")
     if not isinstance(services, dict):
         raise PreflightError("rendered Compose configuration has no services")
@@ -290,11 +366,16 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
     ):
         raise PreflightError("service must prohibit privilege escalation")
     validate_secret_entries(service)
-    validate_mounts(selection.product, service, document)
+    validate_mounts(service, document, audit_root)
     validate_ports(service)
 
 
-def native_check(prefix: list[str], selection: ServiceSelection) -> None:
+def native_check(
+    prefix: list[str],
+    selection: ServiceSelection,
+    audit_root: str,
+    timeout: int,
+) -> None:
     result = run_compose(
         [
             *prefix,
@@ -303,14 +384,63 @@ def native_check(prefix: list[str], selection: ServiceSelection) -> None:
             "--no-deps",
             selection.service,
             *NATIVE_CHECKS[selection.product],
+            "--require-audit-under",
+            audit_root,
         ],
-        timeout=90,
+        timeout=timeout,
         capture_output=False,
     )
     if result.returncode != 0:
         raise PreflightError(
             f"{selection.product} service {selection.service} failed its native runtime check"
         )
+
+
+def start_dependency(prefix: list[str], selection: ServiceSelection, timeout: int) -> None:
+    result = run_compose(
+        [
+            *prefix,
+            "up",
+            "--detach",
+            "--no-deps",
+            selection.service,
+        ],
+        timeout=min(timeout, 30),
+        capture_output=False,
+    )
+    if result.returncode != 0:
+        raise PreflightError("a declared dependency service could not be started")
+
+
+def wait_for_dependency(
+    prefix: list[str], selection: ServiceSelection, timeout: int
+) -> None:
+    healthcheck = DEPENDENCY_HEALTHCHECKS.get(selection.product)
+    if healthcheck is None:
+        raise PreflightError("the selected product cannot be a preflight dependency")
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PreflightError("a declared dependency service did not become ready")
+        result = run_compose(
+            [
+                *prefix,
+                "exec",
+                "--no-TTY",
+                selection.service,
+                *healthcheck,
+            ],
+            timeout=max(1, min(6, int(remaining))),
+            capture_output=False,
+            timeout_is_failure=False,
+        )
+        if result.returncode == 0:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise PreflightError("a declared dependency service did not become ready")
+        time.sleep(min(1.0, remaining))
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -337,6 +467,38 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         required=True,
         help="PRODUCT=SERVICE; repeat for each Evidence, Mint, or Relay service",
     )
+    parser.add_argument(
+        "--audit-root",
+        action="append",
+        required=True,
+        help="SERVICE=ABSOLUTE_CONTAINER_PATH for the service's persistent audit mount",
+    )
+    parser.add_argument(
+        "--dependency-service",
+        action="append",
+        default=[],
+        help="selected internal service to check, start, and probe; repeat in dependency order",
+    )
+    parser.add_argument(
+        "--native-check-timeout-seconds",
+        type=lambda raw: bounded_seconds(
+            raw,
+            minimum=MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS,
+            maximum=MAXIMUM_NATIVE_CHECK_TIMEOUT_SECONDS,
+        ),
+        default=90,
+        help="bounded deadline for each native product check",
+    )
+    parser.add_argument(
+        "--dependency-timeout-seconds",
+        type=lambda raw: bounded_seconds(
+            raw,
+            minimum=MINIMUM_DEPENDENCY_TIMEOUT_SECONDS,
+            maximum=MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS,
+        ),
+        default=90,
+        help="bounded deadline for each declared dependency to become ready",
+    )
     return parser.parse_args(argv)
 
 
@@ -346,12 +508,44 @@ def main(argv: Sequence[str] | None = None) -> int:
         selections = [parse_service(raw) for raw in args.service]
         if len(selections) != len({item.service for item in selections}):
             raise PreflightError("a Compose service was selected more than once")
+        audit_roots = [parse_audit_root(raw) for raw in args.audit_root]
+        if len(audit_roots) != len({item.service for item in audit_roots}):
+            raise PreflightError("a Compose service received more than one audit root")
+        roots_by_service = {item.service: item.path for item in audit_roots}
+        selected_by_service = {item.service: item for item in selections}
+        if set(roots_by_service) != set(selected_by_service):
+            raise PreflightError("every selected service must have exactly one audit root")
+        dependency_names = [parse_service_name(raw) for raw in args.dependency_service]
+        if len(dependency_names) != len(set(dependency_names)):
+            raise PreflightError("a dependency service was selected more than once")
+        if any(name not in selected_by_service for name in dependency_names):
+            raise PreflightError("every dependency service must also be selected for preflight")
+        dependencies = [selected_by_service[name] for name in dependency_names]
+        if any(item.product not in DEPENDENCY_HEALTHCHECKS for item in dependencies):
+            raise PreflightError("the selected product cannot be a preflight dependency")
         prefix = compose_prefix(args)
         document = render_compose(prefix)
         for selection in selections:
-            validate_service(selection, document)
+            validate_service(selection, document, roots_by_service[selection.service])
+        checked: set[str] = set()
+        for selection in dependencies:
+            native_check(
+                prefix,
+                selection,
+                roots_by_service[selection.service],
+                args.native_check_timeout_seconds,
+            )
+            checked.add(selection.service)
+            start_dependency(prefix, selection, args.dependency_timeout_seconds)
+            wait_for_dependency(prefix, selection, args.dependency_timeout_seconds)
         for selection in selections:
-            native_check(prefix, selection)
+            if selection.service not in checked:
+                native_check(
+                    prefix,
+                    selection,
+                    roots_by_service[selection.service],
+                    args.native_check_timeout_seconds,
+                )
     except PreflightError as error:
         print(f"runtime preflight failed: {error}", file=sys.stderr)
         return 1

@@ -1087,6 +1087,11 @@ requires the signer self-test, resolves source credentials without sending an
 evidence-data request, and requires the configured access-token JWKS endpoint
 to provide a usable key set. This fail-closed preflight does not change normal
 serving readiness, which retains its bounded issuer-outage behavior.
+When a container adapter has proved a persistent mount, it also passes
+`--require-audit-under <absolute-container-path>`. Evidence resolves the
+configured audit destination and refuses the dependency check unless that
+destination is at or below the asserted root. Evidence owns the runtime path;
+the adapter owns the mount's persistence and shadowing checks.
 
 For `assuranceProfile: local`, supervised Mint may use the exact canonical
 issuer origin `http://127.0.0.1:<non-zero-port>` only when `jwksUri` is the
