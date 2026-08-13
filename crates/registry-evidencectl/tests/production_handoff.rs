@@ -313,6 +313,22 @@ fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
 }
 
 #[test]
+#[ignore = "exact gate: runs the real production builder and sibling Evidence bundle check"]
+fn production_build_accepts_the_real_bundle_check_revision() {
+    let fixture = Fixture::new();
+    let evidence = evidence_binary();
+    fixture.stage_authoring_project();
+    fixture.stage_four_shape_project();
+    fixture.stage_target();
+    fixture.authorize_four_shapes();
+
+    let output = fixture.build(evidence);
+    let revision = bundle_revision(&output);
+    assert!(revision.starts_with("sha256:"));
+    assert!(fixture.candidate.join("bundle/evidence.yaml").is_file());
+}
+
+#[test]
 #[ignore = "exact gate: runs the real production builder across all four authoring shapes"]
 fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
     let fixture = Fixture::new();

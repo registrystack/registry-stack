@@ -363,7 +363,7 @@ fn runtime_failure<T>(message: &str) -> Result<T> {
 fn parse_bundle_revision(stdout: &str) -> Result<String> {
     let revision = stdout
         .lines()
-        .find_map(|line| line.strip_prefix("Evidence deployment "))
+        .find_map(|line| line.strip_prefix("Evidence bundle "))
         .and_then(|line| line.split_whitespace().next())
         .filter(|value| {
             value.len() == 71
@@ -637,12 +637,19 @@ requirements: []
 
     #[test]
     fn revision_and_secret_reference_parsing_are_closed() {
-        let revision = format!("Evidence deployment sha256:{}\n", "a".repeat(64));
+        let revision = format!(
+            "Evidence bundle sha256:{} passed check (2 requirements)\n",
+            "a".repeat(64)
+        );
         assert_eq!(
             parse_bundle_revision(&revision).expect("revision"),
             format!("sha256:{}", "a".repeat(64))
         );
-        assert!(parse_bundle_revision("Evidence deployment sha256:not-a-digest\n").is_err());
+        assert!(parse_bundle_revision(
+            "Evidence deployment sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        )
+        .is_err());
+        assert!(parse_bundle_revision("Evidence bundle sha256:not-a-digest\n").is_err());
 
         let names = secret_references(&json!({
             "z": "secret:file/source-token",
