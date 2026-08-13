@@ -72,7 +72,8 @@ path; the local target documents the generated bindings and is not passed to
 the strict deployment compiler.
 
 Before routing an environment, run `evidencectl doctor`, all Evidence fixtures,
-`evidence check`, and `mint check`, then confirm both `/ready` endpoints. A
+`evidence check --require-runtime-dependencies`, and `mint check`, then confirm
+both `/ready` endpoints. A
 signer whose controls, pinned version, or public key differ from these governed
 files must fail the handoff.
 

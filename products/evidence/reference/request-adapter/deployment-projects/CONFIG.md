@@ -1001,9 +1001,10 @@ The supported publication handoff is deliberately explicit because
 6. Transfer the new file under a new versioned path, make it non-writable to the
    Evidence identity, update only the matching `runtime.yaml` binding, and
    restart. Never replace the bytes behind an open immutable connection.
-7. Run `evidence check` against the exact runtime and mounted extract. The check
-   refuses an extract that is already older than its source permits. Then run
-   every referenced fixture, real startup, and `/ready` before routing traffic.
+7. Run `evidence check --require-runtime-dependencies` against the exact runtime
+   and mounted extract. The check refuses an extract that is already older than
+   its source permits. Then run every referenced fixture, real startup, and
+   `/ready` before routing traffic.
    Retain the runtime revision and governed extract profile in the deployment
    record. Do not copy publisher-controlled metadata values into logs, audit,
    or error tickets.
