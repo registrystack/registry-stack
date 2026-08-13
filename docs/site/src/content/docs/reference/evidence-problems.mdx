@@ -55,7 +55,7 @@ All responses use `Cache-Control: no-store`.
 | `evidence.denied` | 403 | Evidence request is not permitted | the Evidence request is not permitted | Obtain an appropriate entitlement. The response does not identify the failed authorization condition. |
 | `resource.not_found` | 404 | Requested resource was not found | the requested resource was not found | Check the route and HTTP method. Unknown paths and unsupported methods use this code. |
 | `format.unsupported` | 406 | Requested format is not supported | the requested format is not supported | Send one exact supported `Accept` value. |
-| `evidence.unavailable` | 422 | Evidence could not be produced | evidence could not be produced for this request | Do not retry an unchanged request. The service does not disclose whether the cause was no match, ambiguity, a missing fact, or unresolved derivation input. |
+| `evidence.unavailable` | 422 | Evidence could not be produced | evidence could not be produced for this request | Do not infer the cause or retry blindly. Retry after request inputs or authoritative source state may have changed, or follow operator guidance. The service does not disclose the unavailable class. |
 | `evidence.rate_limited` | 429 | Evidence request rate is exhausted | the Evidence request rate is exhausted | Wait one second, as stated in `Retry-After: 1`, then retry. |
 | `source.unavailable` | 503 | Authoritative source is unavailable | the authoritative source is unavailable | Retry with backoff or contact the source operator. |
 | `service.unavailable` | 503 | Service is unavailable | the request could not be served | Retry with backoff or contact the Evidence Gateway operator. |
@@ -72,6 +72,7 @@ It is not the outer `evidence.unavailable` problem code.
 
 ## Source
 
-This page transcribes `products/evidence/contracts/problem-contract.yaml`.
-The complete generated route mapping is in
+The code, status, title, detail, headers, and batch semantics are transcribed from
+`products/evidence/contracts/problem-contract.yaml` and the generated runtime artifacts. The
+Recovery column is operational guidance. The complete generated route mapping is in
 `products/evidence/generated/registry-evidence.openapi.json`.

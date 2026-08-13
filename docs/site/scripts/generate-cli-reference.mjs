@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   mkdir,
   mkdtemp,
@@ -12,6 +13,7 @@ import {
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import YAML from 'yaml';
 
 const execFileAsync = promisify(execFile);
 const scriptPath = fileURLToPath(import.meta.url);
@@ -19,7 +21,8 @@ const scriptDir = dirname(scriptPath);
 const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
 
-export const schemaVersion = 'registry.cli-reference/v1';
+export const schemaVersion = 'registry.cli-reference/v2';
+export const reviewSchemaVersion = 'registry.cli-reference-review/v2';
 export const expectedBinaries = [
   'evidence',
   'evidence-oid4vci',
@@ -31,6 +34,7 @@ export const expectedBinaries = [
 
 const generatedTree = 'src/content/docs/reference/cli';
 const generatedData = 'src/data/generated/cli-reference.json';
+const reviewMetadataFile = 'src/data/cli-reference.yaml';
 const hiddenCommands = new Set([
   '__dev-supervisor',
   'bundle-check',
@@ -85,9 +89,7 @@ function validateArgument(argument, label) {
     label,
   );
   nonempty(argument.display, `${label}.display`);
-  if (typeof argument.description !== 'string') {
-    throw new Error(`${label}.description must be a string`);
-  }
+  nonempty(argument.description, `${label}.description`);
   if (typeof argument.always_required !== 'boolean') {
     throw new Error(`${label}.always_required must be a boolean`);
   }
@@ -104,12 +106,17 @@ function validateArgument(argument, label) {
 function validateConstraint(constraint, label) {
   exactKeys(constraint, new Set(['kind', 'when', 'arguments']), label);
   if (
-    !['required_exactly_one', 'required_one_or_more', 'requires_all'].includes(
+    ![
+      'required_exactly_one',
+      'required_one_or_more',
+      'requires_all',
+      'mutually_exclusive',
+    ].includes(
       constraint.kind,
     )
   ) {
     throw new Error(
-      `${label}.kind must be required_exactly_one, required_one_or_more, or requires_all`,
+      `${label}.kind must be required_exactly_one, required_one_or_more, requires_all, or mutually_exclusive`,
     );
   }
   if (constraint.when !== null && typeof constraint.when !== 'string') {
@@ -124,6 +131,21 @@ function validateConstraint(constraint, label) {
   stringArray(constraint.arguments, `${label}.arguments`);
   if (constraint.arguments.length === 0) {
     throw new Error(`${label}.arguments must not be empty`);
+  }
+  if (constraint.kind === 'mutually_exclusive') {
+    if (constraint.when !== null) {
+      throw new Error(`${label}.when must be null for mutually exclusive arguments`);
+    }
+    if (constraint.arguments.length !== 2) {
+      throw new Error(`${label}.arguments must contain exactly two mutually exclusive arguments`);
+    }
+    const sorted = [...constraint.arguments].sort();
+    if (
+      sorted[0] === sorted[1] ||
+      JSON.stringify(sorted) !== JSON.stringify(constraint.arguments)
+    ) {
+      throw new Error(`${label}.arguments must be distinct and sorted`);
+    }
   }
 }
 
@@ -184,9 +206,17 @@ function validateCommand(command, parent, invocations) {
 }
 
 export function validateCatalog(catalog) {
-  exactKeys(catalog, new Set(['schema_version', 'binaries']), 'CLI reference catalog');
+  exactKeys(
+    catalog,
+    new Set(['schema_version', 'source_version', 'binaries']),
+    'CLI reference catalog',
+  );
   if (catalog.schema_version !== schemaVersion) {
     throw new Error(`CLI reference catalog must use ${schemaVersion}`);
+  }
+  nonempty(catalog.source_version, 'CLI reference catalog.source_version');
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(catalog.source_version)) {
+    throw new Error('CLI reference catalog.source_version must be a semantic version');
   }
   if (!Array.isArray(catalog.binaries)) {
     throw new Error('CLI reference catalog binaries must be an array');
@@ -198,6 +228,85 @@ export function validateCatalog(catalog) {
   const invocations = new Set();
   catalog.binaries.forEach((binary) => validateCommand(binary, null, invocations));
   return catalog;
+}
+
+export function catalogDigest(catalog) {
+  validateCatalog(catalog);
+  return createHash('sha256').update(JSON.stringify(catalog)).digest('hex');
+}
+
+function validCalendarDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
+export function validateReviewMetadata(metadata, sourceVersion, sourceDigest) {
+  exactKeys(
+    metadata,
+    new Set([
+      'schema_version',
+      'status',
+      'last_reviewed',
+      'reviewed_source_version',
+      'reviewed_catalog_sha256',
+    ]),
+    'CLI reference review metadata',
+  );
+  if (metadata.schema_version !== reviewSchemaVersion) {
+    throw new Error(`CLI reference review metadata must use ${reviewSchemaVersion}`);
+  }
+  if (!['draft', 'current'].includes(metadata.status)) {
+    throw new Error('CLI reference review metadata.status must be draft or current');
+  }
+  nonempty(metadata.last_reviewed, 'CLI reference review metadata.last_reviewed');
+
+  if (metadata.last_reviewed === 'unreviewed') {
+    if (
+      metadata.status !== 'draft'
+      || metadata.reviewed_source_version !== null
+      || metadata.reviewed_catalog_sha256 !== null
+    ) {
+      throw new Error(
+        'unreviewed CLI reference metadata must be draft with no reviewed source version or catalog digest',
+      );
+    }
+    return metadata;
+  }
+
+  if (!validCalendarDate(metadata.last_reviewed)) {
+    throw new Error('CLI reference review metadata.last_reviewed must be unreviewed or YYYY-MM-DD');
+  }
+  nonempty(
+    metadata.reviewed_source_version,
+    'CLI reference review metadata.reviewed_source_version',
+  );
+  if (metadata.reviewed_source_version !== sourceVersion) {
+    throw new Error(
+      `CLI reference review metadata covers ${metadata.reviewed_source_version}, not ${sourceVersion}`,
+    );
+  }
+  if (!/^[0-9a-f]{64}$/u.test(metadata.reviewed_catalog_sha256 ?? '')) {
+    throw new Error('CLI reference review metadata.reviewed_catalog_sha256 must be a lowercase SHA-256 digest');
+  }
+  if (metadata.reviewed_catalog_sha256 !== sourceDigest) {
+    throw new Error('CLI reference review metadata does not cover the current command catalog digest');
+  }
+  return metadata;
+}
+
+async function loadReviewMetadata(docsRoot, sourceVersion, sourceDigest) {
+  const path = resolve(docsRoot, reviewMetadataFile);
+  let metadata;
+  try {
+    metadata = YAML.parse(await readFile(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`${reviewMetadataFile} could not be read: ${error.message}`);
+  }
+  return validateReviewMetadata(metadata, sourceVersion, sourceDigest);
 }
 
 async function executeCatalog(repoRoot) {
@@ -241,15 +350,16 @@ function values(values) {
   return values.length === 0 ? 'n/a' : values.map(inlineCode).join(', ');
 }
 
-function frontmatter(title, description) {
+function frontmatter(title, description, reviewMetadata) {
+  const draft = reviewMetadata.status === 'draft' ? '\ndraft: true' : '';
   return `---
 title: ${JSON.stringify(title)}
 description: ${JSON.stringify(description)}
-status: current
+status: ${reviewMetadata.status}${draft}
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: ${JSON.stringify(reviewMetadata.last_reviewed)}
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -304,6 +414,10 @@ ${rows.map((row) => `| ${row} |`).join('\n')}
 function constraintTable(constraints) {
   if (constraints.length === 0) return '';
   const rows = constraints.map((constraint) => {
+    if (constraint.kind === 'mutually_exclusive') {
+      const [left, right] = constraint.arguments.map(inlineCode);
+      return `| Command invocation | ${left} and ${right} cannot be used together. |`;
+    }
     if (constraint.kind === 'required_exactly_one') {
       const requirement =
         constraint.arguments.length === 1
@@ -333,12 +447,13 @@ ${rows.join('\n')}
 `;
 }
 
-function renderCommand(command) {
+function renderCommand(command, catalog, reviewMetadata, sourceDigest) {
   const path = commandPath(command);
   const lines = [
     frontmatter(
       `${command.invocation} command reference`,
       `Generated syntax and options for ${command.invocation}.`,
+      reviewMetadata,
     ),
     '',
     '{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}',
@@ -347,7 +462,7 @@ function renderCommand(command) {
     '',
     '## Contract status',
     '',
-    'This page is generated from the public Clap command tree. Hidden implementation commands are omitted.',
+    `This page is generated from the public Clap command tree for Registry Stack source version ${inlineCode(catalog.source_version)} and catalog SHA-256 ${inlineCode(sourceDigest)}. Hidden implementation commands are omitted.`,
   ];
   if (command.long_about !== null) {
     lines.push('', '## Description', '', sentence(command.long_about));
@@ -383,12 +498,13 @@ function renderCommand(command) {
   return `${rendered.trimEnd()}\n`;
 }
 
-function renderIndex(catalog) {
+function renderIndex(catalog, reviewMetadata, sourceDigest) {
   const binaries = new Map(catalog.binaries.map((binary) => [binary.name, binary]));
   const lines = [
     frontmatter(
       'Command-line interfaces',
-      'Generated command references for released Registry Relay and Evidence binaries.',
+      'Generated command references for Registry Relay and Evidence binaries.',
+      reviewMetadata,
     ),
     '',
     '{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}',
@@ -397,7 +513,7 @@ function renderIndex(catalog) {
     '',
     '## Contract status',
     '',
-    'The pages in this section are generated from each released binary\'s public Clap command tree. Hidden implementation commands are omitted.',
+    `The pages in this section are generated from the public Clap command trees for Registry Stack source version ${inlineCode(catalog.source_version)} and catalog SHA-256 ${inlineCode(sourceDigest)}. Hidden implementation commands are omitted.`,
   ];
   for (const group of groups) {
     lines.push('', `## ${group.title}`, '', '| Binary | Description |', '| --- | --- |');
@@ -416,11 +532,13 @@ function renderIndex(catalog) {
   return `${lines.join('\n').trimEnd()}\n`;
 }
 
-export function renderCatalog(catalog) {
+export function renderCatalog(catalog, reviewMetadata) {
   validateCatalog(catalog);
-  const files = new Map([['index.mdx', renderIndex(catalog)]]);
+  const sourceDigest = catalogDigest(catalog);
+  validateReviewMetadata(reviewMetadata, catalog.source_version, sourceDigest);
+  const files = new Map([['index.mdx', renderIndex(catalog, reviewMetadata, sourceDigest)]]);
   const add = (command) => {
-    files.set(commandPath(command), renderCommand(command));
+    files.set(commandPath(command), renderCommand(command, catalog, reviewMetadata, sourceDigest));
     command.subcommands.forEach(add);
   };
   catalog.binaries.forEach(add);
@@ -502,7 +620,12 @@ export async function generateCliReference(
     throw new Error(`CLI reference collector did not emit JSON: ${error.message}`);
   }
   validateCatalog(catalog);
-  const pages = renderCatalog(catalog);
+  const reviewMetadata = await loadReviewMetadata(
+    docsRoot,
+    catalog.source_version,
+    catalogDigest(catalog),
+  );
+  const pages = renderCatalog(catalog, reviewMetadata);
   const data = `${JSON.stringify(catalog, null, 2)}\n`;
   const treePath = resolve(docsRoot, generatedTree);
   const dataPath = resolve(docsRoot, generatedData);

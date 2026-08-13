@@ -546,6 +546,10 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_all_unavailable_is_200_and_records_no_signing_key}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_search_is_item_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_aborts_without_partial_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_set_member_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_malformed_sequential_extraction_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_signing_failure_releases_no_partial_envelope}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release}

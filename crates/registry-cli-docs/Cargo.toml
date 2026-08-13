@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Deterministic generated reference data for released Registry Stack CLIs."
+description = "Deterministic generated reference data for public Registry Stack CLIs."
 repository.workspace = true
 publish = false
 

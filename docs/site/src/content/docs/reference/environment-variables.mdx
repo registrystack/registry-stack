@@ -1,6 +1,6 @@
 ---
 title: Environment variable reference
-description: Environment variables read by the Relay, Evidence Gateway, and Registry Mint binaries and by their installers, with the secret reference grammars that name operator-chosen variables.
+description: Environment variables read by Registry Stack runtimes, adopter tooling, and installers, with the secret reference grammars that name operator-chosen variables.
 status: current
 owner: registry-docs
 source_repos:
@@ -13,7 +13,9 @@ locale: en
 standards_referenced: []
 ---
 
-This page lists the environment variables read directly by the Relay binary, the Evidence Gateway binary, and the Registry Mint binary, plus the variables their install scripts read. These are fixed variable names that the process resolves itself.
+This page lists Registry Stack's supported fixed environment-variable interfaces for runtimes,
+adopter tooling, and installers. It also records how Relayctl keeps fixture scratch state independent
+of host temporary-directory configuration.
 
 The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay is the product that works that way, and the reference grammar is closed rather than free-form. Evidence Gateway and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
 
@@ -27,7 +29,7 @@ The `relay` binary reads the variables below.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `RELAY_RUNTIME` | Path to the deployment binding that names the sealed package, the local sources, authentication, audit, and limits. Equivalent to the `--runtime` flag on `relay serve`. | Required for `relay serve`, by flag or by variable. |
+| `RELAY_RUNTIME` | Path to the deployment binding that names the sealed package, the local sources, authentication, audit, and limits. Equivalent to `--runtime` on `relay check` and `relay serve`. | Required for `relay serve`, by flag or by variable. `relay check` defaults to `/etc/relay/runtime.yaml`. |
 | `RELAY_HEALTHCHECK_URL` | Complete HTTP or HTTPS URL of the unauthenticated `/health` endpoint to probe. Equivalent to the `--url` flag on `relay healthcheck`. | Defaults to `http://127.0.0.1:8080/health`. |
 | `RELAY_LOG` | Level for the JSON operational records the process writes on standard error. | Defaults to `info`. |
 
@@ -60,18 +62,60 @@ preserves the previous pair. It does not verify release authenticity.
 
 ## Relayctl
 
-`relayctl` reads no environment variable. Every input is a positional path or an explicit flag, and every secret reference stays inside the project's `runtime.yaml` for `relay` to resolve at startup.
+`relayctl` reads no environment variable. Workflow registries and projects arrive through positional
+paths, explicit flags, or authored files. `tooling editor` may use its documented current-directory
+default, and the language server receives authoring documents through its protocol session. Secret
+references remain inside the project's `runtime.yaml` for `relay` to resolve at startup.
+
+`relayctl test` ignores host temporary-directory variables. It validates the canonical project's
+parent hierarchy, creates an owner-only transient workspace beside the project, and removes that
+workspace after the fixture run. The project itself may be read-only, but its parent must be trusted
+and writable. Scratch placement cannot select a Registry, deployment environment, credential, or
+governed behavior.
 
 ## Evidence Gateway
 
-The `evidence` binary reads the two variables below. Each is a global that applies to every subcommand.
+The runtime-path option is global. `EVIDENCE_LOG` is read by `evidence serve` only.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
 | `REGISTRY_EVIDENCE_RUNTIME` | Absolute path to the one operator runtime file that binds the governed bundle. Equivalent to the global `--runtime` flag. | Defaults to `/etc/registry-evidence/runtime.yaml`. |
 | `EVIDENCE_LOG` | Tracing filter for the operational records the serving process writes as line-delimited JSON on standard output. | Defaults to `info`. Read by `evidence serve` only; offline commands install no log subscriber. |
 
-Evidence Gateway reads no secret from an environment variable. A configured secret reference uses one grammar, `secret:file/<name>`, enforced by `SecretRef::parse` in `crates/registry-evidence/src/config.rs`, and resolves to an owner-only regular file under the `secretProviders.file.root` directory named in `runtime.yaml` (`crates/registry-evidence/src/secrets.rs`). Neither the runtime file nor the governed bundle can name an environment variable to read a credential from. See [Configure Evidence Gateway](../../configure/evidence/) for the runtime file and the bundle it binds.
+Evidence Gateway reads no secret from an environment variable. A configured secret reference uses
+one grammar, `secret:file/<name>`, enforced by `SecretRef::parse` in
+`crates/registry-evidence/src/config.rs`, and resolves through `registry-platform-config` to an
+owner-only regular file under the `secretProviders.file.root` directory named in `runtime.yaml`.
+Neither the runtime file nor the governed bundle can name an environment variable to read a
+credential from. See [Configure Evidence Gateway](../../configure/evidence/) for the runtime file
+and the bundle it binds.
+
+## Evidencectl
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `EVIDENCE_BIN` | Path to the `evidence` binary used by commands that delegate runtime validation or evaluation. An explicit `--evidence-bin` takes precedence, then this variable, then PATH lookup. | Optional. |
+
+### Evidence Gateway toolset installer
+
+The Evidence Gateway toolset installer stages `evidence`, `evidencectl`, `mint`, and
+`evidence-oid4vci`, then verifies every binary against `SHA256SUMS` before replacement begins. If a
+replacement fails, it attempts to restore the previous four-binary set. Checksum verification does
+not authenticate `SHA256SUMS`; follow the tag-frozen `release/VERIFY.md` procedure when authenticity
+matters. The installer reads these variables; the installed binaries do not.
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `EVIDENCECTL_VERSION` | Registry Stack tag whose Evidence Gateway toolset assets are installed. A published installer pins its own tag. | Defaults to the installer's pinned tag. |
+| `EVIDENCECTL_INSTALL_DIR` | Directory that receives the four binaries. | Defaults to `~/.local/bin`. |
+| `EVIDENCECTL_ASSET_DIR` | Directory of already-downloaded release assets to use instead of downloading. | Optional. |
+
+## Evidence OID4VCI supporting service
+
+| Name | Purpose | Default or required |
+| --- | --- | --- |
+| `EVIDENCE_OID4VCI_CONFIG` | YAML configuration path for `evidence-oid4vci check`, `inspect`, and `serve`. Equivalent to `--config`. | Required for those three subcommands, by flag or by variable. |
+| `RUST_LOG` | Tracing filter installed for every subcommand. | Defaults to `info`. |
 
 ## Registry Mint
 
@@ -79,7 +123,8 @@ The `mint` binary reads the variables below.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
-| `MINT_CONFIG` | YAML config path for `mint check` and `mint serve`. Equivalent to `--config`. | Required for those two subcommands, by flag or by variable. |
+| `MINT_CONFIG` | YAML config path for `mint check`, `mint serve`, and `mint verify-audit`. Equivalent to `--config`. | Required for those three subcommands, by flag or by variable. |
+| `MINT_HEALTHCHECK_URL` | Exact numeric loopback or private-address HTTP URL for `mint healthcheck`. The path must be `/ready`; credentials, query, and fragment are refused. | Defaults to `http://127.0.0.1:8081/ready`. |
 | `RUST_LOG` | Tracing filter for the JSON operational logs. Applies to every subcommand; `mint token` sends its logs to standard error so the access token stays alone on standard output. | Defaults to `info`. |
 
 Registry Mint's governed service public keys, Transit proxy settings, and client registrations are named
@@ -91,4 +136,11 @@ values. See the [Registry Mint reference](../mint/) for the full configuration s
 
 ## Source
 
-The fixed variable names above are transcribed from the binaries and the install scripts, at the paths given here. For the canonical definitions, read the Relay binary entry point `crates/registry-relay-v2/src/main.rs` (the `Command` enum, `install_operational_logging`, and `operational_log_directive`), the Relay secret grammar in `crates/registry-relay-v2/src/contract.rs` (`valid_secret_reference`) with its resolver in `crates/registry-relay-v2/src/startup.rs` (`resolve_secret`), the Relay install script `crates/registry-relay-v2/install.sh`, the Evidence Gateway binary entry point `crates/registry-evidence/src/main.rs` (the `Cli` struct and `install_operational_logging`), and the Registry Mint binary entry point `crates/registry-mint/src/main.rs` (the `Command` enum and `main`).
+The fixed names above are transcribed from the CLI definitions, binary entry points, and install
+scripts. Relay CLI ownership is in `crates/registry-relay-v2/src/cli.rs`, with logging in `main.rs`,
+secret grammar in `contract.rs`, and resolution in `startup.rs`. Evidence CLI ownership is in
+`crates/registry-evidence/src/cli.rs`, logging in `main.rs`, and file-secret resolution in
+`registry-platform-config`. Evidencectl binary selection is in
+`crates/registry-evidencectl/src/evidence_binary.rs`; its installer is
+`crates/registry-evidencectl/install.sh`. OID4VCI and Mint CLI ownership is in each crate's `cli.rs`,
+with logging and dispatch in `main.rs`.

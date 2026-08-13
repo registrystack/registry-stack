@@ -240,7 +240,8 @@ record values, credentials, or token contents.
 `RELAY_LOG` and `RELAY_RUNTIME`, which supplies the runtime document path, are the environment
 variables the `relay` process reads by name, alongside `RELAY_HEALTHCHECK_URL` for the healthcheck
 subcommand. It also reads whatever variable a `secret:env/<NAME>` reference in the runtime document
-names. The `relayctl` authoring tool reads no environment variable at all, per
+names. The `relayctl` authoring tool defines no product-specific environment-variable configuration;
+its fixture runner may use only the host's temporary-directory selection for internal materialization, per
 [RS-PR-RELAYCTL](../rs-pr-relayctl/).
 
 ## 7. Startup and shutdown

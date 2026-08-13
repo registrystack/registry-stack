@@ -57,6 +57,9 @@ $comment: >-
   UTF-8 JSON representation would exceed 1048576 bytes. Every condition the
   singular collapse contract exposes as evidence_not_available becomes that
   item outcome, exactly no_match, ambiguous, required_fact_missing, and
-  derivation_input_unresolved in Version 1. Mixed and all-unavailable envelopes
-  return HTTP 200. Any other item failure aborts the outer request through the
-  existing safe Problem Details contract, with no response items released.
+  derivation_input_unresolved, plus an exact source-declared unresolved outcome
+  at a singular or search stage in Version 1. A source-declared unresolved fetch
+  or member remains an outer dependency failure. Mixed and all-unavailable
+  envelopes return HTTP 200. Any other item failure aborts the outer request
+  through the existing safe Problem Details contract, with no response items
+  released.

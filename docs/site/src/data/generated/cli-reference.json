@@ -1,5 +1,6 @@
 {
-  "schema_version": "registry.cli-reference/v1",
+  "schema_version": "registry.cli-reference/v2",
+  "source_version": "0.21.0",
   "binaries": [
     {
       "name": "evidence",
@@ -266,6 +267,14 @@
                 "--jws <JWS>",
                 "--sd-jwt-vc <SD_JWT_VC>"
               ]
+            },
+            {
+              "kind": "mutually_exclusive",
+              "when": null,
+              "arguments": [
+                "--jws <JWS>",
+                "--sd-jwt-vc <SD_JWT_VC>"
+              ]
             }
           ],
           "subcommands": []
@@ -411,7 +420,7 @@
           "options": [
             {
               "display": "--config <CONFIG>",
-              "description": "",
+              "description": "Wallet-delivery deployment configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -441,7 +450,7 @@
           "options": [
             {
               "display": "--config <CONFIG>",
-              "description": "",
+              "description": "Wallet-delivery deployment configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -501,7 +510,7 @@
           "options": [
             {
               "display": "--config <CONFIG>",
-              "description": "",
+              "description": "Wallet-delivery deployment configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -1118,6 +1127,14 @@
                 "--openapi <OPENAPI>",
                 "--transport <TRANSPORT>"
               ]
+            },
+            {
+              "kind": "mutually_exclusive",
+              "when": null,
+              "arguments": [
+                "--openapi <OPENAPI>",
+                "--transport <TRANSPORT>"
+              ]
             }
           ],
           "subcommands": []
@@ -1382,6 +1399,14 @@
                     "--openapi <OPENAPI>",
                     "--project <PROJECT>"
                   ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--openapi <OPENAPI>",
+                    "--project <PROJECT>"
+                  ]
                 }
               ],
               "subcommands": []
@@ -1496,7 +1521,64 @@
                       "environment": null
                     }
                   ],
-                  "constraints": [],
+                  "constraints": [
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--as-of <AS_OF>",
+                        "--config <CONFIG>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--explain"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--openapi <OPENAPI>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--operation <OPERATION>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--project <PROJECT>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--seed <SEED>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--openapi <OPENAPI>",
+                        "--project <PROJECT>"
+                      ]
+                    }
+                  ],
                   "subcommands": []
                 },
                 {
@@ -1628,6 +1710,78 @@
                       "arguments": [
                         "--operation <OPERATION>"
                       ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--as-of <AS_OF>",
+                        "--config <CONFIG>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--case <CASE>",
+                        "--config <CONFIG>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--openapi <OPENAPI>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--operation <OPERATION>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--output <OUTPUT>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--path-parameter <PATH_PARAMETERS>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--project <PROJECT>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--seed <SEED>"
+                      ]
+                    },
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--openapi <OPENAPI>",
+                        "--project <PROJECT>"
+                      ]
                     }
                   ],
                   "subcommands": []
@@ -1668,7 +1822,16 @@
                       "environment": null
                     }
                   ],
-                  "constraints": [],
+                  "constraints": [
+                    {
+                      "kind": "mutually_exclusive",
+                      "when": null,
+                      "arguments": [
+                        "--config <CONFIG>",
+                        "--project <PROJECT>"
+                      ]
+                    }
+                  ],
                   "subcommands": []
                 }
               ]
@@ -1933,6 +2096,14 @@
                     "--subject <SUBJECT>",
                     "--subjects-file <PATH>"
                   ]
+                },
+                {
+                  "kind": "mutually_exclusive",
+                  "when": null,
+                  "arguments": [
+                    "--subject <SUBJECT>",
+                    "--subjects-file <PATH>"
+                  ]
                 }
               ],
               "subcommands": []
@@ -2164,7 +2335,7 @@
           "options": [
             {
               "display": "--config <CONFIG>",
-              "description": "",
+              "description": "Mint deployment configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2203,7 +2374,7 @@
           "options": [
             {
               "display": "--config <CONFIG>",
-              "description": "",
+              "description": "Mint deployment configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2265,7 +2436,7 @@
           "options": [
             {
               "display": "--config <CONFIG>",
-              "description": "",
+              "description": "Mint deployment configuration file",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2593,7 +2764,7 @@
       "options": [
         {
           "display": "--json",
-          "description": "Emit the shared report as best-effort JSON for local automation",
+          "description": "Emit the selected command's report as best-effort JSON when it has one",
           "always_required": false,
           "repeatable": false,
           "default_values": [],
@@ -2641,7 +2812,7 @@
           "options": [
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2740,7 +2911,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2827,7 +2998,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2876,7 +3047,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2925,7 +3096,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2974,7 +3145,7 @@
           "options": [
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3023,7 +3194,7 @@
             },
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3053,7 +3224,7 @@
           "options": [
             {
               "display": "--json",
-              "description": "Emit the shared report as best-effort JSON for local automation",
+              "description": "Emit the selected command's report as best-effort JSON when it has one",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3094,7 +3265,7 @@
               "options": [
                 {
                   "display": "--json",
-                  "description": "Emit the shared report as best-effort JSON for local automation",
+                  "description": "Emit the selected command's report as best-effort JSON when it has one",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -3124,7 +3295,7 @@
               "options": [
                 {
                   "display": "--json",
-                  "description": "Emit the shared report as best-effort JSON for local automation",
+                  "description": "Emit the selected command's report as best-effort JSON when it has one",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],

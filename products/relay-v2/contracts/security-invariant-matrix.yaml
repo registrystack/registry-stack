@@ -290,15 +290,19 @@ invariants:
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: readiness_fails_value_free_for_missing_replaced_and_drifted_sources}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: social_live_update_is_consistent_and_truthfully_unversioned}
   - id: sec-value-free-diagnostics
-    threat: SQL, source paths, or fixture row values appear in SQLite or adopter-tooling errors.
-    enforcementPoint: Typed SQLite errors and closed adopter-tooling diagnostics.
-    expected: SQLite errors render no SQL, paths, or bound values, and fixture-tooling failures render no source row values.
+    threat: SQL, source or project filesystem paths, or fixture row values appear in SQLite or adopter-tooling errors.
+    enforcementPoint: Typed SQLite errors, closed adopter-tooling diagnostics, and an owner-only fixture workspace.
+    expected: SQLite errors render no SQL, paths, or bound values; adopter-tooling operational errors render no absolute filesystem paths or authored values; fixture reports render no source-row values, and transient fixture state is not accessible to other users.
     evidence: focused-error-redaction-tests
     negativeTest: errors_never_render_sql_paths_or_values
     tests:
       - {path: crates/registry-platform-sqlite/tests/kernel.rs, name: errors_never_render_sql_paths_or_values}
       - {path: crates/registry-relay-v2/src/tooling.rs, name: errors_never_render_paths}
+      - {path: crates/registry-relay-v2/src/tooling.rs, name: fixture_workspace_is_owner_only}
+      - {path: crates/registry-relay-v2/src/tooling.rs, name: fixture_workspace_parent_requires_trusted_ownership_and_mode}
       - {path: crates/registry-relay-v2/src/tooling.rs, name: fixture_execution_is_isolated_and_reports_no_row_values}
+      - {path: crates/registry-relayctl/src/lib.rs, name: editor_symlink_stderr_contains_neither_absolute_project_path_nor_source_content}
+      - {path: crates/registry-relayctl/src/lib.rs, name: editor_recovery_stderr_contains_neither_absolute_project_path_nor_source_content}
   - id: sec-value-free-operational-logs
     threat: Request paths, identifiers, query values, or dependency traces enter operational logs.
     enforcementPoint: Closed Relay-owned log filter plus fixed method, route-template, status, latency, and trace dimensions.

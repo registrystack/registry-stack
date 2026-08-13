@@ -158,9 +158,10 @@ deployed, rather than discovering it in an audit log afterwards.
      crates/registry-relay-v2/src/diff.rs:38-105 declares ChangeImpact
      (informational, narrowing, widening, breaking) and the ChangeClass set. */}
 
-`relayctl` reads no environment variable.
-Every input is a path or a flag on the command line, so the same command run twice on the
-same project produces the same result.
+`relayctl` defines no product-specific environment-variable configuration.
+Every governed input is a path, flag, project file, the documented current-directory default for
+`tooling editor`, or a language-server document, so host configuration cannot select another
+Registry or deployment environment.
 A global `--json` flag emits the shared report for local automation.
 
 ## What a sealed package is, and what it is not

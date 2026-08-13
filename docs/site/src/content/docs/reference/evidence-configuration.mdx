@@ -30,7 +30,7 @@ page states which it is.
 
 | Schema | Status | Source |
 | ------ | ------ | ------ |
-| `bundle/evidence.yaml`, `runtime.yaml` | Frozen Version 1 contract | `products/evidence/contracts/*.schema.yaml` |
+| `bundle/evidence.yaml`, `runtime.yaml` | Frozen Version 1 contract | `products/evidence/contracts/bundle.schema.yaml` and `products/evidence/contracts/runtime.schema.yaml` |
 | `questions/<name>.yaml`, `evidence-project.yaml` | Adopter tooling, not frozen | `crates/registry-evidencectl/schemas/authoring/*.schema.json` |
 
 - Status: current, pre-1.0
@@ -38,10 +38,10 @@ page states which it is.
 - Generator: `npm run generate` in `docs/site`
 - Coverage gate: `products/evidence/scripts/check-config-key-paths.sh`
 
-The two frozen contracts are the authority for a deployment. JSON Schema validation and the
-runtime's own checks decide whether a configuration is accepted; this page never adds a rule of
-its own, and it does not inspect a deployment, live configuration, environment variables, or
-secret stores.
+The two frozen schemas are the published and editor-facing grammar. At startup, typed YAML decoding
+and Rust validation decide whether a deployment is accepted. JSON Schema validators are parity
+tools in tests, not a second production acceptance path. This page never adds a rule of its own and
+does not inspect a deployment, live configuration, environment variables, or secret stores.
 
 The authoring schemas are generated from the `registry-evidence-authoring` model that
 `evidencectl` and the language server share, so an editor's idea of the form and the command
@@ -99,7 +99,8 @@ two origin patterns, and a source authenticating with `none` must further match 
 loopback pattern printed below them.
 
 {/* Generated from src/data/generated/evidence-configuration.json, built from
-    products/evidence/contracts/*.schema.yaml and
+    products/evidence/contracts/bundle.schema.yaml,
+    products/evidence/contracts/runtime.schema.yaml, and
     crates/registry-evidencectl/schemas/authoring/*.schema.json.
     Run npm run generate from docs/site. */}
 
@@ -117,9 +118,10 @@ the authoring keys in the context of a whole project. Start with
 [Connect a published SQLite extract](../../tutorials/connect-a-sqlite-extract/) for that transport's
 complete authoring and deployment path.
 
-A key path that this page lists is not a deployment that runs. Schema validity is one gate.
-Runtime, bundle, secret, and audit posture is a separate gate that `evidencectl doctor` reports,
-and fixture results are a third that `evidencectl fixtures run` reports.
+A key path that this page lists is not a deployment that runs. `evidence check` is the authoritative
+runtime acceptance gate. `evidencectl doctor` is an advisory report over runtime, bundle, secret,
+audit, acquisition, and optional Mint compatibility posture. `evidencectl fixtures run` invokes the
+real Evidence checks before evaluating fixtures.
 
 ## Next
 

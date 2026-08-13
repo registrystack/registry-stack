@@ -171,4 +171,89 @@ mod tests {
         .expect_err("subject input forms are mutually exclusive");
         assert_eq!(duplicate_subject.kind(), ErrorKind::ArgumentConflict);
     }
+
+    #[test]
+    fn materialized_source_mock_serve_rejects_ephemeral_generation_options() {
+        for option in [
+            ["--operation", "GET /records"],
+            ["--seed", "1"],
+            ["--as-of", "2026-08-13"],
+        ] {
+            let error = Cli::try_parse_from(
+                [
+                    "evidencectl",
+                    "source",
+                    "mock",
+                    "serve",
+                    "--config",
+                    "source.yaml",
+                ]
+                .into_iter()
+                .chain(option),
+            )
+            .expect_err("materialized serving must reject ephemeral generation options");
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+        }
+
+        let explain = Cli::try_parse_from([
+            "evidencectl",
+            "source",
+            "mock",
+            "serve",
+            "--config",
+            "source.yaml",
+            "--explain",
+        ])
+        .expect_err("materialized serving must reject generator explanations");
+        assert_eq!(explain.kind(), ErrorKind::ArgumentConflict);
+
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "source",
+            "mock",
+            "serve",
+            "--config",
+            "source.yaml",
+            "--http-addr",
+            "127.0.0.1:4010",
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn stored_source_mock_generation_rejects_new_generation_inputs() {
+        for option in [
+            ["--operation", "GET /records"],
+            ["--case", "starter"],
+            ["--path-parameter", "id=123"],
+            ["--seed", "1"],
+            ["--as-of", "2026-08-13"],
+        ] {
+            let error = Cli::try_parse_from(
+                [
+                    "evidencectl",
+                    "source",
+                    "mock",
+                    "generate",
+                    "--config",
+                    "source.yaml",
+                ]
+                .into_iter()
+                .chain(option),
+            )
+            .expect_err("stored generation must reject new generation inputs");
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+        }
+
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "source",
+            "mock",
+            "generate",
+            "--config",
+            "source.yaml",
+            "--explain",
+        ])
+        .is_ok());
+    }
 }

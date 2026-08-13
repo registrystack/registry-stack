@@ -21,6 +21,7 @@ pub struct Cli {
 pub enum Command {
     /// Load the configuration, keys, audit chain, and client registry, then exit.
     Check {
+        /// Mint deployment configuration file.
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
         /// Claim the audit writer and prove every serving dependency is ready.
@@ -30,6 +31,7 @@ pub enum Command {
     },
     /// Serve the token endpoint until terminated.
     Serve {
+        /// Mint deployment configuration file.
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
     },
@@ -45,6 +47,7 @@ pub enum Command {
     },
     /// Verify the retained keyed Mint audit chain named by the configuration.
     VerifyAudit {
+        /// Mint deployment configuration file.
         #[arg(long, env = "MINT_CONFIG")]
         config: PathBuf,
     },
@@ -214,5 +217,24 @@ mod tests {
             url.get_env(),
             Some(std::ffi::OsStr::new("MINT_HEALTHCHECK_URL"))
         );
+    }
+
+    #[test]
+    fn every_config_option_has_public_help() {
+        let command = command();
+        for name in ["check", "serve", "verify-audit"] {
+            let subcommand = command.find_subcommand(name).expect("public subcommand");
+            let config = subcommand
+                .get_arguments()
+                .find(|argument| argument.get_id() == "config")
+                .expect("config option");
+            assert!(
+                config
+                    .get_long_help()
+                    .or_else(|| config.get_help())
+                    .is_some_and(|help| !help.to_string().trim().is_empty()),
+                "{name} --config lacks public help"
+            );
+        }
     }
 }

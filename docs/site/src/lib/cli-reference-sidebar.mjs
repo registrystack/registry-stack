@@ -1,15 +1,20 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const generatedIndex = new URL('../content/docs/reference/cli/index.mdx', import.meta.url);
 
 /**
- * Return CLI navigation only when the selected docset contains its generated index.
- * Archived builds stage this file from their pinned source before Astro loads.
+ * Return CLI navigation only when the selected docset contains a publishable
+ * generated index. Archived builds stage this file from their pinned source
+ * before Astro loads, so the index frontmatter is the publication authority.
  *
  * @param {string | URL} indexPath
  */
 export function cliReferenceSidebar(indexPath = generatedIndex) {
   if (!existsSync(indexPath)) return [];
+  const index = readFileSync(indexPath, 'utf8');
+  const frontmatterEnd = index.indexOf('\n---\n', 4);
+  const frontmatter = frontmatterEnd === -1 ? '' : index.slice(4, frontmatterEnd);
+  if (/^draft:\s*true\s*$/mu.test(frontmatter)) return [];
   return [
     {
       label: 'Command-line interfaces',

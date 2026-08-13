@@ -23,19 +23,18 @@ authentication, Problem, trace, and response validation in Rust.
 Registry Stack is pre-1.0 Beta software. Keep a client on the same Registry Stack release as the
 Relay deployment unless a release note states a wider compatibility range.
 
-Registry Stack v0.20.0 is the first release with prebuilt Relay clients. The release workflow
-attaches three Python wheels and three Node tarballs to the matching GitHub Release. It does not
-publish them to PyPI or npm. The Rust crate has `publish = false`, remains source-only in the
-Registry Stack workspace, and is not published to crates.io.
+Registry Stack v0.20.0 is the first release with prebuilt Relay clients. Released versions through
+v0.21.0 distribute three Python wheels and three Node native tarballs through the matching GitHub
+Release only. The Rust crate has `publish = false`, remains source-only in the Registry Stack
+workspace, and is not published to crates.io.
 
 Python requires version 3.10 or later and uses `abi3-py310`. Node requires version 22.12 or later.
 The release assets cover Linux amd64, Linux arm64, and macOS arm64.
 
 ## Install a client
 
-Download Python and Node packages from the GitHub Release that matches the Relay deployment. The
-Python asset is named
-`registry_relay_client-<version>-cp310-abi3-<wheel-platform>.whl`. Install the local file:
+Download packages from the GitHub Release that matches the Relay deployment. The Python asset is
+named `registry_relay_client-<version>-cp310-abi3-<wheel-platform>.whl`. Install the local file:
 
 ```sh
 python -m pip install ./registry_relay_client-<version>-cp310-abi3-<wheel-platform>.whl
@@ -117,14 +116,14 @@ Relay accepts credentials for that operation.
 
 The supported modes are:
 
-- **No bearer:** omit `with_token_provider` in Rust or `authorization` in Python and Node.
-- **Static bearer:** pass `Arc::new(StaticToken::new(token)?)` to `with_token_provider` in
+- No bearer: omit `with_token_provider` in Rust or `authorization` in Python and Node.
+- Static bearer: pass `Arc::new(StaticToken::new(token)?)` to `with_token_provider` in
   Rust, `authorization={"static": token}` in Python, or
   `authorization: { static: token }` in Node.
-- **Private-key JWT:** pass `PrivateKeyJwt` as a `TokenProvider` in Rust,
+- Private-key JWT: pass `PrivateKeyJwt` as a `TokenProvider` in Rust,
   `authorization={"private_key_jwt": config}` in Python, or
   `authorization: { privateKeyJwt: config }` in Node.
-- **Custom provider:** implement the public `TokenProvider` trait in Rust. Python and Node do not
+- Custom provider: implement the public `TokenProvider` trait in Rust. Python and Node do not
   expose custom token providers.
 
 The built-in private-key-JWT configuration requires a token endpoint, client identifier, and
@@ -220,9 +219,9 @@ Process probes return complete responses only. Cacheable operations return one o
 
 - Rust returns `Conditional::Complete(Complete<T>)` or
   `Conditional::NotModified(NotModified)`.
-- Python returns a mapping with `kind: "complete"`, `value`, `trace_id`, and optional `etag`, or
+- Python returns a mapping with `kind: "complete"`, `value`, `trace_id`, and nullable `etag`, or
   `kind: "not_modified"`, `etag`, and `trace_id`.
-- Node returns an object with `kind: 'complete'`, `value`, `traceId`, and optional `etag`, or
+- Node returns an object with `kind: 'complete'`, `value`, `traceId`, and an `etag` that can be omitted, or
   `kind: 'notModified'`, `etag`, and `traceId`.
 
 Deployment-defined `domainData` stays dynamic. Python returns nested mappings, lists, and scalars,
@@ -258,11 +257,13 @@ A search continuation changes `route` to include `kind: "search"` and its exact 
 identifier. `accessProfile` is absent when the first request did not select one. `format` is one of
 `json`, `json-ld`, `geojson-rfc7946`, or `json-fg`.
 
-Pass the complete returned projection unchanged to the matching continuation method. A
+Pass the complete returned projection unchanged to the matching continuation method. Python and
+Node reject a continuation handed to the wrong route-specific method. Rust exposes one typed
+`continue_collection` method and follows the route carried by that continuation. A
 continuation binds the opaque cursor to its resource or search route, representation format, and
 optional access profile. It intentionally does not carry first-page fields, filters, bounding
-box, or page size. The clients reject raw cursor strings, extra members, wrong-route handoff, and
-attempts to combine a cursor with first-page choices.
+box, or page size. The clients reject raw cursor strings, extra members, and attempts to combine a
+cursor with first-page choices.
 
 ## Conditional cache contract
 

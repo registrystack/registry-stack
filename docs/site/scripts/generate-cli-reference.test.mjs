@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
+  catalogDigest,
   expectedBinaries,
   generateCliReference,
   renderCatalog,
+  reviewSchemaVersion,
   schemaVersion,
   validateCatalog,
+  validateReviewMetadata,
 } from './generate-cli-reference.mjs';
 
 function argument(display) {
@@ -45,11 +48,26 @@ function fixtureCatalog() {
   const tooling = command('tooling', 'relayctl');
   tooling.subcommands.push(command('editor', 'relayctl tooling'));
   relayctl.subcommands.push(tooling);
-  return { schema_version: schemaVersion, binaries };
+  return {
+    schema_version: schemaVersion,
+    source_version: '0.21.0',
+    binaries,
+  };
+}
+
+function fixtureReviewMetadata(overrides = {}) {
+  return {
+    schema_version: reviewSchemaVersion,
+    status: 'draft',
+    last_reviewed: 'unreviewed',
+    reviewed_source_version: null,
+    reviewed_catalog_sha256: null,
+    ...overrides,
+  };
 }
 
 test('renders one linked page for every nested public command', () => {
-  const pages = renderCatalog(fixtureCatalog());
+  const pages = renderCatalog(fixtureCatalog(), fixtureReviewMetadata());
   assert.ok(pages.has('index.mdx'));
   assert.ok(pages.has('relayctl.mdx'));
   assert.ok(pages.has('relayctl/tooling.mdx'));
@@ -59,6 +77,9 @@ test('renders one linked page for every nested public command', () => {
   assert.match(pages.get('relayctl/tooling.mdx'), /\.\/editor\//u);
   assert.match(pages.get('relayctl/tooling/editor.mdx'), /\| `-h, --help` \|/u);
   assert.match(pages.get('relayctl.mdx'), /\{\/\* Generated from Clap/u);
+  assert.match(pages.get('relayctl.mdx'), /status: draft\ndraft: true/u);
+  assert.match(pages.get('relayctl.mdx'), /last_reviewed: "unreviewed"/u);
+  assert.match(pages.get('relayctl.mdx'), /source version `0\.21\.0`/u);
   assert.doesNotMatch(pages.get('relayctl.mdx'), /<!--/u);
 });
 
@@ -81,11 +102,17 @@ test('renders required groups and conditional requirements', () => {
       when: null,
       arguments: ['--scope', '--role'],
     },
+    {
+      kind: 'mutually_exclusive',
+      when: null,
+      arguments: ['--left', '--right'],
+    },
   );
-  const page = renderCatalog(catalog).get('relayctl.mdx');
+  const page = renderCatalog(catalog, fixtureReviewMetadata()).get('relayctl.mdx');
   assert.match(page, /Exactly one of `--left`, `--right` is required\./u);
   assert.match(page, /One or more of `--scope`, `--role` are required\./u);
   assert.match(page, /`--right` is present \| `--detail` is required\./u);
+  assert.match(page, /`--left` and `--right` cannot be used together\./u);
   assert.match(page, /Always required/u);
   assert.doesNotMatch(page, /Repeatable/u);
 });
@@ -98,7 +125,7 @@ test('renders repeatable option cardinality', () => {
     repeatable: true,
   });
 
-  const page = renderCatalog(catalog).get('relayctl.mdx');
+  const page = renderCatalog(catalog, fixtureReviewMetadata()).get('relayctl.mdx');
   assert.match(page, /\| `--attribute-column <COLUMN>` \| No \| Yes \|/u);
   assert.match(page, /\| Option \| Always required \| Repeatable \|/u);
 });
@@ -109,12 +136,91 @@ test('rejects a hidden command even if a collector emits it', () => {
   assert.throws(() => validateCatalog(catalog), /publishes hidden command/u);
 });
 
+test('rejects empty public help and unstable conflict pairs', () => {
+  const emptyHelp = fixtureCatalog();
+  emptyHelp.binaries[0].options[0].description = '';
+  assert.throws(() => validateCatalog(emptyHelp), /description must be a non-empty string/u);
+
+  const unsortedConflict = fixtureCatalog();
+  unsortedConflict.binaries[0].constraints.push({
+    kind: 'mutually_exclusive',
+    when: null,
+    arguments: ['--right', '--left'],
+  });
+  assert.throws(() => validateCatalog(unsortedConflict), /distinct and sorted/u);
+});
+
+test('requires explicit source-matched human review metadata for current pages', () => {
+  const catalog = fixtureCatalog();
+  const digest = catalogDigest(catalog);
+  assert.throws(
+    () => validateReviewMetadata(
+      fixtureReviewMetadata({ status: 'current' }),
+      catalog.source_version,
+      digest,
+    ),
+    /unreviewed CLI reference metadata must be draft/u,
+  );
+  assert.throws(
+    () => validateReviewMetadata(
+      fixtureReviewMetadata({
+        status: 'current',
+        last_reviewed: '2026-08-13',
+        reviewed_source_version: '0.20.0',
+        reviewed_catalog_sha256: digest,
+      }),
+      catalog.source_version,
+      digest,
+    ),
+    /covers 0\.20\.0, not 0\.21\.0/u,
+  );
+
+  const reviewed = fixtureReviewMetadata({
+    status: 'current',
+    last_reviewed: '2026-08-13',
+    reviewed_source_version: catalog.source_version,
+    reviewed_catalog_sha256: digest,
+  });
+  assert.equal(validateReviewMetadata(reviewed, catalog.source_version, digest), reviewed);
+  assert.throws(
+    () => validateReviewMetadata(
+      { ...reviewed, last_reviewed: '2026-02-30' },
+      catalog.source_version,
+      digest,
+    ),
+    /unreviewed or YYYY-MM-DD/u,
+  );
+  const changed = structuredClone(catalog);
+  changed.binaries[0].about = 'Changed public command surface';
+  assert.throws(
+    () => validateReviewMetadata(reviewed, changed.source_version, catalogDigest(changed)),
+    /does not cover the current command catalog digest/u,
+  );
+  const page = renderCatalog(catalog, reviewed).get('relayctl.mdx');
+  assert.match(page, /status: current/u);
+  assert.match(page, /last_reviewed: "2026-08-13"/u);
+  assert.doesNotMatch(page, /^draft: true$/mu);
+});
+
 test('writes deterministic pages and detects tracked drift', async () => {
   const root = await mkdtemp(join(tmpdir(), 'registry-cli-reference-'));
   const docsRoot = join(root, 'docs', 'site');
   const output = `${JSON.stringify(fixtureCatalog(), null, 2)}\n`;
   const execute = async () => output;
   try {
+    await mkdir(join(docsRoot, 'src/data'), { recursive: true });
+    await writeFile(
+      join(docsRoot, 'src/data/cli-reference.yaml'),
+      [
+        `schema_version: ${reviewSchemaVersion}`,
+        'status: draft',
+        'last_reviewed: unreviewed',
+        'reviewed_source_version: null',
+        'reviewed_catalog_sha256: null',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
     await generateCliReference(docsRoot, root, { execute });
     await generateCliReference(docsRoot, root, { check: true, execute });
     const relayctl = join(

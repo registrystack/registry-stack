@@ -87,8 +87,11 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_existence_disclosure_mode_governs_the_public_collapse}
       - {file: crates/registry-evidence/src/runtime.rs, name: derivation_input_inconsistency_collapses_with_the_unresolved_classes}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_search_is_item_unavailable}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_unresolved_fetch_after_unique_search_is_dependency_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: declared_unresolved_fetch_set_member_after_unique_search_is_dependency_failure}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_set_member_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/bundle.rs, name: declared_unresolved_fixture_neutrally_covers_hidden_lookup_categories}
       - {file: crates/registry-evidence/src/main.rs, name: reference_declared_unresolved_form_is_data_free_and_source_bound}
       - {file: crates/registry-evidence/src/main.rs, name: reference_fixture_evaluates_declared_unresolved_without_problem_data}
@@ -474,6 +477,10 @@ entries:
   - id: sec-request-batch-no-partial-release
     tests:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_preserves_order_and_independent_ids_nonces_with_mixed_outcomes}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: sec_exact_relay_lookup_declared_unresolved_maps_to_evidence_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_search_is_item_unavailable}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_aborts_without_partial_release}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_declared_unresolved_fetch_set_member_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_malformed_sequential_extraction_aborts_without_partial_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_signing_failure_releases_no_partial_envelope}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release}

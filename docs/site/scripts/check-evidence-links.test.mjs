@@ -43,11 +43,20 @@ function createRepository(t) {
   return { root, commit: git(root, 'rev-parse', 'HEAD') };
 }
 
-function writeEvidenceData(root, { contractUrls, standardUrls, officialUrl } = {}) {
+function writeEvidenceData(
+  root,
+  {
+    contractUrls,
+    contractStatus = 'pinned-generated-snapshot',
+    standardUrls,
+    officialUrl,
+  } = {},
+) {
   const dataDir = resolve(root, 'docs/site/src/data');
   mkdirSync(resolve(dataDir, 'generated'), { recursive: true });
   const contracts = (contractUrls ?? []).map((url, index) => ({
     id: `contract-${index}`,
+    status: contractStatus,
     source_of_truth: { label: `Contract ${index}`, url },
   }));
   const standards = [
@@ -63,7 +72,7 @@ function writeEvidenceData(root, { contractUrls, standardUrls, officialUrl } = {
   const contractsYaml = contracts
     .map(
       (entry) =>
-        `- id: ${entry.id}\n  source_of_truth:\n    label: ${entry.source_of_truth.label}\n    url: ${entry.source_of_truth.url}\n`,
+        `- id: ${entry.id}\n  status: ${entry.status}\n  source_of_truth:\n    label: ${entry.source_of_truth.label}\n    url: ${entry.source_of_truth.url}\n`,
     )
     .join('');
   const standardsYaml = [
@@ -89,6 +98,7 @@ test('accepts semver tags, full commits, and root-relative current docs', (t) =>
     contractUrls: [
       'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
     ],
+    contractStatus: 'current-source',
     standardUrls: [
       `https://github.com/registrystack/registry-stack/tree/${commit}/source/tree`,
       '/explanation/current/',
@@ -165,6 +175,92 @@ test('does not substitute the selected source for another missing tag', (t) => {
   assert.match(result.errors[0], /missing Git commit or tag v9\.9\.8/);
 });
 
+test('current-source evidence must remain reachable from the selected source', (t) => {
+  const { root } = createRepository(t);
+  git(root, 'checkout', '--quiet', '--orphan', 'unrelated');
+  git(root, 'commit', '--quiet', '-m', 'unrelated current source');
+  const sourceRef = git(root, 'rev-parse', 'HEAD');
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+    contractStatus: 'current-source',
+  });
+
+  const result = checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef });
+  assert.match(result.errors[0], /not reachable from selected current source/);
+});
+
+test('current-source evidence path must still exist at the selected source', (t) => {
+  const { root } = createRepository(t);
+  rmSync(resolve(root, 'source/file.md'));
+  git(root, 'add', '--all');
+  git(root, 'commit', '--quiet', '-m', 'remove current source path');
+  const sourceRef = git(root, 'rev-parse', 'HEAD');
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+    contractStatus: 'current-source',
+  });
+
+  const result = checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef });
+  assert.match(result.errors[0], /absent from selected current source/);
+});
+
+test('current-source evidence contents must match the selected source', (t) => {
+  const { root } = createRepository(t);
+  writeFileSync(resolve(root, 'source/file.md'), '# Changed source\n');
+  git(root, 'add', 'source/file.md');
+  git(root, 'commit', '--quiet', '-m', 'change current source contents');
+  const sourceRef = git(root, 'rev-parse', 'HEAD');
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+    contractStatus: 'current-source',
+  });
+
+  const result = checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef });
+  assert.match(result.errors[0], /contents differ from selected current source/);
+});
+
+test('pinned snapshots may differ from the selected source', (t) => {
+  const { root } = createRepository(t);
+  writeFileSync(resolve(root, 'source/file.md'), '# Changed source\n');
+  git(root, 'add', 'source/file.md');
+  git(root, 'commit', '--quiet', '-m', 'change source after pinned snapshot');
+  const sourceRef = git(root, 'rev-parse', 'HEAD');
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+  });
+
+  assert.deepEqual(checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef }), {
+    checked: 1,
+    errors: [],
+  });
+});
+
+test('pinned snapshots need not retain their path at the selected source', (t) => {
+  const { root } = createRepository(t);
+  rmSync(resolve(root, 'source/file.md'));
+  git(root, 'add', '--all');
+  git(root, 'commit', '--quiet', '-m', 'remove pinned snapshot path');
+  const sourceRef = git(root, 'rev-parse', 'HEAD');
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+  });
+
+  assert.deepEqual(checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef }), {
+    checked: 1,
+    errors: [],
+  });
+});
+
 test('rejects branches, short commits, missing refs, and missing paths', async (t) => {
   const { root, commit } = createRepository(t);
   const cases = [
@@ -232,6 +328,36 @@ test('rejects generated evidence data that is stale', (t) => {
   const result = checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef: commit });
   assert.equal(result.checked, 0);
   assert.match(result.errors[0], /run npm run generate/);
+});
+
+test('rejects a stale generated contract status', (t) => {
+  const { root, commit } = createRepository(t);
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+    contractStatus: 'current-source',
+  });
+  const generatedPath = resolve(dataDir, 'generated/contracts.json');
+  const generated = JSON.parse(readFileSync(generatedPath, 'utf8'));
+  generated[0].status = 'pinned-generated-snapshot';
+  writeFileSync(generatedPath, `${JSON.stringify(generated)}\n`);
+
+  const result = checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef: commit });
+  assert.match(result.errors[0], /statuses differ.*run npm run generate/);
+});
+
+test('rejects an unknown contract status', (t) => {
+  const { root, commit } = createRepository(t);
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      'https://github.com/registrystack/registry-stack/blob/v1.2.3/source/file.md',
+    ],
+    contractStatus: 'unknown-status',
+  });
+
+  const result = checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef: commit });
+  assert.match(result.errors[0], /invalid status unknown-status/);
 });
 
 test('disables lazy fetching for every Git object lookup and fails closed', (t) => {

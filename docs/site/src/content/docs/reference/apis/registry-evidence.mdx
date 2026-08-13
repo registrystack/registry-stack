@@ -16,12 +16,11 @@ standards_referenced:
 
 [Open the Evidence Gateway API operations](../evidence/)
 
-The generated API reference linked above is the **authoritative route reference**. It is built from
-Evidence Gateway's generated OpenAPI document, synced from the
-[`registry-stack`](https://github.com/registrystack/registry-stack) monorepo at the commit pinned in
-`src/data/repo-docs.yaml`. This page carries the context the specification does not: what the
-service asserts, how authentication works, which response formats exist, and what stays out of
-scope.
+The generated API reference linked above is the authoritative route reference. It is built from
+Evidence Gateway's generated OpenAPI document. The development docset reads the checked-out current
+source; archived docsets read their selected release ref. This page carries the context the
+specification does not: what the service asserts, how authentication works, which response formats
+exist, and what stays out of scope.
 
 For exact routes and schemas, read the generated API reference. For deployment and operator
 duties, see the [Evidence Gateway product documentation](../../../products/registry-evidence/).
@@ -55,8 +54,9 @@ cargo run -p registry-evidence --example evidence-contracts -- --output "<direct
 
 Root CI's `evidence-contracts` job runs `products/evidence/scripts/check-contracts.sh`, which
 regenerates the contracts and fails on any byte difference from the committed artifacts, so the
-committed document cannot drift from the code. The docs build then pulls the committed document at
-the pinned ref (`scripts/fetch-openapi.mjs`) and renders it as the generated operations pages.
+committed document cannot drift from the code. The docs build then selects the current checkout or
+the archived docset's release ref (`scripts/fetch-openapi.mjs`) and renders the generated operations
+pages.
 
 A running Evidence Gateway service publishes the same document at `GET /openapi.json` with media type
 `application/json`. The route requires no authentication and reaches no dependency; the
@@ -74,8 +74,8 @@ exact audience, token type, and algorithm allowlists, and one configured princip
 is no API-key mode. The operational routes take no credential and reveal no deployment
 definitions or entitlements.
 
-Every response carries `Cache-Control: no-store` and a W3C `traceparent`
-header. A problem response also carries the same trace identifier in its
+Every response on the Evidence request listener carries `Cache-Control: no-store` and a W3C
+`traceparent` header. A problem response also carries the same trace identifier in its
 `traceId` member. Evidence Gateway may reuse a valid inbound trace identifier,
 but never echoes `tracestate`; the public trace is not its internal audit
 identifier.
@@ -113,14 +113,15 @@ The response preserves request order. Each item is one of these closed results:
 
 - `evidence`, with one signed flattened JWS in the `evidence` member.
 - `evidence_not_available`, when the corresponding singular evaluation produced `no_match`,
-  `ambiguous`, `required_fact_missing`, or `derivation_input_unresolved`.
+  `ambiguous`, `required_fact_missing`, `derivation_input_unresolved`, or an exact
+  source-declared unresolved outcome at a singular or search stage.
 
 Evidence Gateway authenticates once, uses one evaluation instant, charges rate admission for the
 complete item count, and validates and authorizes every item before source access. Any malformed,
-unauthorized, dependency, protocol, signing, serialization, or audit failure, and any derivation
-failure outside the closed `derivation_input_unresolved` class, aborts the complete request without
-releasing item material. The serialized envelope is limited to 1 MiB and is released only after one
-durable terminal audit event.
+unauthorized, dependency, protocol, signing, serialization, or audit failure, any derivation failure
+outside the closed `derivation_input_unresolved` class, and a source-declared unresolved fetch or
+member aborts the complete request without releasing item material. The serialized envelope is
+limited to 1 MiB and is released only after one durable terminal audit event.
 
 Every existing audience-scoped source works through sequential item evaluation. For an eligible
 fixed-path HTTP source, operators can enable the optional `source-batch` capability in both the

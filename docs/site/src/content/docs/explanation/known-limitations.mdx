@@ -404,6 +404,12 @@ These concern how releases are signed and what that signing currently covers.
   cryptographically signed (GPG, SSH, or Sigstore).
   The `v0.8.0` prerelease was published before release-asset signing and does not currently
   include cosign signatures.
+- Identifier publication is asynchronous: `registry-stack` generates the active identifier
+  catalog, while the separate `registrystack-id` repository imports and deploys a pinned catalog.
+  The public resolver can lag until a publisher update is merged and deployed. The current importer
+  rejects a kind change only while the identifier remains in its active catalog; it retains no
+  permanent tombstone after removal. Publication synchronization and permanent URI-kind history are
+  tracked in [registry-stack issue #636](https://github.com/registrystack/registry-stack/issues/636).
 
 For how to verify what *is* signed, see the release verification guidance in `release/VERIFY.md`
 in the repository.

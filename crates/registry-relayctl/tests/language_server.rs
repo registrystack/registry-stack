@@ -25,6 +25,8 @@ fn receive(stdout: &mut BufReader<ChildStdout>) -> Value {
         }
         if let Some(length) = header.strip_prefix("Content-Length:") {
             content_length = Some(length.trim().parse::<usize>().unwrap());
+        } else {
+            panic!("language server emitted non-LSP stdout: {header:?}");
         }
     }
     let mut body = vec![0; content_length.expect("response has Content-Length")];
@@ -32,8 +34,7 @@ fn receive(stdout: &mut BufReader<ChildStdout>) -> Value {
     serde_json::from_slice(&body).unwrap()
 }
 
-#[test]
-fn relay_v2_language_server_speaks_lsp_without_cli_output() {
+fn assert_language_server_speaks_lsp_without_cli_output(arguments: &[&str]) {
     let project = tempfile::tempdir().unwrap();
     std::fs::write(
         project.path().join("registry.yaml"),
@@ -43,10 +44,11 @@ fn relay_v2_language_server_speaks_lsp_without_cli_output() {
     let root_uri = format!("file://{}", project.path().display());
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_relayctl"))
-        .args(["tooling", "language-server"])
+        .args(arguments)
         .current_dir(project.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let mut stdin = child.stdin.take().unwrap();
@@ -84,4 +86,29 @@ fn relay_v2_language_server_speaks_lsp_without_cli_output() {
     );
     drop(stdin);
     assert!(child.wait().unwrap().success());
+    let mut trailing_stdout = Vec::new();
+    stdout.read_to_end(&mut trailing_stdout).unwrap();
+    assert!(
+        trailing_stdout.is_empty(),
+        "language server emitted trailing non-LSP stdout"
+    );
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(stderr.is_empty(), "language server emitted CLI diagnostics");
+}
+
+#[test]
+fn relay_v2_language_server_speaks_lsp_without_cli_output() {
+    for arguments in [
+        &["tooling", "language-server"][..],
+        &["--json", "tooling", "language-server"][..],
+        &["tooling", "language-server", "--json"][..],
+    ] {
+        assert_language_server_speaks_lsp_without_cli_output(arguments);
+    }
 }
