@@ -153,17 +153,20 @@ checked-in semantic inputs.
 Registry Discovery adopter tutorial: PASS
 ```
 
-The consumer first resolves the requirement, searches the resolved Evidence type, and records one
-exact `recordId`. It separately searches one Relay semantic class and operation family and records
-one exact Relay result. The saved records contain public metadata and revision provenance only. Rust,
-Node.js, and Python applications can perform the same resolve, search, and exact-selection workflow
-through their maintained Discovery client binding.
+The consumer first resolves the requirement and chooses one complete Evidence Type alternative.
+Each alternative is an AND-list, so the consumer searches and explicitly chooses one provider for
+every required type. It separately searches one correlated Relay semantic-class and operation-family
+tuple and records one exact Relay result. The saved typed selections contain public metadata,
+complete resolution context, capability matches, and revision provenance only. Rust, Node.js, and
+Python applications perform the same workflow through their maintained Discovery client binding.
 
-The final two handoff checks repeat the exact-selection boundary against publications derived by the
-native products. The adopter's existing Evidence and Relay trust configurations must accept a saved
-selection before a credential is created or a native request is sent. The maintained Evidence client
-then requests and verifies an assertion directly, and the maintained Relay client reads a collection
-directly. Discovery is stopped before those direct calls.
+The final two handoff checks revalidate each persisted selection, then repeat the exact-selection
+boundary against publications derived by the native products. The adopter's existing Evidence and
+Relay trust configurations must accept a saved selection before a credential is created or a native
+request is sent. The maintained Evidence client uses the selected requirement and Evidence Type with
+the adopter's native request policy, then requests and verifies an assertion directly. The maintained
+Relay client uses native metadata to map the selected public tuple to a concrete operation, then reads
+a collection directly. Discovery is stopped before those direct calls.
 
 {/* Tier-C evidence: `crates/registry-discovery-client/src/selection.rs`, test
     `discovery_metadata_has_no_trust_or_native_io_capability`, excludes trust and native I/O from a

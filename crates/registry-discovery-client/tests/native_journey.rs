@@ -16,12 +16,15 @@ use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{SecondsFormat, TimeDelta, Utc};
 use registry_discovery::{
-    load_index, router as discovery_router, Directory, DiscoveryService,
-    EvidenceTypeResolveRequest, ServiceFilters, ServiceKind,
+    load_index, mapping_revision, router as discovery_router, CompiledEvidenceMapping, Directory,
+    DiscoveryService, EvidenceTypeAlternative, EvidenceTypeResolveRequest, ServiceFilters,
+    ServiceKind,
 };
 use registry_discovery_client::{
-    DiscoveryClient, DiscoveryClientConfig, MatchedCapability, SelectionRequest,
-    ServiceSearchSelectionExt, ServiceSelection,
+    validate_service_selection, DiscoveryClient, DiscoveryClientConfig, EvidenceResolutionContext,
+    EvidenceSelectionRequest, EvidenceTypeResolveSelectionExt, MatchedCapability,
+    RelayCapabilityMatch, RelaySelectionRequest, RelayServiceQuery, ServiceSearchSelectionExt,
+    ServiceSelection,
 };
 use registry_discoveryctl::{build_project_at, BuildError};
 use registry_evidence::config::EvidenceConfig;
@@ -51,6 +54,9 @@ use url::Url;
 
 const REQUIREMENT: &str = "urn:example:fixture:requirement:adult-status:v1";
 const EVIDENCE_TYPE: &str = "urn:example:fixture:evidence-type:adult-status:v1";
+const EVIDENCE_TYPE_LIST: &str = "urn:example:journey:list:adult-status";
+const MAPPING: &str = "urn:example:journey:mapping:adult-status";
+const MAPPING_AUTHORITY: &str = "urn:example:journey:mapping-authority";
 const EVIDENCE_SERVICE: &str = "urn:example:fixture:service:evidence";
 const UNTRUSTED_EVIDENCE_SERVICE: &str = "urn:example:fixture:service:untrusted";
 const ISSUER: &str = "urn:example:fixture:issuer:authority";
@@ -171,6 +177,8 @@ struct NativeTrust {
     semantic_class_ids: Vec<String>,
     operation_family_ids: Vec<String>,
     matched_capability: MatchedCapability,
+    evidence_resolution: Option<EvidenceResolutionContext>,
+    relay_capability_match: Option<RelayCapabilityMatch>,
 }
 
 impl NativeTrust {
@@ -192,6 +200,31 @@ impl NativeTrust {
             && selection.semantic_class_ids == self.semantic_class_ids
             && selection.operation_family_ids == self.operation_family_ids
             && selection.matched_capability == self.matched_capability
+            && selection.evidence_resolution == self.evidence_resolution
+            && selection.relay_capability_match == self.relay_capability_match
+    }
+}
+
+fn expected_evidence_resolution() -> EvidenceResolutionContext {
+    let mapping = CompiledEvidenceMapping {
+        mapping_id: MAPPING.into(),
+        mapping_authority_id: MAPPING_AUTHORITY.into(),
+        requirement_id: REQUIREMENT.into(),
+        jurisdiction: Some(JURISDICTION.into()),
+        alternatives: vec![EvidenceTypeAlternative {
+            evidence_type_list_id: EVIDENCE_TYPE_LIST.into(),
+            evidence_type_ids: vec![EVIDENCE_TYPE.into()],
+        }],
+    };
+    EvidenceResolutionContext {
+        requirement_id: REQUIREMENT.into(),
+        jurisdiction: Some(JURISDICTION.into()),
+        mapping_revision: mapping_revision(&[mapping])
+            .expect("the local mapping revision computes"),
+        evidence_type_list_id: EVIDENCE_TYPE_LIST.into(),
+        evidence_type_ids: vec![EVIDENCE_TYPE.into()],
+        mapping_id: MAPPING.into(),
+        mapping_authority_id: MAPPING_AUTHORITY.into(),
     }
 }
 
@@ -626,7 +659,9 @@ fn evidence_client_if_trusted(
     }
     let token = credentials.evidence();
     let config = EvidenceClientConfig::new(
-        Url::parse(&selection.endpoint_url).expect("the selected Evidence endpoint is a URL"),
+        selection
+            .advertised_base_url()
+            .expect("the trusted Evidence selection carries a valid native base URL"),
         token,
         trusted_jwks,
         Vec::new(),
@@ -644,19 +679,28 @@ fn relay_client_if_trusted(
     }
     let token = credentials.relay();
     let config = RelayClientConfig::new(
-        Url::parse(&selection.endpoint_url).expect("the selected Relay endpoint is a URL"),
+        selection
+            .advertised_base_url()
+            .expect("the trusted Relay selection carries a valid native base URL"),
     )
     .with_token_provider(token);
     Some(RelayClient::new(config).expect("the trusted Relay client builds"))
 }
 
-fn evidence_spec() -> EvidenceRequestSpec {
+fn evidence_spec(selection: &ServiceSelection) -> EvidenceRequestSpec {
+    let resolution = selection
+        .evidence_resolution
+        .as_ref()
+        .expect("the selected Evidence service retains its complete resolution");
+    let MatchedCapability::EvidenceType(evidence_type) = &selection.matched_capability else {
+        panic!("the Evidence selection retains its matched Evidence Type");
+    };
     EvidenceRequestSpec {
         response_format: EvidenceResponseFormat::SignedJws,
-        requirement: REQUIREMENT.into(),
+        requirement: resolution.requirement_id.clone(),
         purpose: PURPOSE.into(),
         audience: AUDIENCE.into(),
-        evidence_type: EVIDENCE_TYPE.into(),
+        evidence_type: evidence_type.clone(),
         issued_by: ISSUER.into(),
         provided_by: PROVIDER.into(),
         configuration_revision: CONFIGURATION_REVISION.into(),
@@ -728,13 +772,23 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
         .expect("the real Discovery router resolves the exact requirement");
     assert_eq!(resolved.alternatives.len(), 1);
     assert_eq!(resolved.alternatives[0].evidence_type_ids, [EVIDENCE_TYPE]);
+    let evidence_resolution = resolved
+        .select_only_alternative()
+        .expect("the one complete Evidence Type alternative is explicit");
+    assert_eq!(evidence_resolution, expected_evidence_resolution());
+    assert_eq!(
+        evidence_resolution.evidence_type_list_id,
+        EVIDENCE_TYPE_LIST
+    );
+    assert_eq!(evidence_resolution.mapping_id, MAPPING);
+    assert_eq!(evidence_resolution.mapping_authority_id, MAPPING_AUTHORITY);
 
-    let mut evidence_filters = ServiceFilters::default();
-    evidence_filters.service_kind.push(ServiceKind::Evidence);
-    evidence_filters.evidence_type.push(EVIDENCE_TYPE.into());
-    evidence_filters.jurisdiction.push(JURISDICTION.into());
     let evidence_search = client
-        .search_services(evidence_filters)
+        .search_evidence_services(
+            evidence_resolution
+                .service_query_for(EVIDENCE_TYPE)
+                .expect("the required Evidence Type creates one exact search"),
+        )
         .await
         .expect("the real Discovery router searches the resolved Evidence Type");
     assert!(
@@ -758,44 +812,41 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
         .untrusted_binding
         .assert_exact_record(untrusted_evidence_record);
     let evidence_selection = evidence_search
-        .select_exact(SelectionRequest {
-            record_id: trusted_evidence_record.record_id.clone(),
-            matched_capability: MatchedCapability::EvidenceType(EVIDENCE_TYPE.into()),
-            mapping_revision: Some(resolved.mapping_revision.clone()),
-        })
+        .select_evidence(
+            EvidenceSelectionRequest::new(trusted_evidence_record.record_id.clone(), EVIDENCE_TYPE)
+                .with_resolution(evidence_resolution.clone()),
+        )
         .expect("the relying application selects one exact Evidence record");
     let untrusted_selection = evidence_search
-        .select_exact(SelectionRequest {
-            record_id: untrusted_evidence_record.record_id.clone(),
-            matched_capability: MatchedCapability::EvidenceType(EVIDENCE_TYPE.into()),
-            mapping_revision: Some(resolved.mapping_revision),
-        })
+        .select_evidence(
+            EvidenceSelectionRequest::new(
+                untrusted_evidence_record.record_id.clone(),
+                EVIDENCE_TYPE,
+            )
+            .with_resolution(evidence_resolution),
+        )
         .expect("the untrusted advertisement can still be selected as inert public data");
 
-    let mut relay_filters = ServiceFilters::default();
-    relay_filters.service_kind.push(ServiceKind::Relay);
-    relay_filters
-        .semantic_class
-        .push(RELAY_SEMANTIC_CLASS.into());
-    relay_filters
-        .operation_family
-        .push(RELAY_LIST_FAMILY.into());
-    relay_filters.jurisdiction.push(JURISDICTION.into());
     let relay_search = client
-        .search_services(relay_filters)
+        .search_relay_services(
+            RelayServiceQuery::for_semantic_class(RELAY_SEMANTIC_CLASS)
+                .with_operation_family(RELAY_LIST_FAMILY)
+                .with_jurisdiction(JURISDICTION),
+        )
         .await
         .expect("the real Discovery router searches the exact Relay semantic class");
     assert_eq!(relay_search.items.len(), 1);
-    assert_eq!(relay_search.items[0].service_id, RELAY_SERVICE);
-    provider
-        .relay_binding
-        .assert_exact_record(&relay_search.items[0]);
+    let [relay_record] = relay_search.items.as_slice() else {
+        panic!("the exact Relay tuple has one unambiguous result");
+    };
+    assert_eq!(relay_record.service_id, RELAY_SERVICE);
+    provider.relay_binding.assert_exact_record(relay_record);
     let relay_selection = relay_search
-        .select_exact(SelectionRequest {
-            record_id: relay_search.items[0].record_id.clone(),
-            matched_capability: MatchedCapability::OperationFamily(RELAY_LIST_FAMILY.into()),
-            mapping_revision: None,
-        })
+        .select_relay(RelaySelectionRequest::new(
+            relay_record.record_id.clone(),
+            RelayCapabilityMatch::for_semantic_class(RELAY_SEMANTIC_CLASS)
+                .with_operation_family(RELAY_LIST_FAMILY),
+        ))
         .expect("the relying application selects the exact Relay record");
 
     let saved = serde_json::to_vec(&(evidence_selection, relay_selection))
@@ -809,8 +860,16 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
             .is_err(),
         "Discovery is unavailable before saved selections drive native clients"
     );
-    let (evidence_selection, relay_selection): (ServiceSelection, ServiceSelection) =
-        serde_json::from_slice(&saved).expect("saved selections reload without Discovery");
+    let (evidence_selection, relay_selection): (
+        registry_discovery_client::EvidenceServiceSelection,
+        registry_discovery_client::RelayServiceSelection,
+    ) = serde_json::from_slice(&saved).expect("saved selections reload without Discovery");
+    let evidence_selection = evidence_selection.into_selection();
+    let relay_selection = relay_selection.into_selection();
+    validate_service_selection(&evidence_selection)
+        .expect("the persisted Evidence selection revalidates before trust");
+    validate_service_selection(&relay_selection)
+        .expect("the persisted Relay selection revalidates before trust");
     assert_eq!(
         evidence_selection.binding_id,
         provider.evidence_binding.binding_id
@@ -830,11 +889,13 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
         semantic_class_ids: Vec::new(),
         operation_family_ids: Vec::new(),
         matched_capability: MatchedCapability::EvidenceType(EVIDENCE_TYPE.into()),
+        evidence_resolution: Some(expected_evidence_resolution()),
+        relay_capability_match: None,
     };
     let rejected_credentials = CredentialFactory::default();
     assert!(evidence_client_if_trusted(
         &evidence_trust,
-        &untrusted_selection,
+        untrusted_selection.selection(),
         &rejected_credentials,
         provider.trusted_jwks.clone(),
     )
@@ -853,7 +914,7 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
     )
     .expect("existing adopter-owned Evidence trust accepts the saved selection");
     let prepared = evidence_client
-        .prepare(evidence_spec())
+        .prepare(evidence_spec(&evidence_selection))
         .expect("the relying-party Evidence policy closes before I/O");
     let verified = evidence_client
         .request_and_verify(&prepared)
@@ -873,7 +934,12 @@ async fn complete_evidence_and_relay_journeys_build_select_trust_and_invoke_nati
         evidence_type_ids: Vec::new(),
         semantic_class_ids: vec![RELAY_SEMANTIC_CLASS.into()],
         operation_family_ids: vec![RELAY_LIST_FAMILY.into()],
-        matched_capability: MatchedCapability::OperationFamily(RELAY_LIST_FAMILY.into()),
+        matched_capability: MatchedCapability::SemanticClass(RELAY_SEMANTIC_CLASS.into()),
+        evidence_resolution: None,
+        relay_capability_match: Some(RelayCapabilityMatch {
+            semantic_class_id: Some(RELAY_SEMANTIC_CLASS.into()),
+            operation_family_id: Some(RELAY_LIST_FAMILY.into()),
+        }),
     };
     let relay_client = relay_client_if_trusted(&relay_trust, &relay_selection, &credentials)
         .expect("existing adopter-owned Relay trust accepts the saved selection");

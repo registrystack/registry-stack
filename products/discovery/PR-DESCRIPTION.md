@@ -19,10 +19,12 @@ Evidence or Relay trust and invokes the selected provider directly.
 - Bounded approved-origin build and immutable index.
 - Health, readiness, OpenAPI, exact service search, and evidence-type
   resolution only.
-- Rust, Node.js, and Python clients for bounded search, resolution, and inert
-  exact selection, with no native invocation or trust ownership.
-- Checksum-covered Node.js and Python release artifacts with installed-package
-  smoke tests and exact npm/PyPI promotion from candidate bytes.
+- Rust, Node.js, and Python clients for product-specific bounded search,
+  complete Evidence resolution context, correlated Relay selection, persisted
+  selection validation, and explicit native-client handoff after local trust.
+- Release-pipeline support from v0.23.0 for checksum-covered Node.js and Python
+  artifacts, installed-package smoke tests, and exact npm/PyPI promotion from
+  candidate bytes.
 - Aggregate query, response-media, URL, method, shutdown, and blocking-work
   limits enforced consistently across the server, client, schemas, and
   generated OpenAPI.

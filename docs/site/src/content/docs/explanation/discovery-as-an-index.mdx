@@ -88,14 +88,16 @@ application find their public advertisements.
 
 ## What an application does with a result
 
-For Evidence Gateway, an application can resolve a requirement and jurisdiction to evidence-type
-alternatives, search those types, and explicitly select one record. For Registry Relay, it searches
-the public semantic class or operation family and explicitly selects one record. Discovery preserves
-the catalog and mapping revisions so the application can retain what it selected.
+For Evidence Gateway, an application resolves a requirement and jurisdiction to Evidence Type
+alternatives. Each alternative is an AND-list. The application searches and selects one provider for
+every required type. For Registry Relay, the application searches the public semantic class and
+operation family as one correlated tuple, then explicitly selects one record. Discovery preserves the
+complete Evidence resolution context, Relay tuple, catalog revision, and origin provenance.
 
 {/* Evidence: `crates/registry-discovery/src/query.rs`, `Directory::resolve_evidence_types()` and
     `Directory::search_services()`; `crates/registry-discovery-client/src/selection.rs`,
-    `ServiceSearchSelectionExt::select_exact()` and `ServiceSelection` revision fields. */}
+    `EvidenceTypeResolveSelectionExt`, `ServiceSearchSelectionExt::select_evidence()`,
+    `ServiceSearchSelectionExt::select_relay()`, and the typed selection fields. */}
 
 After selection, the application makes a local native trust decision and calls the advertised endpoint
 directly with its Evidence Gateway or Registry Relay client. Discovery selection contains public
@@ -113,44 +115,84 @@ Node.js applications use `@registrystack/discovery-client`; Python applications 
 `registry-discovery-client`; Rust applications use `registry-discovery-client`.
 
 ```js
-const { DiscoveryClient } = require('@registrystack/discovery-client');
+const {
+  DiscoveryClient,
+  selectEvidenceAlternative,
+  selectEvidenceService,
+  validateSelection,
+} = require('@registrystack/discovery-client');
+const { EvidenceClient } = require('@registrystack/evidence-client');
 
 const discovery = new DiscoveryClient('https://discovery.example/');
-const results = await discovery.searchServices({
-  serviceKind: ['evidence'],
-  evidenceType: ['urn:example:evidence-type'],
+const resolved = await discovery.resolveEvidenceTypes({
+  requirementId: 'urn:example:requirement',
+  jurisdiction: 'urn:example:jurisdiction',
 });
-const selection = discovery.selectExact(results, {
-  recordId: results.items[0].recordId,
-  matchedCapability: { kind: 'evidence-type', id: 'urn:example:evidence-type' },
-});
+const context = selectEvidenceAlternative(resolved, 'urn:example:evidence-type-list');
+
+for (const evidenceTypeId of context.evidenceTypeIds) {
+  const results = await discovery.searchEvidenceServices({
+    evidenceTypeId,
+    ...(context.jurisdiction ? { jurisdiction: context.jurisdiction } : {}),
+  });
+  const record = await adopterChooseRecord(results.items);
+  const selection = selectEvidenceService(results, {
+    recordId: record.recordId,
+    evidenceTypeId,
+    resolution: context,
+  });
+  const checked = validateSelection(selection);
+  adopterTrust.requireEvidence(checked);
+  const evidence = new EvidenceClient({ baseUrl: checked.endpointUrl, ...nativeConfig });
+  if (!checked.evidenceResolution) throw new Error('missing Evidence resolution');
+  const prepared = evidence.prepare({
+    ...localEvidencePolicy,
+    requirement: checked.evidenceResolution.requirementId,
+    evidenceType: checked.matchedCapability.id,
+  });
+  const verified = await evidence.requestAndVerify(prepared);
+}
 ```
 
 ```python
-from registry_discovery_client import DiscoveryClient
+from registry_discovery_client import (
+    DiscoveryClient,
+    select_relay_service,
+    validate_selection,
+)
+from registry_relay_client import RelayClient
 
 discovery = DiscoveryClient("https://discovery.example/")
-results = discovery.search_services({
-    "serviceKind": ["relay"],
-    "semanticClass": ["urn:example:registered-business"],
+results = discovery.search_relay_services({
+    "semanticClassId": "urn:example:registered-business",
+    "operationFamilyId": "urn:example:consultation-list",
 })
-selection = discovery.select_exact(results, {
-    "recordId": results["items"][0]["recordId"],
-    "matchedCapability": {
-        "kind": "semantic-class",
-        "id": "urn:example:registered-business",
+record = adopter_choose_record(results["items"])
+selection = select_relay_service(results, {
+    "recordId": record["recordId"],
+    "capabilityMatch": {
+        "semanticClassId": "urn:example:registered-business",
+        "operationFamilyId": "urn:example:consultation-list",
     },
 })
+checked = validate_selection(selection)
+adopter_trust.require_relay(checked)
+relay = RelayClient(checked["endpointUrl"], authorization=native_authorization)
 ```
 
-The libraries validate the server response and exact capability match before returning the selection.
-They deliberately do not decide whether the selected origin, issuer, operator, endpoint, or capability
-is trusted. Keep that decision in the application's native Evidence or Relay trust configuration.
+The chooser is application-owned because Discovery does not rank results. The libraries validate the
+server response, complete Evidence alternative or Relay tuple, exact capability match, and any loaded
+selection before returning the native base URL. They do not decide whether the selected origin,
+issuer, operator, endpoint, or capability is trusted. Keep that decision in the application's native
+Evidence or Relay trust configuration. Native definitions and local policy still supply Evidence
+purpose, audience, issuer and provider identity, configuration revision, selectors, and expected
+outputs. Native Relay metadata supplies the concrete resource and operation.
 
 {/* Evidence: `crates/registry-discovery-client-node/src/lib.rs` and
     `crates/registry-discovery-client-py/src/lib.rs` are thin bindings over
-    `registry-discovery-client`. Their language-level loopback tests exercise search, resolution,
-    exact selection, and serialized selection persistence. `crates/registry-discovery-client/src/selection.rs`,
+    `registry-discovery-client`. Their language-level loopback tests exercise typed search, complete
+    resolution context, correlated Relay selection, and persisted-selection validation.
+    `crates/registry-discovery-client/src/selection.rs`,
     test `discovery_metadata_has_no_trust_or_native_io_capability`, binds the shared trust boundary. */}
 
 ## Why the split reduces maintenance

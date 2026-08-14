@@ -35,6 +35,10 @@ pub enum DiscoveryClientError {
     NoMatchingService,
     #[error("the exact selection is ambiguous")]
     AmbiguousSelection,
+    #[error("no Evidence Type alternative matched the selection")]
+    NoMatchingAlternative,
+    #[error("the Evidence Type alternative selection is ambiguous")]
+    AmbiguousAlternative,
     #[error("the selected advertised capability does not match the service")]
     CapabilityMismatch,
     #[error("the Discovery exchange did not complete: {kind}")]
@@ -68,6 +72,8 @@ mod tests {
         let errors = [
             DiscoveryClientError::Configuration,
             DiscoveryClientError::Query,
+            DiscoveryClientError::NoMatchingAlternative,
+            DiscoveryClientError::AmbiguousAlternative,
             DiscoveryClientError::CapabilityMismatch,
             DiscoveryClientError::transport(TransportKind::Connect),
             DiscoveryClientError::Problem {

@@ -701,4 +701,8 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding
 module.exports.DiscoveryClient = nativeBinding.DiscoveryClient
+module.exports.selectEvidenceAlternative = nativeBinding.selectEvidenceAlternative
+module.exports.selectEvidenceService = nativeBinding.selectEvidenceService
 module.exports.selectExact = nativeBinding.selectExact
+module.exports.selectRelayService = nativeBinding.selectRelayService
+module.exports.validateSelection = nativeBinding.validateSelection

@@ -170,12 +170,40 @@ class DiscoveryClient {
     }
   }
 
+  async searchEvidenceServices(query) {
+    try {
+      return await this.#inner.searchEvidenceServices(requestValue(query));
+    } catch (error) {
+      throw normalize(error, 'query');
+    }
+  }
+
+  async searchRelayServices(query) {
+    try {
+      return await this.#inner.searchRelayServices(requestValue(query));
+    } catch (error) {
+      throw normalize(error, 'query');
+    }
+  }
+
   selectExact(response, request) {
     try {
       return this.#inner.selectExact(requestValue(response), requestValue(request));
     } catch (error) {
       throw normalize(error, 'query');
     }
+  }
+
+  selectEvidenceAlternative(response, evidenceTypeListId = undefined) {
+    return selectEvidenceAlternative(response, evidenceTypeListId);
+  }
+
+  selectEvidenceService(response, request) {
+    return selectEvidenceService(response, request);
+  }
+
+  selectRelayService(response, request) {
+    return selectRelayService(response, request);
   }
 }
 
@@ -187,4 +215,47 @@ function selectExact(response, request) {
   }
 }
 
-module.exports = { DiscoveryClient, DiscoveryClientError, selectExact };
+function selectEvidenceAlternative(response, evidenceTypeListId = undefined) {
+  try {
+    if (evidenceTypeListId !== undefined && typeof evidenceTypeListId !== 'string') {
+      throw inputError('query');
+    }
+    return native.selectEvidenceAlternative(requestValue(response), evidenceTypeListId);
+  } catch (error) {
+    throw normalize(error, 'query');
+  }
+}
+
+function selectEvidenceService(response, request) {
+  try {
+    return native.selectEvidenceService(requestValue(response), requestValue(request));
+  } catch (error) {
+    throw normalize(error, 'query');
+  }
+}
+
+function selectRelayService(response, request) {
+  try {
+    return native.selectRelayService(requestValue(response), requestValue(request));
+  } catch (error) {
+    throw normalize(error, 'query');
+  }
+}
+
+function validateSelection(selection) {
+  try {
+    return native.validateSelection(requestValue(selection));
+  } catch (error) {
+    throw normalize(error, 'query');
+  }
+}
+
+module.exports = {
+  DiscoveryClient,
+  DiscoveryClientError,
+  selectEvidenceAlternative,
+  selectEvidenceService,
+  selectExact,
+  selectRelayService,
+  validateSelection,
+};

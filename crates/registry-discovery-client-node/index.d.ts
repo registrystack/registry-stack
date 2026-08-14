@@ -4,7 +4,12 @@ export declare class DiscoveryClient {
   constructor(options: string | DiscoveryClientOptions)
   resolveEvidenceTypes(request: any): Promise<any>
   searchServices(filters: any): Promise<any>
+  searchEvidenceServices(query: any): Promise<any>
+  searchRelayServices(query: any): Promise<any>
   selectExact(response: any, request: any): any
+  selectEvidenceAlternative(response: any, evidenceTypeListId?: string | undefined | null): any
+  selectEvidenceService(response: any, request: any): any
+  selectRelayService(response: any, request: any): any
 }
 
 export interface DiscoveryClientOptions {
@@ -15,4 +20,12 @@ export interface DiscoveryClientOptions {
   trustedRootCertificates?: Buffer
 }
 
+export declare function selectEvidenceAlternative(response: any, evidenceTypeListId?: string | undefined | null): any
+
+export declare function selectEvidenceService(response: any, request: any): any
+
 export declare function selectExact(response: any, request: any): any
+
+export declare function selectRelayService(response: any, request: any): any
+
+export declare function validateSelection(selection: any): any

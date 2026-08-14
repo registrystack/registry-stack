@@ -11,9 +11,11 @@ use napi::{
 };
 use napi_derive::napi;
 use registry_discovery_client::{
-    DiscoveryClient as CoreClient, DiscoveryClientConfig, DiscoveryClientError, DiscoveryProblem,
-    EvidenceTypeResolveRequest, SelectionRequest, ServiceFilters, ServiceSearchResponse,
-    ServiceSearchSelectionExt,
+    validate_service_selection, DiscoveryClient as CoreClient, DiscoveryClientConfig,
+    DiscoveryClientError, DiscoveryProblem, EvidenceSelectionRequest, EvidenceServiceQuery,
+    EvidenceTypeResolveRequest, EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt,
+    RelaySelectionRequest, RelayServiceQuery, SelectionRequest, ServiceFilters,
+    ServiceSearchResponse, ServiceSearchSelectionExt, ServiceSelection,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -46,6 +48,14 @@ fn error(source: DiscoveryClientError) -> Error {
         DiscoveryClientError::AmbiguousSelection => json!({
             "kind": "ambiguous_selection",
             "message": "the exact selection is ambiguous"
+        }),
+        DiscoveryClientError::NoMatchingAlternative => json!({
+            "kind": "no_matching_alternative",
+            "message": "no Evidence Type alternative matched the selection"
+        }),
+        DiscoveryClientError::AmbiguousAlternative => json!({
+            "kind": "ambiguous_alternative",
+            "message": "the Evidence Type alternative selection is ambiguous"
         }),
         DiscoveryClientError::CapabilityMismatch => json!({
             "kind": "capability_mismatch",
@@ -98,6 +108,45 @@ fn selection(response: Value, request: Value) -> Result<Value> {
     let response: ServiceSearchResponse = decode(response)?;
     let request: SelectionRequest = decode(request)?;
     encode(&response.select_exact(request).map_err(error)?)
+}
+
+fn evidence_alternative(response: Value, evidence_type_list_id: Option<String>) -> Result<Value> {
+    let response: EvidenceTypeResolveResponse = decode(response)?;
+    let context = match evidence_type_list_id {
+        Some(id) => response.select_alternative(&id),
+        None => response.select_only_alternative(),
+    }
+    .map_err(error)?;
+    encode(&context)
+}
+
+#[napi]
+pub fn select_evidence_alternative(
+    response: Value,
+    evidence_type_list_id: Option<String>,
+) -> Result<Value> {
+    evidence_alternative(response, evidence_type_list_id)
+}
+
+#[napi]
+pub fn select_evidence_service(response: Value, request: Value) -> Result<Value> {
+    let response: ServiceSearchResponse = decode(response)?;
+    let request: EvidenceSelectionRequest = decode(request)?;
+    encode(&response.select_evidence(request).map_err(error)?)
+}
+
+#[napi]
+pub fn select_relay_service(response: Value, request: Value) -> Result<Value> {
+    let response: ServiceSearchResponse = decode(response)?;
+    let request: RelaySelectionRequest = decode(request)?;
+    encode(&response.select_relay(request).map_err(error)?)
+}
+
+#[napi]
+pub fn validate_selection(selection: Value) -> Result<Value> {
+    let selection: ServiceSelection = decode(selection)?;
+    validate_service_selection(&selection).map_err(error)?;
+    encode(&selection)
 }
 
 #[napi]
@@ -166,7 +215,50 @@ impl DiscoveryClient {
     }
 
     #[napi]
+    pub async fn search_evidence_services(&self, query: Value) -> Result<Value> {
+        let query: EvidenceServiceQuery = decode(query)?;
+        encode(
+            &self
+                .inner
+                .search_evidence_services(query)
+                .await
+                .map_err(error)?,
+        )
+    }
+
+    #[napi]
+    pub async fn search_relay_services(&self, query: Value) -> Result<Value> {
+        let query: RelayServiceQuery = decode(query)?;
+        encode(
+            &self
+                .inner
+                .search_relay_services(query)
+                .await
+                .map_err(error)?,
+        )
+    }
+
+    #[napi]
     pub fn select_exact(&self, response: Value, request: Value) -> Result<Value> {
         selection(response, request)
+    }
+
+    #[napi]
+    pub fn select_evidence_alternative(
+        &self,
+        response: Value,
+        evidence_type_list_id: Option<String>,
+    ) -> Result<Value> {
+        evidence_alternative(response, evidence_type_list_id)
+    }
+
+    #[napi]
+    pub fn select_evidence_service(&self, response: Value, request: Value) -> Result<Value> {
+        select_evidence_service(response, request)
+    }
+
+    #[napi]
+    pub fn select_relay_service(&self, response: Value, request: Value) -> Result<Value> {
+        select_relay_service(response, request)
     }
 }

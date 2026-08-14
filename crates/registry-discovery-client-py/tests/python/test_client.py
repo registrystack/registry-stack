@@ -9,7 +9,14 @@ from bootstrap import ensure_built
 
 ensure_built()
 
-from registry_discovery_client import DiscoveryClient, DiscoveryClientError, select_exact
+from registry_discovery_client import (
+    DiscoveryClient,
+    DiscoveryClientError,
+    select_evidence_alternative,
+    select_evidence_service,
+    select_relay_service,
+    validate_selection,
+)
 
 
 DIGEST = "sha256:" + "1" * 64
@@ -31,6 +38,16 @@ SERVICE = {
     "originUrl": "https://provider.example/catalog.jsonld",
     "originContentDigest": DIGEST,
     "originFetchedAt": "2026-08-15T00:00:00Z",
+}
+RELAY_SERVICE = {
+    **SERVICE,
+    "bindingId": "urn:example:binding:relay",
+    "serviceId": "urn:example:service:relay",
+    "serviceKind": "relay",
+    "registryAuthorityId": "urn:example:registry-authority",
+    "evidenceTypeIds": [],
+    "semanticClassIds": ["urn:example:registered-business"],
+    "operationFamilyIds": ["urn:example:consultation-list"],
 }
 
 
@@ -75,24 +92,29 @@ class DiscoveryClientTests(unittest.TestCase):
         thread.start()
         try:
             client = DiscoveryClient(f"http://127.0.0.1:{server.server_port}/")
-            found = client.search_services({
-                "serviceKind": ["evidence"],
-                "evidenceType": ["urn:example:evidence-type"],
+            found = client.search_evidence_services({
+                "evidenceTypeId": "urn:example:evidence-type",
             })
             resolved = client.resolve_evidence_types({
                 "requirementId": "urn:example:requirement",
             })
+            resolution = select_evidence_alternative(resolved)
             request = {
                 "recordId": "record-a",
-                "matchedCapability": {
-                    "kind": "evidence-type",
-                    "id": "urn:example:evidence-type",
-                },
-                "mappingRevision": resolved["mappingRevision"],
+                "evidenceTypeId": "urn:example:evidence-type",
+                "resolution": resolution,
             }
-            selection = client.select_exact(found, request)
+            selection = client.select_evidence_service(found, request)
             self.assertEqual(selection["originContentDigest"], DIGEST)
-            self.assertEqual(select_exact(found, request)["endpointUrl"], SERVICE["endpointUrl"])
+            self.assertEqual(
+                select_evidence_service(found, request)["endpointUrl"],
+                SERVICE["endpointUrl"],
+            )
+            self.assertEqual(
+                selection["evidenceResolution"]["requirementId"],
+                "urn:example:requirement",
+            )
+            self.assertEqual(validate_selection(selection)["recordId"], "record-a")
         finally:
             server.shutdown()
             server.server_close()
@@ -104,6 +126,26 @@ class DiscoveryClientTests(unittest.TestCase):
         with self.assertRaises(DiscoveryClientError) as caught:
             DiscoveryClient("http://provider.example.invalid/")
         self.assertEqual(caught.exception.kind, "configuration")
+
+    def test_relay_selection_retains_the_correlated_capability_match(self) -> None:
+        selection = select_relay_service(
+            {"catalogRevision": DIGEST, "items": [RELAY_SERVICE]},
+            {
+                "recordId": RELAY_SERVICE["recordId"],
+                "capabilityMatch": {
+                    "semanticClassId": "urn:example:registered-business",
+                    "operationFamilyId": "urn:example:consultation-list",
+                },
+            },
+        )
+        self.assertEqual(
+            selection["relayCapabilityMatch"],
+            {
+                "semanticClassId": "urn:example:registered-business",
+                "operationFamilyId": "urn:example:consultation-list",
+            },
+        )
+        self.assertEqual(validate_selection(selection)["serviceKind"], "relay")
 
     def test_configuration_values_are_bounded_and_value_free(self) -> None:
         invalid_configurations = [
@@ -149,7 +191,7 @@ class DiscoveryClientTests(unittest.TestCase):
             lambda: client.resolve_evidence_types({"requirementId": JsonLike()}),
             lambda: client.search_services({"serviceKind": "secret-filter-canary"}),
             lambda: client.search_services(({"serviceKind": []},)),
-            lambda: select_exact([], {"recordId": "record-a"}),
+            lambda: select_evidence_service([], {"recordId": "record-a"}),
         ]
         for operation in invalid_operations:
             with self.subTest(operation=operation), self.assertRaises(DiscoveryClientError) as caught:

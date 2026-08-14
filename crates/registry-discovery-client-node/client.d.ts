@@ -36,6 +36,24 @@ export interface ServiceFilters {
   operationFamily?: string[];
 }
 
+export interface EvidenceServiceQuery {
+  evidenceTypeId: string;
+  jurisdiction?: string;
+  serviceIds?: string[];
+  conformsTo?: string[];
+}
+
+interface RelayServiceQueryOptions {
+  jurisdiction?: string;
+  serviceIds?: string[];
+  conformsTo?: string[];
+}
+
+export type RelayServiceQuery = RelayServiceQueryOptions & (
+  | { semanticClassId: string; operationFamilyId?: string }
+  | { semanticClassId?: string; operationFamilyId: string }
+);
+
 export interface ServiceRecord {
   recordId: string;
   bindingId: string;
@@ -76,17 +94,60 @@ export interface SelectionRequest {
   mappingRevision?: string;
 }
 
-export interface ServiceSelection extends Omit<ServiceRecord, 'title' | 'description'> {
+export interface EvidenceResolutionContext {
+  requirementId: string;
+  jurisdiction?: string;
+  mappingRevision: string;
+  evidenceTypeListId: string;
+  evidenceTypeIds: string[];
+  mappingId: string;
+  mappingAuthorityId: string;
+}
+
+export interface EvidenceSelectionRequest {
+  recordId: string;
+  evidenceTypeId: string;
+  resolution?: EvidenceResolutionContext;
+}
+
+export type RelayCapabilityMatch =
+  | { semanticClassId: string; operationFamilyId?: string }
+  | { semanticClassId?: string; operationFamilyId: string };
+
+export interface RelaySelectionRequest {
+  recordId: string;
+  capabilityMatch: RelayCapabilityMatch;
+}
+
+export interface CommonServiceSelection extends Omit<ServiceRecord, 'title' | 'description'> {
   matchedCapability: MatchedCapability;
   catalogRevision: string;
   mappingRevision?: string;
 }
+
+export interface EvidenceServiceSelection extends CommonServiceSelection {
+  serviceKind: 'evidence';
+  matchedCapability: { kind: 'evidence-type'; id: string };
+  evidenceResolution?: EvidenceResolutionContext;
+}
+
+export interface RelayServiceSelection extends CommonServiceSelection {
+  serviceKind: 'relay';
+  matchedCapability:
+    | { kind: 'semantic-class'; id: string }
+    | { kind: 'operation-family'; id: string };
+  relayCapabilityMatch: RelayCapabilityMatch;
+}
+
+export type ServiceSelection = CommonServiceSelection;
 
 export type DiscoveryClientErrorKind =
   | 'configuration'
   | 'query'
   | 'no_matching_service'
   | 'ambiguous_selection'
+  | 'no_matching_alternative'
+  | 'ambiguous_alternative'
   | 'capability_mismatch'
   | 'transport'
   | 'problem'
@@ -104,10 +165,41 @@ export class DiscoveryClient {
   constructor(options: string | DiscoveryClientOptions);
   resolveEvidenceTypes(request: EvidenceTypeResolveRequest): Promise<EvidenceTypeResolveResponse>;
   searchServices(filters?: ServiceFilters): Promise<ServiceSearchResponse>;
-  selectExact(response: ServiceSearchResponse, request: SelectionRequest): ServiceSelection;
+  searchEvidenceServices(query: EvidenceServiceQuery): Promise<ServiceSearchResponse>;
+  searchRelayServices(query: RelayServiceQuery): Promise<ServiceSearchResponse>;
+  selectExact(response: ServiceSearchResponse, request: SelectionRequest): CommonServiceSelection;
+  selectEvidenceAlternative(
+    response: EvidenceTypeResolveResponse,
+    evidenceTypeListId?: string,
+  ): EvidenceResolutionContext;
+  selectEvidenceService(
+    response: ServiceSearchResponse,
+    request: EvidenceSelectionRequest,
+  ): EvidenceServiceSelection;
+  selectRelayService(
+    response: ServiceSearchResponse,
+    request: RelaySelectionRequest,
+  ): RelayServiceSelection;
 }
 
 export function selectExact(
   response: ServiceSearchResponse,
   request: SelectionRequest,
-): ServiceSelection;
+): CommonServiceSelection;
+
+export function selectEvidenceAlternative(
+  response: EvidenceTypeResolveResponse,
+  evidenceTypeListId?: string,
+): EvidenceResolutionContext;
+
+export function selectEvidenceService(
+  response: ServiceSearchResponse,
+  request: EvidenceSelectionRequest,
+): EvidenceServiceSelection;
+
+export function selectRelayService(
+  response: ServiceSearchResponse,
+  request: RelaySelectionRequest,
+): RelayServiceSelection;
+
+export function validateSelection<T extends CommonServiceSelection>(selection: T): T;

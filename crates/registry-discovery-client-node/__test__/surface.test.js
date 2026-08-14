@@ -3,7 +3,14 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const test = require('node:test');
-const { DiscoveryClient, DiscoveryClientError, selectExact } = require('../client');
+const {
+  DiscoveryClient,
+  DiscoveryClientError,
+  selectEvidenceAlternative,
+  selectEvidenceService,
+  selectRelayService,
+  validateSelection,
+} = require('../client');
 
 const digest = `sha256:${'1'.repeat(64)}`;
 const service = {
@@ -24,6 +31,16 @@ const service = {
   originUrl: 'https://provider.example/catalog.jsonld',
   originContentDigest: digest,
   originFetchedAt: '2026-08-15T00:00:00Z',
+};
+const relayService = {
+  ...service,
+  bindingId: 'urn:example:binding:relay',
+  serviceId: 'urn:example:service:relay',
+  serviceKind: 'relay',
+  registryAuthorityId: 'urn:example:registry-authority',
+  evidenceTypeIds: [],
+  semanticClassIds: ['urn:example:registered-business'],
+  operationFamilyIds: ['urn:example:consultation-list'],
 };
 
 test('search, resolve, and inert exact selection use the Rust client', async () => {
@@ -53,27 +70,51 @@ test('search, resolve, and inert exact selection use the Rust client', async () 
   const address = server.address();
   const client = new DiscoveryClient(`http://127.0.0.1:${address.port}/`);
 
-  const found = await client.searchServices({
-    serviceKind: ['evidence'],
-    evidenceType: ['urn:example:evidence-type'],
+  const found = await client.searchEvidenceServices({
+    evidenceTypeId: 'urn:example:evidence-type',
   });
   const resolved = await client.resolveEvidenceTypes({
     requirementId: 'urn:example:requirement',
   });
-  const selection = client.selectExact(found, {
+  const resolution = selectEvidenceAlternative(resolved);
+  const selection = client.selectEvidenceService(found, {
     recordId: 'record-a',
-    matchedCapability: { kind: 'evidence-type', id: 'urn:example:evidence-type' },
-    mappingRevision: resolved.mappingRevision,
+    evidenceTypeId: 'urn:example:evidence-type',
+    resolution,
   });
   assert.equal(selection.endpointUrl, service.endpointUrl);
   assert.equal(selection.originContentDigest, digest);
-  assert.deepEqual(selectExact(found, {
-    recordId: 'record-a',
-    matchedCapability: { kind: 'evidence-type', id: 'urn:example:evidence-type' },
-  }).matchedCapability, { kind: 'evidence-type', id: 'urn:example:evidence-type' });
+  assert.equal(selection.evidenceResolution.requirementId, 'urn:example:requirement');
+  assert.deepEqual(
+    selectEvidenceService(found, {
+      recordId: 'record-a',
+      evidenceTypeId: 'urn:example:evidence-type',
+      resolution,
+    }).matchedCapability,
+    { kind: 'evidence-type', id: 'urn:example:evidence-type' },
+  );
+  assert.equal(validateSelection(selection).recordId, 'record-a');
 
   await new Promise((resolve) => server.close(resolve));
   assert.equal(JSON.parse(JSON.stringify(selection)).recordId, 'record-a');
+});
+
+test('Relay selection retains the correlated semantic and operation match', () => {
+  const selection = selectRelayService(
+    { catalogRevision: digest, items: [relayService] },
+    {
+      recordId: relayService.recordId,
+      capabilityMatch: {
+        semanticClassId: 'urn:example:registered-business',
+        operationFamilyId: 'urn:example:consultation-list',
+      },
+    },
+  );
+  assert.deepEqual(selection.relayCapabilityMatch, {
+    semanticClassId: 'urn:example:registered-business',
+    operationFamilyId: 'urn:example:consultation-list',
+  });
+  assert.equal(validateSelection(selection).serviceKind, 'relay');
 });
 
 test('binding failures expose a stable value-free kind', () => {

@@ -4,9 +4,11 @@
 use std::{collections::HashSet, time::Duration};
 
 use discovery_client_sdk::{
-    DiscoveryClient as CoreClient, DiscoveryClientConfig, DiscoveryClientError, DiscoveryProblem,
-    EvidenceTypeResolveRequest, SelectionRequest, ServiceFilters, ServiceSearchResponse,
-    ServiceSearchSelectionExt,
+    validate_service_selection, DiscoveryClient as CoreClient, DiscoveryClientConfig,
+    DiscoveryClientError, DiscoveryProblem, EvidenceSelectionRequest, EvidenceServiceQuery,
+    EvidenceTypeResolveRequest, EvidenceTypeResolveResponse, EvidenceTypeResolveSelectionExt,
+    RelaySelectionRequest, RelayServiceQuery, SelectionRequest, ServiceFilters,
+    ServiceSearchResponse, ServiceSearchSelectionExt, ServiceSelection,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -35,6 +37,8 @@ fn kind(error: &DiscoveryClientError) -> &'static str {
         DiscoveryClientError::Query => "query",
         DiscoveryClientError::NoMatchingService => "no_matching_service",
         DiscoveryClientError::AmbiguousSelection => "ambiguous_selection",
+        DiscoveryClientError::NoMatchingAlternative => "no_matching_alternative",
+        DiscoveryClientError::AmbiguousAlternative => "ambiguous_alternative",
         DiscoveryClientError::CapabilityMismatch => "capability_mismatch",
         DiscoveryClientError::Transport { .. } => "transport",
         DiscoveryClientError::Problem { .. } => "problem",
@@ -306,6 +310,76 @@ fn select_exact<'py>(
     exact_selection(py, response, request)
 }
 
+fn evidence_alternative<'py>(
+    py: Python<'py>,
+    response: &Bound<'_, PyAny>,
+    evidence_type_list_id: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let response: EvidenceTypeResolveResponse =
+        python_to_rust(response).map_err(|_| query_error(py))?;
+    let context = match evidence_type_list_id {
+        Some(id) => {
+            let id = id
+                .cast::<PyString>()
+                .map_err(|_| query_error(py))?
+                .to_str()
+                .map_err(|_| query_error(py))?;
+            response.select_alternative(id)
+        }
+        None => response.select_only_alternative(),
+    }
+    .map_err(|error| client_error(py, error))?;
+    rust_to_python(py, &context)
+}
+
+#[pyfunction]
+#[pyo3(signature = (response, evidence_type_list_id=None))]
+fn select_evidence_alternative<'py>(
+    py: Python<'py>,
+    response: &Bound<'_, PyAny>,
+    evidence_type_list_id: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    evidence_alternative(py, response, evidence_type_list_id)
+}
+
+#[pyfunction]
+fn select_evidence_service<'py>(
+    py: Python<'py>,
+    response: &Bound<'_, PyAny>,
+    request: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let response: ServiceSearchResponse = python_to_rust(response).map_err(|_| query_error(py))?;
+    let request: EvidenceSelectionRequest = python_to_rust(request).map_err(|_| query_error(py))?;
+    let selection = response
+        .select_evidence(request)
+        .map_err(|error| client_error(py, error))?;
+    rust_to_python(py, &selection)
+}
+
+#[pyfunction]
+fn select_relay_service<'py>(
+    py: Python<'py>,
+    response: &Bound<'_, PyAny>,
+    request: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let response: ServiceSearchResponse = python_to_rust(response).map_err(|_| query_error(py))?;
+    let request: RelaySelectionRequest = python_to_rust(request).map_err(|_| query_error(py))?;
+    let selection = response
+        .select_relay(request)
+        .map_err(|error| client_error(py, error))?;
+    rust_to_python(py, &selection)
+}
+
+#[pyfunction]
+fn validate_selection<'py>(
+    py: Python<'py>,
+    selection: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let selection: ServiceSelection = python_to_rust(selection).map_err(|_| query_error(py))?;
+    validate_service_selection(&selection).map_err(|error| client_error(py, error))?;
+    rust_to_python(py, &selection)
+}
+
 #[pyclass(name = "DiscoveryClient", module = "registry_discovery_client")]
 struct DiscoveryClient {
     inner: CoreClient,
@@ -400,6 +474,36 @@ impl DiscoveryClient {
         rust_to_python(py, &response)
     }
 
+    fn search_evidence_services<'py>(
+        &self,
+        py: Python<'py>,
+        query: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query: EvidenceServiceQuery = python_to_rust(query).map_err(|_| query_error(py))?;
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.search_evidence_services(query))
+            })
+            .map_err(|error| client_error(py, error))?;
+        rust_to_python(py, &response)
+    }
+
+    fn search_relay_services<'py>(
+        &self,
+        py: Python<'py>,
+        query: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query: RelayServiceQuery = python_to_rust(query).map_err(|_| query_error(py))?;
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.search_relay_services(query))
+            })
+            .map_err(|error| client_error(py, error))?;
+        rust_to_python(py, &response)
+    }
+
     fn select_exact<'py>(
         &self,
         py: Python<'py>,
@@ -408,12 +512,44 @@ impl DiscoveryClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         exact_selection(py, response, request)
     }
+
+    #[pyo3(signature = (response, evidence_type_list_id=None))]
+    fn select_evidence_alternative<'py>(
+        &self,
+        py: Python<'py>,
+        response: &Bound<'_, PyAny>,
+        evidence_type_list_id: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        evidence_alternative(py, response, evidence_type_list_id)
+    }
+
+    fn select_evidence_service<'py>(
+        &self,
+        py: Python<'py>,
+        response: &Bound<'_, PyAny>,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        select_evidence_service(py, response, request)
+    }
+
+    fn select_relay_service<'py>(
+        &self,
+        py: Python<'py>,
+        response: &Bound<'_, PyAny>,
+        request: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        select_relay_service(py, response, request)
+    }
 }
 
 #[pymodule]
 pub fn registry_discovery_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<DiscoveryClient>()?;
     module.add_function(wrap_pyfunction!(select_exact, module)?)?;
+    module.add_function(wrap_pyfunction!(select_evidence_alternative, module)?)?;
+    module.add_function(wrap_pyfunction!(select_evidence_service, module)?)?;
+    module.add_function(wrap_pyfunction!(select_relay_service, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_selection, module)?)?;
     module.add(
         "DiscoveryClientError",
         module.py().get_type::<DiscoveryClientErrorBase>(),

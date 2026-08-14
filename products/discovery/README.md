@@ -16,10 +16,14 @@ The pinned versions and terms are in `contracts/standards-profile.yaml`.
 
 The relying-party SDK is available in Rust as `registry-discovery-client`, in
 Node.js as `@registrystack/discovery-client`, and in Python as
-`registry-discovery-client`. All three perform the same bounded search,
-Evidence Type resolution, and ambiguity-safe exact selection. Their saved
-selection is inert public metadata, not a trust decision or native request.
-Starting with Registry Stack v0.22.0, install the Node.js package as
+`registry-discovery-client`. All three perform the same bounded, product-specific
+search and ambiguity-safe selection. Evidence selections retain the complete
+resolved AND-list and mapping provenance; Relay selections retain the correlated
+semantic-class and operation-family match. Persisted selections can be revalidated
+before local trust accepts them and their advertised base URL is handed to the
+native Evidence or Relay client. A selection remains inert public metadata, not a
+trust decision or native request.
+Starting with Registry Stack v0.23.0, install the Node.js package as
 `@registrystack/discovery-client@<version>` or the Python package as
 `registry-discovery-client==<version>`, using the exact version that matches
 the deployment.
