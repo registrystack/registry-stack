@@ -93,8 +93,8 @@ properties:
       - jurisdictions
     properties:
       serviceId: {type: string, format: uri, maxLength: 512}
-      title: {type: string, minLength: 1, maxLength: 4096}
-      description: {type: string, minLength: 1, maxLength: 4096}
+      title: {type: string, minLength: 1, maxLength: 4096, pattern: '^[^\s\u0000-\u001F\u007F-\u009F](?:[^\u0000-\u001F\u007F-\u009F]*[^\s\u0000-\u001F\u007F-\u009F])?$'}
+      description: {type: string, minLength: 1, maxLength: 4096, pattern: '^[^\s\u0000-\u001F\u007F-\u009F](?:[^\u0000-\u001F\u007F-\u009F]*[^\s\u0000-\u001F\u007F-\u009F])?$'}
       endpointUrl: {type: string, format: uri, maxLength: 512}
       jurisdictions:
         type: array

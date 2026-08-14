@@ -8,8 +8,9 @@ use serde_json::{json, Map, Value};
 use crate::model::{
     EvidenceTypeResolveRequest, EvidenceTypeResolveResponse, ResolvedAlternative, ServiceRecord,
     ServiceSearchResponse, MAXIMUM_EVIDENCE_TYPES_PER_ALTERNATIVE, MAXIMUM_FILTER_VALUES,
-    MAXIMUM_IDENTIFIER_CHARACTERS, MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS,
-    MAXIMUM_TEXT_CHARACTERS, MAXIMUM_VALUES_PER_FIELD, MINIMUM_HTTP_RESPONSE_BYTES,
+    MAXIMUM_IDENTIFIER_CHARACTERS, MAXIMUM_QUERY_BYTES, MAXIMUM_QUERY_VALUE_CHARACTERS,
+    MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS, MAXIMUM_TEXT_CHARACTERS,
+    MAXIMUM_VALUES_PER_FIELD, MINIMUM_HTTP_RESPONSE_BYTES,
 };
 
 pub const HEALTH_ROUTE: &str = "/health";
@@ -27,7 +28,7 @@ const DIGEST_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 const IDENTIFIER_PATTERN: &str =
     "^[^\\s\\u0000-\\u001f\\u007f](?:[^\\u0000-\\u001f\\u007f]*[^\\s\\u0000-\\u001f\\u007f])?$";
 const PUBLIC_URL_PATTERN: &str =
-    "^(?:https://[^/?#@]+|http://(?:localhost|127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$";
+    "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$";
 const TEXT_PATTERN: &str = "^[^\\u0000-\\u001f\\u007f-\\u009f]+$";
 const URI_IDENTIFIER_PATTERN: &str = "^[A-Za-z][A-Za-z0-9+.-]*:";
 
@@ -228,6 +229,11 @@ fn document() -> Value {
     paths.insert(
         SERVICES_ROUTE.into(),
         json!({"get": {
+            "description": format!(
+                "Exact unranked search. The encoded query is limited to {MAXIMUM_QUERY_BYTES} bytes and all decoded values share one aggregate limit of {MAXIMUM_QUERY_VALUE_CHARACTERS} Unicode scalar values. Individual field maxima do not imply that their aggregate is accepted."
+            ),
+            "x-registry-maximum-query-bytes": MAXIMUM_QUERY_BYTES,
+            "x-registry-maximum-decoded-query-value-characters": MAXIMUM_QUERY_VALUE_CHARACTERS,
             "parameters": service_parameters(),
             "responses": dynamic_responses(
                 "Complete exact search result",
@@ -350,6 +356,9 @@ fn service_parameters() -> Value {
             json!({
                 "name": name,
                 "in": "query",
+                "description": format!(
+                    "Repeated exact-match values sharing the operation-wide aggregate limit of {MAXIMUM_QUERY_VALUE_CHARACTERS} decoded Unicode scalar values."
+                ),
                 "style": "form",
                 "explode": true,
                 "schema": bounded_array_schema(
@@ -529,9 +538,19 @@ mod tests {
     #[test]
     fn openapi_publishes_the_compiled_query_and_wire_bounds() {
         let document = document();
-        let parameters = document["paths"][SERVICES_ROUTE]["get"]["parameters"]
-            .as_array()
-            .unwrap();
+        let operation = &document["paths"][SERVICES_ROUTE]["get"];
+        assert_eq!(
+            operation["x-registry-maximum-query-bytes"],
+            MAXIMUM_QUERY_BYTES
+        );
+        assert_eq!(
+            operation["x-registry-maximum-decoded-query-value-characters"],
+            MAXIMUM_QUERY_VALUE_CHARACTERS
+        );
+        assert!(operation["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("Individual field maxima")));
+        let parameters = operation["parameters"].as_array().unwrap();
         for parameter in parameters {
             let name = parameter["name"].as_str().unwrap();
             let expected = if name == "serviceKind" {
@@ -542,6 +561,9 @@ mod tests {
             assert_eq!(parameter["schema"]["minItems"], 1);
             assert_eq!(parameter["schema"]["maxItems"], expected);
             assert_eq!(parameter["schema"]["uniqueItems"], name == "serviceKind");
+            assert!(parameter["description"].as_str().is_some_and(
+                |description| description.contains(&MAXIMUM_QUERY_VALUE_CHARACTERS.to_string())
+            ));
         }
         let parameter = |name: &str| {
             parameters

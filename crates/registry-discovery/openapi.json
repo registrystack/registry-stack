@@ -202,7 +202,7 @@
             "format": "uri",
             "maxLength": 4096,
             "minLength": 1,
-            "pattern": "^(?:https://[^/?#@]+|http://(?:localhost|127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$",
+            "pattern": "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$",
             "type": "string"
           },
           "evidenceTypeIds": {
@@ -279,7 +279,7 @@
             "format": "uri",
             "maxLength": 4096,
             "minLength": 1,
-            "pattern": "^(?:https://[^/?#@]+|http://(?:localhost|127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$",
+            "pattern": "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$",
             "type": "string"
           },
           "publisherId": {
@@ -478,8 +478,10 @@
     },
     "/v1/services": {
       "get": {
+        "description": "Exact unranked search. The encoded query is limited to 65536 bytes and all decoded values share one aggregate limit of 4466 Unicode scalar values. Individual field maxima do not imply that their aggregate is accepted.",
         "parameters": [
           {
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "recordId",
@@ -498,6 +500,7 @@
             "style": "form"
           },
           {
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "serviceId",
@@ -517,6 +520,7 @@
             "style": "form"
           },
           {
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "serviceKind",
@@ -536,6 +540,7 @@
             "style": "form"
           },
           {
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "jurisdiction",
@@ -555,6 +560,7 @@
             "style": "form"
           },
           {
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "conformsTo",
@@ -574,6 +580,7 @@
             "style": "form"
           },
           {
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "evidenceType",
@@ -593,6 +600,7 @@
             "style": "form"
           },
           {
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "semanticClass",
@@ -612,6 +620,7 @@
             "style": "form"
           },
           {
+            "description": "Repeated exact-match values sharing the operation-wide aggregate limit of 4466 decoded Unicode scalar values.",
             "explode": true,
             "in": "query",
             "name": "operationFamily",
@@ -651,7 +660,9 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "x-registry-maximum-decoded-query-value-characters": 4466,
+        "x-registry-maximum-query-bytes": 65536
       }
     }
   }

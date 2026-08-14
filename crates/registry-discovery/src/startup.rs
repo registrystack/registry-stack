@@ -2,6 +2,8 @@
 //! Strict startup-only runtime and immutable-index activation.
 
 use std::fs;
+#[cfg(unix)]
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -114,8 +116,8 @@ pub async fn serve(runtime_path: &Path) -> Result<(), StartupError> {
     });
     tokio::select! {
         result = &mut server => map_server_result(result),
-        signal = tokio::signal::ctrl_c() => {
-            signal.map_err(|_| StartupError::Shutdown)?;
+        signal = shutdown_signal() => {
+            signal?;
             let _ = shutdown_tx.send(());
             match tokio::time::timeout(shutdown_timeout, &mut server).await {
                 Ok(result) => map_server_result(result),
@@ -125,6 +127,34 @@ pub async fn serve(runtime_path: &Path) -> Result<(), StartupError> {
                 }
             }
         }
+    }
+}
+
+async fn shutdown_signal() -> Result<(), StartupError> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(|_| StartupError::Shutdown)?;
+        first_shutdown_signal(tokio::signal::ctrl_c(), terminate.recv()).await
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .map_err(|_| StartupError::Shutdown)
+    }
+}
+
+#[cfg(unix)]
+async fn first_shutdown_signal<C, T, E>(ctrl_c: C, terminate: T) -> Result<(), StartupError>
+where
+    C: Future<Output = Result<(), E>>,
+    T: Future<Output = Option<()>>,
+{
+    tokio::select! {
+        result = ctrl_c => result.map_err(|_| StartupError::Shutdown),
+        result = terminate => result.ok_or(StartupError::Shutdown),
     }
 }
 
@@ -297,5 +327,21 @@ origins: [{ catalogUrl: https://attacker.invalid/catalog.jsonld }]
             symlink(root.join("index.json"), root.join("linked.json")).unwrap();
             assert!(safe_existing_file(root, "linked.json").is_err());
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn injected_ctrl_c_enters_the_shared_graceful_shutdown_path() {
+        let ctrl_c = async { Ok::<(), ()>(()) };
+        let terminate = std::future::pending::<Option<()>>();
+        assert_eq!(first_shutdown_signal(ctrl_c, terminate).await, Ok(()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn injected_sigterm_enters_the_shared_graceful_shutdown_path() {
+        let ctrl_c = std::future::pending::<Result<(), ()>>();
+        let terminate = async { Some(()) };
+        assert_eq!(first_shutdown_signal(ctrl_c, terminate).await, Ok(()));
     }
 }

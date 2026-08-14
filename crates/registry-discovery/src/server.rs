@@ -16,6 +16,7 @@ use registry_platform_httpsec::{security_headers, CspBuilder};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thiserror::Error;
+use tokio::sync::Semaphore;
 use tower_http::trace::TraceLayer;
 
 use crate::model::{
@@ -31,10 +32,42 @@ const JSON: &str = "application/json";
 const OPENAPI_JSON: &str = "application/vnd.oai.openapi+json;version=3.1";
 const HEALTH_BYTES: &[u8] = br#"{"status":"ok"}"#;
 const READY_BYTES: &[u8] = br#"{"status":"ready"}"#;
+const BLOCKING_QUERY_CAPACITY: usize = 4;
 
 pub struct DiscoveryService {
     directory: Directory,
     maximum_response_bytes: usize,
+    blocking_queries: BlockingQueryExecutor,
+}
+
+#[derive(Clone)]
+struct BlockingQueryExecutor {
+    permits: Arc<Semaphore>,
+}
+
+impl BlockingQueryExecutor {
+    fn new(capacity: usize) -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(capacity)),
+        }
+    }
+
+    async fn run<T, F>(&self, operation: F) -> Result<T, ProblemCode>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, ProblemCode> + Send + 'static,
+    {
+        let permit = Arc::clone(&self.permits)
+            .acquire_owned()
+            .await
+            .map_err(|_| ProblemCode::Unavailable)?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            operation()
+        })
+        .await
+        .map_err(|_| ProblemCode::Unavailable)?
+    }
 }
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +87,7 @@ impl DiscoveryService {
         Ok(Self {
             directory,
             maximum_response_bytes,
+            blocking_queries: BlockingQueryExecutor::new(BLOCKING_QUERY_CAPACITY),
         })
     }
 }
@@ -77,10 +111,10 @@ pub fn router(
         return Err(ServiceConfigError);
     }
     Ok(Router::new()
-        .route(HEALTH_ROUTE, get(health))
-        .route(READY_ROUTE, get(ready))
-        .route(OPENAPI_ROUTE, get(openapi))
-        .route(SERVICES_ROUTE, get(search_services))
+        .route(HEALTH_ROUTE, get(health).head(not_found))
+        .route(READY_ROUTE, get(ready).head(not_found))
+        .route(OPENAPI_ROUTE, get(openapi).head(not_found))
+        .route(SERVICES_ROUTE, get(search_services).head(not_found))
         .route(EVIDENCE_TYPES_ROUTE, post(resolve_evidence_types))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
@@ -152,13 +186,19 @@ async fn search_services(
     State(service): State<Arc<DiscoveryService>>,
     RawQuery(query): RawQuery,
 ) -> Response<Body> {
-    let filters = match parse_service_filters(query.as_deref().unwrap_or("")) {
-        Ok(filters) => filters,
-        Err(error) => return ProblemCode::from(error).response(),
+    let directory = service.directory.clone();
+    let maximum_response_bytes = service.maximum_response_bytes;
+    let operation = move || {
+        let filters =
+            parse_service_filters(query.as_deref().unwrap_or("")).map_err(ProblemCode::from)?;
+        let response = directory
+            .search_services(&filters)
+            .map_err(ProblemCode::from)?;
+        bounded_json_bytes(maximum_response_bytes, &response)
     };
-    match service.directory.search_services(&filters) {
-        Ok(response) => bounded_json(&service, &response),
-        Err(error) => ProblemCode::from(error).response(),
+    match service.blocking_queries.run(operation).await {
+        Ok(bytes) => static_json(&bytes, JSON),
+        Err(error) => error.response(),
     }
 }
 
@@ -170,13 +210,18 @@ async fn resolve_evidence_types(
     if !json_media_type(&headers) {
         return ProblemCode::InvalidRequest.response();
     }
-    let request = match strict_body::<EvidenceTypeResolveRequest>(&body) {
-        Ok(request) => request,
-        Err(problem) => return problem.response(),
+    let directory = service.directory.clone();
+    let maximum_response_bytes = service.maximum_response_bytes;
+    let operation = move || {
+        let request = strict_body::<EvidenceTypeResolveRequest>(&body)?;
+        let response = directory
+            .resolve_evidence_types(&request)
+            .map_err(ProblemCode::from)?;
+        bounded_json_bytes(maximum_response_bytes, &response)
     };
-    match service.directory.resolve_evidence_types(&request) {
-        Ok(response) => bounded_json(&service, &response),
-        Err(error) => ProblemCode::from(error).response(),
+    match service.blocking_queries.run(operation).await {
+        Ok(bytes) => static_json(&bytes, JSON),
+        Err(error) => error.response(),
     }
 }
 
@@ -204,14 +249,15 @@ fn json_media_type(headers: &HeaderMap) -> bool {
         .is_some_and(|value| value.trim().eq_ignore_ascii_case(JSON))
 }
 
-fn bounded_json<T: Serialize>(service: &DiscoveryService, value: &T) -> Response<Body> {
-    let Ok(bytes) = serde_json::to_vec(value) else {
-        return ProblemCode::Unavailable.response();
-    };
-    if bytes.len() > service.maximum_response_bytes {
-        return ProblemCode::ResultBoundExceeded.response();
+fn bounded_json_bytes<T: Serialize>(
+    maximum_response_bytes: usize,
+    value: &T,
+) -> Result<Vec<u8>, ProblemCode> {
+    let bytes = serde_json::to_vec(value).map_err(|_| ProblemCode::Unavailable)?;
+    if bytes.len() > maximum_response_bytes {
+        return Err(ProblemCode::ResultBoundExceeded);
     }
-    static_json(&bytes, JSON)
+    Ok(bytes)
 }
 
 fn static_json(bytes: &[u8], content_type: &'static str) -> Response<Body> {
@@ -258,7 +304,7 @@ fn operational_route(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::sync::Mutex;
+    use std::sync::{mpsc, Mutex};
 
     use axum::body::to_bytes;
     use axum::http::{Request, StatusCode};
@@ -351,6 +397,85 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {route}");
         }
+    }
+
+    #[tokio::test]
+    async fn head_is_explicitly_concealed_on_every_get_route() {
+        let app = app(10);
+        for route in [HEALTH_ROUTE, READY_ROUTE, OPENAPI_ROUTE, SERVICES_ROUTE] {
+            let response = app
+                .clone()
+                .oneshot(Request::head(route).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "HEAD {route}");
+            assert_eq!(
+                response.headers()[CONTENT_TYPE],
+                "application/problem+json",
+                "HEAD {route}"
+            );
+            assert_eq!(
+                response.headers()[CACHE_CONTROL],
+                "no-store",
+                "HEAD {route}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timed_out_blocking_query_keeps_its_permit_and_capacity_recovers() {
+        let executor = BlockingQueryExecutor::new(1);
+        let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
+        let (release_first_tx, release_first_rx) = mpsc::channel();
+        let first_executor = executor.clone();
+        let first = tokio::spawn(async move {
+            tokio::time::timeout(
+                Duration::from_millis(25),
+                first_executor.run(move || {
+                    let _ = first_started_tx.send(());
+                    release_first_rx
+                        .recv()
+                        .map_err(|_| ProblemCode::Unavailable)?;
+                    Ok::<_, ProblemCode>(())
+                }),
+            )
+            .await
+        });
+        first_started_rx.await.expect("the first worker started");
+        assert!(first.await.expect("the first caller joined").is_err());
+
+        let (second_started_tx, mut second_started_rx) = tokio::sync::oneshot::channel();
+        let second_executor = executor.clone();
+        let second = tokio::spawn(async move {
+            second_executor
+                .run(move || {
+                    let _ = second_started_tx.send(());
+                    Ok::<_, ProblemCode>(7usize)
+                })
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut second_started_rx)
+                .await
+                .is_err(),
+            "the detached first worker must retain the only permit"
+        );
+
+        release_first_tx
+            .send(())
+            .expect("the detached worker can be released");
+        tokio::time::timeout(Duration::from_secs(1), &mut second_started_rx)
+            .await
+            .expect("the second worker starts after capacity returns")
+            .expect("the second worker reports startup");
+        assert_eq!(second.await.expect("the second caller joined"), Ok(7));
+        assert_eq!(
+            executor
+                .run(|| Ok::<_, ProblemCode>(8usize))
+                .await
+                .expect("the executor remains available"),
+            8
+        );
     }
 
     #[tokio::test]

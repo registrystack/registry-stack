@@ -615,6 +615,20 @@ async fn provider_discovery_description_route_serves_compiled_exact_bytes_withou
             .await
             .expect("response body reads");
         assert_eq!(body.as_ref(), expected.as_slice(), "{project}");
+        if project == "labour-statistics" {
+            let description = registry_discovery_profile::parse_description(&body)
+                .expect("maintained labour-statistics publication satisfies the shared profile");
+            let statistical = description
+                .services()
+                .iter()
+                .filter(|service| {
+                    service.operation_family_ids()
+                        == ["https://registrystack.org/discovery/operation-family/relay-v2/statistical-dataflow"]
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(statistical.len(), 1);
+            assert!(statistical[0].semantic_class_ids().is_empty());
+        }
 
         // If the public-artifact branch performed optional bearer
         // authentication, this malformed credential would be rejected before

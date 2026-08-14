@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import socket
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 from pyshacl import validate
 from rdflib import BNode, Graph, URIRef
@@ -57,7 +57,7 @@ class StandardsOracleTest(unittest.TestCase):
     def graph_for(self, path: Path) -> Graph:
         document = json.loads(path.read_text(encoding="utf-8"))
         document["@context"] = self.context
-        with mock.patch.object(socket.socket, "connect", _deny_network):
+        with unittest.mock.patch.object(socket.socket, "connect", _deny_network):
             return Graph().parse(
                 data=json.dumps(document),
                 format="json-ld",
@@ -65,7 +65,7 @@ class StandardsOracleTest(unittest.TestCase):
             )
 
     def assert_conforms(self, graph: Graph) -> None:
-        with mock.patch.object(socket.socket, "connect", _deny_network):
+        with unittest.mock.patch.object(socket.socket, "connect", _deny_network):
             conforms, _report_graph, report_text = validate(
                 data_graph=graph,
                 shacl_graph=self.shapes,
@@ -90,7 +90,7 @@ class StandardsOracleTest(unittest.TestCase):
     def test_shacl_oracle_rejects_missing_endpoint(self) -> None:
         graph = self.graph_for(DESCRIPTIONS / "evidence.jsonld")
         graph.remove((None, ENDPOINT_URL, None))
-        with mock.patch.object(socket.socket, "connect", _deny_network):
+        with unittest.mock.patch.object(socket.socket, "connect", _deny_network):
             conforms, report_graph, _report_text = validate(
                 data_graph=graph,
                 shacl_graph=self.shapes,

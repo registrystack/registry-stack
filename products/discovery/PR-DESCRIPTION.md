@@ -20,6 +20,9 @@ Evidence or Relay trust and invokes the selected provider directly.
 - Health, readiness, OpenAPI, exact service search, and evidence-type
   resolution only.
 - Rust client selection data with no native invocation or trust ownership.
+- Aggregate query, response-media, URL, method, shutdown, and blocking-work
+  limits enforced consistently across the server, client, schemas, and
+  generated OpenAPI.
 - One Evidence and one Relay local acceptance journey, plus a clean-checkout
   adopter tutorial exercised in CI.
 
@@ -92,7 +95,10 @@ Security traceability: `products/discovery/contracts/security-invariant-matrix.y
 [x] products/evidence/scripts/check-source-neutrality.sh
 [x] products/evidence/scripts/check-verifier-portability.sh
 [x] products/relay-v2/scripts/check-contracts.sh
+[x] products/relay-v2/scripts/check-authoring-schema.sh
 [x] products/relay-v2/scripts/test-http.sh
+[x] products/identifiers/scripts/check.sh
+[x] Evidence and Relay Node clients: npm ci, build:debug, test, check:types
 [x] python3 .github/scripts/test_ci_changes.py
 [x] cd docs/site && npm test
 [x] cd docs/site && npm run check

@@ -9,7 +9,8 @@ use crate::model::{
     valid_identifier, valid_uri_identifier, validate_index, CompiledEvidenceMapping,
     DiscoveryIndex, EvidenceTypeResolveRequest, EvidenceTypeResolveResponse, ResolvedAlternative,
     ServiceFilters, ServiceKind, ServiceRecord, ServiceSearchResponse, MAXIMUM_FILTER_VALUES,
-    MAXIMUM_QUERY_BYTES, MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS,
+    MAXIMUM_QUERY_BYTES, MAXIMUM_QUERY_VALUE_CHARACTERS, MAXIMUM_RESULT_ALTERNATIVES,
+    MAXIMUM_RESULT_RECORDS,
 };
 
 const FILTER_NAMES: [&str; 8] = [
@@ -126,11 +127,16 @@ pub fn parse_service_filters(raw_query: &str) -> Result<ServiceFilters, QueryErr
     }
     let mut filters = ServiceFilters::default();
     let mut parameter_count = 0usize;
+    let mut value_characters = 0usize;
     for (name, value) in url::form_urlencoded::parse(raw_query.as_bytes()) {
         parameter_count = parameter_count
             .checked_add(1)
             .ok_or(QueryError::InvalidRequest)?;
+        value_characters = value_characters
+            .checked_add(value.chars().count())
+            .ok_or(QueryError::InvalidRequest)?;
         if parameter_count > FILTER_NAMES.len() * MAXIMUM_FILTER_VALUES
+            || value_characters > MAXIMUM_QUERY_VALUE_CHARACTERS
             || value.is_empty()
             || !valid_identifier(&value)
         {
@@ -165,7 +171,9 @@ pub fn validate_service_filters(filters: &ServiceFilters) -> Result<(), QueryErr
         &filters.semantic_class,
         &filters.operation_family,
     ];
-    if filters.service_kind.len() > 2
+    if query_value_characters(filters)
+        .is_none_or(|characters| characters > MAXIMUM_QUERY_VALUE_CHARACTERS)
+        || filters.service_kind.len() > 2
         || filters
             .service_kind
             .windows(2)
@@ -192,6 +200,27 @@ pub fn validate_service_filters(filters: &ServiceFilters) -> Result<(), QueryErr
         return Err(QueryError::InvalidRequest);
     }
     Ok(())
+}
+
+fn query_value_characters(filters: &ServiceFilters) -> Option<usize> {
+    let string_values = [
+        &filters.record_id,
+        &filters.service_id,
+        &filters.jurisdiction,
+        &filters.conforms_to,
+        &filters.evidence_type,
+        &filters.semantic_class,
+        &filters.operation_family,
+    ];
+    string_values
+        .into_iter()
+        .flatten()
+        .map(|value| value.chars().count())
+        .chain(filters.service_kind.iter().map(|kind| match kind {
+            ServiceKind::Evidence => "evidence".len(),
+            ServiceKind::Relay => "relay".len(),
+        }))
+        .try_fold(0usize, usize::checked_add)
 }
 
 pub fn service_matches_filters(service: &ServiceRecord, filters: &ServiceFilters) -> bool {
@@ -301,6 +330,43 @@ mod tests {
             parse_service_filters("serviceKind=evidence&semanticClass=urn%3Aclass"),
             Err(QueryError::InvalidRequest)
         );
+    }
+
+    #[test]
+    fn decoded_query_values_share_one_aggregate_character_budget() {
+        let first = "a".repeat(crate::model::MAXIMUM_IDENTIFIER_CHARACTERS);
+        let remaining = MAXIMUM_QUERY_VALUE_CHARACTERS - first.chars().count();
+        let second = "b".repeat(remaining);
+        let boundary = format!("recordId={first}&recordId={second}");
+        assert!(boundary.len() <= MAXIMUM_QUERY_BYTES);
+        assert!(parse_service_filters(&boundary).is_ok());
+
+        let over = format!("{boundary}b");
+        assert_eq!(
+            parse_service_filters(&over),
+            Err(QueryError::InvalidRequest)
+        );
+    }
+
+    #[test]
+    fn per_field_maxima_do_not_imply_aggregate_acceptance() {
+        let maximum = "a".repeat(crate::model::MAXIMUM_IDENTIFIER_CHARACTERS);
+        let raw = format!("recordId={maximum}&recordId={maximum}");
+        assert!(raw.len() <= MAXIMUM_QUERY_BYTES);
+        assert_eq!(parse_service_filters(&raw), Err(QueryError::InvalidRequest));
+    }
+
+    #[test]
+    fn worst_case_percent_encoding_of_the_aggregate_budget_fits_the_wire_ceiling() {
+        let first = "􏿿".repeat(crate::model::MAXIMUM_IDENTIFIER_CHARACTERS);
+        let second = "􏿿"
+            .repeat(MAXIMUM_QUERY_VALUE_CHARACTERS - crate::model::MAXIMUM_IDENTIFIER_CHARACTERS);
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("recordId", &first)
+            .append_pair("recordId", &second)
+            .finish();
+        assert!(encoded.len() <= MAXIMUM_QUERY_BYTES, "{}", encoded.len());
+        assert!(parse_service_filters(&encoded).is_ok());
     }
 
     #[test]

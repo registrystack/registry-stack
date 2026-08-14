@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use url::{Host, Url};
+use url::Url;
 
 pub use registry_discovery_profile::ServiceKind;
 
@@ -26,6 +26,25 @@ pub const MAXIMUM_TEXT_CHARACTERS: usize = 16 * 1024;
 pub const MAXIMUM_LISTENER_ADDRESS_CHARACTERS: usize = 128;
 pub const MAXIMUM_FILTER_VALUES: usize = 100;
 pub const MAXIMUM_QUERY_BYTES: usize = 64 * 1024;
+const MAXIMUM_QUERY_PARAMETERS: usize = (7 * MAXIMUM_FILTER_VALUES) + 2;
+const MAXIMUM_QUERY_PARAMETER_NAME_BYTES: usize = "operationFamily".len();
+const MAXIMUM_PERCENT_ENCODED_SCALAR_BYTES: usize = 12;
+const MAXIMUM_QUERY_PARAMETER_OVERHEAD_BYTES: usize =
+    MAXIMUM_QUERY_PARAMETERS * (MAXIMUM_QUERY_PARAMETER_NAME_BYTES + 2);
+/// Aggregate Unicode scalar-value budget shared by every decoded query value.
+///
+/// A Unicode scalar can occupy four UTF-8 bytes and each byte can require a
+/// three-byte percent escape. Reserving the maximum parameter-name, equals,
+/// and separator overhead proves that any accepted value aggregate can still
+/// fit the encoded 64 KiB query ceiling.
+pub const MAXIMUM_QUERY_VALUE_CHARACTERS: usize = (MAXIMUM_QUERY_BYTES
+    - MAXIMUM_QUERY_PARAMETER_OVERHEAD_BYTES)
+    / MAXIMUM_PERCENT_ENCODED_SCALAR_BYTES;
+const _: () = assert!(
+    (MAXIMUM_QUERY_VALUE_CHARACTERS * MAXIMUM_PERCENT_ENCODED_SCALAR_BYTES)
+        + MAXIMUM_QUERY_PARAMETER_OVERHEAD_BYTES
+        <= MAXIMUM_QUERY_BYTES
+);
 pub const MAXIMUM_RESULT_RECORDS: usize = 10_000;
 pub const MAXIMUM_RESULT_ALTERNATIVES: usize = 1_000;
 pub const MINIMUM_HTTP_RESPONSE_BYTES: usize = 64 * 1024;
@@ -513,28 +532,8 @@ fn valid_timestamp(value: &str) -> bool {
 }
 
 pub fn valid_public_url(value: &str) -> bool {
-    if value.chars().count() > MAXIMUM_IDENTIFIER_CHARACTERS {
-        return false;
-    }
-    let Ok(url) = Url::parse(value) else {
-        return false;
-    };
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return false;
-    }
-    match url.scheme() {
-        "https" => url.host().is_some(),
-        "http" => url.host().is_some_and(|host| match host {
-            Host::Ipv4(address) => address.is_loopback(),
-            Host::Ipv6(address) => address.is_loopback(),
-            Host::Domain(name) => name == "localhost",
-        }),
-        _ => false,
-    }
+    value.chars().count() <= MAXIMUM_IDENTIFIER_CHARACTERS
+        && registry_discovery_profile::is_valid_endpoint_url(value, true)
 }
 
 #[cfg(test)]
@@ -663,6 +662,29 @@ pub(crate) mod tests {
         assert!(identifier.len() > MAXIMUM_IDENTIFIER_CHARACTERS);
         assert!(valid_uri_identifier(&identifier));
         assert!(!valid_uri_identifier(&format!("{identifier}界")));
+    }
+
+    #[test]
+    fn public_urls_refuse_raw_whitespace_and_controls_before_url_parsing() {
+        for value in [
+            "https://provider.example/catalog.jsonld",
+            "http://localhost:8080/catalog.jsonld",
+            "http://127.0.0.1:8080/catalog.jsonld",
+            "http://[::1]:8080/catalog.jsonld",
+        ] {
+            assert!(valid_public_url(value), "{value:?}");
+        }
+        for value in [
+            "http://127.0.0.2:8080/catalog.jsonld",
+            "http://[::2]:8080/catalog.jsonld",
+            " https://provider.example/catalog.jsonld",
+            "https://provider.example/catalog.jsonld ",
+            "https://provider.example/catalog path",
+            "https://provider.example/catalog\npath",
+            "https://provider.example/catalog\u{0085}path",
+        ] {
+            assert!(!valid_public_url(value), "{value:?}");
+        }
     }
 
     #[test]

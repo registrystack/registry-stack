@@ -481,12 +481,14 @@ const CONSULTATION_RETRIEVE_FAMILY: &str =
     "https://registrystack.org/discovery/operation-family/relay-v2/consultation-retrieve";
 const CONSULTATION_SEARCH_FAMILY: &str =
     "https://registrystack.org/discovery/operation-family/relay-v2/consultation-search";
+const AGGREGATE_DATA_STATISTICAL_DATAFLOW_FAMILY: &str =
+    "https://registrystack.org/discovery/operation-family/relay-v2/statistical-dataflow";
 
 fn discovery_description(
     registry: &CompiledRegistry,
     jurisdictions: &[String],
 ) -> Result<Vec<u8>, ArtifactError> {
-    let mut bindings = BTreeSet::new();
+    let mut bindings: BTreeSet<(Vec<String>, Vec<String>)> = BTreeSet::new();
     for resource in &registry.resources {
         for operation in &resource.operations {
             if operation
@@ -495,11 +497,25 @@ fn discovery_description(
                 .any(|profile| matches!(profile.access, CompiledAccess::Public))
             {
                 bindings.insert((
-                    resource.semantic_class.clone(),
-                    operation_family(operation.pattern).to_owned(),
+                    vec![resource.semantic_class.clone()],
+                    vec![operation_family(operation.pattern).to_owned()],
                 ));
             }
         }
+    }
+    if registry.statistical_datasets.iter().any(|dataset| {
+        projection_visibility(
+            registry
+                .metadata_visibility
+                .statistical_datasets
+                .unwrap_or(Visibility::OperatorOnly),
+            &dataset.access,
+        ) == Visibility::Public
+    }) {
+        bindings.insert((
+            Vec::new(),
+            vec![AGGREGATE_DATA_STATISTICAL_DATAFLOW_FAMILY.to_owned()],
+        ));
     }
     let roles = ServiceRoles {
         publisher_id: Some(registry.publisher_identifier.clone()),
@@ -511,12 +527,7 @@ fn discovery_description(
     let exact_bindings = if bindings.is_empty() {
         vec![(Vec::new(), Vec::new())]
     } else {
-        bindings
-            .into_iter()
-            .map(|(semantic_class, operation_family)| {
-                (vec![semantic_class], vec![operation_family])
-            })
-            .collect()
+        bindings.into_iter().collect()
     };
     let services = exact_bindings
         .into_iter()
@@ -1959,6 +1970,61 @@ mod tests {
         assert!(!description.services().iter().any(|service| {
             service.semantic_class_ids() == ["urn:example:semantic-class:second"]
                 && service.operation_family_ids() == [CONSULTATION_LIST_FAMILY]
+        }));
+    }
+
+    #[test]
+    fn provider_discovery_description_deduplicates_public_statistical_dataflow_without_semantic_class(
+    ) {
+        let mut registry = compiled_statistical_registry();
+        let mut second_public = registry.statistical_datasets[0].clone();
+        second_public.id = "second-public-statistical-dataset".into();
+        registry.statistical_datasets.push(second_public);
+
+        let bytes =
+            discovery_description(&registry, &["urn:example:jurisdiction:acceptance".into()])
+                .expect("public statistical description renders");
+        let description = registry_discovery_profile::parse_description(&bytes)
+            .expect("public statistical description satisfies the shared profile");
+        let statistical = description
+            .services()
+            .iter()
+            .filter(|service| {
+                service.operation_family_ids() == [AGGREGATE_DATA_STATISTICAL_DATAFLOW_FAMILY]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(statistical.len(), 1, "the operation family is deduplicated");
+        assert!(
+            statistical[0].semantic_class_ids().is_empty(),
+            "Relay must not invent a statistical semantic class"
+        );
+    }
+
+    #[test]
+    fn provider_discovery_description_excludes_protected_and_operator_only_statistical_dataflows() {
+        let jurisdictions = ["urn:example:jurisdiction:acceptance".into()];
+        let mut registry = compiled_statistical_registry();
+        registry.statistical_datasets[0].access = CompiledAccess::Protected {
+            scope: "statistics:protected:read".into(),
+            purpose: None,
+            row_binding: None,
+        };
+        let protected = discovery_description(&registry, &jurisdictions)
+            .expect("protected statistical description renders");
+        let protected = registry_discovery_profile::parse_description(&protected)
+            .expect("protected statistical description satisfies the shared profile");
+        assert!(protected.services().iter().all(|service| {
+            service.operation_family_ids() != [AGGREGATE_DATA_STATISTICAL_DATAFLOW_FAMILY]
+        }));
+
+        registry.statistical_datasets[0].access = CompiledAccess::Public;
+        registry.metadata_visibility.statistical_datasets = Some(Visibility::OperatorOnly);
+        let operator_only = discovery_description(&registry, &jurisdictions)
+            .expect("operator-only statistical description renders");
+        let operator_only = registry_discovery_profile::parse_description(&operator_only)
+            .expect("operator-only statistical description satisfies the shared profile");
+        assert!(operator_only.services().iter().all(|service| {
+            service.operation_family_ids() != [AGGREGATE_DATA_STATISTICAL_DATAFLOW_FAMILY]
         }));
     }
 

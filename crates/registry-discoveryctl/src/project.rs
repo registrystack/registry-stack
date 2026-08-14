@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use url::Url;
 
 pub const ORIGINS_SCHEMA: &str = "registry-discovery/origins/v1alpha1";
 pub const MAPPING_SCHEMA: &str = "registry-discovery/evidence-mapping/v1alpha1";
@@ -190,25 +189,8 @@ fn validate_mapping(mapping: &AuthoredEvidenceMapping) -> Result<(), ProjectErro
 }
 
 fn valid_catalog_url(value: &str, allow_loopback: bool) -> bool {
-    if value.chars().count() > MAX_IDENTIFIER_CHARACTERS {
-        return false;
-    }
-    let Ok(url) = Url::parse(value) else {
-        return false;
-    };
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return false;
-    }
-    if url.scheme() == "https" {
-        return url.host().is_some();
-    }
-    allow_loopback
-        && url.scheme() == "http"
-        && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
+    value.chars().count() <= MAX_IDENTIFIER_CHARACTERS
+        && registry_discovery_profile::is_valid_endpoint_url(value, allow_loopback)
 }
 
 fn valid_short_name(value: &str) -> bool {
@@ -286,13 +268,35 @@ alternatives:
 
     #[test]
     fn loopback_http_requires_the_explicit_development_switch() {
-        let origins = ORIGINS.replace(
-            "https://unreachable.example.invalid/catalog.jsonld",
+        for endpoint in [
+            "http://localhost:8080/catalog.jsonld",
             "http://127.0.0.1:8080/catalog.jsonld",
-        );
-        let root = project(&origins, &[]);
-        assert!(check_project(root.path(), false).is_err());
-        assert!(check_project(root.path(), true).is_ok());
+            "http://[::1]:8080/catalog.jsonld",
+        ] {
+            let origins = ORIGINS.replace(
+                "https://unreachable.example.invalid/catalog.jsonld",
+                endpoint,
+            );
+            let root = project(&origins, &[]);
+            assert!(check_project(root.path(), false).is_err(), "{endpoint}");
+            assert!(check_project(root.path(), true).is_ok(), "{endpoint}");
+        }
+    }
+
+    #[test]
+    fn catalog_urls_refuse_other_loopbacks_and_preparser_whitespace_or_controls() {
+        for endpoint in [
+            "http://127.0.0.2:8080/catalog.jsonld",
+            "http://127.1:8080/catalog.jsonld",
+            "http://LOCALHOST:8080/catalog.jsonld",
+            "http://[::2]:8080/catalog.jsonld",
+            " https://catalog.example.invalid/catalog.jsonld",
+            "https://catalog.example.invalid/catalog.jsonld\n",
+            "https://catalog.example.invalid/catalog .jsonld",
+            "https://catalog.example.invalid/catalog\u{0007}.jsonld",
+        ] {
+            assert!(!valid_catalog_url(endpoint, true), "accepted {endpoint:?}");
+        }
     }
 
     #[test]

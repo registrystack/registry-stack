@@ -29,8 +29,9 @@
         "catalogUrl": {
           "type": "string",
           "format": "uri",
+          "minLength": 1,
           "maxLength": 4096,
-          "pattern": "^https://[^/?#@]+(?:/[^?#]*)?$",
+          "pattern": "^https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$",
           "description": "Exact production HTTPS URL without credentials, query, or fragment. Loopback HTTP is a CLI development-mode exception, not part of this production authoring schema."
         },
         "profile": {"const": "registry-discovery-v1alpha1"},

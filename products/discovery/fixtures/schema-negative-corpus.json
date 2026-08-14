@@ -26,6 +26,12 @@
       "value": "https://provider.example/catalog.jsonld?private=true"
     },
     {
+      "name": "origins-refuses-whitespace-before-url-parsing",
+      "contract": "origins",
+      "pointer": "/origins/0/catalogUrl",
+      "value": " https://provider.example/catalog.jsonld"
+    },
+    {
       "name": "mapping-refuses-unknown-root-member",
       "contract": "evidence-mapping",
       "pointer": "/unexpected",
@@ -84,6 +90,12 @@
       "contract": "index",
       "pointer": "/services/0/semanticClassIds",
       "value": ["urn:example:class:private"]
+    },
+    {
+      "name": "index-refuses-whitespace-before-url-parsing",
+      "contract": "index",
+      "pointer": "/services/0/endpointUrl",
+      "value": "https://provider.example/evidence path"
     },
     {
       "name": "profile-refuses-unknown-root-member",

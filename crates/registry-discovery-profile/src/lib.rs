@@ -12,7 +12,7 @@ use registry_platform_canonical_json::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-use url::Url;
+use url::{Host, Url};
 
 /// The sole Registry Discovery publication profile understood by this crate.
 pub const PROFILE_ID: &str = "registry-discovery-v1alpha1";
@@ -422,6 +422,9 @@ pub fn render_description(description: &DiscoveryDescription) -> Result<Vec<u8>,
         serde_json::to_value(description).expect("closed profile serialization cannot fail");
     let mut rendered = canonicalize_json(&value)?;
     rendered.push(b'\n');
+    if rendered.len() > MAX_DESCRIPTION_BYTES {
+        return Err(ProfileError::DocumentTooLarge);
+    }
     Ok(rendered)
 }
 
@@ -470,12 +473,18 @@ fn derive_binding_id(
     ))
 }
 
+/// Whether a provider-public text value satisfies the shared character,
+/// trimming, and control-character rules.
+#[must_use]
+pub fn is_valid_public_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= MAX_STRING_CHARACTERS
+        && !value.chars().any(char::is_control)
+        && value.trim() == value
+}
+
 fn validate_text(field: &'static str, value: &str) -> Result<(), ProfileError> {
-    if value.is_empty()
-        || value.chars().count() > MAX_STRING_CHARACTERS
-        || value.chars().any(char::is_control)
-        || value.trim() != value
-    {
+    if !is_valid_public_text(value) {
         return Err(ProfileError::PublicField(field));
     }
     Ok(())
@@ -491,23 +500,68 @@ fn validate_identifier(field: &'static str, value: &str) -> Result<(), ProfileEr
 }
 
 fn validate_endpoint(value: &str) -> Result<(), ProfileError> {
-    validate_text("endpointURL", value)?;
-    let parsed = Url::parse(value).map_err(|_| ProfileError::Endpoint)?;
-    if parsed.username() != ""
+    if !is_valid_endpoint_url(value, true) {
+        return Err(ProfileError::Endpoint);
+    }
+    Ok(())
+}
+
+/// Whether a client base or provider-catalog URL satisfies the shared closed
+/// URL predicate. Literal whitespace and controls are rejected before WHATWG
+/// parsing can trim or percent-encode them. The optional cleartext exception
+/// accepts only the three explicit loopback host identities.
+#[must_use]
+pub fn is_valid_endpoint_url(value: &str, allow_loopback_http: bool) -> bool {
+    if !is_valid_public_text(value)
+        || value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return false;
+    }
+    let Ok(parsed) = Url::parse(value) else {
+        return false;
+    };
+    if parsed.host().is_none()
+        || !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.fragment().is_some()
         || parsed.query().is_some()
     {
-        return Err(ProfileError::Endpoint);
+        return false;
     }
-    let loopback = matches!(
-        parsed.host_str(),
-        Some("localhost") | Some("127.0.0.1") | Some("::1")
-    );
-    if !(parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback)) {
-        return Err(ProfileError::Endpoint);
+    let explicit_loopback = exact_loopback_host(value, &parsed);
+    parsed.scheme() == "https"
+        || (allow_loopback_http && parsed.scheme() == "http" && explicit_loopback)
+}
+
+fn exact_loopback_host(value: &str, parsed: &Url) -> bool {
+    let Some(authority_and_path) = value.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = authority_and_path
+        .split_once('/')
+        .map_or(authority_and_path, |(authority, _)| authority);
+    let raw_host = if authority.starts_with('[') {
+        authority
+            .find(']')
+            .map(|end| &authority[..=end])
+            .unwrap_or(authority)
+    } else {
+        authority
+            .split_once(':')
+            .map_or(authority, |(host, _)| host)
+    };
+    match parsed.host() {
+        Some(Host::Domain(host)) => host == "localhost" && raw_host == "localhost",
+        Some(Host::Ipv4(address)) => {
+            address == std::net::Ipv4Addr::LOCALHOST && raw_host == "127.0.0.1"
+        }
+        Some(Host::Ipv6(address)) => {
+            address == std::net::Ipv6Addr::LOCALHOST && raw_host == "[::1]"
+        }
+        None => false,
     }
-    Ok(())
 }
 
 fn validate_identifier_collection(
@@ -645,6 +699,63 @@ mod tests {
     }
 
     #[test]
+    fn rendering_counts_the_trailing_lf_and_every_successful_render_parses() {
+        let services = (0..MAX_SERVICES)
+            .map(|index| {
+                ServiceDescription::new(
+                    format!("urn:example:service:evidence:{index:04}"),
+                    ServiceKind::Evidence,
+                    "Evidence".into(),
+                    "x".into(),
+                    "https://evidence.example.org".into(),
+                    ServiceRoles::default(),
+                    vec!["urn:example:jurisdiction".into()],
+                    vec!["https://registrystack.org/evidence/profile/v1".into()],
+                    vec!["urn:example:evidence-type".into()],
+                    vec![],
+                    vec![],
+                )
+                .expect("bounded service")
+            })
+            .collect();
+        let mut document = DiscoveryDescription::new(services).expect("bounded document");
+        let baseline =
+            canonicalize_json(&serde_json::to_value(&document).expect("closed profile serializes"))
+                .expect("closed profile canonicalizes")
+                .len();
+        let mut remaining = MAX_DESCRIPTION_BYTES - 1 - baseline;
+        for service in &mut document.services {
+            let available = MAX_STRING_CHARACTERS - service.description.chars().count();
+            let added = remaining.min(available);
+            service.description.push_str(&"x".repeat(added));
+            remaining -= added;
+            if remaining == 0 {
+                break;
+            }
+        }
+        assert_eq!(remaining, 0, "the bounded strings can reach the byte edge");
+
+        let rendered = render_description(&document).expect("exact maximum renders");
+        assert_eq!(rendered.len(), MAX_DESCRIPTION_BYTES);
+        assert_eq!(
+            parse_description(&rendered).expect("every successful render parses"),
+            document
+        );
+
+        document
+            .services
+            .iter_mut()
+            .find(|service| service.description.chars().count() < MAX_STRING_CHARACTERS)
+            .expect("one service retains character capacity")
+            .description
+            .push('x');
+        assert!(matches!(
+            render_description(&document),
+            Err(ProfileError::DocumentTooLarge)
+        ));
+    }
+
+    #[test]
     fn multibyte_public_strings_use_the_json_schema_character_bound() {
         let mut description = evidence();
         description.services[0].title = "é".repeat(MAX_STRING_CHARACTERS);
@@ -658,6 +769,43 @@ mod tests {
             description.validate(),
             Err(ProfileError::PublicField("title"))
         ));
+    }
+
+    #[test]
+    fn endpoint_urls_use_typed_exact_loopback_hosts_and_reject_preparser_whitespace() {
+        for accepted in [
+            "https://evidence.example.org/catalog.jsonld",
+            "http://localhost:8080/catalog.jsonld",
+            "http://127.0.0.1:8080/catalog.jsonld",
+            "http://[::1]:8080/catalog.jsonld",
+        ] {
+            assert!(is_valid_endpoint_url(accepted, true), "rejected {accepted}");
+        }
+        for refused in [
+            "http://localhost:8080/catalog.jsonld",
+            "http://127.0.0.1:8080/catalog.jsonld",
+            "http://[::1]:8080/catalog.jsonld",
+        ] {
+            assert!(
+                !is_valid_endpoint_url(refused, false),
+                "loopback HTTP did not require explicit allowance: {refused}"
+            );
+        }
+        for refused in [
+            "http://127.0.0.2:8080/catalog.jsonld",
+            "http://127.1:8080/catalog.jsonld",
+            "http://LOCALHOST:8080/catalog.jsonld",
+            "http://[::2]:8080/catalog.jsonld",
+            " http://127.0.0.1:8080/catalog.jsonld",
+            "http://127.0.0.1:8080/catalog.jsonld\n",
+            "https://evidence.example.org/catalog .jsonld",
+            "https://evidence.example.org/catalog\u{0007}.jsonld",
+        ] {
+            assert!(
+                !is_valid_endpoint_url(refused, true),
+                "accepted non-exact or pre-parser-normalized URL: {refused:?}"
+            );
+        }
     }
 
     #[test]

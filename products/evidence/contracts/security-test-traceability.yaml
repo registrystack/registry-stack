@@ -7,6 +7,8 @@ entries:
       - {file: crates/registry-evidence/src/discovery.rs, name: provider_discovery_description_never_advertises_impossible_capability_combinations}
       - {file: crates/registry-evidence/src/discovery.rs, name: provider_discovery_description_preserves_evidence_type_profile_correlation}
       - {file: crates/registry-evidence/src/discovery.rs, name: every_maintained_acceptance_bundle_publishes_exact_valid_bytes}
+      - {file: crates/registry-evidence/src/config.rs, name: publication_public_text_matches_shared_profile_and_schema_and_always_renders}
+      - {file: crates/registry-evidence/src/config.rs, name: publication_endpoint_requires_https_or_local_loopback_http}
       - {file: crates/registry-evidence/src/bundle.rs, name: packaged_provider_discovery_description_must_match_exact_regeneration}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: provider_discovery_description_serves_exact_bytes_without_authentication_or_side_effects}
   - id: sec-assurance-profile-fixture-boundary

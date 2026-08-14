@@ -52,6 +52,7 @@ pub struct ServiceSelection {
     pub origin_id: String,
     pub origin_url: String,
     pub origin_content_digest: String,
+    pub origin_fetched_at: String,
     pub catalog_revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mapping_revision: Option<String>,
@@ -111,6 +112,7 @@ impl ServiceSearchSelectionExt for ServiceSearchResponse {
             origin_id: service.origin_id.clone(),
             origin_url: service.origin_url.clone(),
             origin_content_digest: service.origin_content_digest.clone(),
+            origin_fetched_at: service.origin_fetched_at.clone(),
             catalog_revision: self.catalog_revision.clone(),
             mapping_revision: request.mapping_revision,
         })
@@ -230,6 +232,38 @@ mod tests {
         assert_eq!(selection.semantic_class_ids, ["urn:semantic:business"]);
         assert_eq!(selection.operation_family_ids, ["urn:operation:list"]);
         assert!(selection.evidence_type_ids.is_empty());
+    }
+
+    #[test]
+    fn selection_retains_and_round_trips_complete_origin_provenance() {
+        let record = service();
+        let response = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
+            items: vec![record],
+        };
+        let selection = response
+            .select_exact(SelectionRequest {
+                record_id: "record-a".into(),
+                matched_capability: MatchedCapability::EvidenceType("urn:evidence".into()),
+                mapping_revision: Some(format!("sha256:{}", "2".repeat(64))),
+            })
+            .expect("exact service selection");
+
+        assert_eq!(selection.origin_id, "origin-a");
+        assert_eq!(
+            selection.origin_url,
+            "https://provider.example/catalog.jsonld"
+        );
+        assert_eq!(
+            selection.origin_content_digest,
+            format!("sha256:{}", "1".repeat(64))
+        );
+        assert_eq!(selection.origin_fetched_at, "2026-08-14T00:00:00Z");
+
+        let encoded = serde_json::to_vec(&selection).expect("selection serializes");
+        let decoded: ServiceSelection =
+            serde_json::from_slice(&encoded).expect("selection deserializes");
+        assert_eq!(decoded, selection);
     }
 
     #[test]

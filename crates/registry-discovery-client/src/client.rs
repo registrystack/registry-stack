@@ -203,12 +203,18 @@ impl DiscoveryClient {
             .await
             .map_err(|error| DiscoveryClientError::transport(read_failure_kind(&error)))?;
         if status.is_success() {
-            if content_type.as_deref() != Some(JSON) {
+            if !content_type
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(JSON))
+            {
                 return Err(DiscoveryClientError::Protocol);
             }
             strict_decode(&bytes)
         } else {
-            if content_type.as_deref() != Some(PROBLEM_JSON) {
+            if !content_type
+                .as_deref()
+                .is_some_and(|value| value.eq_ignore_ascii_case(PROBLEM_JSON))
+            {
                 return Err(DiscoveryClientError::Protocol);
             }
             Err(problem_from_response(status, &bytes)?)
@@ -222,7 +228,73 @@ fn response_content_type(headers: &reqwest::header::HeaderMap) -> Option<String>
         (Some(value), None) => value.to_str().ok()?,
         _ => return None,
     };
-    value.split(';').next().map(str::trim).map(str::to_owned)
+    let mut parts = value.split(';');
+    let essence = parts.next()?.trim_ascii();
+    let (kind, subtype) = essence.split_once('/')?;
+    if subtype.contains('/') || !media_token(kind) || !media_token(subtype) {
+        return None;
+    }
+    let mut parameter_names = Vec::new();
+    for parameter in parts {
+        let (name, parameter_value) = parameter.trim_ascii().split_once('=')?;
+        let name = name.trim_ascii();
+        let parameter_value = parameter_value.trim_ascii();
+        if !media_token(name)
+            || !(media_token(parameter_value) || quoted_media_parameter(parameter_value))
+            || parameter_names
+                .iter()
+                .any(|seen: &&str| seen.eq_ignore_ascii_case(name))
+        {
+            return None;
+        }
+        parameter_names.push(name);
+    }
+    Some(essence.to_owned())
+}
+
+fn media_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+fn quoted_media_parameter(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() < 2 || bytes.first() != Some(&b'"') || bytes.last() != Some(&b'"') {
+        return false;
+    }
+    let mut escaped = false;
+    for byte in &bytes[1..bytes.len() - 1] {
+        if escaped {
+            if byte.is_ascii_control() {
+                return false;
+            }
+            escaped = false;
+        } else if *byte == b'\\' {
+            escaped = true;
+        } else if *byte == b'"' || byte.is_ascii_control() {
+            return false;
+        }
+    }
+    !escaped
 }
 
 fn strict_decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, DiscoveryClientError> {
@@ -352,6 +424,7 @@ fn validate_search_response(
 }
 
 fn service_query(filters: &ServiceFilters) -> Result<String, DiscoveryClientError> {
+    validate_service_filters(filters).map_err(|_| DiscoveryClientError::Query)?;
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     for value in &filters.record_id {
         serializer.append_pair("recordId", value);
@@ -410,6 +483,10 @@ mod tests {
         Valid,
         Redirect,
         Oversized,
+        UppercaseSuccessMediaType,
+        UppercaseProblemMediaType,
+        WrongMediaType,
+        DuplicateMediaType,
     }
 
     #[derive(Clone)]
@@ -480,6 +557,23 @@ mod tests {
                 response
             }
             Mode::Oversized => json_response(json!({ "padding": "x".repeat(8192) })),
+            Mode::UppercaseSuccessMediaType => search_response("Application/JSON; charset=utf-8"),
+            Mode::UppercaseProblemMediaType => {
+                response_with_media_type(
+                    StatusCode::BAD_REQUEST,
+                    "Application/Problem+JSON; charset=\"utf-8\"",
+                    br#"{"type":"https://registrystack.org/problems/discovery/invalid-request","title":"Invalid request","status":400}"#.to_vec(),
+                )
+            }
+            Mode::WrongMediaType => search_response("text/plain"),
+            Mode::DuplicateMediaType => {
+                let mut response = search_response(JSON);
+                response.headers_mut().append(
+                    CONTENT_TYPE,
+                    reqwest::header::HeaderValue::from_static(JSON),
+                );
+                response
+            }
             Mode::Valid if request.uri().path().ends_with("evidence-types/resolve") => {
                 json_response(json!({
                     "requirementId": "urn:requirement",
@@ -503,10 +597,32 @@ mod tests {
     }
 
     fn json_response(value: serde_json::Value) -> Response<Body> {
-        let mut response = Response::new(Body::from(serde_json::to_vec(&value).unwrap()));
+        response_with_media_type(StatusCode::OK, JSON, serde_json::to_vec(&value).unwrap())
+    }
+
+    fn search_response(media_type: &'static str) -> Response<Body> {
+        let service = service();
+        response_with_media_type(
+            StatusCode::OK,
+            media_type,
+            serde_json::to_vec(&json!({
+                "catalogRevision": catalog_revision(std::slice::from_ref(&service)).unwrap(),
+                "items": [service]
+            }))
+            .unwrap(),
+        )
+    }
+
+    fn response_with_media_type(
+        status: StatusCode,
+        media_type: &'static str,
+        bytes: Vec<u8>,
+    ) -> Response<Body> {
+        let mut response = Response::new(Body::from(bytes));
+        *response.status_mut() = status;
         response.headers_mut().insert(
             CONTENT_TYPE,
-            reqwest::header::HeaderValue::from_static(JSON),
+            reqwest::header::HeaderValue::from_static(media_type),
         );
         response
     }
@@ -584,6 +700,62 @@ mod tests {
         assert_eq!(
             url::form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>(),
             [("semanticClass".into(), fragment.into())]
+        );
+    }
+
+    #[test]
+    fn query_serialization_enforces_the_shared_aggregate_character_budget() {
+        let mut filters = ServiceFilters::default();
+        filters
+            .record_id
+            .push("a".repeat(registry_discovery::MAXIMUM_IDENTIFIER_CHARACTERS));
+        filters.record_id.push("b".repeat(
+            registry_discovery::MAXIMUM_QUERY_VALUE_CHARACTERS
+                - registry_discovery::MAXIMUM_IDENTIFIER_CHARACTERS,
+        ));
+        let boundary = service_query(&filters).expect("the aggregate boundary serializes");
+        assert!(boundary.len() <= MAXIMUM_QUERY_BYTES);
+
+        filters.record_id[1].push('b');
+        assert_eq!(service_query(&filters), Err(DiscoveryClientError::Query));
+    }
+
+    #[tokio::test]
+    async fn success_media_type_token_is_case_insensitive_after_parameter_parsing() {
+        let (client, _) = client(Mode::UppercaseSuccessMediaType, 1024 * 1024).await;
+        assert!(client
+            .search_services(ServiceFilters::default())
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn problem_media_type_token_is_case_insensitive_after_parameter_parsing() {
+        let (client, _) = client(Mode::UppercaseProblemMediaType, 1024 * 1024).await;
+        assert_eq!(
+            client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Problem {
+                status: 400,
+                problem: DiscoveryProblem::InvalidRequest,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_response_media_type_is_refused() {
+        let (client, _) = client(Mode::WrongMediaType, 1024 * 1024).await;
+        assert_eq!(
+            client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Protocol)
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_response_media_type_headers_are_refused() {
+        let (client, _) = client(Mode::DuplicateMediaType, 1024 * 1024).await;
+        assert_eq!(
+            client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Protocol)
         );
     }
 

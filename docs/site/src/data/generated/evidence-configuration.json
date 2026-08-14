@@ -868,7 +868,8 @@
           "constraints": [
             [
               "maxLength: 4096",
-              "minLength: 1"
+              "minLength: 1",
+              "pattern: ^[^\\s\\u0000-\\u001F\\u007F-\\u009F](?:[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$"
             ]
           ],
           "conditional_constraints": [],
@@ -988,7 +989,8 @@
           "constraints": [
             [
               "maxLength: 4096",
-              "minLength: 1"
+              "minLength: 1",
+              "pattern: ^[^\\s\\u0000-\\u001F\\u007F-\\u009F](?:[^\\u0000-\\u001F\\u007F-\\u009F]*[^\\s\\u0000-\\u001F\\u007F-\\u009F])?$"
             ]
           ],
           "conditional_constraints": [],

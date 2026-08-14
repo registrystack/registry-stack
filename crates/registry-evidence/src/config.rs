@@ -580,7 +580,11 @@ impl EvidenceConfig {
 
         self.validate_acquisition_capabilities()?;
         self.validate_holder_bound_requirements()?;
-        self.validate_cross_references()
+        self.validate_cross_references()?;
+        if self.publication.is_some() && crate::discovery::render(self).is_err() {
+            return invalid("provider publication cannot be rendered");
+        }
+        Ok(())
     }
 
     /// Refuse a holder-bound requirement no request could ever reach, and one
@@ -1055,25 +1059,17 @@ pub struct PublicationConfig {
 impl PublicationConfig {
     fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
         validate_uri(&self.service_id)?;
-        validate_string(&self.title, 1, 4096, "publication title")?;
-        validate_string(&self.description, 1, 4096, "publication description")?;
+        if !registry_discovery_profile::is_valid_public_text(&self.title) {
+            return invalid("publication title is invalid");
+        }
+        if !registry_discovery_profile::is_valid_public_text(&self.description) {
+            return invalid("publication description is invalid");
+        }
         validate_string(&self.endpoint_url, 1, 512, "publication endpoint URL")?;
-        let endpoint = Url::parse(&self.endpoint_url)
-            .map_err(|_| ConfigError::Invalid("publication endpoint URL is invalid"))?;
-        let loopback_http = endpoint.scheme() == "http"
-            && assurance_profile == AssuranceProfile::Local
-            && match endpoint.host() {
-                Some(Host::Ipv4(address)) => address.is_loopback(),
-                Some(Host::Ipv6(address)) => address.is_loopback(),
-                _ => false,
-            };
-        if !(endpoint.scheme() == "https" || loopback_http)
-            || endpoint.host().is_none()
-            || !endpoint.username().is_empty()
-            || endpoint.password().is_some()
-            || endpoint.query().is_some()
-            || endpoint.fragment().is_some()
-        {
+        if !registry_discovery_profile::is_valid_endpoint_url(
+            &self.endpoint_url,
+            assurance_profile == AssuranceProfile::Local,
+        ) {
             return invalid("publication endpoint URL is invalid");
         }
         validate_len(
@@ -5427,24 +5423,93 @@ mod tests {
         );
 
         config.assurance_profile = AssuranceProfile::Local;
-        config
-            .publication
-            .as_mut()
-            .expect("publication configured")
-            .endpoint_url = "http://127.0.0.1:8080".to_owned();
-        config
-            .validate()
-            .expect("local assurance accepts a loopback service base");
+        for endpoint in [
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+        ] {
+            config
+                .publication
+                .as_mut()
+                .expect("publication configured")
+                .endpoint_url = endpoint.to_owned();
+            config
+                .validate()
+                .unwrap_or_else(|_| panic!("local assurance rejected {endpoint}"));
+            crate::discovery::render(&config)
+                .unwrap_or_else(|_| panic!("valid local publication did not render: {endpoint}"));
+        }
+        for endpoint in [
+            "http://127.0.0.2:8080",
+            "http://127.1:8080",
+            "http://LOCALHOST:8080",
+            "http://[::2]:8080",
+            " http://127.0.0.1:8080",
+            "http://127.0.0.1:8080\n",
+            "http://127.0.0.1:8080/catalog .jsonld",
+            "http://127.0.0.1:8080/catalog\u{0007}.jsonld",
+        ] {
+            config
+                .publication
+                .as_mut()
+                .expect("publication configured")
+                .endpoint_url = endpoint.to_owned();
+            assert!(config.validate().is_err(), "accepted {endpoint:?}");
+        }
+    }
 
-        config
-            .publication
-            .as_mut()
-            .expect("publication configured")
-            .endpoint_url = "http://localhost:8080".to_owned();
-        assert!(
-            config.validate().is_err(),
-            "the local exception is IP-loopback only"
+    #[test]
+    fn publication_public_text_matches_shared_profile_and_schema_and_always_renders() {
+        let validator = bundle_contract_validator();
+        let fixture = include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         );
+        for field in ["title", "description"] {
+            for (value, accepted) in [
+                (
+                    "é".repeat(registry_discovery_profile::MAX_STRING_CHARACTERS),
+                    true,
+                ),
+                (
+                    "é".repeat(registry_discovery_profile::MAX_STRING_CHARACTERS + 1),
+                    false,
+                ),
+                (" leading".to_owned(), false),
+                ("trailing ".to_owned(), false),
+                ("embedded\u{0007}control".to_owned(), false),
+            ] {
+                let mut config = EvidenceConfig::parse_yaml(fixture)
+                    .expect("strict fixture validates before the mutation");
+                let publication = config.publication.as_mut().expect("publication configured");
+                match field {
+                    "title" => publication.title.clone_from(&value),
+                    "description" => publication.description.clone_from(&value),
+                    _ => unreachable!("closed publication field list"),
+                }
+                assert_eq!(
+                    config.validate().is_ok(),
+                    accepted,
+                    "Rust/profile parity for {field} at {} scalars",
+                    value.chars().count()
+                );
+
+                let mut instance = bundle_contract_instance(fixture);
+                instance["publication"][field] = serde_json::json!(value);
+                assert_eq!(
+                    validator.is_valid(&instance),
+                    accepted,
+                    "schema/profile parity for {field}"
+                );
+
+                if accepted {
+                    let rendered = crate::discovery::render(&config)
+                        .expect("every valid publication renders")
+                        .expect("publication remains configured");
+                    registry_discovery_profile::parse_description(&rendered)
+                        .expect("every valid publication renders a parseable description");
+                }
+            }
+        }
     }
 
     /// Two authority claims naming one JWT member, or naming a member the token

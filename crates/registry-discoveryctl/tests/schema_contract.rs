@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use jsonschema::{Draft, JSONSchema};
 use registry_discovery::{parse_index, prepare};
-use registry_discovery_profile::parse_description;
+use registry_discovery_profile::{
+    parse_description, render_description, DiscoveryDescription, ServiceDescription,
+};
 use registry_discoveryctl::check_project;
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::Value;
@@ -265,6 +267,75 @@ fn profile_multibyte_strings_use_json_schema_character_semantics() {
     );
     assert!(!validator.is_valid(&document));
     assert!(!accepted_by_rust("profile", &document));
+}
+
+#[test]
+fn profile_endpoint_schema_and_rust_reject_preparser_whitespace_and_controls() {
+    let validator = validator("profile/schema/registry-discovery-v1alpha1.schema.json");
+    for endpoint in [
+        "https://evidence.example.org/catalog.jsonld",
+        "http://localhost:8080/catalog.jsonld",
+        "http://127.0.0.1:8080/catalog.jsonld",
+        "http://[::1]:8080/catalog.jsonld",
+    ] {
+        let baseline = parse_description(
+            &fs::read(product_path("fixtures/descriptions/evidence.jsonld"))
+                .expect("profile fixture reads"),
+        )
+        .expect("profile fixture parses");
+        let original = &baseline.services()[0];
+        let service = ServiceDescription::new(
+            original.service_id().to_owned(),
+            original.service_kind(),
+            original.title().to_owned(),
+            original.description().to_owned(),
+            endpoint.to_owned(),
+            original.roles().clone(),
+            original.jurisdictions().to_vec(),
+            original.conforms_to().to_vec(),
+            original.evidence_type_ids().to_vec(),
+            original.semantic_class_ids().to_vec(),
+            original.operation_family_ids().to_vec(),
+        )
+        .expect("accepted endpoint constructs a service");
+        let document: Value = serde_json::from_slice(
+            &render_description(
+                &DiscoveryDescription::new(vec![service]).expect("description constructs"),
+            )
+            .expect("description renders"),
+        )
+        .expect("description is JSON");
+        assert!(validator.is_valid(&document), "schema rejected {endpoint}");
+        assert!(
+            accepted_by_rust("profile", &document),
+            "Rust rejected {endpoint}"
+        );
+    }
+    for endpoint in [
+        "http://127.0.0.2:8080/catalog.jsonld",
+        "http://127.1:8080/catalog.jsonld",
+        "http://LOCALHOST:8080/catalog.jsonld",
+        "http://[::2]:8080/catalog.jsonld",
+        " https://evidence.example.org/catalog.jsonld",
+        "https://evidence.example.org/catalog.jsonld\n",
+        "https://evidence.example.org/catalog .jsonld",
+        "https://evidence.example.org/catalog\u{0007}.jsonld",
+    ] {
+        let mut document = positive_document("profile");
+        set_pointer(
+            &mut document,
+            "/services/0/endpointURL",
+            Value::String(endpoint.to_owned()),
+        );
+        assert!(
+            !validator.is_valid(&document),
+            "schema accepted {endpoint:?}"
+        );
+        assert!(
+            !accepted_by_rust("profile", &document),
+            "Rust accepted {endpoint:?}"
+        );
+    }
 }
 
 #[test]

@@ -1382,7 +1382,7 @@ projects:
       size: 8754
       visibility: operator-only
   labour-statistics:
-    packageRevision: sha256:c6814fb19bc9ff9eabbb928ce110627bc12c9ec9bf8c5b38dbf8a28d780f8947
+    packageRevision: sha256:4eebbcfcff5e54cef3190ce1846ddc38bc19fb7eee5212b01a59775fe731a055
     contractRevision: sha256:5fa07359d1278ada6adaf24c6f838e8dfb7ac9e5d5b6774683d71c66c3f2ee0d
     sourceSchemaFingerprints:
       labour-statistics: sha256:21890387ccf8d33a95a4ba38d085b6eac79e4522b8a8b34a10a4a637711b4034
@@ -1413,7 +1413,7 @@ projects:
       mediaType: application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"
       operationIdentifier: null
       path: generated/artifacts/discovery.jsonld
-      sha256: sha256:c6d81d23c88dbd79b20192a860c51f5dd15acea19f5cae52e7876d324ddae5fc
+      sha256: sha256:26b2c876e9911f69127232d65dccc8c46aab1a56dd9506d03fbfb9c451723757
       visibility: public
     - accessBinding:
         kind: fixed-operation

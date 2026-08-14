@@ -665,6 +665,22 @@
       ],
       "type": "object"
     },
+    "Publication": {
+      "additionalProperties": false,
+      "description": "Public facts the Registry author explicitly elects to publish for\ndiscovery. All other description fields are derived from already governed\nRegistry identity, service, role, and operation contracts.",
+      "properties": {
+        "jurisdictions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "jurisdictions"
+      ],
+      "type": "object"
+    },
     "PurposeConstraint": {
       "additionalProperties": false,
       "properties": {
@@ -1565,6 +1581,17 @@
     },
     "metadataVisibility": {
       "$ref": "#/$defs/MetadataVisibility"
+    },
+    "publication": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Publication"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "registry": {
       "$ref": "#/$defs/RegistryDefinition"
