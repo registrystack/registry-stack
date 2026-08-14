@@ -408,6 +408,9 @@ class RegistryReleaseTest(TestCase):
     def test_recovery_verification_emits_exact_retry_command(self) -> None:
         registry_release = load_registry_release()
         manifest_sha = "b" * 64
+        source_sha = "a" * 40
+        workflow_revision = "c" * 40
+        protected_main = "d" * 40
         binding = registry_release.release_candidate.render_tag_binding(
             77,
             1,
@@ -419,7 +422,7 @@ class RegistryReleaseTest(TestCase):
                 registry_release,
                 "tagged_candidate_binding",
                 return_value=(
-                    "a" * 40,
+                    source_sha,
                     registry_release.release_candidate.parse_tag_binding(binding),
                 ),
             ),
@@ -427,8 +430,28 @@ class RegistryReleaseTest(TestCase):
             mock.patch.object(
                 registry_release,
                 "verify_candidate_run",
-                return_value=({"release": {"version": "0.22.0"}}, binding),
+                return_value=(
+                    {
+                        "release": {"version": "0.22.0"},
+                        "workflow": {"revision": workflow_revision},
+                    },
+                    binding,
+                ),
             ),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=protected_main,
+            ),
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                return_value=workflow_revision,
+            ),
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_ancestry",
+            ) as validate_ancestry,
             redirect_stdout(io.StringIO()) as output,
             redirect_stderr(io.StringIO()) as errors,
         ):
@@ -445,6 +468,75 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn(expected, output.getvalue())
         self.assertIn(expected, errors.getvalue())
+        validate_ancestry.assert_called_once_with(
+            ROOT,
+            source_sha=source_sha,
+            workflow_revision=workflow_revision,
+            protected_main_sha=protected_main,
+        )
+
+    def test_recovery_verification_rejects_unreachable_candidate_source(self) -> None:
+        registry_release = load_registry_release()
+        source_sha = "a" * 40
+        workflow_revision = "c" * 40
+        protected_main = "d" * 40
+        manifest_sha = "b" * 64
+        binding = registry_release.release_candidate.render_tag_binding(
+            77,
+            1,
+            manifest_sha,
+        )
+        with (
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(registry_release, "release_for_tag", return_value=None),
+            mock.patch.object(
+                registry_release,
+                "tagged_candidate_binding",
+                return_value=(
+                    source_sha,
+                    registry_release.release_candidate.parse_tag_binding(binding),
+                ),
+            ),
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_run",
+                return_value=(
+                    {
+                        "release": {"version": "0.22.0"},
+                        "workflow": {"revision": workflow_revision},
+                    },
+                    binding,
+                ),
+            ),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=protected_main,
+            ),
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                return_value=workflow_revision,
+            ),
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_ancestry",
+                side_effect=registry_release.ReleasePlanError(
+                    f"candidate source {source_sha} is not reachable from protected main"
+                ),
+            ),
+            redirect_stdout(io.StringIO()) as output,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.verify_release_recovery(
+                ROOT,
+                tag="v0.22.0",
+                repository="registrystack/registry-stack",
+            )
+
+        self.assertEqual(1, result)
+        self.assertNotIn("workflow run", output.getvalue())
+        self.assertIn("not reachable from protected main", errors.getvalue())
 
     def test_recovery_verification_rejects_tags_publication_cannot_dispatch(
         self,

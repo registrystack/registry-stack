@@ -2701,7 +2701,7 @@ def verify_release_recovery(
                 f"corresponding {tag} Git tag and archived assets"
             )
         source_sha, tag_binding = tagged_candidate_binding(repo, tag)
-        _manifest, rendered_binding = verify_candidate_run(
+        manifest, rendered_binding = verify_candidate_run(
             repo,
             repository=repository,
             candidate_run=tag_binding["run_id"],
@@ -2711,6 +2711,18 @@ def verify_release_recovery(
         )
         if release_candidate.parse_tag_binding(rendered_binding) != tag_binding:
             raise ReleasePlanError("annotated tag binding differs from the candidate attempt")
+        protected_main = refresh_protected_main(repo, repository)
+        workflow_revision = resolve_commit(
+            repo,
+            manifest["workflow"]["revision"],
+            "candidate workflow revision",
+        )
+        validate_candidate_ancestry(
+            repo,
+            source_sha=source_sha,
+            workflow_revision=workflow_revision,
+            protected_main_sha=protected_main,
+        )
         release_state = validate_recovery_release(
             release,
             tag=tag,
