@@ -44,6 +44,16 @@ def version_uses_client_registries(version: str) -> bool:
     )
 
 
+def client_registry_clients(version: str) -> tuple[str, ...]:
+    clients = ["evidence", "relay"]
+    if (
+        tuple(int(part) for part in version.split("."))
+        >= release_candidate.DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION
+    ):
+        clients.insert(0, "discovery")
+    return tuple(clients)
+
+
 def run_text(command: list[str], *, cwd: Path | None = None) -> str:
     try:
         result = subprocess.run(
@@ -346,7 +356,7 @@ def smoke_asset_name(tag: str) -> str:
 def verify_client_registries(directory: Path, version: str) -> int:
     package_count = 0
     try:
-        for client in sorted(client_registry.CLIENTS):
+        for client in client_registry_clients(version):
             client_registry.validate_distribution(directory, version, client)
             npm_packages = client_registry.npm_tarballs(directory, version, client)
             for tarball in npm_packages:
