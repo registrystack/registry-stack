@@ -427,24 +427,57 @@ class RegistryReleaseTest(TestCase):
             mock.patch.object(
                 registry_release,
                 "verify_candidate_run",
-                return_value=({"release": {"version": "1.2.3"}}, binding),
+                return_value=({"release": {"version": "0.22.0"}}, binding),
             ),
             redirect_stdout(io.StringIO()) as output,
             redirect_stderr(io.StringIO()) as errors,
         ):
             result = registry_release.verify_release_recovery(
                 ROOT,
-                tag="v1.2.3",
+                tag="v0.22.0",
                 repository="registrystack/registry-stack",
             )
 
         self.assertEqual(0, result)
         expected = (
             "gh workflow run release.yml --repo registrystack/registry-stack "
-            "--ref main -f tag=v1.2.3"
+            "--ref main -f tag=v0.22.0"
         )
         self.assertIn(expected, output.getvalue())
         self.assertIn(expected, errors.getvalue())
+
+    def test_recovery_verification_rejects_tags_publication_cannot_dispatch(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        for tag, expected_error in (
+            ("v1.2.3", "Beta publication accepts only v0.x.y release tags"),
+            ("v0.18.0", "pre-v0.19 releases are immutable historical evidence"),
+        ):
+            with self.subTest(tag=tag):
+                with (
+                    mock.patch.object(registry_release, "verify_origin_repository"),
+                    mock.patch.object(
+                        registry_release,
+                        "release_for_tag",
+                        return_value=None,
+                    ),
+                    mock.patch.object(
+                        registry_release,
+                        "tagged_candidate_binding",
+                    ) as candidate,
+                    redirect_stdout(io.StringIO()),
+                    redirect_stderr(io.StringIO()) as errors,
+                ):
+                    result = registry_release.verify_release_recovery(
+                        ROOT,
+                        tag=tag,
+                        repository="registrystack/registry-stack",
+                    )
+
+                self.assertEqual(1, result)
+                candidate.assert_not_called()
+                self.assertIn(expected_error, errors.getvalue())
 
     def test_published_recovery_routes_to_public_verification_without_retry(self) -> None:
         registry_release = load_registry_release()

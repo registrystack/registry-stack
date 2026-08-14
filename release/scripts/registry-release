@@ -2673,8 +2673,9 @@ def verify_release_recovery(
     repository: str,
 ) -> int:
     try:
-        if SEMVER_TAG.fullmatch(tag) is None:
+        if not tag.startswith("v"):
             raise ReleasePlanError("tag must be canonical v<major>.<minor>.<patch> text")
+        tag_version = strict_semver(tag.removeprefix("v"))
         verify_origin_repository(repo, repository)
         release = release_for_tag(repository, tag)
         if release is not None and release.get("draft") is False:
@@ -2692,6 +2693,13 @@ def verify_release_recovery(
                 file=sys.stderr,
             )
             return 0
+        if tag_version[0] != 0:
+            raise ReleasePlanError("Beta publication accepts only v0.x.y release tags")
+        if tag_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
+            raise ReleasePlanError(
+                "pre-v0.19 releases are immutable historical evidence; use the "
+                f"corresponding {tag} Git tag and archived assets"
+            )
         source_sha, tag_binding = tagged_candidate_binding(repo, tag)
         _manifest, rendered_binding = verify_candidate_run(
             repo,
