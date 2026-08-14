@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "registry-discovery/security-test-traceability/v1alpha1",
+  "matrix": "products/discovery/contracts/security-invariant-matrix.yaml",
+  "rule": "Every enforced invariant has one or more exact executable test bindings. Integration-required rows must be converted to enforced with an exact binding before product completion.",
+  "requirements": [
+    {
+      "id": "sec-provider-public-projection",
+      "negativeTest": "private-provider-fields-are-omitted-and-invalid-public-projection-is-refused",
+      "testId": "discovery_publication::private_projection_refused",
+      "tests": [
+        {"path": "crates/registry-evidence/src/discovery.rs", "name": "provider_discovery_description_excludes_private_configuration_fields"},
+        {"path": "crates/registry-evidence/src/discovery.rs", "name": "provider_discovery_description_preserves_evidence_type_profile_correlation"},
+        {"path": "crates/registry-relay-v2/src/artifacts.rs", "name": "provider_discovery_description_excludes_protected_and_internal_contract_fields"},
+        {"path": "crates/registry-relay-v2/src/artifacts.rs", "name": "provider_discovery_description_preserves_semantic_class_operation_family_correlation"}
+      ]
+    },
+    {
+      "id": "sec-origin-target-confinement",
+      "negativeTest": "origin-target-is-confined-to-exact-approved-https",
+      "testId": "discoveryctl::origin_target_confined",
+      "tests": [
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "production_policy_refuses_loopback_before_connecting"},
+        {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "outbound_client_does_not_follow_redirects"},
+        {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "outbound_clients_ignore_ambient_proxy_variables_in_an_isolated_process"},
+        {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "immediate_get_does_not_follow_redirect_to_unvalidated_destination"},
+        {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "strict_policy_rejects_http_and_local_or_private_targets"},
+        {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "policy_rejects_cloud_metadata_ipv4_and_ipv6"},
+        {"path": "crates/registry-platform-httputil/src/lib.rs", "name": "fetch_url_policy_blocks_dns_rebinding_to_private_range"}
+      ]
+    },
+    {
+      "id": "sec-profile-parser-confinement",
+      "negativeTest": "unknown-or-remote-context-and-duplicate-members-are-refused",
+      "testId": "discovery_profile::remote_context_and_duplicate_members_refused",
+      "tests": [
+        {"path": "crates/registry-discovery-profile/src/lib.rs", "name": "unknown_or_remote_context_is_refused_without_resolution"},
+        {"path": "crates/registry-discovery-profile/src/lib.rs", "name": "duplicate_members_are_refused_before_deserialization"},
+        {"path": "crates/registry-discoveryctl/tests/schema_contract.rs", "name": "shared_negative_corpus_is_refused_by_both_schema_and_rust"},
+        {"path": "products/discovery/scripts/test_standards_oracle.py", "name": "test_json_ld_oracle_preserves_fragment_iris"},
+        {"path": "crates/registry-discovery/src/model.rs", "name": "semantic_uri_identifiers_accept_rdf_fragment_iris"},
+        {"path": "crates/registry-discovery/src/query.rs", "name": "fragment_iris_survive_exact_search_and_resolution"},
+        {"path": "crates/registry-discovery-client/src/client.rs", "name": "query_serialization_preserves_fragment_iris_as_values"},
+        {"path": "products/discovery/scripts/test_standards_oracle.py", "name": "test_distinct_binding_nodes_preserve_repeated_service_id_capability_correlation"}
+      ]
+    },
+    {
+      "id": "sec-build-resource-bounds",
+      "negativeTest": "build-bound-excess-is-refused-without-an-index",
+      "testId": "discovery_build::resource_bounds",
+      "tests": [
+        {"path": "crates/registry-discovery-profile/src/lib.rs", "name": "maximum_description_bytes_are_refused_before_parsing"},
+        {"path": "crates/registry-discoveryctl/tests/schema_contract.rs", "name": "shared_negative_corpus_is_refused_by_both_schema_and_rust"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "oversized_origin_body_leaves_the_previous_output_untouched"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "encoded_origin_body_is_refused_without_replacing_the_output"},
+        {"path": "crates/registry-discoveryctl/src/build.rs", "name": "origin_fetch_timeout_leaves_the_previous_output_untouched"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "compiled_service_bound_leaves_the_previous_output_untouched"},
+        {"path": "crates/registry-discoveryctl/src/build.rs", "name": "compiled_index_byte_overflow_preserves_the_previous_output"},
+        {"path": "crates/registry-discovery/src/model.rs", "name": "canonical_index_output_enforces_the_runtime_byte_bound"}
+      ]
+    },
+    {
+      "id": "sec-origin-record-isolation",
+      "negativeTest": "origin-records-never-merge-across-origins",
+      "testId": "discovery_index::origin_records_isolated",
+      "tests": [
+        {"path": "crates/registry-discovery/src/model.rs", "name": "records_from_distinct_origins_never_merge"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "identical_claimed_service_ids_from_distinct_origins_remain_separate"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "duplicate_binding_within_one_origin_is_refused_without_replacing_the_output"}
+      ]
+    },
+    {
+      "id": "sec-atomic-index-build",
+      "negativeTest": "failed-build-leaves-no-new-visible-index",
+      "testId": "discoveryctl::atomic_index_build",
+      "tests": [
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "failed_origin_fetch_leaves_the_previous_output_untouched"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "wrong_profile_media_type_is_refused_without_replacing_the_output"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "duplicate_profile_media_type_is_refused_without_replacing_the_output"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "duplicate_binding_within_one_origin_is_refused_without_replacing_the_output"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "invalid_mapping_is_refused_before_origin_io_and_preserves_previous_output"},
+        {"path": "crates/registry-discoveryctl/src/build.rs", "name": "origin_fetch_timeout_leaves_the_previous_output_untouched"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "compiled_service_bound_leaves_the_previous_output_untouched"},
+        {"path": "crates/registry-discoveryctl/src/build.rs", "name": "compiled_index_byte_overflow_preserves_the_previous_output"},
+        {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "write_failure_preserves_previous_output_and_leaves_no_visible_temporary_file"}
+      ]
+    },
+    {
+      "id": "sec-discovery-not-trust",
+      "negativeTest": "discovery-selection-cannot-create-trust-or-native-io",
+      "testId": "discovery_client::selection_is_not_trust",
+      "tests": [
+        {"path": "crates/registry-discovery-client/src/selection.rs", "name": "discovery_metadata_has_no_trust_or_native_io_capability"},
+        {"path": "crates/registry-discovery-client/tests/native_journey.rs", "name": "complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively"}
+      ]
+    },
+    {
+      "id": "sec-query-and-log-minimization",
+      "negativeTest": "discovery-diagnostics-redact-query-and-description-canaries",
+      "testId": "discovery_server::diagnostics_minimized",
+      "tests": [
+        {"path": "crates/registry-discovery/src/server.rs", "name": "real_trace_and_problem_output_exclude_request_canaries"},
+        {"path": "crates/registry-discovery-client/src/client.rs", "name": "client_diagnostics_never_log_request_values"}
+      ]
+    }
+  ]
+}

@@ -581,6 +581,66 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
 }
 
 #[tokio::test]
+async fn provider_discovery_description_route_serves_compiled_exact_bytes_without_authentication() {
+    for project in PROJECTS {
+        let harness = ProjectHarness::open(project).await;
+        let expected = harness
+            .service
+            .artifacts
+            .get("artifacts/discovery.jsonld")
+            .expect("maintained Registry publishes a description")
+            .content
+            .clone();
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v2/artifacts/discovery-description")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK, "{project}");
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static(
+                "application/ld+json;profile=\"https://registrystack.org/discovery/profile/v1alpha1\""
+            )),
+            "{project}"
+        );
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("response body reads");
+        assert_eq!(body.as_ref(), expected.as_slice(), "{project}");
+
+        // If the public-artifact branch performed optional bearer
+        // authentication, this malformed credential would be rejected before
+        // the compiled bytes were served.
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v2/artifacts/discovery-description")
+                    .header(AUTHORIZATION, "Bearer malformed")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK, "{project}");
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("response body reads");
+        assert_eq!(body.as_ref(), expected.as_slice(), "{project}");
+    }
+}
+
+#[tokio::test]
 async fn rust_client_drives_the_real_relay_router_across_the_public_surface() {
     let mut business = ProjectHarness::open("business-registry").await;
     let business_loopback = ClientLoopback::start(&business, None).await;

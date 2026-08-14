@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "registry-discovery/offline-rdf-shacl-provenance/v1alpha1",
+  "execution": {
+    "network": "forbidden",
+    "dependencyInstallation": "uv 0.11.16 installs only the fully locked test environment; oracle execution is --offline --no-sync and denies socket connects",
+    "jsonLdExpansion": "RDFLib 7.1.4 with the pinned local context injected before JSON-LD expansion",
+    "remoteResolution": "forbidden",
+    "rdfInput": "closed registry-discovery-v1alpha1 JSON-LD only",
+    "output": "deterministic sorted N-Triples",
+    "shacl": "pySHACL 0.30.1 in-memory validation over the selected local shapes"
+  },
+  "oracles": [
+    {
+      "purpose": "Draft 2020-12 and closed Rust parser parity over every positive fixture and shared negative-corpus case",
+      "implementation": "jsonschema",
+      "version": "0.18.3",
+      "path": "crates/registry-discoveryctl/tests/schema_contract.rs",
+      "test": "every_positive_fixture_satisfies_draft_2020_12_and_the_closed_rust_parser"
+    },
+    {
+      "purpose": "standards JSON-LD to RDF expansion",
+      "implementation": "rdflib",
+      "version": "7.1.4",
+      "path": "products/discovery/scripts/test_standards_oracle.py",
+      "test": "test_json_ld_and_shacl_oracles_validate_every_profile_fixture"
+    },
+    {
+      "purpose": "selected SHACL validation",
+      "implementation": "pyshacl",
+      "version": "0.30.1",
+      "path": "products/discovery/scripts/test_standards_oracle.py",
+      "test": "test_shacl_oracle_rejects_missing_endpoint"
+    },
+    {
+      "purpose": "repeated service identity capability correlation",
+      "implementation": "rdflib",
+      "version": "7.1.4",
+      "path": "products/discovery/scripts/test_standards_oracle.py",
+      "test": "test_distinct_binding_nodes_preserve_repeated_service_id_capability_correlation"
+    },
+    {
+      "purpose": "RDF fragment IRI preservation",
+      "implementation": "rdflib",
+      "version": "7.1.4",
+      "path": "products/discovery/scripts/test_standards_oracle.py",
+      "test": "test_json_ld_oracle_preserves_fragment_iris"
+    }
+  ],
+  "standards": [
+    {
+      "name": "W3C Data Catalog Vocabulary (DCAT) Version 3",
+      "version": "W3C Recommendation 2024-08-22",
+      "url": "https://www.w3.org/TR/2024/REC-vocab-dcat-3-20240822/"
+    },
+    {
+      "name": "DCAT-AP",
+      "version": "3.0.1 Recommendation",
+      "url": "https://semiceu.github.io/DCAT-AP/releases/3.0.1/"
+    },
+    {
+      "name": "BRegDCAT-AP",
+      "version": "3.0.0 Working Draft",
+      "url": "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/"
+    },
+    {
+      "name": "BRegDCAT-AP",
+      "version": "2.1.0 latest published release",
+      "url": "https://github.com/SEMICeu/BregDCAT-AP/tree/main/releases/2.1.0"
+    }
+  ],
+  "resources": [
+    {"path": "profile/context/registry-discovery-v1alpha1.jsonld", "version": "v1alpha1", "sha256": "d42c559086ab0f63fed783e7965d852ae6df58aef8dd47d97e2abc6d6844028f"},
+    {"path": "profile/schema/registry-discovery-v1alpha1.schema.json", "version": "v1alpha1", "sha256": "5873b255ba871f1a5a0804bdc42c9897c849440d0ea17119110b01073f224f80"},
+    {"path": "profile/shapes/registry-discovery-v1alpha1.shacl.ttl", "version": "v1alpha1", "sha256": "19890b75f14c5292c38317f12b10272c508c49936dba9918f9970f75242bcec1"},
+    {"path": "schemas/origins.schema.json", "version": "v1alpha1", "sha256": "7851f379845d0403be4382503beae0aad40b6a03d56032562a0e17db460aefd9"},
+    {"path": "schemas/evidence-mapping.schema.json", "version": "v1alpha1", "sha256": "58f38befe0d401179d9092fd6efae93850786594ada40abbfd61f0ff3d9dddb9"},
+    {"path": "schemas/runtime.schema.json", "version": "v1alpha1", "sha256": "12a4d0ac52602fa55989f7db630e91903a9f8ca07a601480fe45e618c0173cc5"},
+    {"path": "schemas/index.schema.json", "version": "v1alpha1", "sha256": "e44e0ed75f485f3afafc5dea1a66b9b686ace1ee538876d5a9078cfbc441ca60"},
+    {"path": "scripts/test_standards_oracle.py", "version": "v1alpha1", "sha256": "ae5390f07a0834877c08b8f63bddd57e2f745a8d568dabf21375b435c2b8887f"},
+    {"path": "standards-oracle/pyproject.toml", "version": "locked", "sha256": "78b53a2fa3a496aeceafcee189a0974e820e05c5c23bd63dd898d896ae89eb3e"},
+    {"path": "standards-oracle/uv.lock", "version": "revision-3", "sha256": "970302805249159017e5f72c434a2e00d099f6a95ee87838ad67927bec8da35d"}
+  ],
+  "fixtures": [
+    {"path": "fixtures/schema-negative-corpus.json", "sha256": "0080225837f67e53fcd0265e86770a945b0ff04b56502e8b13ede0bbbf1ddf29"},
+    {"path": "fixtures/descriptions/repeated-service-bindings.jsonld", "sha256": "03d281647751c60489d1b2940c3a79bba2cfaa932b186daccb0b0ac310f17f24"},
+    {"path": "fixtures/rdf/repeated-service-bindings.nt", "sha256": "3fa531e2b9a27eab260ae3e2838124e5886e1d22b717322f37bf3e0d27099746"}
+  ]
+}

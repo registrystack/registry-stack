@@ -24,6 +24,8 @@ governance:
   controller: urn:example:institution:statistics-office
   publisher: urn:example:institution:statistics-office
   auditOwner: urn:example:institution:statistics-office-audit
+publication:
+  jurisdictions: [urn:example:jurisdiction:acceptance]
 semantics:
   localVocabulary: https://statistics.example.invalid/vocabulary/
 classifications:

@@ -378,16 +378,25 @@ pub async fn artifact(
     if !uri_within_bound(&uri) {
         return ProblemCode::UriTooLong.response(&trace);
     }
+    let artifact = service
+        .artifacts
+        .artifacts
+        .iter()
+        .find(|item| item.id == artifact_identifier);
+    if let Some(artifact) = artifact.filter(|item| item.visibility == Visibility::Public) {
+        return static_bytes_response(
+            &artifact.content,
+            &artifact.media_type,
+            true,
+            &headers,
+            &trace,
+        );
+    }
     let principal = match optional_principal(&service, &headers).await {
         Ok(value) => value,
         Err(code) => return code.response(&trace),
     };
-    let Some(artifact) = service
-        .artifacts
-        .artifacts
-        .iter()
-        .find(|item| item.id == artifact_identifier)
-    else {
+    let Some(artifact) = artifact else {
         if principal.is_none() && service.artifacts.artifacts.iter().any(protected_artifact) {
             return ProblemCode::MissingCredential.response(&trace);
         }
@@ -395,7 +404,15 @@ pub async fn artifact(
     };
     match artifact.visibility {
         Visibility::OperatorOnly => return ProblemCode::ResourceNotFound.response(&trace),
-        Visibility::Public => {}
+        Visibility::Public => {
+            return static_bytes_response(
+                &artifact.content,
+                &artifact.media_type,
+                true,
+                &headers,
+                &trace,
+            );
+        }
         Visibility::OperationBound => {
             let Some(principal) = principal.as_ref() else {
                 return ProblemCode::MissingCredential.response(&trace);

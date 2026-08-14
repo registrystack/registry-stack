@@ -2,8 +2,8 @@ schemaVersion: relay.registrystack.org/generated-baselines/v1alpha1
 product: relay-v2
 projects:
   social-assistance:
-    packageRevision: sha256:b33f97436165c8a1867203279601a2d7fa52ad8a2b315b98b580e02cc16bea21
-    contractRevision: sha256:6e53ff7465f665e315bf6b9f6fc039a3f657deb5beb20ea502584f9083f11ced
+    packageRevision: sha256:569bba3e2e61d30bed21dbf6e07ff946925caed72d825f26a3f9baeb35da0a4d
+    contractRevision: sha256:a6d99c99f88b2735aa03a2eea0c4b8cff33981d79f23dbbd378da224f54c8ef8
     sourceSchemaFingerprints:
       assistance: sha256:936a90a03d06be67a76226d6999a830c04f6604a3ff8b340a62fdd378d8c6d91
     artifacts:
@@ -14,7 +14,7 @@ projects:
       mediaType: application/json
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--access-profile-caseworker.capability.json
-      sha256: sha256:9531000a455d96cf1d9c75aeb6f4a793bd7d7ced9f4febf673f9fae144392fb2
+      sha256: sha256:15f8aecdb60b62d61c277639c6ca676f83cfb2ab11a4abe2c8765fcf3974492c
       visibility: operation-bound
     - accessBinding: null
       id: assistance-enrolment--lookup-by-case-and-person--access-profile-caseworker-classifications
@@ -75,7 +75,7 @@ projects:
       mediaType: application/json
       operationIdentifier: assistance-enrolment.lookup.by-case-and-person
       path: generated/artifacts/assistance-enrolment--lookup-by-case-and-person--access-profile-limited.capability.json
-      sha256: sha256:1715a29d7acc7fb717769f1cba3fd5af7088e316fdf80a6cecdb862b84b11203
+      sha256: sha256:03e808bb240ede3bc12975a8d074d661681c5a61422f00293e492bae447ba768
       visibility: operation-bound
     - accessBinding: null
       id: assistance-enrolment--lookup-by-case-and-person--access-profile-limited-classifications
@@ -197,14 +197,21 @@ projects:
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
-      sha256: sha256:9e2846ab762dc5c8e97353cd8f27e620f6c962de1fef982d33865bea307c2e35
+      sha256: sha256:1659384312336c37e6814ea414d3cfb9f6d8a2ae06be707d53dd32535f515b9e
       visibility: operator-only
     - accessBinding: null
       id: capability-inventory
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.json
-      sha256: sha256:18a232dacd91ebd9d6db8035822ea8e29984311d2c11be98f3f60441e70107b3
+      sha256: sha256:6892b801d131b0c3e6b14605b4e78bea68ff67bb3eb0ca075fe73f8618d0794c
+      visibility: public
+    - accessBinding: null
+      id: discovery-description
+      mediaType: application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"
+      operationIdentifier: null
+      path: generated/artifacts/discovery.jsonld
+      sha256: sha256:d75201a6ff07d76d6927e279f5f4d0aa41fbe40375813d6c63a05704a5272bac
       visibility: public
     - accessBinding: null
       id: openapi-full
@@ -272,12 +279,12 @@ projects:
     - generated: false
       mediaType: application/yaml
       path: registry.yaml
-      sha256: sha256:621a5951fd86471650e5b3e05da83c2686bb525fbe584d3fbf7b7193d3c651a7
-      size: 6470
+      sha256: sha256:011fba1de39ca17b1316d0a871f31993a2b4f44f8000b87844dded925309098c
+      size: 6538
       visibility: operator-only
   business-registry:
-    packageRevision: sha256:2f8b5e2020d8d64e5676feb3a50969219cbe01467dff02bf34c592edb429e681
-    contractRevision: sha256:369c247ec65709907d7c33104231429fb786d46992d90b9192edc0730dd7896e
+    packageRevision: sha256:8e84198c79ef1e9e011ac63cd20e0c4b622878cb4c39c0cbe3d540dd7f563b22
+    contractRevision: sha256:231fd79855d4c134dbb0ffa08364c9f194661789b0358d8b841527423b600f98
     sourceSchemaFingerprints:
       companies: sha256:dd62b98578f0fa7341eeeaaac4b34da9b79405ae067dc06e5edb004c2d4a38fe
     artifacts:
@@ -293,14 +300,21 @@ projects:
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
-      sha256: sha256:5b073fa109a32e96bdc466bfa9d0a18085a28afe249132f102f25c8440922593
+      sha256: sha256:317db544f79c63ffe8c16498e79ea46bf85d0c80be806f4e3b020fe360e45736
       visibility: operator-only
     - accessBinding: null
       id: capability-inventory
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.json
-      sha256: sha256:fe0145160439365517a13beea24dea9e3be9068eecb1c7e66a6e7c696abafc56
+      sha256: sha256:f0e29780a014235b457c729b15a832236998ebc3747c11478988361d61e54e8f
+      visibility: public
+    - accessBinding: null
+      id: discovery-description
+      mediaType: application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"
+      operationIdentifier: null
+      path: generated/artifacts/discovery.jsonld
+      sha256: sha256:f8fcd26046b4a9bf7cf3263c06b0cd34da29ac33db0ee1fb2acb6f8ae0134340
       visibility: public
     - accessBinding: null
       id: registered-business--list--access-profile-public-register-classifications
@@ -351,7 +365,7 @@ projects:
       mediaType: application/json
       operationIdentifier: registered-business.list
       path: generated/artifacts/registered-business--list--access-profile-registrar.capability.json
-      sha256: sha256:d4ff2cb2c3ca2b7fecee7ceebf41ebbee236ccd3c94c6304d24f1e2c9388a416
+      sha256: sha256:5eb2026707fb15c8c1b8ae45f142ba247459e66ba17bdd83489a7e5ed39ea177
       visibility: operation-bound
     - accessBinding:
         identifier: registrar
@@ -456,7 +470,7 @@ projects:
       mediaType: application/json
       operationIdentifier: registered-business.read
       path: generated/artifacts/registered-business--read--access-profile-registrar.capability.json
-      sha256: sha256:ec21faeed07cc9eabb5178a0e7b57080e2a933839b6e187546ed2e9c65b82bc0
+      sha256: sha256:3828c72a263f2e0d69a9b56eeef3365699eddc68d667032d20ec31980866f600
       visibility: operation-bound
     - accessBinding:
         identifier: registrar
@@ -582,7 +596,7 @@ projects:
       mediaType: application/json
       operationIdentifier: registered-premises.list
       path: generated/artifacts/registered-premises--list--access-profile-registrar-premises.capability.json
-      sha256: sha256:b5d369d5eb0ae184dd03aec1c5e3c719a84b34a14b393ca8662862a03a2d83b6
+      sha256: sha256:e25c5d0bba26bc3b6995d9856a68a4130510b15e713095f32defd0303fc797d9
       visibility: operation-bound
     - accessBinding:
         identifier: registrar-premises
@@ -703,7 +717,7 @@ projects:
       mediaType: application/json
       operationIdentifier: registered-premises.read
       path: generated/artifacts/registered-premises--read--access-profile-registrar-premises.capability.json
-      sha256: sha256:7e19c55e016f024cf48a631504757af97d60a3d2ed266eb1f5b5438342c9ab68
+      sha256: sha256:719f93dfec68da82264219d57926e743fc80034f319d3d16a79e21670887c9bd
       visibility: operation-bound
     - accessBinding:
         identifier: registrar-premises
@@ -824,7 +838,7 @@ projects:
       mediaType: application/json
       operationIdentifier: registered-premises.search.within-bbox
       path: generated/artifacts/registered-premises--search-within-bbox--access-profile-registrar-premises.capability.json
-      sha256: sha256:1d82d38018a9136d8cd208edc52fd18154f6f9f4544dfdf2528c8a35c7fe7a61
+      sha256: sha256:e9e4a32f9f0fd687975c353ae2b7d114bc65f425299c445026d8e8528ab2230e
       visibility: operation-bound
     - accessBinding:
         identifier: registrar-premises
@@ -1003,12 +1017,12 @@ projects:
     - generated: false
       mediaType: application/yaml
       path: registry.yaml
-      sha256: sha256:0b4b6d6a1393c7618b9643c3559fb03bcdbdfd8e6a87a13ec4e27117449139e2
-      size: 11235
+      sha256: sha256:0fcc679c73b79784c9f6ac1d70266ac081bf35b127b36fbc7ce61579d75ad1b4
+      size: 11303
       visibility: operator-only
   civil-event:
-    packageRevision: sha256:e4a0bd40049e480e5724d734748e693ea0fbfef4fc0e8e41dfa8c5de693836d2
-    contractRevision: sha256:8dfc2b2930ba1725394710e732d922bcf1cfff7b25efee39cb92227ad28762b8
+    packageRevision: sha256:e118f00f827246319cb74e6a79527ade7f8173fcd43bf955d1c280667c2d6c03
+    contractRevision: sha256:d58218a5eb57d236d2690e652fb4895a3f9f26cf296989a35d6f6e4b4ade53f8
     sourceSchemaFingerprints:
       events: sha256:7f770d64cb19ec54caca2aa56378b13a43cd5edc206ff44b5fecc99ee9e63759
     artifacts:
@@ -1024,14 +1038,14 @@ projects:
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
-      sha256: sha256:4b9f8a3952ff32bd4ff3ebd6cc8218336867312d464c77818387e15d031e7be4
+      sha256: sha256:49106f1d9eed00065af0fd3413b3e0b01178743956cb0564d8d82870b126964c
       visibility: operator-only
     - accessBinding: null
       id: capability-inventory
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.json
-      sha256: sha256:c1bf8ce69c75cd870ee0967d8f78dae89cf490edb7a113c9076f20c28086bc2b
+      sha256: sha256:91c6a82be6a8a662840e26eaeb4d33e2f143826cef0842a8227d40d3287f15e7
       visibility: public
     - accessBinding:
         identifier: registrar-verification
@@ -1040,7 +1054,7 @@ projects:
       mediaType: application/json
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--access-profile-registrar-verification.capability.json
-      sha256: sha256:bb382c585ef0658c9d4e6e70974c1075c81abf403c5a9ff8c9788791b558295c
+      sha256: sha256:c5edb1a1a7beaf21b7525914058afdb5ba8bf0252114d14d2ba36c24287b8142
       visibility: operation-bound
     - accessBinding: null
       id: civil-event--lookup-verify-registration--access-profile-registrar-verification-classifications
@@ -1101,7 +1115,7 @@ projects:
       mediaType: application/json
       operationIdentifier: civil-event.lookup.verify-registration
       path: generated/artifacts/civil-event--lookup-verify-registration--access-profile-supervisory.capability.json
-      sha256: sha256:611498504c1bd2eebe8c57f8fea8addcccea4d9ef77b9950c49ac99e72864625
+      sha256: sha256:ba173958f2134d72b1d56d3f4cd1097365afb44f0067d80a08d576e2239be6c2
       visibility: operation-bound
     - accessBinding: null
       id: civil-event--lookup-verify-registration--access-profile-supervisory-classifications
@@ -1162,7 +1176,7 @@ projects:
       mediaType: application/json
       operationIdentifier: civil-event.read
       path: generated/artifacts/civil-event--read--access-profile-registrar.capability.json
-      sha256: sha256:ba19349d0111c2cedf912d53e1dcf30cbbd917c2525ce83919e869b0c8661685
+      sha256: sha256:f018393dcb889504ebf76e4c12571ec9e2471ce787ad9ec3a21d9b4d3672630f
       visibility: operation-bound
     - accessBinding: null
       id: civil-event--read--access-profile-registrar-classifications
@@ -1280,6 +1294,13 @@ projects:
       sha256: sha256:762086646e734b6a8248a6bb62675490edc9a303559dca7e08719925656fec40
       visibility: operator-only
     - accessBinding: null
+      id: discovery-description
+      mediaType: application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"
+      operationIdentifier: null
+      path: generated/artifacts/discovery.jsonld
+      sha256: sha256:c2c83493ca556b6b951b9f10e778ed001766aa6bbff8fdff0c9bb1e0d8c46242
+      visibility: public
+    - accessBinding: null
       id: openapi-full
       mediaType: application/yaml
       operationIdentifier: null
@@ -1357,12 +1378,12 @@ projects:
     - generated: false
       mediaType: application/yaml
       path: registry.yaml
-      sha256: sha256:8954bcc3af8c5178f8539d3f43b299a89c421d8a630d901a8d11e0882ad0328a
-      size: 8686
+      sha256: sha256:695b5f08e55395b006c446d62e6ae4d64ccde6e8e2e29d042dceca85365459f2
+      size: 8754
       visibility: operator-only
   labour-statistics:
-    packageRevision: sha256:43f93c8ec32caaf12d709389502eb0bdc00117d581bb721925f701bf7e432e8b
-    contractRevision: sha256:75bbe805a2c72b303af2990bf2420b18d53b3fdae78446880027ced3897c9ff3
+    packageRevision: sha256:c6814fb19bc9ff9eabbb928ce110627bc12c9ec9bf8c5b38dbf8a28d780f8947
+    contractRevision: sha256:5fa07359d1278ada6adaf24c6f838e8dfb7ac9e5d5b6774683d71c66c3f2ee0d
     sourceSchemaFingerprints:
       labour-statistics: sha256:21890387ccf8d33a95a4ba38d085b6eac79e4522b8a8b34a10a4a637711b4034
     artifacts:
@@ -1378,14 +1399,21 @@ projects:
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.full.json
-      sha256: sha256:65bf33dba43060f24dfeebfd4da18df1265292856e8a4246de7392c55bd8241d
+      sha256: sha256:2c90384770bde74a9148090f075f5781b80f3800aeea62a7e6226eb0eb189a99
       visibility: operator-only
     - accessBinding: null
       id: capability-inventory
       mediaType: application/json
       operationIdentifier: null
       path: generated/artifacts/capabilities.json
-      sha256: sha256:d179ba993bd10768c4b16ad67f40197b9a4765864d76014c08b72536647bd685
+      sha256: sha256:733c513f641adcfa50106e08f54160e7f733512d67f272d73bf6e9d042ebf9e9
+      visibility: public
+    - accessBinding: null
+      id: discovery-description
+      mediaType: application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"
+      operationIdentifier: null
+      path: generated/artifacts/discovery.jsonld
+      sha256: sha256:c6d81d23c88dbd79b20192a860c51f5dd15acea19f5cae52e7876d324ddae5fc
       visibility: public
     - accessBinding:
         kind: fixed-operation
@@ -1479,6 +1507,6 @@ projects:
     - generated: false
       mediaType: application/yaml
       path: registry.yaml
-      sha256: sha256:ebbc889e610839c51de254e672722f85afd668b4e5e5357695940d3b43598e1e
-      size: 6372
+      sha256: sha256:0c5f25437b86c815ad6202e65a1a5602fdb52a80e2922258d061cc347627d1e8
+      size: 6440
       visibility: operator-only

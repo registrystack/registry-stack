@@ -1,0 +1,13 @@
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <http://purl.org/dc/terms/conformsTo> <https://registrystack.org/evidence/profile/v1> .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <http://purl.org/dc/terms/description> "Public signed evidence assertions" .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <http://purl.org/dc/terms/spatial> <https://publications.europa.eu/resource/authority/territory/DEU> .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <http://purl.org/dc/terms/title> "Example Evidence" .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <http://www.w3.org/ns/dcat#endpointURL> <https://evidence.example.org> .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <https://registrystack.org/discovery/vocab/v1alpha1#evidenceTypeId> <urn:example:evidence-type:adult-status> .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <https://registrystack.org/discovery/vocab/v1alpha1#publisherId> <urn:example:publisher> .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <https://registrystack.org/discovery/vocab/v1alpha1#serviceId> <urn:example:service:evidence> .
+<urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> <https://registrystack.org/discovery/vocab/v1alpha1#serviceKind> "evidence" .
+_:catalog <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#Catalog> .
+_:catalog <http://www.w3.org/ns/dcat#service> <urn:registrystack:discovery:binding:sha256:2f9ccc4629c7ea2409d986a9c0ee6e3afe6e63326ca7b1be7d9eb8c69082d96c> .
+_:catalog <https://registrystack.org/discovery/vocab/v1alpha1#profile> "registry-discovery-v1alpha1" .

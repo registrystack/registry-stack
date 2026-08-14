@@ -9,7 +9,7 @@
       "marker": "evidence-bundle-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 265,
+      "field_count": 274,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -844,6 +844,155 @@
           ],
           "conditional_constraints": [],
           "description": "Legal issuer URI placed in every assertion as `issuedBy`, and governance must authorize the provider named in `service.providerId` to act for that issuer.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication",
+          "kind": "property",
+          "type": "object",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [],
+          "conditional_constraints": [],
+          "description": "Optional provider-authored public facts that cannot be derived from the governed service, issuer, response-format, binding-mode, and Evidence Type inventory. When present, the runtime publishes one deterministic closed Registry Discovery description.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication.description",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 4096",
+              "minLength: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication.endpointUrl",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication.jurisdictions",
+          "kind": "property",
+          "type": "array",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxItems: 128",
+              "minItems: 1",
+              "uniqueItems: true"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication.jurisdictions[]",
+          "kind": "array_item",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication.operatorId",
+          "kind": "property",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication.publisherId",
+          "kind": "property",
+          "type": "string",
+          "required": "no",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication.serviceId",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
+          "runtime_validation": null
+        },
+        {
+          "key_path": "publication.title",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "maxLength: 4096",
+              "minLength: 1"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": null,
           "runtime_validation": null
         },
         {

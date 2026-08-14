@@ -1,0 +1,15 @@
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <http://purl.org/dc/terms/conformsTo> <https://registrystack.org/relay/profile/v2> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <http://purl.org/dc/terms/description> "Public registry query metadata" .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <http://purl.org/dc/terms/spatial> <https://publications.europa.eu/resource/authority/territory/DEU> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <http://purl.org/dc/terms/title> "Example Relay" .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <http://www.w3.org/ns/dcat#endpointURL> <https://relay.example.org> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <https://registrystack.org/discovery/vocab/v1alpha1#operationFamilyId> <urn:example:operation:lookup> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <https://registrystack.org/discovery/vocab/v1alpha1#operatorId> <urn:example:operator> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <https://registrystack.org/discovery/vocab/v1alpha1#registryAuthorityId> <urn:example:authority> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <https://registrystack.org/discovery/vocab/v1alpha1#semanticClassId> <urn:example:class:person> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <https://registrystack.org/discovery/vocab/v1alpha1#serviceId> <urn:example:service:relay> .
+<urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> <https://registrystack.org/discovery/vocab/v1alpha1#serviceKind> "relay" .
+_:catalog <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#Catalog> .
+_:catalog <http://www.w3.org/ns/dcat#service> <urn:registrystack:discovery:binding:sha256:cfbc42c572f4b0dfd81d10cd47c149e54451e2f0fa61f79b842b54eff51fb4e6> .
+_:catalog <https://registrystack.org/discovery/vocab/v1alpha1#profile> "registry-discovery-v1alpha1" .

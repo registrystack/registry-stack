@@ -362,6 +362,8 @@ pub struct EvidenceConfig {
     pub assurance_profile: AssuranceProfile,
     pub service: ServiceConfig,
     pub issuer: IssuerConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<PublicationConfig>,
     pub authentication: AuthenticationConfig,
     pub audit: AuditConfig,
     pub subject_binding: SubjectBindingConfig,
@@ -488,6 +490,9 @@ impl EvidenceConfig {
         validate_uri(&self.service.provider_id)?;
         validate_uri(&self.service.trust_domain)?;
         validate_uri(&self.issuer.id)?;
+        if let Some(publication) = &self.publication {
+            publication.validate(self.assurance_profile)?;
+        }
         self.authentication.validate(self.assurance_profile)?;
         self.audit.validate()?;
         self.subject_binding.validate()?;
@@ -1029,6 +1034,72 @@ pub struct ServiceConfig {
 #[serde(deny_unknown_fields)]
 pub struct IssuerConfig {
     pub id: String,
+}
+
+/// Public facts that cannot be derived from the governed Evidence service,
+/// issuer, formats, bindings, and requirement inventory.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicationConfig {
+    pub service_id: String,
+    pub title: String,
+    pub description: String,
+    pub endpoint_url: String,
+    pub jurisdictions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_id: Option<String>,
+}
+
+impl PublicationConfig {
+    fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
+        validate_uri(&self.service_id)?;
+        validate_string(&self.title, 1, 4096, "publication title")?;
+        validate_string(&self.description, 1, 4096, "publication description")?;
+        validate_string(&self.endpoint_url, 1, 512, "publication endpoint URL")?;
+        let endpoint = Url::parse(&self.endpoint_url)
+            .map_err(|_| ConfigError::Invalid("publication endpoint URL is invalid"))?;
+        let loopback_http = endpoint.scheme() == "http"
+            && assurance_profile == AssuranceProfile::Local
+            && match endpoint.host() {
+                Some(Host::Ipv4(address)) => address.is_loopback(),
+                Some(Host::Ipv6(address)) => address.is_loopback(),
+                _ => false,
+            };
+        if !(endpoint.scheme() == "https" || loopback_http)
+            || endpoint.host().is_none()
+            || !endpoint.username().is_empty()
+            || endpoint.password().is_some()
+            || endpoint.query().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return invalid("publication endpoint URL is invalid");
+        }
+        validate_len(
+            self.jurisdictions.len(),
+            1,
+            128,
+            "publication jurisdictions",
+        )?;
+        if self
+            .jurisdictions
+            .iter()
+            .any(|jurisdiction| validate_uri(jurisdiction).is_err())
+            || self.jurisdictions.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return invalid(
+                "publication jurisdictions must be sorted, unique, globally scoped URIs",
+            );
+        }
+        for role in [&self.publisher_id, &self.operator_id]
+            .into_iter()
+            .flatten()
+        {
+            validate_uri(role)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -5340,6 +5411,40 @@ mod tests {
                 "{profile:?} inherited the local HTTP exception"
             );
         }
+    }
+
+    #[test]
+    fn publication_endpoint_requires_https_or_local_loopback_http() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        let publication = config.publication.as_mut().expect("publication configured");
+        publication.endpoint_url = "http://evidence.example.invalid".to_owned();
+        assert!(
+            config.validate().is_err(),
+            "a non-local deployment must reject cleartext publication"
+        );
+
+        config.assurance_profile = AssuranceProfile::Local;
+        config
+            .publication
+            .as_mut()
+            .expect("publication configured")
+            .endpoint_url = "http://127.0.0.1:8080".to_owned();
+        config
+            .validate()
+            .expect("local assurance accepts a loopback service base");
+
+        config
+            .publication
+            .as_mut()
+            .expect("publication configured")
+            .endpoint_url = "http://localhost:8080".to_owned();
+        assert!(
+            config.validate().is_err(),
+            "the local exception is IP-loopback only"
+        );
     }
 
     /// Two authority claims naming one JWT member, or naming a member the token

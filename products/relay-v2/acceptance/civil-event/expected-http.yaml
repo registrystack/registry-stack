@@ -22,6 +22,9 @@ authorizations:
     scopes: [registry:civil-events:lookup]
     claims: {purpose: registration-verification, jurisdiction: EX-B}
 steps:
+  - id: provider-discovery-description
+    request: {method: GET, path: /v2/artifacts/discovery-description}
+    expect: {status: 200, mediaType: 'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"'}
   - id: registry-discovery
     authorizationFixture: civil-registrar-ex-a
     request: {method: GET, path: /v2}

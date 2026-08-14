@@ -2,6 +2,10 @@ schemaVersion: relay.registrystack.org/acceptance-scenarios/v1alpha1
 product: relay-v2
 execution: products/relay-v2/scripts/test-http.sh
 scenarios:
+  - {id: social-provider-discovery, project: social-assistance, journeyStep: provider-discovery-description, assertion: The anonymous discovery artifact route serves the exact compiled provider-publication bytes without exposing protected capabilities.}
+  - {id: business-provider-discovery, project: business-registry, journeyStep: provider-discovery-description, assertion: The anonymous discovery artifact route serves the exact compiled provider-publication bytes.}
+  - {id: civil-provider-discovery, project: civil-event, journeyStep: provider-discovery-description, assertion: The anonymous discovery artifact route serves the exact compiled provider-publication bytes without exposing protected operations.}
+  - {id: labour-provider-discovery, project: labour-statistics, journeyStep: provider-discovery-description, assertion: The anonymous discovery artifact route serves the exact compiled provider-publication bytes.}
   - {id: social-ready, project: social-assistance, journeyStep: readiness, assertion: One local protected Registry becomes ready from a generated package.}
   - {id: social-lookup, project: social-assistance, journeyStep: lookup-success, assertion: A bounded protected lookup returns only its selected governed properties.}
   - {id: social-lookup-default, project: social-assistance, journeyStep: lookup-default, assertion: The default access profile contains exactly the compiled disclosure profile and the exact safe partial-string result rather than the source identifier.}

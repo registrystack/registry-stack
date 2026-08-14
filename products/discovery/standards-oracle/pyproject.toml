@@ -1,0 +1,11 @@
+[project]
+name = "registry-discovery-standards-oracle"
+version = "0.0.0"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+  "pyshacl==0.30.1",
+  "rdflib==7.1.4",
+]
+
+[tool.uv]
+package = false

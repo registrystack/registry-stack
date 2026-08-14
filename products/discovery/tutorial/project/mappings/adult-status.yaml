@@ -1,0 +1,9 @@
+schemaVersion: registry-discovery/evidence-mapping/v1alpha1
+mappingId: urn:example:mapping:adult-status
+mappingAuthorityId: urn:example:mapping-authority
+requirementId: urn:example:requirement:adult-status
+jurisdiction: urn:example:jurisdiction
+alternatives:
+  - evidenceTypeListId: urn:example:evidence-type-list:adult-status
+    evidenceTypeIds:
+      - urn:example:evidence-type:adult-status

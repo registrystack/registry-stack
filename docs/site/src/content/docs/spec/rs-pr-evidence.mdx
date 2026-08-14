@@ -1,6 +1,6 @@
 ---
 title: "RS-PR-EVIDENCE: Evidence Gateway protocol"
-description: "The normative HTTP protocol contract for Evidence Gateway: discovery, authentication, assurance profiles, the closed request contract, acceptance definitions, minimum disclosure, response formats, problem reporting, audit gates, and immutable deployment input."
+description: "The normative HTTP protocol contract for Evidence Gateway: provider publication, requester-scoped discovery, authentication, assurance profiles, the closed request contract, minimum disclosure, response formats, problem reporting, audit gates, and immutable deployment input."
 status: draft
 owner: registry-docs
 source_repos:
@@ -66,12 +66,14 @@ Defined terms are used per [RS-TERMS](../rs-terms/).
 | 0.5.0 | 2026-08-07 | draft | Added the closed single and search-then-fetch acquisition kinds, the hard one-request-per-stage and two-request-per-evaluation ceilings, validated prior-fact handoff, and per-stage access audit. |
 | 0.6.0 | 2026-08-08 | draft | Added Section 7.3, the holder-bound subject binding mode, its batch release envelope, and relying-party presentation verification (REQ-PR-EVIDENCE-060 through REQ-PR-EVIDENCE-069). Scoped REQ-PR-EVIDENCE-024, REQ-PR-EVIDENCE-037, REQ-PR-EVIDENCE-038, REQ-PR-EVIDENCE-040, and REQ-PR-EVIDENCE-041 to the audience-scoped mode without renumbering them. |
 | 0.7.0 | 2026-08-09 | draft | Added Section 7.4, the bounded multi-subject request batch, ordered signed-JWS outcomes, atomic admission and release, and the optional source-batch optimization (REQ-PR-EVIDENCE-070 through REQ-PR-EVIDENCE-075). |
+| 0.8.0 | 2026-08-14 | draft | Added the exact packaged public provider advertisement, distinguished it from requester-scoped definition discovery and verifier trust, and aligned the primary and private metrics listener route inventories. |
 
 ## 1. Scope and references
 
 This specification covers Evidence Gateway's externally observable protocol behavior:
 
-- The service surface, the generated OpenAPI document, and requester-scoped definition discovery.
+- The service surface, the generated OpenAPI document, public provider publication, and
+  requester-scoped definition discovery.
 - Authentication of callers and the single authorization decision that gates a request.
 - The governed assurance profile and its local-only authoring exceptions.
 - The closed request contract and the request nonce.
@@ -111,8 +113,10 @@ Evidence Gateway Version 1 has explicit non-goals, recorded in
 It stops before documents, credential issuance protocols and credential lifecycle, status lists and
 revocation, OpenID for Verifiable Credential Issuance (OID4VCI) in any part, service-held replay,
 challenge, or presentation state, server-issued challenges, federation, delegated agents, workflow,
-public or federated catalogs, runtime bundle mutation, source planning, multi-source fulfillment,
-and an application database.
+a public requester-entitlement or definition catalog, searchable, mutable, aggregate, or federated
+catalogs, runtime bundle mutation, source planning, multi-source fulfillment, and an application
+database. The closed public provider advertisement is allowed because Evidence Gateway serves
+package-derived facts for external indexing and implements no catalog runtime.
 The SD-JWT VC output is a second encoding of one stateless assertion under a frozen profile; it is
 never a credential lifecycle.
 Presentation-side verification is a relying-party act, not a service surface: Section 7.3 specifies
@@ -128,11 +132,19 @@ operator-controlled trust domain, beside the portable `registry-evidence-verifie
 runtime depends on for the response formats, the Evidence payload contract, and relying-party
 verification (`products/evidence/README.md`).
 
-REQ-PR-EVIDENCE-001: The reachable HTTP surface MUST be exactly the operations declared in
-`products/evidence/generated/registry-evidence.openapi.json`: one singular evidence operation, one
-multi-subject request-batch operation, one definition-discovery operation, public key discovery,
+REQ-PR-EVIDENCE-001: The primary Evidence listener's reachable HTTP surface MUST be exactly the
+operations declared in `products/evidence/generated/registry-evidence.openapi.json`: one singular
+evidence operation, one multi-subject request-batch operation, one requester-scoped
+definition-discovery operation, one public provider-advertisement operation, public key discovery,
 JWT VC Issuer Metadata, liveness, readiness, and publication of that OpenAPI document itself.
-A conforming deployment MUST NOT add a route outside that generated document.
+Those operations are `POST /v1/evidence`, `POST /v1/evidence/batch`,
+`GET /v1/evidence-definitions`, `GET /catalog.jsonld`,
+`GET /.well-known/evidence/jwks.json`, `GET /.well-known/jwt-vc-issuer`, `GET /health`,
+`GET /ready`, and `GET /openapi.json`.
+A conforming primary listener MUST NOT add a route outside that generated document.
+An operator MAY configure the separate private metrics listener defined by
+`products/evidence/OPERATOR-CONTRACT.md`; that listener serves only `GET /metrics`, and the primary
+listener never serves metrics.
 
 REQ-PR-EVIDENCE-002: Definition discovery MUST be authenticated, rate limited, and requester-scoped.
 The response MUST contain only complete request shapes that match exactly one configured authority
@@ -141,10 +153,14 @@ path, and MUST omit unentitled and ambiguous shapes, so an unentitled caller rec
 `products/evidence/contracts/security-invariant-matrix.yaml`).
 
 REQ-PR-EVIDENCE-003: Discovery MUST NOT create authority and MUST NOT expose deployment internals.
-It MUST NOT reveal source plans, scripts, credentials, requester tags, authority-profile identifiers,
-selector values, codelist values, or unrelated definitions, MUST perform no provider request, and
-MUST NOT emit an evidence-data audit event
+Requester-scoped definition discovery MUST NOT reveal source plans, scripts, credentials, requester
+tags, authority-profile identifiers, selector values, codelist values, or unrelated definitions,
+MUST perform no provider request, and MUST NOT emit an evidence-data audit event
 (`products/evidence/contracts/definitions.schema.yaml`, invariant `V1-I26`).
+Public provider publication MUST serve the exact packaged `catalog.jsonld` bytes, with a distinct
+derived binding identity for each exact Evidence Type and compatible response profile. It MUST NOT
+publish request shapes or entitlements, perform authentication, source access, assertion evaluation,
+signing, or Evidence audit work, and MUST NOT be treated as a trust anchor (invariant `V1-I53`).
 
 REQ-PR-EVIDENCE-004: Public key discovery MUST serve public keys only, and JWT VC Issuer Metadata
 MUST carry only the members named in `products/evidence/contracts/sd-jwt-vc-profile.yaml`.

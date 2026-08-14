@@ -1,0 +1,10 @@
+schemaVersion: registry-discovery/origins/v1alpha1
+origins:
+  - originId: example-evidence
+    catalogUrl: https://evidence.example.invalid/catalog.jsonld
+    profile: registry-discovery-v1alpha1
+    enabled: true
+  - originId: example-relay
+    catalogUrl: https://relay.example.invalid/v2/artifacts/discovery-description
+    profile: registry-discovery-v1alpha1
+    enabled: true

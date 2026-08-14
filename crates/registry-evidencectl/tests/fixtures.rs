@@ -193,13 +193,15 @@ fn editable_sqlite_starter_compiles_and_runs_through_bundle_only_seams() {
     );
 
     let invocations = read_argv_log(&argv_log);
-    assert_eq!(invocations.len(), 2);
-    assert_eq!(invocations[0][0], "bundle-check");
-    assert_eq!(invocations[0][1], "--bundle");
-    assert_eq!(invocations[1][0], "bundle-evaluate");
+    assert_eq!(invocations.len(), 3);
+    assert_eq!(invocations[0][0], "render-discovery-description");
+    assert_eq!(invocations[0][1], "--config");
+    assert_eq!(invocations[1][0], "bundle-check");
     assert_eq!(invocations[1][1], "--bundle");
+    assert_eq!(invocations[2][0], "bundle-evaluate");
+    assert_eq!(invocations[2][1], "--bundle");
     assert_eq!(
-        invocations[1][3..],
+        invocations[2][3..],
         ["--fixture", "fixtures/record-status.yaml"]
     );
 }

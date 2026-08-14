@@ -218,6 +218,11 @@ pub fn compile_contract(
         controller_identifier: contract.governance.controller.clone(),
         publisher_identifier: contract.governance.publisher.clone(),
         audit_owner_identifier: contract.governance.audit_owner.clone(),
+        publication: contract.publication.as_ref().map(|publication| {
+            crate::model::CompiledPublication {
+                jurisdictions: publication.jurisdictions.clone(),
+            }
+        }),
         local_vocabulary: contract.semantics.local_vocabulary.clone(),
         semantic_alignments: contract.semantics.alignments.clone(),
         governed_files: Vec::new(),
@@ -631,6 +636,51 @@ impl<'a> Compiler<'a> {
                     location,
                     "governance role identifiers must be non-empty",
                 );
+            }
+        }
+        if let Some(publication) = &self.contract.publication {
+            if publication.jurisdictions.is_empty()
+                || publication
+                    .jurisdictions
+                    .iter()
+                    .any(|value| !valid_global_identifier(value))
+                || publication
+                    .jurisdictions
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+            {
+                self.error(
+                    "publication.jurisdictions_invalid",
+                    "publication.jurisdictions",
+                    "published jurisdictions must be a non-empty, sorted, duplicate-free set of globally scoped URIs",
+                );
+            }
+            for (value, location) in [
+                (
+                    self.contract.registry.authority.identifier.as_str(),
+                    "registry.authority.identifier",
+                ),
+                (
+                    self.contract.governance.publisher.as_str(),
+                    "governance.publisher",
+                ),
+            ] {
+                if !valid_global_identifier(value) {
+                    self.error(
+                        "publication.role_identifier_invalid",
+                        location,
+                        "a role published for discovery must be a globally scoped URI",
+                    );
+                }
+            }
+            if let Some(operator) = &self.contract.registry.operator {
+                if !valid_global_identifier(&operator.identifier) {
+                    self.error(
+                        "publication.role_identifier_invalid",
+                        "registry.operator.identifier",
+                        "a role published for discovery must be a globally scoped URI",
+                    );
+                }
             }
         }
         if !valid_relative_reference(&self.contract.classifications.provenance_ref) {

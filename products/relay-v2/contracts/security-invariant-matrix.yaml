@@ -2,6 +2,17 @@ schemaVersion: relay.registrystack.org/security-invariants/v1alpha1
 product: relay-v2
 status: enforced
 invariants:
+  - id: sec-provider-public-projection
+    threat: Public discovery publication leaks protected capabilities, governed source internals, access policy, credentials, or runtime-only deployment state.
+    enforcementPoint: Production compilation generates one closed Registry Discovery profile artifact with one distinct binding identity per exact public semantic-class and operation-family pair, and package verification regenerates its exact bytes before activation; the existing public artifact route serves only those captured bytes.
+    expected: Every maintained Registry publishes its public identity and explicitly authored jurisdiction, public capability pairs remain correlated under JSON-LD, RDF, and multi-filter search, protected-only capabilities remain absent, and no source, selector, column, access-profile, scope, token, signing, audit, or runtime field can enter the description.
+    evidence: deterministic-generation-closed-projection-and-real-router-exact-byte-tests
+    negativeTest: provider_discovery_description_excludes_protected_and_internal_contract_fields
+    tests:
+      - {path: crates/registry-relay-v2/src/artifacts.rs, name: provider_discovery_description_excludes_protected_and_internal_contract_fields}
+      - {path: crates/registry-relay-v2/src/artifacts.rs, name: provider_discovery_description_is_deterministic_and_exactly_regenerated}
+      - {path: crates/registry-relay-v2/src/artifacts.rs, name: provider_discovery_description_preserves_semantic_class_operation_family_correlation}
+      - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: provider_discovery_description_route_serves_compiled_exact_bytes_without_authentication}
   - id: sec-contract-runtime-separation
     threat: Deployment configuration weakens governed disclosure or authorization.
     enforcementPoint: RegistryContract and RelayRuntime closed-schema compilation before readiness.

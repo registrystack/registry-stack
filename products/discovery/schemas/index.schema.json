@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/discovery/schema/index-v1alpha1.json",
+  "title": "Registry Discovery immutable index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "catalogRevision", "mappingRevision", "builtAt", "origins", "services", "mappings"],
+  "properties": {
+    "schemaVersion": {"const": "registry-discovery/index/v1alpha1"},
+    "catalogRevision": {"$ref": "#/$defs/digest"},
+    "mappingRevision": {"$ref": "#/$defs/digest"},
+    "builtAt": {"type": "string", "format": "date-time", "maxLength": 64},
+    "origins": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/origin"}},
+    "services": {"type": "array", "maxItems": 100000, "items": {"$ref": "#/$defs/service"}},
+    "mappings": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/mapping"}}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^\\S(?:[^\\u0000-\\u001F\\u007F]*\\S)?$"},
+    "uriIdentifier": {"allOf": [{"$ref": "#/$defs/identifier"}, {"format": "uri"}]},
+    "publicUrl": {"type": "string", "format": "uri", "maxLength": 4096, "pattern": "^(?:https://[^/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "uriSet": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/uriIdentifier"}
+    },
+    "nonEmptyUriSet": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/uriIdentifier"}
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originId", "catalogUrl", "contentDigest", "fetchedAt"],
+      "properties": {
+        "originId": {"$ref": "#/$defs/identifier"},
+        "catalogUrl": {"$ref": "#/$defs/publicUrl"},
+        "contentDigest": {"$ref": "#/$defs/digest"},
+        "fetchedAt": {"type": "string", "format": "date-time", "maxLength": 64}
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordId", "bindingId", "serviceId", "serviceKind", "title", "description", "endpointUrl", "jurisdictions", "conformsTo", "evidenceTypeIds", "semanticClassIds", "operationFamilyIds", "originId", "originUrl", "originContentDigest", "originFetchedAt"],
+      "properties": {
+        "recordId": {"$ref": "#/$defs/identifier"},
+        "bindingId": {"$ref": "#/$defs/uriIdentifier"},
+        "serviceId": {"$ref": "#/$defs/uriIdentifier"},
+        "serviceKind": {"enum": ["evidence", "relay"]},
+        "title": {"$ref": "#/$defs/text"},
+        "description": {"$ref": "#/$defs/text"},
+        "endpointUrl": {"$ref": "#/$defs/publicUrl"},
+        "publisherId": {"$ref": "#/$defs/uriIdentifier"},
+        "operatorId": {"$ref": "#/$defs/uriIdentifier"},
+        "registryAuthorityId": {"$ref": "#/$defs/uriIdentifier"},
+        "legalIssuerId": {"$ref": "#/$defs/uriIdentifier"},
+        "technicalProviderId": {"$ref": "#/$defs/uriIdentifier"},
+        "jurisdictions": {"$ref": "#/$defs/nonEmptyUriSet"},
+        "conformsTo": {"$ref": "#/$defs/nonEmptyUriSet"},
+        "evidenceTypeIds": {"$ref": "#/$defs/uriSet"},
+        "semanticClassIds": {"$ref": "#/$defs/uriSet"},
+        "operationFamilyIds": {"$ref": "#/$defs/uriSet"},
+        "originId": {"$ref": "#/$defs/identifier"},
+        "originUrl": {"$ref": "#/$defs/publicUrl"},
+        "originContentDigest": {"$ref": "#/$defs/digest"},
+        "originFetchedAt": {"type": "string", "format": "date-time", "maxLength": 64}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"serviceKind": {"const": "evidence"}}, "required": ["serviceKind"]},
+          "then": {
+            "properties": {
+              "evidenceTypeIds": {"$ref": "#/$defs/nonEmptyUriSet"},
+              "semanticClassIds": {"maxItems": 0},
+              "operationFamilyIds": {"maxItems": 0}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"serviceKind": {"const": "relay"}}, "required": ["serviceKind"]},
+          "then": {"properties": {"evidenceTypeIds": {"maxItems": 0}}}
+        }
+      ]
+    },
+    "alternative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidenceTypeListId", "evidenceTypeIds"],
+      "properties": {
+        "evidenceTypeListId": {"$ref": "#/$defs/uriIdentifier"},
+        "evidenceTypeIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/uriIdentifier"}
+        }
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mappingId", "mappingAuthorityId", "requirementId", "alternatives"],
+      "properties": {
+        "mappingId": {"$ref": "#/$defs/uriIdentifier"},
+        "mappingAuthorityId": {"$ref": "#/$defs/uriIdentifier"},
+        "requirementId": {"$ref": "#/$defs/uriIdentifier"},
+        "jurisdiction": {"$ref": "#/$defs/uriIdentifier"},
+        "alternatives": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/alternative"}}
+      }
+    }
+  }
+}

@@ -1,0 +1,149 @@
+{
+  "schemaVersion": "registry-discovery/schema-negative-corpus/v1alpha1",
+  "cases": [
+    {
+      "name": "origins-refuses-unknown-root-member",
+      "contract": "origins",
+      "pointer": "/unexpected",
+      "value": true
+    },
+    {
+      "name": "origins-refuses-invalid-origin-id",
+      "contract": "origins",
+      "pointer": "/origins/0/originId",
+      "value": "contains spaces"
+    },
+    {
+      "name": "origins-refuses-non-https-production-url",
+      "contract": "origins",
+      "pointer": "/origins/0/catalogUrl",
+      "value": "ftp://provider.example/catalog.jsonld"
+    },
+    {
+      "name": "origins-refuses-query-bearing-url",
+      "contract": "origins",
+      "pointer": "/origins/0/catalogUrl",
+      "value": "https://provider.example/catalog.jsonld?private=true"
+    },
+    {
+      "name": "mapping-refuses-unknown-root-member",
+      "contract": "evidence-mapping",
+      "pointer": "/unexpected",
+      "value": true
+    },
+    {
+      "name": "mapping-refuses-duplicate-evidence-type",
+      "contract": "evidence-mapping",
+      "pointer": "/alternatives/0/evidenceTypeIds",
+      "value": ["urn:example:evidence-type:adult-status", "urn:example:evidence-type:adult-status"]
+    },
+    {
+      "name": "runtime-refuses-unknown-root-member",
+      "contract": "runtime",
+      "pointer": "/unexpected",
+      "value": true
+    },
+    {
+      "name": "runtime-refuses-zero-request-bound",
+      "contract": "runtime",
+      "pointer": "/limits/maximumRequestBytes",
+      "value": 0
+    },
+    {
+      "name": "runtime-refuses-response-bound-below-service-minimum",
+      "contract": "runtime",
+      "pointer": "/limits/maximumResponseBytes",
+      "value": 65535
+    },
+    {
+      "name": "runtime-refuses-non-socket-listener",
+      "contract": "runtime",
+      "pointer": "/listener/address",
+      "value": "localhost"
+    },
+    {
+      "name": "runtime-refuses-out-of-range-socket-literal",
+      "contract": "runtime",
+      "pointer": "/listener/address",
+      "value": "999.999.999.999:99999"
+    },
+    {
+      "name": "runtime-refuses-parent-traversal-index-path",
+      "contract": "runtime",
+      "pointer": "/indexPath",
+      "value": "../discovery-index.json"
+    },
+    {
+      "name": "index-refuses-unknown-root-member",
+      "contract": "index",
+      "pointer": "/unexpected",
+      "value": true
+    },
+    {
+      "name": "index-refuses-cross-kind-capability",
+      "contract": "index",
+      "pointer": "/services/0/semanticClassIds",
+      "value": ["urn:example:class:private"]
+    },
+    {
+      "name": "profile-refuses-unknown-root-member",
+      "contract": "profile",
+      "pointer": "/unexpected",
+      "value": true
+    },
+    {
+      "name": "profile-refuses-remote-context",
+      "contract": "profile",
+      "pointer": "/@context",
+      "value": "https://attacker.example/context"
+    },
+    {
+      "name": "profile-refuses-relative-semantic-identifier",
+      "contract": "profile",
+      "pointer": "/services/0/serviceId",
+      "value": "relative/service"
+    },
+    {
+      "name": "profile-refuses-query-bearing-endpoint",
+      "contract": "profile",
+      "pointer": "/services/0/endpointURL",
+      "value": "https://evidence.example.org?private=true"
+    },
+    {
+      "name": "profile-refuses-general-graph-form",
+      "contract": "profile",
+      "pointer": "/@graph",
+      "value": []
+    },
+    {
+      "name": "profile-refuses-cross-kind-capability",
+      "contract": "profile",
+      "pointer": "/services/0/semanticClassIds",
+      "value": ["urn:example:class:private"]
+    },
+    {
+      "name": "profile-refuses-service-count-over-bound",
+      "contract": "profile",
+      "pointer": "/services",
+      "generator": "services-over-bound"
+    },
+    {
+      "name": "profile-refuses-multibyte-string-characters-over-bound",
+      "contract": "profile",
+      "pointer": "/services/0/title",
+      "generator": "multibyte-string-over-bound"
+    },
+    {
+      "name": "profile-refuses-identifier-array-over-bound",
+      "contract": "profile",
+      "pointer": "/services/0/jurisdictions",
+      "generator": "identifiers-over-bound"
+    },
+    {
+      "name": "profile-refuses-excessive-json-depth",
+      "contract": "profile",
+      "pointer": "/services/0/title",
+      "generator": "excessive-json-depth"
+    }
+  ]
+}

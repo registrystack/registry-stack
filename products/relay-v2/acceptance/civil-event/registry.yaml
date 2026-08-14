@@ -27,6 +27,8 @@ governance:
   controller: urn:example:institution:civil-registration-authority
   publisher: urn:example:institution:civil-registration-authority
   auditOwner: urn:example:institution:civil-registration-inspectorate
+publication:
+  jurisdictions: [urn:example:jurisdiction:acceptance]
 semantics:
   localVocabulary: https://civil-registry.example.invalid/vocabulary/
   alignments:

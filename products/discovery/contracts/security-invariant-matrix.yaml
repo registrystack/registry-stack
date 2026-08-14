@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "registry-discovery/security-invariant-matrix/v1alpha1",
+  "product": "registry-discovery",
+  "status": "enforced",
+  "invariants": [
+    {
+      "id": "sec-provider-public-projection",
+      "status": "enforced",
+      "threat": "Provider generation includes source, authorization, trust, credential, or protected-capability data, or graph merging creates a false cross-capability match.",
+      "enforcementPoint": "Evidence and Relay public projection compilers before packaging.",
+      "requiredNegativeBehavior": "Exclude private fields through the closed public projection; refuse any authored public-projection value that cannot satisfy the closed profile; preserve each exact capability pair under a distinct binding identity.",
+      "negativeTest": "private-provider-fields-are-omitted-and-invalid-public-projection-is-refused",
+      "binding": {"path": "crates/registry-evidence/src/discovery.rs", "name": "provider_discovery_description_excludes_private_configuration_fields"}
+    },
+    {
+      "id": "sec-origin-target-confinement",
+      "status": "enforced",
+      "threat": "An approved origin redirects or reaches an ambient, private, or metadata target.",
+      "enforcementPoint": "discoveryctl exact-target network client.",
+      "requiredNegativeBehavior": "Refuse the build and leave no new visible index.",
+      "negativeTest": "origin-target-is-confined-to-exact-approved-https",
+      "binding": {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "production_policy_refuses_loopback_before_connecting"}
+    },
+    {
+      "id": "sec-profile-parser-confinement",
+      "status": "enforced",
+      "threat": "A description uses a remote context, duplicate member, unknown field, graph form, import, schema, or shape to change its meaning.",
+      "enforcementPoint": "registry-discovery-profile strict JSON parser and closed Rust model.",
+      "requiredNegativeBehavior": "Refuse before any resolution or secondary I/O.",
+      "negativeTest": "unknown-or-remote-context-and-duplicate-members-are-refused",
+      "binding": {"path": "crates/registry-discovery-profile/src/lib.rs", "name": "unknown_or_remote_context_is_refused_without_resolution"}
+    },
+    {
+      "id": "sec-build-resource-bounds",
+      "status": "enforced",
+      "threat": "Oversized fetch, decompression, JSON, collection, normalization, or output work exhausts build resources.",
+      "enforcementPoint": "discoveryctl fetch and build limits.",
+      "requiredNegativeBehavior": "Refuse with no partial index.",
+      "negativeTest": "build-bound-excess-is-refused-without-an-index",
+      "binding": {"path": "crates/registry-discovery-profile/src/lib.rs", "name": "maximum_description_bytes_are_refused_before_parsing"}
+    },
+    {
+      "id": "sec-origin-record-isolation",
+      "status": "enforced",
+      "threat": "Two origins claiming related identifiers are graph-merged or one origin authenticates another.",
+      "enforcementPoint": "Origin-scoped normalization and index record identity.",
+      "requiredNegativeBehavior": "Keep records separate or refuse a within-origin collision.",
+      "negativeTest": "origin-records-never-merge-across-origins",
+      "binding": {"path": "crates/registry-discovery/src/model.rs", "name": "records_from_distinct_origins_never_merge"}
+    },
+    {
+      "id": "sec-atomic-index-build",
+      "status": "enforced",
+      "threat": "A failure during fetch, parse, normalization, mapping, serialization, or write exposes a partial index.",
+      "enforcementPoint": "discoveryctl staged build and atomic activation.",
+      "requiredNegativeBehavior": "Leave the previous index unchanged and create no visible replacement.",
+      "negativeTest": "failed-build-leaves-no-new-visible-index",
+      "binding": {"path": "crates/registry-discoveryctl/tests/build.rs", "name": "failed_origin_fetch_leaves_the_previous_output_untouched"}
+    },
+    {
+      "id": "sec-discovery-not-trust",
+      "status": "enforced",
+      "threat": "Catalog metadata becomes native trust configuration or causes credentials and provider I/O before local acceptance.",
+      "enforcementPoint": "Discovery client selection boundary and adopter-owned native trust configuration.",
+      "requiredNegativeBehavior": "Refuse local trust mismatch before credential construction or provider traffic.",
+      "negativeTest": "discovery-selection-cannot-create-trust-or-native-io",
+      "binding": {"path": "crates/registry-discovery-client/src/selection.rs", "name": "discovery_metadata_has_no_trust_or_native_io_capability"}
+    },
+    {
+      "id": "sec-query-and-log-minimization",
+      "status": "enforced",
+      "threat": "Problems, server or client logs, or traces retain full filters, requirements, descriptions, origin documents, credentials, subjects, claims, or native values.",
+      "enforcementPoint": "Discovery runtime and client diagnostics.",
+      "requiredNegativeBehavior": "Emit only value-free bounded diagnostic categories.",
+      "negativeTest": "discovery-diagnostics-redact-query-and-description-canaries",
+      "binding": {"path": "crates/registry-discovery/src/server.rs", "name": "real_trace_and_problem_output_exclude_request_canaries"}
+    }
+  ]
+}

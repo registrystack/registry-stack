@@ -134,6 +134,7 @@ fn successful_build_copies_runtime_exactly_and_excludes_local_and_validation_sec
         vec![
             PathBuf::from("bundle/adapters/source-extract.rhai"),
             PathBuf::from("bundle/adapters/source-prepare.rhai"),
+            PathBuf::from("bundle/catalog.jsonld"),
             PathBuf::from("bundle/derivations/answer.rhai"),
             PathBuf::from("bundle/evidence.yaml"),
             PathBuf::from("bundle/fixtures/answer.yaml"),
@@ -937,6 +938,11 @@ outboundTls: {systemRoots: true, trustProfiles: {}}
 
 const FAKE_EVIDENCE: &str = r#"#!/bin/sh
 set -eu
+
+if [ "${1:-}" = 'render-discovery-description' ]; then
+  printf '{}\n'
+  exit 0
+fi
 
 for arg in "$@"; do
   printf '%s\n' "$arg" >> "$FAKE_EVIDENCE_LOG"

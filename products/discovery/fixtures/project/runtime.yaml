@@ -1,0 +1,12 @@
+schemaVersion: registry-discovery/runtime/v1alpha1
+listener:
+  address: 127.0.0.1:8080
+indexPath: discovery-index.json
+limits:
+  maximumRequestBytes: 65536
+  maximumResponseBytes: 1048576
+  maximumResultRecords: 100
+  maximumResultAlternatives: 100
+  requestTimeoutSeconds: 10
+  shutdownTimeoutSeconds: 10
+logLevel: info

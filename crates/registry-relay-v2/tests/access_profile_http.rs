@@ -1783,6 +1783,7 @@ fn compiled_registry(fingerprint: String) -> CompiledRegistry {
         controller_identifier: "urn:example:authority".into(),
         publisher_identifier: "urn:example:authority".into(),
         audit_owner_identifier: "urn:example:audit".into(),
+        publication: None,
         local_vocabulary: "https://registry.example.invalid/vocabulary/".into(),
         semantic_alignments: Vec::new(),
         governed_files: Vec::new(),

@@ -155,6 +155,10 @@ impl LocalServicePorts {
     pub(crate) fn mint_origin(self) -> String {
         format!("http://127.0.0.1:{}", self.mint)
     }
+
+    pub(crate) fn evidence_origin(self) -> String {
+        format!("http://127.0.0.1:{}", self.evidence)
+    }
 }
 
 impl Default for LocalServicePorts {
@@ -209,7 +213,7 @@ pub(crate) fn compile_local_project_with_ports(
             active_public_jwk,
         },
     )?;
-    let compilation = write_plan(&project_root, staging_root, &plan, ports)?;
+    let compilation = write_plan(&project_root, staging_root, &plan, ports, evidence_bin)?;
 
     if let Err(error) = check_with_evidence(evidence_bin, &compilation.runtime_path) {
         // A rejected unpublished generation should remain removable by its
@@ -241,6 +245,7 @@ pub(crate) fn compile_production_project(
     deployment_target_root: &Path,
     staging_root: &Path,
     governed_bundle: Value,
+    evidence_bin: &Path,
 ) -> Result<CompiledProductionProject> {
     validate_plain_path_components(project_root, "authoring project")?;
     let project_root = validate_project_root(project_root)?;
@@ -258,6 +263,7 @@ pub(crate) fn compile_production_project(
         Some(&deployment_target_root),
         staging_root,
         &plan,
+        evidence_bin,
     )?;
     let fixture_paths = plan
         .questions
@@ -284,6 +290,7 @@ pub(crate) fn compile_production_project(
 pub(crate) fn compile_fixture_project(
     project_root: &Path,
     staging_root: &Path,
+    evidence_bin: &Path,
 ) -> Result<CompiledFixtureProject> {
     let project_root = validate_project_root(project_root)?;
     validate_private_empty_staging(staging_root)?;
@@ -298,7 +305,7 @@ pub(crate) fn compile_fixture_project(
             active_public_jwk,
         },
     )?;
-    let bundle_path = write_bundle(&project_root, None, staging_root, &plan)?;
+    let bundle_path = write_bundle(&project_root, None, staging_root, &plan, evidence_bin)?;
     let fixture_paths = plan
         .questions
         .iter()
@@ -2602,6 +2609,13 @@ fn render_local_bundle(
             "trustDomain": local_uri("trust-domain"),
         },
         "issuer": {"id": local_uri("issuer")},
+        "publication": {
+            "serviceId": local_uri("service"),
+            "title": "Local Evidence service",
+            "description": "Local minimum-disclosure Evidence authoring service",
+            "endpointUrl": ports.evidence_origin(),
+            "jurisdictions": [local_uri("jurisdiction")],
+        },
         "authentication": {
             "kind": "oidc-access-token",
             "issuer": mint_origin,
@@ -2691,8 +2705,9 @@ fn write_plan(
     staging_root: &Path,
     plan: &CompilePlan,
     ports: LocalServicePorts,
+    evidence_bin: &Path,
 ) -> Result<CompiledProject> {
-    write_bundle(project_root, None, staging_root, plan)?;
+    write_bundle(project_root, None, staging_root, plan, evidence_bin)?;
     create_private_directory(&staging_root.join("audit"))?;
 
     let canonical_staging = fs::canonicalize(staging_root)
@@ -2778,6 +2793,7 @@ fn write_bundle(
     deployment_target_root: Option<&Path>,
     staging_root: &Path,
     plan: &CompilePlan,
+    evidence_bin: &Path,
 ) -> Result<PathBuf> {
     let bundle = staging_root.join("bundle");
     create_private_directory(&bundle)?;
@@ -2795,7 +2811,12 @@ fn write_bundle(
     if plan.local_public_jwk.is_some() {
         create_private_directory(&bundle.join("public-keys"))?;
     }
-    write_private_file(&bundle.join("evidence.yaml"), &yaml_bytes(&plan.bundle)?)?;
+    let config_path = bundle.join("evidence.yaml");
+    write_private_file(&config_path, &yaml_bytes(&plan.bundle)?)?;
+    let description = render_discovery_description(evidence_bin, &config_path)?;
+    if !description.is_empty() {
+        write_private_file(&bundle.join("catalog.jsonld"), &description)?;
+    }
     let mut written_sources = BTreeSet::new();
     let mut written_paths = BTreeSet::from(["evidence.yaml".to_owned()]);
     if let Some((path, bytes)) = &plan.local_public_jwk {
@@ -3058,6 +3079,25 @@ fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
         bail!("Evidence rejected the compiled local generation");
     }
     bail!("Evidence rejected the compiled local generation: {diagnostic}")
+}
+
+fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Result<Vec<u8>> {
+    let output = Command::new(evidence_bin)
+        .arg("render-discovery-description")
+        .arg("--config")
+        .arg(config_path)
+        .env_remove("REGISTRY_EVIDENCE_RUNTIME")
+        .output()
+        .with_context(|| {
+            format!(
+                "running {} provider publication compiler",
+                evidence_bin.display()
+            )
+        })?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    bail!("Evidence rejected provider publication compilation")
 }
 
 fn yaml_bytes(value: &Value) -> Result<Vec<u8>> {
@@ -3466,6 +3506,7 @@ properties:
                 "bundle/adapters/",
                 "bundle/adapters/adult-status-source-extract.rhai",
                 "bundle/adapters/adult-status-source-prepare.rhai",
+                "bundle/catalog.jsonld",
                 "bundle/derivations/",
                 "bundle/derivations/adult-status.rhai",
                 "bundle/evidence.yaml",
@@ -4145,8 +4186,14 @@ factSchema: schemas/source-facts.schema.yaml
             "authorityProfiles": {"authority": {"kind": "explicit-request"}},
         });
         let project = fs::canonicalize(&fixture.project).expect("canonical authoring project");
-        let compiled = compile_production_project(&project, &project, &fixture.staging, target)
-            .expect("all neutral shapes compile through production");
+        let compiled = compile_production_project(
+            &project,
+            &project,
+            &fixture.staging,
+            target,
+            &fixture.evidence,
+        )
+        .expect("all neutral shapes compile through production");
         let bundle = compiled.bundle;
         let requirements = bundle["requirements"].as_array().expect("requirements");
 
@@ -5352,9 +5399,9 @@ factSchema: schemas/family-facts.schema.yaml
                 .open(&evidence)
                 .expect("stub");
             let script = if check_succeeds {
-                "#!/bin/sh\ntest \"$1\" = --runtime && test \"$3\" = check\n"
+                "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\ntest \"$1\" = --runtime && test \"$3\" = check\n"
             } else {
-                "#!/bin/sh\necho 'script rejected' >&2\nexit 1\n"
+                "#!/bin/sh\nif test \"$1\" = render-discovery-description; then printf '{}\\n'; exit 0; fi\necho 'script rejected' >&2\nexit 1\n"
             };
             file.write_all(script.as_bytes()).expect("write stub");
 

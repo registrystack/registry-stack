@@ -1,0 +1,21 @@
+@prefix dcat: <http://www.w3.org/ns/dcat#> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix registry: <https://registrystack.org/discovery/vocab/v1alpha1#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+registry:CatalogShape
+  a sh:NodeShape ;
+  sh:targetClass dcat:Catalog ;
+  sh:property [ sh:path registry:profile ; sh:minCount 1 ; sh:maxCount 1 ; sh:hasValue "registry-discovery-v1alpha1" ] ;
+  sh:property [ sh:path dcat:service ; sh:minCount 1 ; sh:nodeKind sh:IRI ] .
+
+registry:DataServiceShape
+  a sh:NodeShape ;
+  sh:targetClass dcat:DataService ;
+  sh:property [ sh:path registry:serviceId ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+  sh:property [ sh:path dct:title ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:Literal ] ;
+  sh:property [ sh:path dct:description ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:Literal ] ;
+  sh:property [ sh:path dcat:endpointURL ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+  sh:property [ sh:path dct:spatial ; sh:minCount 1 ; sh:nodeKind sh:IRI ] ;
+  sh:property [ sh:path dct:conformsTo ; sh:minCount 1 ; sh:nodeKind sh:IRI ] ;
+  sh:property [ sh:path registry:serviceKind ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "evidence" "relay" ) ] .

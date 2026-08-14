@@ -39,6 +39,38 @@ the legacy Digital Registries OpenAPI or claim GovStack conformance. The API
 binding uses `pageSize`, `cursor`, direct camelCase equality filters, the
 `items`/`pageInfo.nextCursor` list envelope, and Registry Stack problems.
 
+## Publish a Registry for discovery
+
+Add only the jurisdiction identifiers that Relay cannot derive from the
+Registry contract:
+
+```yaml
+publication:
+  jurisdictions: [urn:example:jurisdiction:national]
+```
+
+`relayctl package` derives the service identity, title, description, native
+client base URL, publisher, operator, Registry authority, Relay profile, and
+public capability identifiers from the reviewed contract. It publishes each
+exact public semantic-class and operation-family pair under a distinct derived
+binding identity, so catalog filters cannot combine capabilities from different
+resources. The generated sealed artifact is served, without a new route or
+credential, at `/v2/artifacts/discovery-description`.
+
+Run the production compilation flow after changing the contract:
+
+```sh
+relayctl check <project> --production
+relayctl generate <project> --output <generated>
+relayctl package <project> --output <package>
+```
+
+Relay startup validates the sealed package and exact-regenerates every artifact
+before activation. The description is a closed
+public-facts projection for search. It is not a trust anchor, and protected
+operations and internal source, access, policy, and audit fields are excluded
+by the provider-public-projection invariant tests.
+
 Every successful item has the same non-selectable core shape. For example:
 
 ```json
@@ -861,6 +893,9 @@ metadataVisibility.resources
 metadataVisibility.semantics
 metadataVisibility.service
 metadataVisibility.statisticalDatasets
+publication
+publication.jurisdictions
+publication.jurisdictions[]
 registry
 registry.alignmentTargets
 registry.alignmentTargets[]

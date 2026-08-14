@@ -40,6 +40,9 @@ The supported native deployment has:
   established;
 - production HTTPS exposure, dependency timeouts, per-source concurrency
   limits, per-principal rate controls, and bounded failed-selector attempts.
+- an optional governed public provider advertisement, generated and sealed as
+  `catalog.jsonld`, served unchanged at `GET /catalog.jsonld`, and containing
+  no requester entitlement or trust decision.
 
 Multiple evidence definitions may be enabled only when they share the same
 operator, deployment lifecycle, audit boundary, and failure domain. Mutually
@@ -205,13 +208,16 @@ Evidence Version 1 answers "what may this caller request?" with authenticated
 definition must exist in the exact deployed bundle and exactly one authority
 path must match the verified token, requirement, purpose, audience, complete
 subject-role set, selector profiles, and value origins. The runtime never
-publishes a global unauthenticated list.
+publishes a global unauthenticated list of requester entitlements or invocable
+definitions. Its separate public provider advertisement contains only closed
+service facts for external indexing.
 
-Discovery uses four separately trusted surfaces:
+Discovery uses five separately trusted surfaces:
 
 | Artifact | Purpose | What it does not do |
 |---|---|---|
 | Generated Evidence OpenAPI | Describes `GET /v1/evidence-definitions`, `POST /v1/evidence`, `POST /v1/evidence/batch`, operational routes, envelopes, media types, and safe problems. | It contains no deployment definitions or entitlements. |
+| Public provider advertisement | Serves the exact packaged `catalog.jsonld` bytes at `GET /catalog.jsonld`, with public service identity and one distinct binding for each exact Evidence Type and compatible response profile. | It contains no requester-specific request shape, entitlement, source configuration, credential, or trust decision. |
 | Authenticated definition response | Lists the exact complete request shapes available to this verified token at this bundle revision, each with the configuration revision an assertion for that one requirement carries. | It performs no provider access, does not grant authority, and is not a global catalog. |
 | Static onboarding material | Gives an approved consumer token-acquisition instructions, human descriptions, legal context, endpoint trust, and verifier policy through the existing API catalog, developer portal, configuration repository, or bilateral process. | It is not accepted by the runtime and grants no authority. |
 | Evidence JWKS | Publishes the active and retained public verification keys. | It is not a trust anchor and contains no definition or entitlement metadata. |
@@ -246,14 +252,21 @@ internal requester-tag values, authority-profile identifiers, selector values,
 codelist values, or unrelated definitions. Possessing discovery metadata does
 not authorize its recipient; the identity provider must issue the configured
 claims, and Evidence re-authenticates and re-authorizes every evidence request.
+The public provider advertisement supports indexing and coarse service
+matching only. Its `serviceId` identifies the native service, while each
+derived `bindingId` keeps one Evidence Type and compatible response profile
+correlated. A client still uses authenticated definition discovery to learn an
+invocable request shape for its verified token.
 
 The publication workflow is:
 
 1. Review the complete bundle and its combined disclosure surface.
 2. Run `evidence check` and every referenced fixture, and record the exact
    governed bundle revision.
-3. Publish the generic OpenAPI and static onboarding material; configure token
-   issuance and verifier trust through the same governed process.
+3. Run the production `evidencectl build` flow, which generates and seals
+   `catalog.jsonld`, then publish the generic OpenAPI, provider advertisement,
+   and static onboarding material. Configure token issuance and verifier trust
+   through the same governed process.
 4. Obtain a token, call `GET /v1/evidence-definitions`, and bind each returned
    `configurationRevision` to the requirement it is published under. A relying
    party pins the requirements it consumes, not the deployment.
@@ -264,10 +277,11 @@ The publication workflow is:
    revision. Clients observe a new revision through authenticated discovery,
    not by probing problem responses.
 
-Version one does not implement a public, cross-requester, searchable, mutable,
-or federated catalog, a registration editor, or a `describe` CLI command.
+Version one does not implement a searchable, mutable, or federated catalog
+inside Evidence, a registration editor, or a `describe` CLI command. An
+external catalog may index the closed provider advertisement. `/catalog.jsonld`,
 `/health`, `/ready`, `/openapi.json`, public problems, and JWKS never reveal
-enabled definitions or selector profiles.
+requester entitlements, enabled request definitions, or selector profiles.
 
 ## Requester authority and purpose
 
@@ -934,9 +948,10 @@ fixed by the deployed contract rather than by anything a caller sends:
 | `status` | `success`, `client_error`, `server_error` |
 | `error` | A reviewed problem code, otherwise `none` |
 
-The registered route templates are `/v1/evidence`,
-`/v1/evidence-definitions`, `/health`, `/ready`, `/openapi.json`,
-`/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. The
+The registered route templates are `/v1/evidence`, `/v1/evidence/batch`,
+`/v1/evidence-definitions`, `/catalog.jsonld`, `/health`, `/ready`,
+`/openapi.json`, `/.well-known/evidence/jwks.json`, and
+`/.well-known/jwt-vc-issuer`. The
 reviewed problem codes are the closed public set: `evidence.invalid_request`,
 `request.selector_invalid`, `auth.invalid_credential`, `evidence.denied`,
 `resource.not_found`, `format.unsupported`, `evidence.unavailable`,

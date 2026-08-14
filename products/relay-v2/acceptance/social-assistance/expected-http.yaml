@@ -30,6 +30,9 @@ authorizations:
     scopes: [registry:social-assistance:limited]
     claims: {purpose: benefit-delivery, service_area: AREA-B}
 steps:
+  - id: provider-discovery-description
+    request: {method: GET, path: /v2/artifacts/discovery-description}
+    expect: {status: 200, mediaType: 'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"'}
   - id: readiness
     request: {method: GET, path: /ready}
     expect: {status: 200}

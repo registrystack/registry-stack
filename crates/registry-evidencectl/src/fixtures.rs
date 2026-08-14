@@ -123,7 +123,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
             fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
                 .context("sealing private fixture compilation staging")?;
         }
-        let compilation = compile_fixture_project(&args.project, staging.path())
+        let compilation = compile_fixture_project(&args.project, staging.path(), &evidence_bin)
             .context("compiling editable project for fixture evaluation")?;
         FixtureTarget::Editable {
             compilation,

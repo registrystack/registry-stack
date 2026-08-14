@@ -27,6 +27,8 @@ governance:
   controller: urn:example:institution:company-registrar
   publisher: urn:example:institution:company-registrar
   auditOwner: urn:example:institution:company-registrar-audit
+publication:
+  jurisdictions: [urn:example:jurisdiction:acceptance]
 semantics:
   localVocabulary: https://business.example.invalid/vocabulary/
   alignments:

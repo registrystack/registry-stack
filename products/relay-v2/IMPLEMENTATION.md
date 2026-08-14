@@ -147,6 +147,15 @@ generated/openapi.public.json
 generated/artifacts/...
 ```
 
+`generated/artifacts/discovery.jsonld` is the deterministic public Registry
+Discovery provider description when `publication.jurisdictions` is configured.
+It is sealed and exact-byte regenerated with every other artifact, then served
+through the existing `/v2/artifacts/discovery-description` route. Compilation
+derives every other member from the governed Registry and includes capability
+identifiers only for operations with a public access profile. It emits one
+distinct binding identity per exact semantic-class and operation-family pair,
+so independent resources cannot become a false combined capability.
+
 `relay-package.json` is canonical JSON with package version
 `relay.registrystack.org/package/v1alpha3`, containing
 `packageRevision`, `contractRevision`, the expected SQLite schema fingerprint,

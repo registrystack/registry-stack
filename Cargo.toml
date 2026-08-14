@@ -1,6 +1,10 @@
 [workspace]
 members = [
     "crates/registry-cli-docs",
+    "crates/registry-discovery",
+    "crates/registry-discovery-client",
+    "crates/registry-discovery-profile",
+    "crates/registry-discoveryctl",
     "crates/registry-evidence",
     "crates/registry-evidence-authoring",
     "crates/registry-evidence-client",
@@ -50,6 +54,10 @@ repository = "https://github.com/registrystack/registry-stack"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
+registry-discovery = { path = "crates/registry-discovery", version = "0.22.0", default-features = false }
+registry-discovery-client = { path = "crates/registry-discovery-client", version = "0.22.0" }
+registry-discovery-profile = { path = "crates/registry-discovery-profile", version = "0.22.0" }
+registry-discoveryctl = { path = "crates/registry-discoveryctl", version = "0.22.0" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.22.0" }
 registry-evidence-authoring = { path = "crates/registry-evidence-authoring", version = "0.22.0" }
 registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.22.0" }

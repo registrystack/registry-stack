@@ -3,6 +3,10 @@
 
 use std::collections::BTreeSet;
 
+use registry_discovery_profile::{
+    render_description, DiscoveryDescription, ServiceDescription, ServiceKind, ServiceRoles,
+    MEDIA_TYPE as DISCOVERY_MEDIA_TYPE,
+};
 use registry_platform_canonical_json::canonicalize_json;
 use registry_relay_http_contract::{routes, PROBLEM_MEDIA_TYPE};
 use serde::{Deserialize, Serialize};
@@ -90,11 +94,25 @@ pub enum ArtifactError {
     MissingDisclosure,
     #[error("a compiled statistical structure could not be serialized")]
     StatisticalStructure,
+    #[error("the compiled public discovery description is invalid")]
+    DiscoveryDescription,
 }
 
 pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, ArtifactError> {
     let mut artifacts = Vec::new();
     let mut bindings = Vec::new();
+
+    if let Some(publication) = &registry.publication {
+        push_text(
+            &mut artifacts,
+            "discovery-description",
+            "artifacts/discovery.jsonld",
+            DISCOVERY_MEDIA_TYPE,
+            Visibility::Public,
+            None,
+            discovery_description(registry, &publication.jurisdictions)?,
+        );
+    }
 
     push_json(
         &mut artifacts,
@@ -453,6 +471,84 @@ pub fn generate_artifacts(registry: &CompiledRegistry) -> Result<ArtifactSet, Ar
         artifacts,
         operation_bindings: bindings,
     })
+}
+
+/// Product-owned identifier for the Relay Version 2 service profile.
+pub const RELAY_PROFILE_ID: &str = "https://registrystack.org/relay/profile/v2";
+const CONSULTATION_LIST_FAMILY: &str =
+    "https://registrystack.org/discovery/operation-family/relay-v2/consultation-list";
+const CONSULTATION_RETRIEVE_FAMILY: &str =
+    "https://registrystack.org/discovery/operation-family/relay-v2/consultation-retrieve";
+const CONSULTATION_SEARCH_FAMILY: &str =
+    "https://registrystack.org/discovery/operation-family/relay-v2/consultation-search";
+
+fn discovery_description(
+    registry: &CompiledRegistry,
+    jurisdictions: &[String],
+) -> Result<Vec<u8>, ArtifactError> {
+    let mut bindings = BTreeSet::new();
+    for resource in &registry.resources {
+        for operation in &resource.operations {
+            if operation
+                .access_profiles
+                .iter()
+                .any(|profile| matches!(profile.access, CompiledAccess::Public))
+            {
+                bindings.insert((
+                    resource.semantic_class.clone(),
+                    operation_family(operation.pattern).to_owned(),
+                ));
+            }
+        }
+    }
+    let roles = ServiceRoles {
+        publisher_id: Some(registry.publisher_identifier.clone()),
+        operator_id: registry.operator_identifier.clone(),
+        registry_authority_id: Some(registry.authority_identifier.clone()),
+        legal_issuer_id: None,
+        technical_provider_id: None,
+    };
+    let exact_bindings = if bindings.is_empty() {
+        vec![(Vec::new(), Vec::new())]
+    } else {
+        bindings
+            .into_iter()
+            .map(|(semantic_class, operation_family)| {
+                (vec![semantic_class], vec![operation_family])
+            })
+            .collect()
+    };
+    let services = exact_bindings
+        .into_iter()
+        .map(|(semantic_class_ids, operation_family_ids)| {
+            ServiceDescription::new(
+                registry.registry_identifier.clone(),
+                ServiceKind::Relay,
+                registry.registry_name.clone(),
+                registry.authoritative_scope.clone(),
+                registry.base_uri.clone(),
+                roles.clone(),
+                jurisdictions.to_vec(),
+                vec![RELAY_PROFILE_ID.to_owned()],
+                Vec::new(),
+                semantic_class_ids,
+                operation_family_ids,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ArtifactError::DiscoveryDescription)?;
+    render_description(
+        &DiscoveryDescription::new(services).map_err(|_| ArtifactError::DiscoveryDescription)?,
+    )
+    .map_err(|_| ArtifactError::DiscoveryDescription)
+}
+
+const fn operation_family(pattern: crate::model::ConsultationPattern) -> &'static str {
+    match pattern {
+        crate::model::ConsultationPattern::List => CONSULTATION_LIST_FAMILY,
+        crate::model::ConsultationPattern::Retrieve => CONSULTATION_RETRIEVE_FAMILY,
+        crate::model::ConsultationPattern::Search => CONSULTATION_SEARCH_FAMILY,
+    }
 }
 
 fn projection_visibility(configured: Visibility, access: &CompiledAccess) -> Visibility {
@@ -1770,6 +1866,157 @@ mod tests {
             &compiler_tests::governed_files_for(&contract),
         )
         .expect("statistical contract compiles")
+    }
+
+    #[test]
+    fn provider_discovery_description_is_deterministic_and_exactly_regenerated() {
+        let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
+            .expect("contract parses");
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files(),
+        )
+        .expect("contract compiles");
+        registry.publication = Some(crate::model::CompiledPublication {
+            jurisdictions: vec!["urn:example:jurisdiction:acceptance".into()],
+        });
+
+        let first = generate_artifacts(&registry).expect("description generates");
+        let second = generate_artifacts(&registry).expect("description regenerates");
+        let first = first
+            .get("artifacts/discovery.jsonld")
+            .expect("description artifact exists");
+        let second = second
+            .get("artifacts/discovery.jsonld")
+            .expect("regenerated description exists");
+        assert_eq!(first.content, second.content);
+        assert_eq!(first.media_type, DISCOVERY_MEDIA_TYPE);
+        assert_eq!(first.visibility, Visibility::Public);
+        assert_eq!(first.operation_identifier, None);
+        assert_eq!(first.access_binding, None);
+        let parsed = registry_discovery_profile::parse_description(&first.content)
+            .expect("generated description satisfies the shared profile");
+        for service in parsed.services() {
+            assert_eq!(service.conforms_to(), [RELAY_PROFILE_ID]);
+            assert!(service.semantic_class_ids().len() <= 1);
+            assert!(service.operation_family_ids().len() <= 1);
+            assert_eq!(
+                service.endpoint_url(),
+                registry.base_uri,
+                "the publication endpoint is the native Relay client base"
+            );
+        }
+    }
+
+    #[test]
+    fn provider_discovery_description_preserves_semantic_class_operation_family_correlation() {
+        let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
+            .expect("contract parses");
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files(),
+        )
+        .expect("contract compiles");
+        registry.publication = Some(crate::model::CompiledPublication {
+            jurisdictions: vec!["urn:example:jurisdiction:acceptance".into()],
+        });
+        let mut first = registry.resources[0].clone();
+        first.semantic_class = "urn:example:semantic-class:first".into();
+        first.operations.truncate(1);
+        first.operations[0].pattern = crate::model::ConsultationPattern::List;
+        first.operations[0].access_profiles[0].access = CompiledAccess::Public;
+        let mut second = first.clone();
+        second.semantic_class = "urn:example:semantic-class:second".into();
+        second.operations[0].pattern = crate::model::ConsultationPattern::Search;
+        registry.resources = vec![first, second];
+
+        let generated = generate_artifacts(&registry).expect("description generates");
+        let artifact = generated
+            .get("artifacts/discovery.jsonld")
+            .expect("description artifact exists");
+        let description = registry_discovery_profile::parse_description(&artifact.content)
+            .expect("description satisfies profile");
+        assert_eq!(description.services().len(), 2);
+        assert!(description.services().iter().all(|service| {
+            service.semantic_class_ids().len() == 1 && service.operation_family_ids().len() == 1
+        }));
+        assert!(description.services().iter().any(|service| {
+            service.semantic_class_ids() == ["urn:example:semantic-class:first"]
+                && service.operation_family_ids() == [CONSULTATION_LIST_FAMILY]
+        }));
+        assert!(description.services().iter().any(|service| {
+            service.semantic_class_ids() == ["urn:example:semantic-class:second"]
+                && service.operation_family_ids() == [CONSULTATION_SEARCH_FAMILY]
+        }));
+        assert!(!description.services().iter().any(|service| {
+            service.semantic_class_ids() == ["urn:example:semantic-class:first"]
+                && service.operation_family_ids() == [CONSULTATION_SEARCH_FAMILY]
+        }));
+        assert!(!description.services().iter().any(|service| {
+            service.semantic_class_ids() == ["urn:example:semantic-class:second"]
+                && service.operation_family_ids() == [CONSULTATION_LIST_FAMILY]
+        }));
+    }
+
+    #[test]
+    fn provider_discovery_description_excludes_protected_and_internal_contract_fields() {
+        let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
+            .expect("contract parses");
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files(),
+        )
+        .expect("contract compiles");
+        registry.publication = Some(crate::model::CompiledPublication {
+            jurisdictions: vec!["urn:example:jurisdiction:acceptance".into()],
+        });
+        let operation = &mut registry.resources[0].operations[0];
+        operation.identifier = "canary.protected.operation".into();
+        operation.access_profiles[0].id = "canary-private-profile".into();
+        operation.access_profiles[0].access = CompiledAccess::Protected {
+            scope: "canary:private:scope".into(),
+            purpose: None,
+            row_binding: None,
+        };
+        registry.sources[0].id = "canary-internal-source".into();
+        registry.resources[0].source = "canary-internal-source".into();
+        registry.resources[0].view = "canary_internal_view".into();
+        registry.resources[0].properties[0].binding = crate::model::CompiledPropertyBinding::Scalar(
+            crate::model::CompiledScalarPropertyBinding {
+                source_column: "canary_private_column".into(),
+                ..registry.resources[0].properties[0]
+                    .scalar_binding()
+                    .expect("scalar property")
+                    .clone()
+            },
+        );
+
+        let generated = generate_artifacts(&registry).expect("description generates");
+        let artifact = generated
+            .get("artifacts/discovery.jsonld")
+            .expect("description artifact exists");
+        let text = std::str::from_utf8(&artifact.content).expect("description is UTF-8");
+        for canary in [
+            "canary.protected.operation",
+            "canary-private-profile",
+            "canary:private:scope",
+            "canary-internal-source",
+            "canary_internal_view",
+            "canary_private_column",
+        ] {
+            assert!(!text.contains(canary), "public projection leaked {canary}");
+        }
+        let description = registry_discovery_profile::parse_description(&artifact.content)
+            .expect("description satisfies profile");
+        let service = &description.services()[0];
+        assert!(service.semantic_class_ids().is_empty());
+        assert!(service.operation_family_ids().is_empty());
     }
 
     #[test]

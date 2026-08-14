@@ -1184,6 +1184,47 @@ async fn openapi_route_serves_the_generated_contract_without_authentication_or_s
 }
 
 #[tokio::test]
+async fn provider_discovery_description_serves_exact_bytes_without_authentication_or_side_effects()
+{
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    let expected = fixture
+        .runtime
+        .bundle()
+        .discovery_description()
+        .expect("acceptance bundle publishes discovery");
+    assert_eq!(
+        expected,
+        fs::read(fixture.bundle_root.join("catalog.jsonld"))
+            .expect("the packaged description is readable"),
+        "the route must serve the packaged bytes, not a runtime reconstruction"
+    );
+
+    let response = http.get("/catalog.jsonld").await;
+    response.assert_status_ok();
+    assert_eq!(
+        response.header("content-type"),
+        registry_discovery_profile::MEDIA_TYPE
+    );
+    assert_eq!(response.header("cache-control"), "no-store");
+    assert_eq!(response.as_bytes(), expected);
+    registry_discovery_profile::parse_description(response.as_bytes())
+        .expect("served bytes satisfy the shared profile");
+    assert!(fixture
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    assert!(
+        fs::read_to_string(&fixture.audit_path)
+            .expect("audit is readable")
+            .is_empty(),
+        "provider discovery must not create Evidence audit records"
+    );
+}
+
+#[tokio::test]
 async fn discovery_requires_authentication_and_returns_no_unentitled_definitions() {
     let fixture = acceptance_runtime().await;
     let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
@@ -3855,6 +3896,7 @@ async fn unsigned_output_requires_both_bundle_and_grant_permission() {
         1,
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    regenerate_discovery_description(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     let runtime = Arc::new(
         EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
@@ -4222,6 +4264,7 @@ async fn sd_jwt_vc_acceptance(grant_permits: bool) -> PreparedAcceptance {
         );
     }
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    regenerate_discovery_description(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     prepared
 }
@@ -4255,6 +4298,7 @@ async fn holder_bound_acceptance() -> PreparedAcceptance {
         1,
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    regenerate_discovery_description(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     prepared
 }
@@ -5265,6 +5309,7 @@ async fn holder_bound_batch_acceptance(ceiling: u16) -> PreparedAcceptance {
         1,
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
+    regenerate_discovery_description(&prepared.bundle_root);
     make_read_only(&prepared.bundle_root);
     prepared
 }
@@ -10494,6 +10539,18 @@ fn replace_exact(text: &mut String, from: &str, to: &str, expected: usize) {
         "fixture drift for {from}"
     );
     *text = text.replace(from, to);
+}
+
+fn regenerate_discovery_description(bundle_root: &Path) {
+    let config = crate::config::EvidenceConfig::parse_yaml(
+        &fs::read(bundle_root.join("evidence.yaml")).expect("rewritten configuration is readable"),
+    )
+    .expect("rewritten configuration validates");
+    let description = crate::discovery::render(&config)
+        .expect("provider description renders")
+        .expect("acceptance publication remains configured");
+    fs::write(bundle_root.join("catalog.jsonld"), description)
+        .expect("provider description is regenerated");
 }
 
 fn write_secret(root: &Path, name: &str, value: &str) {

@@ -1,0 +1,20 @@
+[package]
+name = "registry-discovery-profile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Closed Registry Discovery JSON-LD publication profile."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+registry-platform-canonical-json.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+url.workspace = true

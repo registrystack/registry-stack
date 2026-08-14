@@ -1,0 +1,658 @@
+{
+  "components": {
+    "responses": {
+      "InvalidRequest": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "Invalid request or request body exceeds the configured bound"
+      },
+      "ResultBoundExceeded": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "Complete result exceeds the configured bound"
+      },
+      "Unavailable": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "Request exceeded the configured time limit or the response could not be produced"
+      }
+    },
+    "schemas": {
+      "EvidenceTypeResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "jurisdiction": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "requirementId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requirementId"
+        ],
+        "type": "object"
+      },
+      "EvidenceTypeResolveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "alternatives": {
+            "items": {
+              "$ref": "#/components/schemas/ResolvedAlternative"
+            },
+            "maxItems": 1000,
+            "minItems": 0,
+            "type": "array",
+            "uniqueItems": false
+          },
+          "jurisdiction": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "mappingRevision": {
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "requirementId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requirementId",
+          "mappingRevision",
+          "alternatives"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ResolvedAlternative": {
+        "additionalProperties": false,
+        "properties": {
+          "evidenceTypeIds": {
+            "items": {
+              "format": "uri",
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "evidenceTypeListId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "mappingAuthorityId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "mappingId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidenceTypeListId",
+          "evidenceTypeIds",
+          "mappingId",
+          "mappingAuthorityId"
+        ],
+        "type": "object"
+      },
+      "ServiceRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "bindingId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "conformsTo": {
+            "items": {
+              "format": "uri",
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "description": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+            "type": "string"
+          },
+          "endpointUrl": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^(?:https://[^/?#@]+|http://(?:localhost|127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$",
+            "type": "string"
+          },
+          "evidenceTypeIds": {
+            "items": {
+              "format": "uri",
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 0,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "jurisdictions": {
+            "items": {
+              "format": "uri",
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "legalIssuerId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "operationFamilyIds": {
+            "items": {
+              "format": "uri",
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 0,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "operatorId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "originContentDigest": {
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "originFetchedAt": {
+            "format": "date-time",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "originId": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000-\\u001f\\u007f](?:[^\\u0000-\\u001f\\u007f]*[^\\s\\u0000-\\u001f\\u007f])?$",
+            "type": "string"
+          },
+          "originUrl": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^(?:https://[^/?#@]+|http://(?:localhost|127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$",
+            "type": "string"
+          },
+          "publisherId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "recordId": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[^\\s\\u0000-\\u001f\\u007f](?:[^\\u0000-\\u001f\\u007f]*[^\\s\\u0000-\\u001f\\u007f])?$",
+            "type": "string"
+          },
+          "registryAuthorityId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "semanticClassIds": {
+            "items": {
+              "format": "uri",
+              "maxLength": 4096,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 0,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "serviceId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "serviceKind": {
+            "enum": [
+              "evidence",
+              "relay"
+            ],
+            "type": "string"
+          },
+          "technicalProviderId": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recordId",
+          "bindingId",
+          "serviceId",
+          "serviceKind",
+          "title",
+          "description",
+          "endpointUrl",
+          "jurisdictions",
+          "conformsTo",
+          "evidenceTypeIds",
+          "semanticClassIds",
+          "operationFamilyIds",
+          "originId",
+          "originUrl",
+          "originContentDigest",
+          "originFetchedAt"
+        ],
+        "type": "object"
+      },
+      "ServiceSearchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "catalogRevision": {
+            "maxLength": 71,
+            "minLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceRecord"
+            },
+            "maxItems": 10000,
+            "minItems": 0,
+            "type": "array",
+            "uniqueItems": false
+          }
+        },
+        "required": [
+          "catalogRevision",
+          "items"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Registry Discovery",
+    "version": "v1alpha1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Process is live"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Exact OpenAPI document"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Immutable index is loaded"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/evidence-types/resolve": {
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceTypeResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceTypeResolveResponse"
+                }
+              }
+            },
+            "description": "Complete exact mapping result"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "422": {
+            "$ref": "#/components/responses/ResultBoundExceeded"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/services": {
+      "get": {
+        "parameters": [
+          {
+            "explode": true,
+            "in": "query",
+            "name": "recordId",
+            "schema": {
+              "items": {
+                "maxLength": 4096,
+                "minLength": 1,
+                "pattern": "^[^\\s\\u0000-\\u001f\\u007f](?:[^\\u0000-\\u001f\\u007f]*[^\\s\\u0000-\\u001f\\u007f])?$",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": false
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "serviceId",
+            "schema": {
+              "items": {
+                "format": "uri",
+                "maxLength": 4096,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": false
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "serviceKind",
+            "schema": {
+              "items": {
+                "enum": [
+                  "evidence",
+                  "relay"
+                ],
+                "type": "string"
+              },
+              "maxItems": 2,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": true
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "jurisdiction",
+            "schema": {
+              "items": {
+                "format": "uri",
+                "maxLength": 4096,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": false
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "conformsTo",
+            "schema": {
+              "items": {
+                "format": "uri",
+                "maxLength": 4096,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": false
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "evidenceType",
+            "schema": {
+              "items": {
+                "format": "uri",
+                "maxLength": 4096,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": false
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "semanticClass",
+            "schema": {
+              "items": {
+                "format": "uri",
+                "maxLength": 4096,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": false
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "operationFamily",
+            "schema": {
+              "items": {
+                "format": "uri",
+                "maxLength": 4096,
+                "minLength": 1,
+                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
+                "type": "string"
+              },
+              "maxItems": 100,
+              "minItems": 1,
+              "type": "array",
+              "uniqueItems": false
+            },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceSearchResponse"
+                }
+              }
+            },
+            "description": "Complete exact search result"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "422": {
+            "$ref": "#/components/responses/ResultBoundExceeded"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    }
+  }
+}
