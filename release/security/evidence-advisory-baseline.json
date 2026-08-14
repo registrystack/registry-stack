@@ -27,7 +27,8 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:1a3a76602977106ea792f0a5848f318428f2f90682182c665b0be65cca36d45d"
+      "sha256:9c9226dd6fa9be3fb68e2702d21430ee4a7a5bd9121df7cfbfaaa1b221fa8b34",
+      "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
       "user": "65532",
@@ -44,7 +45,7 @@
       "exposed_ports": ["8080/tcp"],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:fdca4898fdc24ac1184a7affa233fee80870b696cead8e257641eb20d6724814"
+    "definition_digest": "sha256:d863d2bb36260e2a6e132b9e4c34c6e9bb6f72fa4baf4b77db9de14634fd86b7"
   },
   "policies": [
     {
@@ -67,8 +68,8 @@
       "severity": "Critical",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. A local v0.20.1 Linux AMD64 Evidence reproduction from the recorded source revision provided the reviewed rootfs bytes; no official retained Evidence candidate report is claimed. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-08-12",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.22.0 Linux AMD64 Evidence candidate had only fixed-format %lu and %lx sscanf call sites and no effective vulnerable allocating-character scanf path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "reviewed_at": "2026-08-14",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -85,14 +86,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:fdca4898fdc24ac1184a7affa233fee80870b696cead8e257641eb20d6724814",
+      "runtime_definition_digest": "sha256:d863d2bb36260e2a6e132b9e4c34c6e9bb6f72fa4baf4b77db9de14634fd86b7",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:833392109397d3365067ba542475ff5b63a91986a785bf5d4f9ec4fe685c2a9d",
-        "reference_source_revision": "b9f6d12d7d4b62199558351087487550eedb2bdc",
-        "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:fdca4898fdc24ac1184a7affa233fee80870b696cead8e257641eb20d6724814",
+        "reference_image_digest": "sha256:3ad995a2324d777a0c41c6d65635977514b132653916581b3e3e40f98225add3",
+        "reference_source_revision": "0ddd1fa6481ef0154d9f11a13815ba35ab942053",
+        "reference_provenance": "official_candidate",
+        "runtime_definition_digest": "sha256:d863d2bb36260e2a6e132b9e4c34c6e9bb6f72fa4baf4b77db9de14634fd86b7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -112,10 +113,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:114e249d2f76cd6534a619c339ace46a1f56824f807b65434b593a8d43799a8f"
+            "sha256": "sha256:f10c16ad811f63289c2eb36582db7bcb79308ff9012c86addbfbef11bbf70439"
           }
         ],
-        "definition_digest": "sha256:6fbd70ac0ae9fa877692770419d13821fc6a7dde41d60e7a0862d9b54e4d272e"
+        "definition_digest": "sha256:2dcf75b57667b0bd40d53920c27f2a4a4be9cd236497fd2b2e174cd86b2e77e9"
       }
     },
     {
@@ -125,8 +126,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. A local v0.20.1 Linux AMD64 Evidence reproduction from the recorded source revision provided the reviewed rootfs bytes; no official retained Evidence candidate report is claimed. Libc exporting ungetwc is expected. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-08-12",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.22.0 Linux AMD64 Evidence candidate had no effective wide-character input path in the reviewed bytes; libc exporting ungetwc is expected. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "reviewed_at": "2026-08-14",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -143,14 +144,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:fdca4898fdc24ac1184a7affa233fee80870b696cead8e257641eb20d6724814",
+      "runtime_definition_digest": "sha256:d863d2bb36260e2a6e132b9e4c34c6e9bb6f72fa4baf4b77db9de14634fd86b7",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:833392109397d3365067ba542475ff5b63a91986a785bf5d4f9ec4fe685c2a9d",
-        "reference_source_revision": "b9f6d12d7d4b62199558351087487550eedb2bdc",
-        "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:fdca4898fdc24ac1184a7affa233fee80870b696cead8e257641eb20d6724814",
+        "reference_image_digest": "sha256:3ad995a2324d777a0c41c6d65635977514b132653916581b3e3e40f98225add3",
+        "reference_source_revision": "0ddd1fa6481ef0154d9f11a13815ba35ab942053",
+        "reference_provenance": "official_candidate",
+        "runtime_definition_digest": "sha256:d863d2bb36260e2a6e132b9e4c34c6e9bb6f72fa4baf4b77db9de14634fd86b7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -170,10 +171,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:114e249d2f76cd6534a619c339ace46a1f56824f807b65434b593a8d43799a8f"
+            "sha256": "sha256:f10c16ad811f63289c2eb36582db7bcb79308ff9012c86addbfbef11bbf70439"
           }
         ],
-        "definition_digest": "sha256:6fbd70ac0ae9fa877692770419d13821fc6a7dde41d60e7a0862d9b54e4d272e"
+        "definition_digest": "sha256:2dcf75b57667b0bd40d53920c27f2a4a4be9cd236497fd2b2e174cd86b2e77e9"
       }
     },
     {
@@ -183,8 +184,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. A local v0.20.1 Linux AMD64 Evidence reproduction from the recorded source revision provided the reviewed rootfs bytes; no official retained Evidence candidate report is claimed. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-08-12",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The official v0.22.0 Linux AMD64 Evidence candidate had no effective deprecated resolver-printing path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "reviewed_at": "2026-08-14",
       "expires_at": "2026-08-28",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -201,14 +202,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:fdca4898fdc24ac1184a7affa233fee80870b696cead8e257641eb20d6724814",
+      "runtime_definition_digest": "sha256:d863d2bb36260e2a6e132b9e4c34c6e9bb6f72fa4baf4b77db9de14634fd86b7",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:833392109397d3365067ba542475ff5b63a91986a785bf5d4f9ec4fe685c2a9d",
-        "reference_source_revision": "b9f6d12d7d4b62199558351087487550eedb2bdc",
-        "reference_provenance": "local_reproduction",
-        "runtime_definition_digest": "sha256:fdca4898fdc24ac1184a7affa233fee80870b696cead8e257641eb20d6724814",
+        "reference_image_digest": "sha256:3ad995a2324d777a0c41c6d65635977514b132653916581b3e3e40f98225add3",
+        "reference_source_revision": "0ddd1fa6481ef0154d9f11a13815ba35ab942053",
+        "reference_provenance": "official_candidate",
+        "runtime_definition_digest": "sha256:d863d2bb36260e2a6e132b9e4c34c6e9bb6f72fa4baf4b77db9de14634fd86b7",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -228,10 +229,10 @@
           },
           {
             "path": "/usr/local/bin/evidence",
-            "sha256": "sha256:114e249d2f76cd6534a619c339ace46a1f56824f807b65434b593a8d43799a8f"
+            "sha256": "sha256:f10c16ad811f63289c2eb36582db7bcb79308ff9012c86addbfbef11bbf70439"
           }
         ],
-        "definition_digest": "sha256:6fbd70ac0ae9fa877692770419d13821fc6a7dde41d60e7a0862d9b54e4d272e"
+        "definition_digest": "sha256:2dcf75b57667b0bd40d53920c27f2a4a4be9cd236497fd2b2e174cd86b2e77e9"
       }
     }
   ]
