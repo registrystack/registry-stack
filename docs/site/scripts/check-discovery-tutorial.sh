@@ -49,7 +49,7 @@ required_literals=(
 	'Tier-C evidence:'
 )
 for literal in "${required_literals[@]}"; do
-	if ! rg --fixed-strings --quiet "$literal" "$tutorial"; then
+	if ! grep -Fq -- "$literal" "$tutorial"; then
 		printf 'Discovery tutorial drift: missing literal: %s\n' "$literal" >&2
 		exit 1
 	fi
@@ -87,7 +87,7 @@ expected_output=(
 	'Registry Discovery adopter tutorial: PASS'
 )
 for expected in "${expected_output[@]}"; do
-	if ! rg --fixed-strings --quiet "$expected" "$transcript"; then
+	if ! grep -Fq -- "$expected" "$transcript"; then
 		printf 'Discovery tutorial output missing: %s\n' "$expected" >&2
 		exit 1
 	fi

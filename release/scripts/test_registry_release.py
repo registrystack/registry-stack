@@ -492,6 +492,7 @@ class RegistryReleaseTest(TestCase):
                 "rust-policy",
                 "rust-quality",
                 "rust-tests",
+                "discovery-contracts",
                 "evidence-contracts",
                 "identifiers",
                 "relay-client-contracts",
