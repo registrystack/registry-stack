@@ -21,8 +21,11 @@ use serde_json::{Map, Value};
 const MAXIMUM_CONVERSION_BYTES: usize = 16 * 1024 * 1024;
 const MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BYTES: usize = 4 * 1024 * 1024;
 const MAXIMUM_JSON_DEPTH: usize = 128;
-const MAXIMUM_JSON_NODES: usize = 100_000;
-const MAXIMUM_JSON_STRING_BYTES: usize = 4 * 1024 * 1024;
+const MAXIMUM_REQUEST_JSON_NODES: usize = 100_000;
+// A valid 16 MiB result can contain far more collection nodes than a request.
+const MAXIMUM_RESPONSE_JSON_NODES: usize = 3_000_000;
+const MAXIMUM_REQUEST_JSON_STRING_BYTES: usize = 4 * 1024 * 1024;
+const MAXIMUM_RESPONSE_JSON_STRING_BYTES: usize = MAXIMUM_CONVERSION_BYTES;
 
 pyo3::create_exception!(
     registry_discovery_client,
@@ -85,22 +88,26 @@ struct ConversionError;
 
 struct ConversionBudget {
     nodes: usize,
+    maximum_nodes: usize,
     string_bytes: usize,
+    maximum_string_bytes: usize,
     active_containers: HashSet<usize>,
 }
 
 impl ConversionBudget {
-    fn new() -> Self {
+    fn new(maximum_nodes: usize, maximum_string_bytes: usize) -> Self {
         Self {
             nodes: 0,
+            maximum_nodes,
             string_bytes: 0,
+            maximum_string_bytes,
             active_containers: HashSet::new(),
         }
     }
 
     fn visit(&mut self) -> Result<(), ConversionError> {
         self.nodes += 1;
-        if self.nodes > MAXIMUM_JSON_NODES {
+        if self.nodes > self.maximum_nodes {
             return Err(ConversionError);
         }
         Ok(())
@@ -108,7 +115,7 @@ impl ConversionBudget {
 
     fn count_string(&mut self, value: &str) -> Result<(), ConversionError> {
         self.string_bytes = self.string_bytes.saturating_add(value.len());
-        if self.string_bytes > MAXIMUM_JSON_STRING_BYTES {
+        if self.string_bytes > self.maximum_string_bytes {
             return Err(ConversionError);
         }
         Ok(())
@@ -131,7 +138,25 @@ impl ConversionBudget {
 /// exact built-in JSON primitive, list, and dict values only. This rules out
 /// custom encoders and conversion hooks before the value reaches the SDK.
 fn python_to_json(value: &Bound<'_, PyAny>) -> Result<Value, ConversionError> {
-    python_to_json_at_depth(value, 1, &mut ConversionBudget::new())
+    python_to_json_at_depth(
+        value,
+        1,
+        &mut ConversionBudget::new(
+            MAXIMUM_REQUEST_JSON_NODES,
+            MAXIMUM_REQUEST_JSON_STRING_BYTES,
+        ),
+    )
+}
+
+fn python_response_to_json(value: &Bound<'_, PyAny>) -> Result<Value, ConversionError> {
+    python_to_json_at_depth(
+        value,
+        1,
+        &mut ConversionBudget::new(
+            MAXIMUM_RESPONSE_JSON_NODES,
+            MAXIMUM_RESPONSE_JSON_STRING_BYTES,
+        ),
+    )
 }
 
 fn python_to_json_at_depth(
@@ -213,6 +238,17 @@ fn python_to_json_at_depth(
 
 fn python_to_rust<T: DeserializeOwned>(value: &Bound<'_, PyAny>) -> Result<T, ConversionError> {
     let value = python_to_json(value)?;
+    deserialize_bounded(value)
+}
+
+fn python_response_to_rust<T: DeserializeOwned>(
+    value: &Bound<'_, PyAny>,
+) -> Result<T, ConversionError> {
+    let value = python_response_to_json(value)?;
+    deserialize_bounded(value)
+}
+
+fn deserialize_bounded<T: DeserializeOwned>(value: Value) -> Result<T, ConversionError> {
     let bytes = serde_json::to_vec(&value).map_err(|_| ConversionError)?;
     if bytes.len() > MAXIMUM_CONVERSION_BYTES {
         return Err(ConversionError);
@@ -293,7 +329,8 @@ fn exact_selection<'py>(
     response: &Bound<'_, PyAny>,
     request: &Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let response: ServiceSearchResponse = python_to_rust(response).map_err(|_| query_error(py))?;
+    let response: ServiceSearchResponse =
+        python_response_to_rust(response).map_err(|_| query_error(py))?;
     let request: SelectionRequest = python_to_rust(request).map_err(|_| query_error(py))?;
     let selection = response
         .select_exact(request)
@@ -316,7 +353,7 @@ fn evidence_alternative<'py>(
     evidence_type_list_id: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let response: EvidenceTypeResolveResponse =
-        python_to_rust(response).map_err(|_| query_error(py))?;
+        python_response_to_rust(response).map_err(|_| query_error(py))?;
     let context = match evidence_type_list_id {
         Some(id) => {
             let id = id
@@ -348,7 +385,8 @@ fn select_evidence_service<'py>(
     response: &Bound<'_, PyAny>,
     request: &Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let response: ServiceSearchResponse = python_to_rust(response).map_err(|_| query_error(py))?;
+    let response: ServiceSearchResponse =
+        python_response_to_rust(response).map_err(|_| query_error(py))?;
     let request: EvidenceSelectionRequest = python_to_rust(request).map_err(|_| query_error(py))?;
     let selection = response
         .select_evidence(request)
@@ -362,7 +400,8 @@ fn select_relay_service<'py>(
     response: &Bound<'_, PyAny>,
     request: &Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let response: ServiceSearchResponse = python_to_rust(response).map_err(|_| query_error(py))?;
+    let response: ServiceSearchResponse =
+        python_response_to_rust(response).map_err(|_| query_error(py))?;
     let request: RelaySelectionRequest = python_to_rust(request).map_err(|_| query_error(py))?;
     let selection = response
         .select_relay(request)

@@ -4,7 +4,9 @@ const { types: { isProxy } } = require('node:util');
 const native = require('./index');
 
 const MAX_JSON_DEPTH = 128;
-const MAX_JSON_NODES = 100_000;
+const MAX_REQUEST_JSON_NODES = 100_000;
+// A valid 16 MiB result can contain far more collection nodes than a request.
+const MAX_RESPONSE_JSON_NODES = 3_000_000;
 const MAX_JSON_STRING_BYTES = 16 * 1024 * 1024;
 
 class DiscoveryClientError extends Error {
@@ -53,7 +55,7 @@ function inputError(kind) {
 function cloneJson(value, budget, depth) {
   if (depth > MAX_JSON_DEPTH) throw inputError('query');
   budget.nodes += 1;
-  if (budget.nodes > MAX_JSON_NODES) throw inputError('query');
+  if (budget.nodes > budget.maximumNodes) throw inputError('query');
 
   if (value === null || typeof value === 'boolean') return value;
   if (typeof value === 'string') {
@@ -103,7 +105,21 @@ function cloneJson(value, budget, depth) {
 }
 
 function requestValue(value) {
-  return cloneJson(value, { nodes: 0, stringBytes: 0, active: new Set() }, 1);
+  return cloneJson(value, {
+    nodes: 0,
+    maximumNodes: MAX_REQUEST_JSON_NODES,
+    stringBytes: 0,
+    active: new Set(),
+  }, 1);
+}
+
+function responseValue(value) {
+  return cloneJson(value, {
+    nodes: 0,
+    maximumNodes: MAX_RESPONSE_JSON_NODES,
+    stringBytes: 0,
+    active: new Set(),
+  }, 1);
 }
 
 function configurationValue(options) {
@@ -188,7 +204,7 @@ class DiscoveryClient {
 
   selectExact(response, request) {
     try {
-      return this.#inner.selectExact(requestValue(response), requestValue(request));
+      return this.#inner.selectExact(responseValue(response), requestValue(request));
     } catch (error) {
       throw normalize(error, 'query');
     }
@@ -209,7 +225,7 @@ class DiscoveryClient {
 
 function selectExact(response, request) {
   try {
-    return native.selectExact(requestValue(response), requestValue(request));
+    return native.selectExact(responseValue(response), requestValue(request));
   } catch (error) {
     throw normalize(error, 'query');
   }
@@ -220,7 +236,7 @@ function selectEvidenceAlternative(response, evidenceTypeListId = undefined) {
     if (evidenceTypeListId !== undefined && typeof evidenceTypeListId !== 'string') {
       throw inputError('query');
     }
-    return native.selectEvidenceAlternative(requestValue(response), evidenceTypeListId);
+    return native.selectEvidenceAlternative(responseValue(response), evidenceTypeListId);
   } catch (error) {
     throw normalize(error, 'query');
   }
@@ -228,7 +244,7 @@ function selectEvidenceAlternative(response, evidenceTypeListId = undefined) {
 
 function selectEvidenceService(response, request) {
   try {
-    return native.selectEvidenceService(requestValue(response), requestValue(request));
+    return native.selectEvidenceService(responseValue(response), requestValue(request));
   } catch (error) {
     throw normalize(error, 'query');
   }
@@ -236,7 +252,7 @@ function selectEvidenceService(response, request) {
 
 function selectRelayService(response, request) {
   try {
-    return native.selectRelayService(requestValue(response), requestValue(request));
+    return native.selectRelayService(responseValue(response), requestValue(request));
   } catch (error) {
     throw normalize(error, 'query');
   }

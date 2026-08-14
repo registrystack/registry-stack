@@ -117,6 +117,42 @@ test('Relay selection retains the correlated semantic and operation match', () =
   assert.equal(validateSelection(selection).serviceKind, 'relay');
 });
 
+test('a supported large response remains selectable', () => {
+  const identifiers = (name) => Array.from(
+    { length: 128 },
+    (_, index) => `urn:example:${name}:${String(index).padStart(3, '0')}`,
+  );
+  const items = Array.from({ length: 200 }, (_, index) => ({
+    ...relayService,
+    recordId: `record-${String(index).padStart(3, '0')}`,
+    bindingId: `urn:example:binding:relay:${String(index).padStart(3, '0')}`,
+    serviceId: `urn:example:service:relay:${String(index).padStart(3, '0')}`,
+    jurisdictions: identifiers('jurisdiction'),
+    conformsTo: identifiers('profile'),
+    semanticClassIds: [
+      'urn:example:registered-business',
+      ...identifiers('semantic').slice(0, 127),
+    ],
+    operationFamilyIds: [
+      'urn:example:consultation-list',
+      ...identifiers('operation').slice(0, 127),
+    ],
+  }));
+  assert.ok(JSON.stringify(items).length < 16 * 1024 * 1024);
+
+  const selection = selectRelayService(
+    { catalogRevision: digest, items },
+    {
+      recordId: 'record-000',
+      capabilityMatch: {
+        semanticClassId: 'urn:example:registered-business',
+        operationFamilyId: 'urn:example:consultation-list',
+      },
+    },
+  );
+  assert.equal(selection.recordId, 'record-000');
+});
+
 test('binding failures expose a stable value-free kind', () => {
   assert.throws(
     () => new DiscoveryClient('http://provider.example.invalid/'),

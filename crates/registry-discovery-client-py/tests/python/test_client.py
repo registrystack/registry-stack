@@ -147,6 +147,28 @@ class DiscoveryClientTests(unittest.TestCase):
         )
         self.assertEqual(validate_selection(selection)["serviceKind"], "relay")
 
+    def test_supported_large_response_remains_selectable(self) -> None:
+        items = []
+        for index in range(1_100):
+            suffix = f"{index:04d}"
+            items.append({
+                **SERVICE,
+                "recordId": f"record-{suffix}",
+                "bindingId": f"urn:example:binding:{suffix}",
+                "serviceId": f"urn:example:service:{suffix}",
+                "description": "x" * 4_096,
+            })
+        response = {"catalogRevision": DIGEST, "items": items}
+        encoded = json.dumps(response, separators=(",", ":")).encode()
+        self.assertGreater(len(encoded), 4 * 1024 * 1024)
+        self.assertLess(len(encoded), 16 * 1024 * 1024)
+
+        selection = select_evidence_service(response, {
+            "recordId": "record-0000",
+            "evidenceTypeId": "urn:example:evidence-type",
+        })
+        self.assertEqual(selection["recordId"], "record-0000")
+
     def test_configuration_values_are_bounded_and_value_free(self) -> None:
         invalid_configurations = [
             {"request_timeout_seconds": 1e300},
