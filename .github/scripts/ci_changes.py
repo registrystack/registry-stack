@@ -12,6 +12,12 @@ from typing import Any, Iterable
 
 
 SHARDS = {
+    "discovery": (
+        "registry-discovery",
+        "registry-discovery-client",
+        "registry-discovery-profile",
+        "registry-discoveryctl",
+    ),
     "platform": (
         "registry-platform-audit",
         "registry-platform-authcommon",
@@ -55,10 +61,59 @@ SHARDS = {
 }
 
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
+DISCOVERY_PACKAGES = frozenset(SHARDS["discovery"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
+
+# Provider publication is part of the Discovery product contract even though
+# Evidence and Relay own its generation and serving code. Keep this explicit:
+# a publisher-only change must run the cross-product profile and journey gates
+# without relying on an incidental reverse dev-dependency.
+DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
+    "crates/registry-evidence/src/bundle.rs",
+    "crates/registry-evidence/src/cli.rs",
+    "crates/registry-evidence/src/config.rs",
+    "crates/registry-evidence/src/contracts.rs",
+    "crates/registry-evidence/src/discovery.rs",
+    "crates/registry-evidence/src/main.rs",
+    "crates/registry-evidence/src/runtime_tests.rs",
+    "crates/registry-evidence/src/server.rs",
+    "crates/registry-evidencectl/src/authoring.rs",
+    "crates/registry-evidencectl/src/build.rs",
+    "crates/registry-evidencectl/tests/production_build.rs",
+    "crates/registry-relay-http-contract/src/lib.rs",
+    "crates/registry-relay-v2/src/api.rs",
+    "crates/registry-relay-v2/src/artifacts.rs",
+    "crates/registry-relay-v2/src/compiler.rs",
+    "crates/registry-relay-v2/src/contract.rs",
+    "crates/registry-relay-v2/src/model.rs",
+    "crates/registry-relay-v2/src/package.rs",
+    "crates/registry-relay-v2/src/server.rs",
+    "crates/registry-relay-v2/src/tooling.rs",
+    "crates/registry-relay-v2/tests/acceptance_http.rs",
+)
+DISCOVERY_PROVIDER_INPUTS = DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS + (
+    "products/evidence/contracts/bundle.schema.yaml",
+    "products/evidence/fixtures/acceptance/*/catalog.jsonld",
+    "products/evidence/fixtures/acceptance/*/evidence.yaml",
+    "products/evidence/generated/registry-evidence.openapi.json",
+    "products/relay-v2/acceptance/*/expected-http.yaml",
+    "products/relay-v2/acceptance/*/registry.yaml",
+    "products/relay-v2/contracts/acceptance-scenario-matrix.yaml",
+    "products/relay-v2/contracts/artifact-inventory.yaml",
+    "products/relay-v2/contracts/generated-baselines.yaml",
+)
+
+# The full reader journey is a Discovery product gate, not only a docs lint.
+# A tutorial-only edit must replay the same provider, operator, consumer, and
+# native-client handoff that the page promises.
+DISCOVERY_TUTORIAL_INPUTS = (
+    "docs/site/scripts/check-discovery-tutorial.sh",
+    "docs/site/scripts/check-discovery-tutorial.test.mjs",
+    "docs/site/src/content/docs/tutorials/publish-and-consume-discovery-index.mdx",
+)
 
 # Every input the Evidence tutorial gate replays or is built from. The tutorial
 # pages and helper scripts here must stay in step with the gate's own registry
@@ -440,6 +495,8 @@ def classify(
                 continue
             if path.startswith("products/evidence/"):
                 seeds.update(EVIDENCE_PACKAGES)
+            elif path.startswith("products/discovery/"):
+                seeds.update(DISCOVERY_PACKAGES)
             elif path.startswith("products/manifest/"):
                 seeds.update(MANIFEST_PACKAGES)
             elif path.startswith("products/platform/"):
@@ -632,6 +689,10 @@ def classify(
         "rust_packages": sorted(affected),
         "platform": platform,
         "platform_hygiene": platform_hygiene,
+        "discovery_contracts": complete
+        or bool(affected & DISCOVERY_PACKAGES)
+        or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
+        or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
         "relay_v2_contracts": bool(affected & RELAY_V2_PACKAGES),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
