@@ -13,7 +13,7 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 import {
   buildDocsetArchive,
@@ -65,7 +65,7 @@ test('archive snapshot reads one no-follow regular-file descriptor', async (t) =
   assert.equal(await readOptionalRegularFile(resolve(root, 'missing.json')), null);
 });
 
-test('Pagefind gzip metadata normalizes to a stable archive tree', async (t) => {
+test('Pagefind gzip streams normalize across platforms without changing content', async (t) => {
   const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-pagefind-gzip-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const left = resolve(root, 'left');
@@ -73,15 +73,21 @@ test('Pagefind gzip metadata normalizes to a stable archive tree', async (t) => 
   await mkdir(resolve(left, 'pagefind'), { recursive: true });
   await mkdir(resolve(right, 'pagefind'), { recursive: true });
 
-  const compressed = gzipSync('architecture-independent WebAssembly');
+  const wasm = Buffer.from(
+    `\0asm\x01\0\0\0${'architecture-independent WebAssembly'.repeat(256)}`,
+  );
   for (const name of ['wasm.en.pagefind', 'wasm.unknown.pagefind']) {
-    const leftContents = Buffer.from(compressed);
-    const rightContents = Buffer.from(compressed);
+    const leftContents = gzipSync(wasm, { level: 1 });
+    const rightContents = gzipSync(wasm, { level: 9 });
     leftContents.writeUInt32LE(1_700_000_000, 4);
     rightContents.writeUInt32LE(1_800_000_000, 4);
+    leftContents[9] = 0x03;
+    rightContents[9] = 0x13;
     await writeFile(resolve(left, 'pagefind', name), leftContents);
     await writeFile(resolve(right, 'pagefind', name), rightContents);
     assert.notDeepEqual(leftContents, rightContents);
+    assert.deepEqual(gunzipSync(leftContents), wasm);
+    assert.deepEqual(gunzipSync(rightContents), wasm);
   }
 
   assert.deepEqual(
@@ -95,10 +101,18 @@ test('Pagefind gzip metadata normalizes to a stable archive tree', async (t) => 
   for (const name of ['wasm.en.pagefind', 'wasm.unknown.pagefind']) {
     const normalizedLeft = await readFile(resolve(left, 'pagefind', name));
     const normalizedRight = await readFile(resolve(right, 'pagefind', name));
-    assert.deepEqual(normalizedLeft.subarray(4, 8), Buffer.alloc(4));
+    assert.deepEqual(
+      normalizedLeft.subarray(0, 10),
+      Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0x02, 0xff]),
+    );
     assert.deepEqual(normalizedLeft, normalizedRight);
+    assert.deepEqual(gunzipSync(normalizedLeft), wasm);
   }
   assert.equal(await treeDigest(left), await treeDigest(right));
+  assert.deepEqual(
+    await normalizePagefindGzipMetadata(left),
+    { files: 2, normalized: 0 },
+  );
 });
 
 test('Pagefind metadata normalization rejects an unexpected WASM format', async (t) => {
