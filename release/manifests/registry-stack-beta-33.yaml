@@ -15,8 +15,6 @@ artifacts:
   evidencectl-installer: 0.22.0
   evidence-client-node: 0.22.0
   evidence-client-python: 0.22.0
-  discovery-client-node: 0.22.0
-  discovery-client-python: 0.22.0
   relay-installer: 0.22.0
   registry-docs: 0.22.0
   relay-client-node: 0.22.0
@@ -24,7 +22,7 @@ artifacts:
 
 identifier_catalog:
   path: products/identifiers/generated/catalog.v1.json
-  sha256: ee5a0f79f4617735264ade9799097e4e42d2dc3e9dc5dccac0f93851836ba432
+  sha256: 7a8130406862922a1c52f81a43577446713ab10ffe76b49179946ad861af3ac9
   entry_count: 47
 
 external: {}

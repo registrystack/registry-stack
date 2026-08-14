@@ -660,34 +660,34 @@ class ReleaseCandidateTest(TestCase):
             ],
         )
 
-    def test_discovery_client_payloads_begin_with_v0_22_0(self) -> None:
-        historical = self.module._relay_v2_payload_inventory("0.21.1")
-        current = self.module._relay_v2_payload_inventory("0.22.0")
+    def test_discovery_client_payloads_begin_with_v0_23_0(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.22.0")
+        current = self.module._relay_v2_payload_inventory("0.23.0")
 
         self.assertNotIn(
-            "discovery-client-node-v0.21.1-linux-amd64-glibc.tgz", historical
+            "discovery-client-node-v0.22.0-linux-amd64-glibc.tgz", historical
         )
         self.assertNotIn(
-            "registry_discovery_client-0.21.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+            "registry_discovery_client-0.22.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
             historical,
         )
         self.assertEqual(
             "client-package",
-            current["discovery-client-node-v0.22.0-linux-amd64-glibc.tgz"],
+            current["discovery-client-node-v0.23.0-linux-amd64-glibc.tgz"],
         )
         self.assertEqual(
             "client-package",
             current[
-                "registry_discovery_client-0.22.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                "registry_discovery_client-0.23.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
             ],
         )
         self.assertEqual(
             "client-package",
-            current["registrystack-discovery-client-0.22.0.tgz"],
+            current["registrystack-discovery-client-0.23.0.tgz"],
         )
         self.assertEqual(
             "client-package",
-            current["registrystack-discovery-client-linux-x64-gnu-0.22.0.tgz"],
+            current["registrystack-discovery-client-linux-x64-gnu-0.23.0.tgz"],
         )
 
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:

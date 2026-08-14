@@ -42,6 +42,8 @@ jobs:
       workflow_revision: ${{ steps.candidate.outputs.workflow_revision }}
       docs_sha256: ${{ steps.candidate.outputs.docs_sha256 }}
       client_registries: ${{ steps.candidate.outputs.client_registries }}
+      client_registry_matrix: ${{ steps.candidate.outputs.client_registry_matrix }}
+      client_registry_pypi_matrix: ${{ steps.candidate.outputs.client_registry_pypi_matrix }}
       candidate_run: ${{ steps.binding.outputs.run_id }}
       candidate_attempt: ${{ steps.binding.outputs.run_attempt }}
       manifest_sha256: ${{ steps.binding.outputs.manifest_sha256 }}
@@ -241,11 +243,44 @@ jobs:
           print("true" if version >= CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION else "false")
           PY
           )"
+          client_registry_matrix="$(
+            PYTHONPATH=release/scripts python3 - \
+              "${{ steps.identity.outputs.version }}" <<'PY'
+          import json
+          import sys
+          from release_candidate import DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION
+
+          version = tuple(int(part) for part in sys.argv[1].split("."))
+          clients = ["evidence", "relay"]
+          if version >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
+              clients.insert(0, "discovery")
+          print(json.dumps({"client": clients}, separators=(",", ":")))
+          PY
+          )"
+          client_registry_pypi_matrix="$(
+            PYTHONPATH=release/scripts python3 - \
+              "${{ steps.identity.outputs.version }}" <<'PY'
+          import json
+          import sys
+          from release_candidate import DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION
+
+          version = tuple(int(part) for part in sys.argv[1].split("."))
+          clients = [
+              {"client": "evidence", "environment": "pypi-evidence"},
+              {"client": "relay", "environment": "pypi"},
+          ]
+          if version >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
+              clients.insert(0, {"client": "discovery", "environment": "pypi"})
+          print(json.dumps({"include": clients}, separators=(",", ":")))
+          PY
+          )"
           {
             echo "release_id=${release_id}"
             echo "workflow_revision=${workflow_revision}"
             echo "docs_sha256=${docs_sha256}"
             echo "client_registries=${client_registries}"
+            echo "client_registry_matrix=${client_registry_matrix}"
+            echo "client_registry_pypi_matrix=${client_registry_pypi_matrix}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Classify absent, draft, or exact published release destination
@@ -1175,8 +1210,7 @@ jobs:
     environment: npm
     strategy:
       fail-fast: false
-      matrix:
-        client: [discovery, evidence, relay]
+      matrix: ${{ fromJSON(needs.verify.outputs.client_registry_matrix) }}
     permissions:
       actions: read
       contents: read
@@ -1294,14 +1328,7 @@ jobs:
     environment: ${{ matrix.environment }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - client: discovery
-            environment: pypi
-          - client: evidence
-            environment: pypi-evidence
-          - client: relay
-            environment: pypi
+      matrix: ${{ fromJSON(needs.verify.outputs.client_registry_pypi_matrix) }}
     permissions:
       actions: read
       contents: read

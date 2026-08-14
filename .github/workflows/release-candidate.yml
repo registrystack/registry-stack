@@ -495,7 +495,7 @@ jobs:
           IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
           for client in discovery evidence relay; do
             if [[ "${client}" == discovery ]] &&
-                (( client_major == 0 && client_minor < 22 )); then
+                (( client_major == 0 && client_minor < 23 )); then
               continue
             fi
             if [[ "${client}" == relay ]] &&
@@ -539,7 +539,7 @@ jobs:
               [[ "${CLIENT_VERSION}" != "0.19.0" ]]; then
             expected_wheels=2
           fi
-          if (( client_major > 0 || client_minor >= 22 )); then
+          if (( client_major > 0 || client_minor >= 23 )); then
             expected_wheels=3
           fi
           test "$(find "${wheel_dir}" -maxdepth 1 -name '*.whl' | wc -l)" -eq "${expected_wheels}"
@@ -551,7 +551,7 @@ jobs:
           IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
           for client in discovery evidence relay; do
             if [[ "${client}" == discovery ]] &&
-                (( client_major == 0 && client_minor < 22 )); then
+                (( client_major == 0 && client_minor < 23 )); then
               continue
             fi
             if [[ "${client}" == relay ]] &&
@@ -581,7 +581,7 @@ jobs:
           IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
           for client in discovery evidence relay; do
             if [[ "${client}" == discovery ]] &&
-                (( client_major == 0 && client_minor < 22 )); then
+                (( client_major == 0 && client_minor < 23 )); then
               continue
             fi
             if [[ "${client}" == relay ]] &&
@@ -635,7 +635,7 @@ jobs:
           IFS=. read -r major minor _patch <<<"${CLIENT_VERSION}"
           for client in discovery evidence relay; do
             if [[ "${client}" == discovery ]] &&
-                (( major == 0 && minor < 22 )); then
+                (( major == 0 && minor < 23 )); then
               continue
             fi
             if [[ "${client}" == relay ]] &&
@@ -1038,7 +1038,7 @@ jobs:
           fi
           include_discovery_clients=0
           if ((
-            client_major > 0 || client_minor >= 22
+            client_major > 0 || client_minor >= 23
           )); then
             include_discovery_clients=1
           fi

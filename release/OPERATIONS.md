@@ -74,15 +74,15 @@ not part of later releases.
 
 ### Provision client registries
 
-Registry Stack v0.22.0 and later promote the exact candidate Discovery,
-Evidence, and Relay client packages to npm and PyPI before the GitHub Release
-becomes public. The npm and PyPI publication jobs use GitHub-hosted runners and
-OpenID Connect trusted publishing. Do not add npm or PyPI write tokens to the
-repository.
+Registry Stack v0.22.0 promotes the exact candidate Evidence and Relay client
+packages to npm and PyPI before the GitHub Release becomes public. Registry
+Stack v0.23.0 and later also promote the Discovery clients. The npm and PyPI
+publication jobs use GitHub-hosted runners and OpenID Connect trusted
+publishing. Do not add npm or PyPI write tokens to the repository.
 
 On PyPI, register pending trusted publishers for `registry-discovery-client`,
 `registry-evidence-client`, and `registry-relay-client` with these exact values
-before requesting the first candidate:
+before requesting the first v0.23.0 or later candidate:
 
 - Owner: `registrystack`
 - Repository: `registry-stack`
@@ -94,12 +94,13 @@ reviewers. PyPI creates each project when its first trusted publication
 succeeds.
 
 npm does not provide a pending trusted publisher for an uncreated package.
-The first Registry Stack release that publishes to npm therefore has a
-one-time bootstrap:
+Each client package therefore needs a one-time bootstrap before its first
+release. Evidence and Relay were provisioned for v0.22.0. Before the first
+v0.23.0-or-later candidate, provision only the Discovery root and platform
+packages:
 
 1. Create inert `0.0.0` root and platform packages for
-   `@registrystack/discovery-client`, `@registrystack/evidence-client`, and
-   `@registrystack/relay-client`. Each client has `darwin-arm64`,
+   `@registrystack/discovery-client`. It has `darwin-arm64`,
    `linux-arm64-gnu`, and `linux-x64-gnu` platform packages. Give every
    bootstrap package only a README, `package.json`, and Apache-2.0 license. Do
    not include executable code.
@@ -413,8 +414,9 @@ Publication:
    digest. An absent tag is copied, an existing exact digest is accepted, and a
    mismatch stops publication.
 4. Adds `SHA256SUMS` and one keyless Sigstore bundle for the checksum file.
-5. Reconciles the exact Evidence and Relay wheels on PyPI and the exact root
-   and platform packages on npm. Absent packages use trusted short-lived
+5. Reconciles the exact version-appropriate client wheels on PyPI and root and
+   platform packages on npm. v0.22.x includes Evidence and Relay; v0.23.0 and
+   later also include Discovery. Absent packages use trusted short-lived
    credentials; existing packages must match the candidate bytes.
 6. Rechecks the full asset inventory, checksum signature, image digests, and
    completed client registry jobs, then publishes a public, non-prerelease
@@ -441,9 +443,9 @@ every downloadable asset against GitHub's digest metadata, the exact
 `SHA256SUMS` closure and its protected-main Sigstore identity, the release-body
 manifest binding, every final OCI digest, and one maintained binary version
 smoke. For v0.22.0 and later, the publication workflow also verifies the npm
-SHA-512 integrity and PyPI SHA-256 digest of every client package before
-docs promotion. The public verifier is read-only and can be rerun
-independently.
+SHA-512 integrity and PyPI SHA-256 digest of every version-appropriate client
+package before docs promotion. Discovery joins that set at v0.23.0. The public
+verifier is read-only and can be rerun independently.
 
 ## Failure handling
 

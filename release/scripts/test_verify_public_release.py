@@ -34,14 +34,14 @@ class PublicReleaseVerifierTest(TestCase):
         self.assertTrue(self.module.version_uses_client_registries("0.21.1"))
         self.assertTrue(self.module.version_uses_client_registries("1.0.0"))
 
-    def test_discovery_registry_verification_begins_with_v0_22_0(self) -> None:
+    def test_discovery_registry_verification_begins_with_v0_23_0(self) -> None:
         self.assertEqual(
             ("evidence", "relay"),
-            self.module.client_registry_clients("0.21.1"),
+            self.module.client_registry_clients("0.22.0"),
         )
         self.assertEqual(
             ("discovery", "evidence", "relay"),
-            self.module.client_registry_clients("0.22.0"),
+            self.module.client_registry_clients("0.23.0"),
         )
 
     def test_checksum_parser_requires_one_local_unique_asset_per_line(self) -> None:

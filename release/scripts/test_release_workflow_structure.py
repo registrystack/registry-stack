@@ -1118,17 +1118,13 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 "needs.verify.outputs.destination_state != 'published'", job["if"]
             )
             self.assertEqual(
-                job["strategy"]["matrix"]["client"],
-                ["discovery", "evidence", "relay"],
+                job["strategy"]["matrix"],
+                "${{ fromJSON(needs.verify.outputs.client_registry_matrix) }}",
             )
         self.assertEqual(pypi["environment"], "${{ matrix.environment }}")
         self.assertEqual(
-            pypi["strategy"]["matrix"]["include"],
-            [
-                {"client": "discovery", "environment": "pypi"},
-                {"client": "evidence", "environment": "pypi-evidence"},
-                {"client": "relay", "environment": "pypi"},
-            ],
+            pypi["strategy"]["matrix"],
+            "${{ fromJSON(needs.verify.outputs.client_registry_pypi_matrix) }}",
         )
         self.assertEqual(
             pypi["permissions"],
@@ -1140,6 +1136,14 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn(
             "needs.verify.outputs.destination_state != 'published'", pypi["if"]
         )
+        candidate = step_run(
+            document,
+            "verify",
+            "Verify binding, candidate, and attestations",
+        )
+        self.assertIn("DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION", candidate)
+        self.assertIn("client_registry_matrix=", candidate)
+        self.assertIn("client_registry_pypi_matrix=", candidate)
         self.assertEqual(npm["needs"], ["verify", "finalize-assets"])
         self.assertEqual(pypi["needs"], ["verify", "finalize-assets"])
         publish = document["jobs"]["publish"]

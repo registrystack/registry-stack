@@ -36,7 +36,7 @@ RELAY_V2_ARTIFACT_INVENTORY = (
     "relayctl",
 )
 RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
-DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 22, 0)
+DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 23, 0)
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:

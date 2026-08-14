@@ -157,7 +157,7 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.add("registry-docs")
         if parsed_version >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
             expected_inventory.update({"relay-client-node", "relay-client-python"})
-        if parsed_version >= (0, 22, 0):
+        if parsed_version >= (0, 23, 0):
             expected_inventory.update({"discovery-client-node", "discovery-client-python"})
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(artifact_names - expected_inventory)
