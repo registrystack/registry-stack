@@ -211,6 +211,12 @@ The command prints the exact candidate run ID and URL immediately after the
 dispatch is correlated. `--wait-for-ci` waits only for protected-main `ci.yml`
 at the exact source SHA, then refreshes protected `main` again immediately
 before dispatch. `--wait` follows only that uniquely identified candidate run.
+Both waits print only workflow state changes by default. If a protected
+environment is waiting for approval, the command names the environment, links
+the exact run, and prints a read-only command for inspecting the pending
+deployment. An authorized reviewer must approve it through **Review
+deployments** in that run. Add `--verbose-wait` to retain the raw `gh run watch`
+display when detailed live job output is useful.
 Omit either flag when another operator or monitor owns the corresponding wait.
 
 The request is accepted only when `source_sha` is the exact protected-main
@@ -446,6 +452,23 @@ smoke. For v0.22.0 and later, the publication workflow also verifies the npm
 SHA-512 integrity and PyPI SHA-256 digest of every version-appropriate client
 package before docs promotion. Discovery joins that set at v0.23.0. The public
 verifier is read-only and can be rerun independently.
+
+For an interrupted publication after the annotated tag exists, classify the
+exact recovery state before retrying:
+
+```sh
+release/scripts/registry-release verify-recovery --tag v<version>
+```
+
+This command is read-only. For an absent release or a bound draft, it verifies
+that the local annotated tag exactly matches `origin`, revalidates the original
+candidate and its lifetime, and checks the draft's candidate binding. It then
+prints the exact protected-main `release.yml` retry command. The workflow owns
+the fail-closed reconciliation of draft assets, OCI digests, npm packages, and
+PyPI wheels immediately before each write. If the release is already
+published, the command runs `verify-public`, reports the release complete, and
+does not recommend a retry. It never approves environments or dispatches a
+workflow, and it adds no release gate.
 
 ## Failure handling
 
