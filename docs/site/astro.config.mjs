@@ -408,6 +408,8 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'operate/advanced' },
+            { label: 'Publish and consume a Discovery index', slug: 'tutorials/publish-and-consume-discovery-index' },
+            { label: 'Build and run a Registry Discovery index', slug: 'configure/discovery' },
             { label: 'Retention and persistent state', slug: 'operate/retention-and-persistent-state' },
             { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
             { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
@@ -493,6 +495,7 @@ export default defineConfig({
                 { label: 'Architecture', slug: 'explanation/architecture' },
                 { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
                 { label: 'Records stay home', slug: 'explanation/records-stay-home' },
+                { label: 'Registry Discovery is an index', slug: 'explanation/discovery-as-an-index' },
                 { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
                 { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
                 { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },

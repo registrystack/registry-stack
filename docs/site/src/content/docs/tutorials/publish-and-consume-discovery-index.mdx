@@ -1,0 +1,236 @@
+---
+title: Publish and consume a Registry Discovery index
+description: Build a local Discovery index from Evidence and Relay advertisements, select exact records, and hand them to native product trust.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-14"
+doc_type: tutorial
+persona:
+  - assertion provider
+  - data publisher
+  - operator
+  - consumer or verifier
+locale: en
+standards_referenced:
+  - dcat
+  - json-ld
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Build a local Registry Discovery index from exact Evidence Gateway and Registry Relay publication
+bytes, resolve and select one record for each product, then verify both selections through the
+maintained native clients and adopter-owned trust.
+
+<QuickstartMeta
+  outcome="One immutable local index, exact Evidence and Relay selections, and two direct native client handoffs."
+  time="About 15 minutes after the Rust dependencies are available"
+  level="Local development with synthetic data"
+  prerequisites={['Git', 'Rust 1.95.0 through rustup', 'Python 3', 'curl', 'shasum', 'Bash', 'Local ports 38080 and 38090']}
+/>
+
+## Before you start
+
+Use a clean checkout. The tutorial compiles the two Discovery binaries from the locked workspace,
+starts only loopback services, and creates its authoring project in a temporary directory.
+
+```sh
+git clone --depth 1 --quiet https://github.com/registrystack/registry-stack.git
+cd registry-stack
+test -f products/discovery/scripts/test-adopter-tutorial.sh
+printf 'checkout ready\n'
+```
+
+The final two commands report:
+
+```text
+checkout ready
+```
+
+## Confirm the provider publications
+
+The Evidence assertion provider and Relay data publisher each contribute one closed, public JSON-LD
+description. Confirm the exact bytes supplied by the checkout.
+
+```sh
+shasum -a 256 \
+  products/discovery/fixtures/descriptions/evidence.jsonld \
+  products/discovery/fixtures/descriptions/relay.jsonld
+```
+
+```text
+fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905  products/discovery/fixtures/descriptions/evidence.jsonld
+5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7  products/discovery/fixtures/descriptions/relay.jsonld
+```
+
+The fixture bytes are deterministic examples of the same closed profile the two native products
+derive and package. A provider deploys the exact packaged file at its public description URL; the
+Discovery runtime does not reconstruct provider metadata.
+
+{/* Evidence: `products/discovery/fixtures/descriptions/evidence.jsonld` and `relay.jsonld` are the
+    product-owned deterministic bytes. `crates/registry-evidence/src/discovery.rs`, test
+    `provider_discovery_description_preserves_evidence_type_profile_correlation`, and
+    `crates/registry-relay-v2/src/artifacts.rs`, test
+    `provider_discovery_description_preserves_semantic_class_operation_family_correlation`, bind
+    the profile to native provider packaging. */}
+
+## Inspect the operator project
+
+The operator owns an explicit list of provider description URLs. Local HTTP is enabled only for this
+loopback tutorial.
+
+```sh
+sed -n '1,80p' products/discovery/tutorial/project/origins.yaml
+```
+
+```yaml
+schemaVersion: registry-discovery/origins/v1alpha1
+origins:
+  - originId: tutorial-evidence
+    catalogUrl: http://127.0.0.1:38090/evidence.jsonld
+    profile: registry-discovery-v1alpha1
+    enabled: true
+  - originId: tutorial-relay
+    catalogUrl: http://127.0.0.1:38090/relay.jsonld
+    profile: registry-discovery-v1alpha1
+    enabled: true
+```
+
+The operator also owns the mapping from an application requirement to one Evidence type.
+
+```sh
+sed -n '1,80p' products/discovery/tutorial/project/mappings/adult-status.yaml
+```
+
+```yaml
+schemaVersion: registry-discovery/evidence-mapping/v1alpha1
+mappingId: urn:example:mapping:adult-status
+mappingAuthorityId: urn:example:mapping-authority
+requirementId: urn:example:requirement:adult-status
+jurisdiction: urn:example:jurisdiction
+alternatives:
+  - evidenceTypeListId: urn:example:evidence-type-list:adult-status
+    evidenceTypeIds:
+      - urn:example:evidence-type:adult-status
+```
+
+`discoveryctl check` validates these authoring files without contacting either URL. The later explicit
+build is the only step that fetches the enabled origins.
+
+{/* Evidence: `crates/registry-discoveryctl/src/project.rs`, test
+    `check_is_offline_and_accepts_an_unreachable_https_origin`, proves the offline check.
+    `crates/registry-discoveryctl/tests/build.rs`, test
+    `build_fetches_each_origin_once_and_preserves_semantic_revisions`, covers the one-shot fetch. */}
+
+## Build, serve, select, and hand off
+
+Run the product-owned reader journey. The script builds `discovery` and `discoveryctl`, copies the
+operator project into a fresh temporary directory, checks it before starting the provider, performs
+one explicit build, waits for readiness, and calls the real resolve and search routes.
+
+```sh
+bash products/discovery/scripts/test-adopter-tutorial.sh
+```
+
+The output ends with these role-oriented results. Revision and record digests are stable for the
+checked-in semantic inputs.
+
+```text
+[checkout] building discovery and discoveryctl from locked source
+[provider] evidence.jsonld sha256=fc96f3a8cb0d82239425ea5712dceca975a5899e5528616648174da661fae905
+[provider] relay.jsonld sha256=5a34fa469803b7c28b3d5e7134a42398e326a2f173aacae9090d29787bc8f4d7
+[operator] offline check: valid origins=2 mappings=1
+[operator] explicit build: built catalogRevision=sha256:b4b7195f36691c245bf49a88a248049ed899c0c41dbf1a87a386571c0dbfba0f mappingRevision=sha256:332004ca3920c498539180946e8f2637e9998ba7e49cd98f31e19d6f818857ac
+[operator] readiness: {"status":"ready"}
+[consumer] resolved evidenceType=urn:example:evidence-type:adult-status alternatives=1
+[consumer] selected evidence recordId=urn:registrystack:discovery:record:sha256:676659c10ce5cc9d353f4fd2816673c7947e612151efbbe1cc4d42372d9be9d5
+[consumer] selected relay recordId=urn:registrystack:discovery:record:sha256:aa220c11f493c266bc22adf5dc7ca82fb7a83842e6e887dc0e8e5680f4f84244
+[handoff] adopter-owned Evidence trust accepted; native assertion verified
+[handoff] adopter-owned Relay trust accepted; native list response verified
+[cleanup] local services stopped; temporary project removed
+Registry Discovery adopter tutorial: PASS
+```
+
+The consumer first resolves the requirement, searches the resolved Evidence type, and records one
+exact `recordId`. It separately searches one Relay semantic class and operation family and records
+one exact Relay result. The saved records contain public metadata and revision provenance only.
+
+The final two handoff checks repeat the exact-selection boundary against publications derived by the
+native products. The adopter's existing Evidence and Relay trust configurations must accept a saved
+selection before a credential is created or a native request is sent. The maintained Evidence client
+then requests and verifies an assertion directly, and the maintained Relay client reads a collection
+directly. Discovery is stopped before those direct calls.
+
+{/* Tier-C evidence: `crates/registry-discovery-client/src/selection.rs`, test
+    `discovery_metadata_has_no_trust_or_native_io_capability`, excludes trust and native I/O from a
+    selection. `crates/registry-discovery-client/tests/native_journey.rs`, test
+    `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`, proves that a
+    mismatched local trust record creates no credentials or provider traffic, then exercises the
+    maintained Evidence and Relay clients after accepted local trust. Maintainer reviewed and
+    accepted this trust-boundary claim on 2026-08-14. */}
+
+## Assign the maintenance work
+
+| Role | Maintained input | Change trigger | Handoff |
+| --- | --- | --- | --- |
+| Assertion provider | Packaged Evidence public description | Public Evidence endpoint, profile, evidence type, or issuer role changes | Publish the exact packaged bytes at the approved URL |
+| Data publisher | Packaged Relay public description | Public Relay endpoint, profile, semantic class, operation family, or authority role changes | Publish the exact sealed artifact bytes at the approved URL |
+| Operator | `origins.yaml`, mapping files, immutable index, and `runtime.yaml` | An approved origin or mapping changes | Run offline `check`, explicit `build`, deploy the complete index, then restart Discovery |
+| Consumer or verifier | Saved exact selection and native product trust | A catalog revision, mapping revision, origin digest, binding, or local trust decision changes | Re-evaluate local trust, then call the selected native endpoint directly |
+
+The operator does not run a synchronization scheduler or maintain a writable catalog. A failed build
+does not replace the deployed index. Deploy a complete new index and restart the process when the
+change is intentional.
+
+{/* Tier-C evidence: `products/discovery/README.md` defines check, explicit build, deployment, and restart
+    as the maintenance loop. `crates/registry-discoveryctl/tests/build.rs`, test
+    `failed_origin_fetch_leaves_the_previous_output_untouched`, proves atomic replacement.
+    `crates/registry-discovery/src/startup.rs`, test
+    `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`, defines the
+    runtime configuration boundary. `crates/registry-discovery-client/tests/native_journey.rs`, test
+    `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`, proves the
+    adopter-owned native trust handoff. Maintainer reviewed and accepted this maintenance-boundary
+    claim on 2026-08-14. */}
+
+## Clean up the local services
+
+The runner stops Discovery and the publication server and removes the temporary project on success,
+failure, or `Ctrl+C`. The compiled binaries remain under `target/discovery-tutorial-source` so a
+second run can reuse them. The runner's final cleanup line confirms that neither loopback service
+remains active.
+
+## What you built
+
+- The provider roles supplied two deterministic public descriptions.
+- The operator checked explicit origins and mappings offline, built one immutable index, started
+  Discovery, and waited for `{"status":"ready"}`.
+- The consumer resolved one Evidence requirement and made exact Evidence and Relay selections.
+- The verifier applied adopter-owned native trust and used the existing clients without routing
+  credentials, native requests, or responses through Discovery.
+
+## Next
+
+- [Build and run a Registry Discovery index](../../configure/discovery/) with your approved HTTPS
+  origins, deployment directory, and runtime limits.
+- [Registry Discovery is an index](../../explanation/discovery-as-an-index/) explains why trust and
+  invocation stay in the native products.
+- [Request Evidence from an application](../request-evidence-from-an-application/) shows the native
+  Evidence relying-party workflow.
+- [Publish a governed SQLite registry](../publish-governed-sqlite-registry/) shows the native Relay
+  publication and request workflow.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The publication server or Discovery stops before readiness | Port `38090` or `38080` is already in use | Stop the process using the port, then run the tutorial again |
+| Cargo cannot resolve dependencies | The clean checkout has not acquired the locked Rust dependencies | Restore network access to the Cargo registry or provide a populated Cargo cache |
+| A publication digest differs | The provider bytes do not match the tutorial's reviewed fixture | Restore the clean checkout or review the changed publication before indexing it |
+| Native handoff is refused | The selected binding does not match the adopter-owned product trust record | Keep the selection inert, correct the local trust decision, and retry the native handoff |
+
+{/* Tier-C evidence: `crates/registry-discovery-client/tests/native_journey.rs`, test
+    `complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively`, proves the trust
+    refusal occurs before credential construction and provider traffic. Maintainer reviewed and
+    accepted this trust-boundary claim on 2026-08-14. */}

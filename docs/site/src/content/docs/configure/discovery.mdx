@@ -1,0 +1,253 @@
+---
+title: Build and run a Registry Discovery index
+description: Build a bounded Registry Discovery index from approved provider descriptions and run its read-only service.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-14"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - json-ld
+  - shacl
+---
+
+Use this guide when you operate a Registry Discovery catalog for known Evidence Gateway and
+Registry Relay providers. You maintain provider URLs and evidence-type mappings, build one immutable
+index on demand, then restart the read-only service with that index.
+
+{/* Evidence: products/discovery/README.md describes the operator flow as offline `check`, one
+    explicit `build`, immutable-index deployment, then restart. `crates/registry-discoveryctl/src/lib.rs`
+    exposes only `check` and `build`; `crates/registry-discovery/src/server.rs` fixes the public routes. */}
+
+## When to use this
+
+Use Registry Discovery to curate public advertisements from providers your catalog operator has
+already chosen to index. It is useful when an application must find an Evidence Gateway by evidence
+type, or a Registry Relay by its public semantics, before it performs its normal product-specific
+connection.
+
+{/* Evidence: `crates/registry-discovery/src/query.rs` matches Evidence type, Relay semantic-class,
+    and Relay operation-family filters. `products/discovery/ACCEPTANCE-JOURNEYS.md` defines direct
+    native Evidence and Relay invocation after exact selection. */}
+
+## Before you start
+
+You need these inputs:
+
+- A provider-supplied public description URL, such as
+  `https://<provider-host>/catalog.jsonld`. Record the URL out of band with the provider.
+- A local directory for the catalog project and a separate deployment directory for the index and
+  runtime file.
+- The `discoveryctl` and `discovery` binaries.
+
+The provider description uses the closed Registry Discovery JSON-LD profile. The profile is a
+selected alignment with Data Catalog Vocabulary (DCAT) 3, DCAT-AP 3.0.1, and BRegDCAT-AP terms.
+It does not claim complete DCAT-AP or BRegDCAT-AP conformance.
+
+{/* Evidence: `crates/registry-discoveryctl/src/project.rs` accepts explicit `catalogUrl` values in
+    `origins.yaml`; `products/discovery/DECISIONS.md`, ADR-002 and
+    `products/discovery/contracts/standards-profile.yaml` pin the profile and selected standards
+    subset. */}
+
+## Add the approved provider URLs
+
+Create `<discovery-project>/origins.yaml`. Each enabled origin is fetched only during a build.
+
+```yaml
+schemaVersion: registry-discovery/origins/v1alpha1
+origins:
+  - originId: evidence-provider
+    catalogUrl: https://<provider-host>/catalog.jsonld
+    profile: registry-discovery-v1alpha1
+    enabled: true
+```
+
+Use a unique `originId` for each approved URL. Production origins use HTTPS. The
+`--allow-loopback` option exists only for a local development origin.
+
+{/* Evidence: `crates/registry-discoveryctl/src/project.rs`, `check_project()` validates the closed
+    origin shape, profile identifier, unique origin IDs and URLs, and HTTPS policy; its test
+    `loopback_http_requires_the_explicit_development_switch` covers the development exception. */}
+
+## Add evidence-type mappings
+
+Create `<discovery-project>/mappings/adult-status.yaml` for each requirement that needs
+evidence-type resolution. A mapping can offer alternatives, but every ID in one alternative is
+required together.
+
+```yaml
+schemaVersion: registry-discovery/evidence-mapping/v1alpha1
+mappingId: urn:example:mapping:adult-status
+mappingAuthorityId: urn:example:authority
+requirementId: urn:example:requirement:adult-status
+jurisdiction: urn:example:jurisdiction
+alternatives:
+  - evidenceTypeListId: urn:example:list:adult-status
+    evidenceTypeIds:
+      - urn:example:evidence-type:adult-status
+```
+
+`jurisdiction` is optional. Use the same exact identifier in a resolve request when your mapping
+declares one.
+
+{/* Evidence: `crates/registry-discoveryctl/src/project.rs`, `AuthoredEvidenceMapping` and
+    `AuthoredEvidenceTypeAlternative`, define the closed mapping fields. `crates/registry-discovery/src/query.rs`,
+    `resolver_preserves_and_within_lists_or_across_alternatives_and_refuses_over_bound`, proves
+    conjunction within an alternative and alternatives across the response. */}
+
+## Check the authoring project
+
+Run the offline check before any build.
+
+```sh
+discoveryctl check --project "<discovery-project>"
+```
+
+Expected output reports the validated origin and mapping counts:
+
+```text
+valid origins=1 mappings=1
+```
+
+The check reads the two authoring inputs but does not contact the provider URL.
+
+{/* Evidence: `crates/registry-discoveryctl/src/lib.rs`, `Command::Check`, prints this output.
+    `crates/registry-discoveryctl/src/project.rs`, test
+    `check_is_offline_and_accepts_an_unreachable_https_origin`, proves that validation is offline. */}
+
+## Build one bounded index
+
+Build into the deployment directory when the approved provider descriptions are available.
+
+```sh
+discoveryctl build \
+  --project "<discovery-project>" \
+  --output "<deployment-directory>/discovery-index.json"
+```
+
+Expected output reports independent semantic revisions:
+
+```text
+built catalogRevision=sha256:<64-lowercase-hex-digits> mappingRevision=sha256:<64-lowercase-hex-digits>
+```
+
+The build fetches every enabled origin once, records the exact fetched-byte digest and fetch time,
+and replaces the output only after the complete index validates. Run it again only when you intend
+to publish a new index revision.
+
+{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `fetch_origins()` and `atomic_replace()`;
+    `crates/registry-discoveryctl/tests/build.rs`,
+    `build_fetches_each_origin_once_and_preserves_semantic_revisions` and
+    `failed_origin_fetch_leaves_the_previous_output_untouched`. */}
+
+## Deploy and restart the service
+
+Place this `runtime.yaml` beside `discovery-index.json` in the deployment directory.
+
+```yaml
+schemaVersion: registry-discovery/runtime/v1alpha1
+listener:
+  address: 127.0.0.1:8080
+indexPath: discovery-index.json
+limits:
+  maximumRequestBytes: 65536
+  maximumResponseBytes: 1048576
+  maximumResultRecords: 100
+  maximumResultAlternatives: 100
+  requestTimeoutSeconds: 10
+  shutdownTimeoutSeconds: 10
+logLevel: info
+```
+
+Start the new revision after replacing the runtime directory contents.
+
+```sh
+discovery --runtime "<deployment-directory>/runtime.yaml"
+```
+
+The process remains running and serves the index named by the relative `indexPath`. Verify readiness
+from a network location that can reach the listener.
+
+```sh
+curl --fail-with-body "http://127.0.0.1:8080/ready"
+```
+
+```json
+{"status":"ready"}
+```
+
+The runtime accepts only its listener, relative index path, limits, and log level. It does not carry
+provider credentials, origin-fetch configuration, mappings, or application trust configuration.
+
+{/* Evidence: `crates/registry-discovery/src/startup.rs`, `RuntimeConfig`, `load_runtime()`, and
+    test `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`;
+    `crates/registry-discovery/src/server.rs`, `READY_ROUTE`. */}
+
+## Verify resolution and exact search
+
+Resolve an application requirement to its evidence-type alternatives.
+
+```sh
+curl --fail-with-body \
+  -H 'Content-Type: application/json' \
+  --data '{"requirementId":"urn:example:requirement:adult-status","jurisdiction":"urn:example:jurisdiction"}' \
+  "http://127.0.0.1:8080/v1/evidence-types/resolve"
+```
+
+The response contains `mappingRevision` and the configured alternative with its mapping authority.
+
+```json
+{"requirementId":"urn:example:requirement:adult-status","jurisdiction":"urn:example:jurisdiction","mappingRevision":"sha256:<64-lowercase-hex-digits>","alternatives":[{"evidenceTypeListId":"urn:example:list:adult-status","evidenceTypeIds":["urn:example:evidence-type:adult-status"],"mappingId":"urn:example:mapping:adult-status","mappingAuthorityId":"urn:example:authority"}]}
+```
+
+Search the catalog for a public Evidence Gateway advertisement. Copy the selected `recordId`,
+`endpointUrl`, and origin provenance from the result into your application selection record.
+
+```sh
+curl --fail-with-body --get \
+  --data-urlencode 'serviceKind=evidence' \
+  --data-urlencode 'evidenceType=urn:example:evidence-type:adult-status' \
+  "http://127.0.0.1:8080/v1/services"
+```
+
+The response has a `catalogRevision` and an `items` array. Each item carries the provider endpoint,
+its advertised capability IDs, and the origin URL, content digest, and fetch time.
+
+For Registry Relay, use `serviceKind=relay` and one or both of `semanticClass` and
+`operationFamily` as repeated query filters. A protected-only Relay can advertise neither public
+semantic class nor operation family.
+
+{/* Evidence: `crates/registry-discovery/openapi.json` defines both calls and the query fields.
+    `crates/registry-discovery/tests/http_journey.rs`,
+    `immutable_index_supports_resolution_and_exact_service_search`, exercises these exact request
+    shapes. `crates/registry-discovery/src/model.rs`, `ServiceRecord`, defines provenance fields.
+    `products/discovery/ACCEPTANCE-JOURNEYS.md` records the protected-only Relay case. */}
+
+## Hand off to native product trust
+
+Discovery selection is metadata only. Before an application creates a native request, use its own
+Evidence Gateway or Registry Relay trust configuration to accept or reject the selected provider,
+then invoke the selected `endpointUrl` directly with that product's native client. Do not send
+credentials or native request data to Registry Discovery.
+
+{/* Evidence: `crates/registry-discovery-client/src/selection.rs`,
+    `discovery_metadata_has_no_trust_or_native_io_capability`, proves that a selection excludes
+    trust anchors, credentials, native request data, and responses. `products/discovery/DECISIONS.md`,
+    ADR-001, assigns provider trust and invocation to the native product. */}
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `discoveryctl check` fails | The origins or mapping document is not in the closed authoring shape. | Correct the schema version, identifiers, and duplicate values, then run the offline check again. |
+| `discoveryctl build` fails | An enabled provider URL could not be fetched safely or did not return the exact profile media type. | Confirm the URL with the provider and its public description deployment. Keep the previous index running until a complete build succeeds. |
+| A search returns no items | The index contains no advertisement that matches every supplied filter. | Inspect the advertised capability IDs and use a narrower or correct filter set. |
+| Native connection is refused | The application did not accept the selected provider under its local product trust configuration. | Resolve the native Evidence Gateway or Registry Relay trust decision before retrying the direct connection. |
+
+{/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `BuildError`; `crates/registry-discovery/src/query.rs`,
+    `service_matches_filters`; `crates/registry-discovery-client/src/selection.rs`, exact selection
+    errors and no-native-I/O test. */}
