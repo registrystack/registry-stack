@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repository_root=$(cd "$script_dir/../../.." && pwd)
 oracle_project="$repository_root/products/discovery/standards-oracle"
+cd "$repository_root"
 export UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$repository_root/target/discovery-standards-oracle-venv}"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_contract_artifacts.py"
 PYTHONDONTWRITEBYTECODE=1 python3 "$script_dir/validate_profile_rdf.py" --check

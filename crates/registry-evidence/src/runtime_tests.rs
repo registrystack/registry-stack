@@ -1210,6 +1210,15 @@ async fn provider_discovery_description_serves_exact_bytes_without_authenticatio
     assert_eq!(response.as_bytes(), expected);
     registry_discovery_profile::parse_description(response.as_bytes())
         .expect("served bytes satisfy the shared profile");
+
+    let rejected_head = http
+        .method(axum::http::Method::HEAD, "/catalog.jsonld")
+        .await;
+    assert_eq!(
+        rejected_head.status_code(),
+        ProblemCode::ResourceNotFound.status()
+    );
+    assert!(rejected_head.as_bytes().is_empty());
     assert!(fixture
         .server
         .received_requests()

@@ -156,7 +156,10 @@ fn build_app_with_tracker_at(
         .route(EVIDENCE_ROUTE, post(create_evidence))
         .route(EVIDENCE_BATCH_ROUTE, post(create_evidence_batch))
         .route(DEFINITIONS_ROUTE, get(discover_evidence))
-        .route(DISCOVERY_ROUTE, get(discovery_description))
+        .route(
+            DISCOVERY_ROUTE,
+            get(discovery_description).head(unknown_route),
+        )
         .route(HEALTH_ROUTE, get(health))
         .route(OPENAPI_ROUTE, get(openapi))
         .route(READY_ROUTE, get(ready))

@@ -3,6 +3,8 @@ members = [
     "crates/registry-cli-docs",
     "crates/registry-discovery",
     "crates/registry-discovery-client",
+    "crates/registry-discovery-client-node",
+    "crates/registry-discovery-client-py",
     "crates/registry-discovery-profile",
     "crates/registry-discoveryctl",
     "crates/registry-evidence",
@@ -56,6 +58,8 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 registry-discovery = { path = "crates/registry-discovery", version = "0.22.0", default-features = false }
 registry-discovery-client = { path = "crates/registry-discovery-client", version = "0.22.0" }
+registry-discovery-client-node = { path = "crates/registry-discovery-client-node", version = "0.22.0" }
+registry-discovery-client-py = { path = "crates/registry-discovery-client-py", version = "0.22.0" }
 registry-discovery-profile = { path = "crates/registry-discovery-profile", version = "0.22.0" }
 registry-discoveryctl = { path = "crates/registry-discoveryctl", version = "0.22.0" }
 registry-evidence = { path = "crates/registry-evidence", version = "0.22.0" }

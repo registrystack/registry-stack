@@ -105,6 +105,54 @@ metadata only. It cannot carry a trust anchor, credential, request, or response 
     `discovery_metadata_has_no_trust_or_native_io_capability`; `products/discovery/DECISIONS.md`,
     ADR-001. */}
 
+## The same client workflow in Rust, Node.js, and Python
+
+The maintained clients expose the same three steps in each language: resolve an Evidence requirement
+when needed, search with exact filters, then convert one exact record into a serializable selection.
+Node.js applications use `@registrystack/discovery-client`; Python applications use
+`registry-discovery-client`; Rust applications use `registry-discovery-client`.
+
+```js
+const { DiscoveryClient } = require('@registrystack/discovery-client');
+
+const discovery = new DiscoveryClient('https://discovery.example/');
+const results = await discovery.searchServices({
+  serviceKind: ['evidence'],
+  evidenceType: ['urn:example:evidence-type'],
+});
+const selection = discovery.selectExact(results, {
+  recordId: results.items[0].recordId,
+  matchedCapability: { kind: 'evidence-type', id: 'urn:example:evidence-type' },
+});
+```
+
+```python
+from registry_discovery_client import DiscoveryClient
+
+discovery = DiscoveryClient("https://discovery.example/")
+results = discovery.search_services({
+    "serviceKind": ["relay"],
+    "semanticClass": ["urn:example:registered-business"],
+})
+selection = discovery.select_exact(results, {
+    "recordId": results["items"][0]["recordId"],
+    "matchedCapability": {
+        "kind": "semantic-class",
+        "id": "urn:example:registered-business",
+    },
+})
+```
+
+The libraries validate the server response and exact capability match before returning the selection.
+They deliberately do not decide whether the selected origin, issuer, operator, endpoint, or capability
+is trusted. Keep that decision in the application's native Evidence or Relay trust configuration.
+
+{/* Evidence: `crates/registry-discovery-client-node/src/lib.rs` and
+    `crates/registry-discovery-client-py/src/lib.rs` are thin bindings over
+    `registry-discovery-client`. Their language-level loopback tests exercise search, resolution,
+    exact selection, and serialized selection persistence. `crates/registry-discovery-client/src/selection.rs`,
+    test `discovery_metadata_has_no_trust_or_native_io_capability`, binds the shared trust boundary. */}
+
 ## Why the split reduces maintenance
 
 The provider maintains one public description URL. The catalog operator maintains a small explicit

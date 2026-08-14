@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and reconcile Evidence and Relay client registry packages."""
+"""Validate and reconcile Discovery, Evidence, and Relay client packages."""
 
 from __future__ import annotations
 
@@ -27,6 +27,13 @@ class ClientDefinition(NamedTuple):
 
 
 CLIENTS = {
+    "discovery": ClientDefinition(
+        npm_root_package="@registrystack/discovery-client",
+        npm_tarball_stem="registrystack-discovery-client",
+        native_binary_stem="discovery-client",
+        pypi_project="registry-discovery-client",
+        wheel_stem="registry_discovery_client",
+    ),
     "evidence": ClientDefinition(
         npm_root_package="@registrystack/evidence-client",
         npm_tarball_stem="registrystack-evidence-client",

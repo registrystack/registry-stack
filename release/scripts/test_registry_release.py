@@ -2046,6 +2046,9 @@ def write_manifest(
         artifacts["registry-docs"] = version
         artifacts["relay-client-node"] = version
         artifacts["relay-client-python"] = version
+    if version_tuple >= (0, 22, 0):
+        artifacts["discovery-client-node"] = version
+        artifacts["discovery-client-python"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

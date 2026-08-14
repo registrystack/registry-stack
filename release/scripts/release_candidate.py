@@ -44,6 +44,7 @@ OFFICIAL_RUNTIME_IMAGE_MINIMUM_VERSION = (0, 21, 0)
 HISTORICAL_RUNTIME_IMAGE_NAMES = {"relay"}
 OFFICIAL_RUNTIME_IMAGE_NAMES = {"evidence", "mint", "relay"}
 CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION = (0, 21, 1)
+DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 22, 0)
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -187,6 +188,18 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
                 inventory[
                     f"registrystack-{client}-client-{platform}-{version}.tgz"
                 ] = "client-package"
+    if version_tuple >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
+        for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):
+            inventory[f"discovery-client-node-{tag}-{platform}.tgz"] = "client-package"
+        for platform in wheel_platforms:
+            inventory[
+                f"registry_discovery_client-{version}-cp310-abi3-{platform}.whl"
+            ] = "client-package"
+        inventory[f"registrystack-discovery-client-{version}.tgz"] = "client-package"
+        for platform in ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu"):
+            inventory[
+                f"registrystack-discovery-client-{platform}-{version}.tgz"
+            ] = "client-package"
     return inventory
 
 

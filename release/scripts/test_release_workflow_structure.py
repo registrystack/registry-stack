@@ -685,7 +685,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         for name in ("Smoke Python client wheels", "Smoke Node client packages"):
             smoke = step_run(document, "clients", name)
             self.assertIn("smoke-${client}-client-package", smoke)
-            self.assertIn("for client in evidence relay", smoke)
+            self.assertIn("for client in discovery evidence relay", smoke)
         node_smoke = step_run(document, "clients", "Smoke Node client packages")
         self.assertIn("node-root-${client}", node_smoke)
         self.assertIn("root_package", node_smoke)
@@ -697,6 +697,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertRegex(baseline, r"^node:22\.12\.0-bullseye-slim@sha256:[0-9a-f]{64}$")
         self.assertIn("-maxdepth 1 -name '*.node'", node_smoke)
         self.assertIn("node_modules/@registrystack/${client}-client-", node_smoke)
+        self.assertIn(
+            "crates/registry-discovery-client-node/package-lock.json",
+            str(clients),
+        )
         self.assertIn(
             "crates/registry-evidence-client-node/package-lock.json",
             str(clients),
@@ -718,12 +722,18 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("include_relay_clients=1", assemble)
         self.assertIn("expected_client_assets=4", assemble)
         self.assertIn("expected_client_assets=6", assemble)
+        self.assertIn("expected_client_assets=9", assemble)
         self.assertIn("relay-client-node-", assemble)
+        self.assertIn("discovery-client-node-", assemble)
         self.assertIn("registrystack-${client}-client-${version}.tgz", assemble)
-        self.assertIn("for client in evidence relay", assemble)
+        self.assertIn("for client in discovery evidence relay", assemble)
         self.assertIn("client_registry.py validate-dist", assemble)
         self.assertIn("registry_relay_client-", assemble)
+        self.assertIn("registry_discovery_client-", assemble)
         self.assertIn("kind=client-package", text)
+        self.assertIn("discovery-client-node-*.tgz", text)
+        self.assertIn("registrystack-discovery-client-*.tgz", text)
+        self.assertIn("registry_discovery_client-*.whl", text)
         self.assertIn("registrystack-evidence-client-*.tgz", text)
         self.assertIn("registrystack-relay-client-*.tgz", text)
         for forbidden in ("npm publish", "maturin publish", "twine upload"):
@@ -1109,12 +1119,13 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             )
             self.assertEqual(
                 job["strategy"]["matrix"]["client"],
-                ["evidence", "relay"],
+                ["discovery", "evidence", "relay"],
             )
         self.assertEqual(pypi["environment"], "${{ matrix.environment }}")
         self.assertEqual(
             pypi["strategy"]["matrix"]["include"],
             [
+                {"client": "discovery", "environment": "pypi"},
                 {"client": "evidence", "environment": "pypi-evidence"},
                 {"client": "relay", "environment": "pypi"},
             ],

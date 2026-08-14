@@ -74,19 +74,20 @@ not part of later releases.
 
 ### Provision client registries
 
-Registry Stack v0.22.0 and later promote the exact candidate Evidence and Relay client
-packages to npm and PyPI before the GitHub Release becomes public. The two
-publication jobs use GitHub-hosted runners and OpenID Connect trusted
-publishing. Do not add npm or PyPI write tokens to the repository.
+Registry Stack v0.22.0 and later promote the exact candidate Discovery,
+Evidence, and Relay client packages to npm and PyPI before the GitHub Release
+becomes public. The npm and PyPI publication jobs use GitHub-hosted runners and
+OpenID Connect trusted publishing. Do not add npm or PyPI write tokens to the
+repository.
 
-On PyPI, register pending trusted publishers for `registry-evidence-client`
-and `registry-relay-client` with these exact values before requesting the first
-candidate:
+On PyPI, register pending trusted publishers for `registry-discovery-client`,
+`registry-evidence-client`, and `registry-relay-client` with these exact values
+before requesting the first candidate:
 
 - Owner: `registrystack`
 - Repository: `registry-stack`
 - Workflow: `release.yml`
-- Environment: `pypi` for Relay and `pypi-evidence` for Evidence
+- Environment: `pypi` for Discovery and Relay, and `pypi-evidence` for Evidence
 
 Configure the `pypi` and `pypi-evidence` GitHub environments with required
 reviewers. PyPI creates each project when its first trusted publication
@@ -96,11 +97,12 @@ npm does not provide a pending trusted publisher for an uncreated package.
 The first Registry Stack release that publishes to npm therefore has a
 one-time bootstrap:
 
-1. Create inert `0.0.0` root and platform packages for both
-   `@registrystack/evidence-client` and `@registrystack/relay-client`. Each
-   client has `darwin-arm64`, `linux-arm64-gnu`, and `linux-x64-gnu` platform
-   packages. Give every bootstrap package only a README, `package.json`, and
-   Apache-2.0 license. Do not include executable code.
+1. Create inert `0.0.0` root and platform packages for
+   `@registrystack/discovery-client`, `@registrystack/evidence-client`, and
+   `@registrystack/relay-client`. Each client has `darwin-arm64`,
+   `linux-arm64-gnu`, and `linux-x64-gnu` platform packages. Give every
+   bootstrap package only a README, `package.json`, and Apache-2.0 license. Do
+   not include executable code.
 2. Publish each package with `npm publish --access public --tag bootstrap` and
    a maintainer's two-factor authentication. Verify the resulting tags. npm
    can initialize `latest` when the first package version is created, even

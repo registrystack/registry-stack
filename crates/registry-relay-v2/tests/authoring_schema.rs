@@ -50,3 +50,30 @@ fn registry_schema_rejects_a_key_the_strict_type_rejects() {
 
     assert!(!validator.is_valid(&instance));
 }
+
+#[test]
+fn registry_schema_enforces_the_publication_jurisdiction_bound() {
+    let documents = documents().unwrap();
+    let validator = validator(documents.get(REGISTRY_SCHEMA_FILE).unwrap());
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/relay-v2/acceptance/social-assistance/registry.yaml");
+    let mut instance: Value = serde_norway::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    let jurisdictions = |count| {
+        Value::Array(
+            (0..count)
+                .map(|index| Value::String(format!("https://example.invalid/{index:03}")))
+                .collect(),
+        )
+    };
+
+    instance["publication"] = serde_json::json!({
+        "jurisdictions": jurisdictions(
+            registry_discovery_profile::MAX_IDENTIFIER_VALUES
+        )
+    });
+    assert!(validator.is_valid(&instance));
+
+    instance["publication"]["jurisdictions"] =
+        jurisdictions(registry_discovery_profile::MAX_IDENTIFIER_VALUES + 1);
+    assert!(!validator.is_valid(&instance));
+}

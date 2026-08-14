@@ -173,6 +173,9 @@ pub struct RegistryContract {
     pub metadata_visibility: MetadataVisibility,
 }
 
+pub const MAXIMUM_PUBLICATION_JURISDICTIONS: usize =
+    registry_discovery_profile::MAX_IDENTIFIER_VALUES;
+
 /// Public facts the Registry author explicitly elects to publish for
 /// discovery. All other description fields are derived from already governed
 /// Registry identity, service, role, and operation contracts.
@@ -180,6 +183,10 @@ pub struct RegistryContract {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Publication {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAXIMUM_PUBLICATION_JURISDICTIONS))
+    )]
     pub jurisdictions: Vec<String>,
 }
 

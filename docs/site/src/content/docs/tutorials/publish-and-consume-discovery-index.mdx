@@ -155,7 +155,9 @@ Registry Discovery adopter tutorial: PASS
 
 The consumer first resolves the requirement, searches the resolved Evidence type, and records one
 exact `recordId`. It separately searches one Relay semantic class and operation family and records
-one exact Relay result. The saved records contain public metadata and revision provenance only.
+one exact Relay result. The saved records contain public metadata and revision provenance only. Rust,
+Node.js, and Python applications can perform the same resolve, search, and exact-selection workflow
+through their maintained Discovery client binding.
 
 The final two handoff checks repeat the exact-selection boundary against publications derived by the
 native products. The adopter's existing Evidence and Relay trust configurations must accept a saved

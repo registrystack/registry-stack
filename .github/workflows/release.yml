@@ -1176,7 +1176,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        client: [evidence, relay]
+        client: [discovery, evidence, relay]
     permissions:
       actions: read
       contents: read
@@ -1296,6 +1296,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - client: discovery
+            environment: pypi
           - client: evidence
             environment: pypi-evidence
           - client: relay

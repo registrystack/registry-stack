@@ -465,6 +465,7 @@ jobs:
           node-version: 22.20.0
           cache: npm
           cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
 
@@ -475,7 +476,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json') }}
+          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json') }}
           restore-keys: |
             registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
 
@@ -491,7 +492,12 @@ jobs:
           export PATH="${RUNNER_TEMP}/maturin/bin:${PATH}"
           wheel_dir="${GITHUB_WORKSPACE}/candidate-client-package/clients"
           mkdir -p "${wheel_dir}"
-          for client in evidence relay; do
+          IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
+          for client in discovery evidence relay; do
+            if [[ "${client}" == discovery ]] &&
+                (( client_major == 0 && client_minor < 22 )); then
+              continue
+            fi
             if [[ "${client}" == relay ]] &&
                 [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
               continue
@@ -533,13 +539,21 @@ jobs:
               [[ "${CLIENT_VERSION}" != "0.19.0" ]]; then
             expected_wheels=2
           fi
+          if (( client_major > 0 || client_minor >= 22 )); then
+            expected_wheels=3
+          fi
           test "$(find "${wheel_dir}" -maxdepth 1 -name '*.whl' | wc -l)" -eq "${expected_wheels}"
 
       - name: Smoke Python client wheels
         shell: bash
         run: |
           set -euo pipefail
-          for client in evidence relay; do
+          IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
+          for client in discovery evidence relay; do
+            if [[ "${client}" == discovery ]] &&
+                (( client_major == 0 && client_minor < 22 )); then
+              continue
+            fi
             if [[ "${client}" == relay ]] &&
                 [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
               continue
@@ -564,7 +578,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in evidence relay; do
+          IFS=. read -r client_major client_minor _client_patch <<<"${CLIENT_VERSION}"
+          for client in discovery evidence relay; do
+            if [[ "${client}" == discovery ]] &&
+                (( client_major == 0 && client_minor < 22 )); then
+              continue
+            fi
             if [[ "${client}" == relay ]] &&
                 [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
               continue
@@ -614,7 +633,11 @@ jobs:
         run: |
           set -euo pipefail
           IFS=. read -r major minor _patch <<<"${CLIENT_VERSION}"
-          for client in evidence relay; do
+          for client in discovery evidence relay; do
+            if [[ "${client}" == discovery ]] &&
+                (( major == 0 && minor < 22 )); then
+              continue
+            fi
             if [[ "${client}" == relay ]] &&
                 [[ "${CLIENT_VERSION}" =~ ^0\.([0-9]|1[0-8])\. || "${CLIENT_VERSION}" == "0.19.0" ]]; then
               continue
@@ -708,6 +731,7 @@ jobs:
           node-version: 22.12.0
           cache: npm
           cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
 
@@ -1012,6 +1036,12 @@ jobs:
           )); then
             include_registry_packages=1
           fi
+          include_discovery_clients=0
+          if ((
+            client_major > 0 || client_minor >= 22
+          )); then
+            include_discovery_clients=1
+          fi
           for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
             client_root="inputs/candidate-clients-${platform}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/clients"
             expected_client_assets=2
@@ -1021,11 +1051,18 @@ jobs:
             if [[ "${include_registry_packages}" -eq 1 ]]; then
               expected_client_assets=6
             fi
+            if [[ "${include_discovery_clients}" -eq 1 ]]; then
+              expected_client_assets=9
+            fi
             test "$(find "${client_root}" -maxdepth 1 -type f | wc -l)" -eq "${expected_client_assets}"
             cp "${client_root}"/* candidate/bundle-root/
           done
           if [[ "${include_registry_packages}" -eq 1 ]]; then
-            for client in evidence relay; do
+            for client in discovery evidence relay; do
+              if [[ "${client}" == discovery ]] &&
+                  [[ "${include_discovery_clients}" -ne 1 ]]; then
+                continue
+              fi
               node_client="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
               (cd "${node_client}" && npm ci --ignore-scripts)
               test -z "$(find "${node_client}" -maxdepth 1 -name '*.node' -print -quit)"
@@ -1063,6 +1100,20 @@ jobs:
                 done
               fi
             fi
+            if [[ "${include_discovery_clients}" -eq 1 ]]; then
+              for platform in linux-amd64-glibc linux-arm64-glibc macos-arm64; do
+                echo "discovery-client-node-${{ needs.validate.outputs.tag }}-${platform}.tgz"
+              done
+              for wheel_platform in "${wheel_platforms[@]}"; do
+                echo "registry_discovery_client-${{ needs.validate.outputs.version }}-cp310-abi3-${wheel_platform}.whl"
+              done
+              if [[ "${include_registry_packages}" -eq 1 ]]; then
+                echo "registrystack-discovery-client-${version}.tgz"
+                for platform in darwin-arm64 linux-arm64-gnu linux-x64-gnu; do
+                  echo "registrystack-discovery-client-${platform}-${version}.tgz"
+                done
+              fi
+            fi
           } | sort > "${RUNNER_TEMP}/expected-client-assets"
           find candidate/bundle-root -maxdepth 1 -type f \
             \( -name 'evidence-client-node-*.tgz' \
@@ -1070,13 +1121,20 @@ jobs:
                -o -name 'relay-client-node-*.tgz' \
                -o -name 'registrystack-evidence-client-*.tgz' \
                -o -name 'registrystack-relay-client-*.tgz' \
-               -o -name 'registry_relay_client-*.whl' \) \
+               -o -name 'registry_relay_client-*.whl' \
+               -o -name 'discovery-client-node-*.tgz' \
+               -o -name 'registrystack-discovery-client-*.tgz' \
+               -o -name 'registry_discovery_client-*.whl' \) \
             -printf '%f\n' | sort > "${RUNNER_TEMP}/actual-client-assets"
           diff -u \
             "${RUNNER_TEMP}/expected-client-assets" \
             "${RUNNER_TEMP}/actual-client-assets"
           if [[ "${include_registry_packages}" -eq 1 ]]; then
-            for client in evidence relay; do
+            for client in discovery evidence relay; do
+              if [[ "${client}" == discovery ]] &&
+                  [[ "${include_discovery_clients}" -ne 1 ]]; then
+                continue
+              fi
               python3 release/scripts/client_registry.py validate-dist \
                 --directory candidate/bundle-root \
                 --version "${version}" \
@@ -1197,7 +1255,7 @@ jobs:
                     *.sbom.spdx.json) kind=sbom ;;
                     *-security-evidence.tar.gz) kind=security-evidence ;;
                     *-install.sh) kind=installer ;;
-                    evidence-client-node-*.tgz|registry_evidence_client-*.whl|relay-client-node-*.tgz|registrystack-evidence-client-*.tgz|registrystack-relay-client-*.tgz|registry_relay_client-*.whl) kind=client-package ;;
+                    discovery-client-node-*.tgz|evidence-client-node-*.tgz|relay-client-node-*.tgz|registrystack-discovery-client-*.tgz|registrystack-evidence-client-*.tgz|registrystack-relay-client-*.tgz|registry_discovery_client-*.whl|registry_evidence_client-*.whl|registry_relay_client-*.whl) kind=client-package ;;
                     *) kind=binary ;;
                   esac
                   jq -n \

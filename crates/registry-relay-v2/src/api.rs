@@ -383,7 +383,9 @@ pub async fn artifact(
         .artifacts
         .iter()
         .find(|item| item.id == artifact_identifier);
-    if let Some(artifact) = artifact.filter(|item| item.visibility == Visibility::Public) {
+    if let Some(artifact) = artifact
+        .filter(|item| item.id == "discovery-description" && item.visibility == Visibility::Public)
+    {
         return static_bytes_response(
             &artifact.content,
             &artifact.media_type,

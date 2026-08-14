@@ -156,13 +156,13 @@ private-candidate recovery and evidence-regeneration procedure for a failed gate
 
 ## Verify client registries
 
-Registry Stack v0.22.0 and later publish the checksum-covered Evidence and Relay client
-packages to npm and PyPI. With the release assets still in the current
+Registry Stack v0.22.0 and later publish the checksum-covered Discovery, Evidence,
+and Relay client packages to npm and PyPI. With the release assets still in the current
 directory, compare every registry version with its release tarball or wheel:
 
 ```sh
 version="${tag#v}"
-for client in evidence relay; do
+for client in discovery evidence relay; do
   for tarball in \
     "registrystack-${client}-client-darwin-arm64-${version}.tgz" \
     "registrystack-${client}-client-linux-arm64-gnu-${version}.tgz" \

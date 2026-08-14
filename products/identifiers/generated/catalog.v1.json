@@ -745,11 +745,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "6b006f8add281fc1677aed87de2d0e686ffcb84d32f8d1ced61b59a54abb2e42"
+        "sha256": "d7a3d7b6dc9c1904fc067f0779c941ff247b26feb3a62f8d391b04f463c5a2ca"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "6b006f8add281fc1677aed87de2d0e686ffcb84d32f8d1ced61b59a54abb2e42",
+        "sha256": "d7a3d7b6dc9c1904fc067f0779c941ff247b26feb3a62f8d391b04f463c5a2ca",
         "mediaType": "application/schema+json"
       }
     },

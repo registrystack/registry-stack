@@ -19,7 +19,10 @@ Evidence or Relay trust and invokes the selected provider directly.
 - Bounded approved-origin build and immutable index.
 - Health, readiness, OpenAPI, exact service search, and evidence-type
   resolution only.
-- Rust client selection data with no native invocation or trust ownership.
+- Rust, Node.js, and Python clients for bounded search, resolution, and inert
+  exact selection, with no native invocation or trust ownership.
+- Checksum-covered Node.js and Python release artifacts with installed-package
+  smoke tests and exact npm/PyPI promotion from candidate bytes.
 - Aggregate query, response-media, URL, method, shutdown, and blocking-work
   limits enforced consistently across the server, client, schemas, and
   generated OpenAPI.
@@ -32,8 +35,7 @@ Evidence or Relay trust and invokes the selected provider directly.
   ranking, keyword search, pagination, aggregate catalog, or native proxy.
 - No Discovery trust-store schema, credentials, authorization policy,
   provider routing, registration workflow, or Evidence procedure.
-- No Python or Node bindings, release installer, OCI image, or independent
-  distribution in this change.
+- No Discovery runtime installer or OCI image in this change.
 
 ## Refactor record
 
@@ -62,6 +64,8 @@ changes remain an explicit build-and-restart operation.
 - Provider description routes serve only the packaged bytes without
   authentication, source access, signing, or audit work. Relay tests prove
   even a malformed bearer cannot turn that public route into authentication.
+  The Relay exception is scoped to `discovery-description`; a regression test
+  preserves supplied-bearer authentication for every other public artifact.
 - The build owns exact approved HTTPS target, redirect, proxy, private-network,
   resource-bound, provenance, and atomic-write controls.
 - Discovery output cannot create native trust or cause credentials or provider
@@ -99,6 +103,8 @@ Security traceability: `products/discovery/contracts/security-invariant-matrix.y
 [x] products/relay-v2/scripts/test-http.sh
 [x] products/identifiers/scripts/check.sh
 [x] Evidence and Relay Node clients: npm ci, build:debug, test, check:types
+[x] Discovery Node and Python clients: build, tests, generated types, installed-package smokes
+[x] Registry release plan, candidate inventory, and client-package promotion tests
 [x] python3 .github/scripts/test_ci_changes.py
 [x] cd docs/site && npm test
 [x] cd docs/site && npm run check

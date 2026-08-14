@@ -99,6 +99,8 @@ class ClientRegistryTest(unittest.TestCase):
 
     def test_validates_both_clients_independently(self) -> None:
         self._write_distribution("evidence")
+        self._write_distribution("discovery")
+        self.module.validate_distribution(self.directory, self.version, "discovery")
         self.module.validate_distribution(self.directory, self.version, "evidence")
         self.module.validate_distribution(self.directory, self.version, "relay")
 

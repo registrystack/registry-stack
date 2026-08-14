@@ -1,0 +1,33 @@
+[package]
+name = "registry-discovery-client-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Python binding for the Registry Discovery client, via PyO3."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lib]
+name = "registry_discovery_client"
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+discovery-client-sdk = { package = "registry-discovery-client", path = "../registry-discovery-client", version = "0.22.0" }
+pyo3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[build-dependencies]
+pyo3-build-config.workspace = true
+
+[dev-dependencies]
+pyo3 = { workspace = true, features = ["auto-initialize"] }

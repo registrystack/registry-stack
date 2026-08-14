@@ -147,7 +147,8 @@ pub struct EvidenceTypeResolveResponse {
     pub alternatives: Vec<ResolvedAlternative>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct ServiceFilters {
     pub record_id: Vec<String>,
     pub service_id: Vec<String>,

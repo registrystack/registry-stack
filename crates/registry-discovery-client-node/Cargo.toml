@@ -1,0 +1,28 @@
+[package]
+name = "registry-discovery-client-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Node.js binding for the Registry Discovery client, via napi-rs."
+readme = "README.md"
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# napi-rs generates unsafe Node-API registration glue outside this crate's
+# authored source. The workspace-wide `unsafe_code = "forbid"` lint would
+# reject that generated glue, so this crate denies unsafe code directly in
+# `src/lib.rs` instead of inheriting the workspace lint table.
+
+[dependencies]
+napi.workspace = true
+napi-derive.workspace = true
+registry-discovery-client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true

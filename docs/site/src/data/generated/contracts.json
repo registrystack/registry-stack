@@ -6,8 +6,8 @@
     "status": "current-source",
     "surface": "Closed YAML grammar `relay.registrystack.org/v2alpha1` for the two documents an adopter authors: `registry.yaml` (`kind: RegistryContract`), declaring registry identity, resources, operations, access profiles, disclosure, and the closed public discovery publication; and `runtime.yaml` (`kind: RelayRuntime`), binding one deployment's package, SQLite source, authentication, audit, secrets, and listener.",
     "source_of_truth": {
-      "label": "Relay V2 contract and runtime types",
-      "url": "https://github.com/registrystack/registry-stack/blob/e126c55a98507188e6a5eece818ebf67b3e5b9ed/crates/registry-relay-v2/src/contract.rs"
+      "label": "Registry Stack contract reference",
+      "url": "/reference/contracts/"
     },
     "consumer_note": "Both documents are closed shapes: an unrecognized key is a parse failure, not an ignored field. Compatibility for recognized keys follows the release policy. The grammar is pre-1.0 and can change with a documented migration in a release note. A deployment's HTTP surface is compiled from its own `registry.yaml`, so no product-level OpenAPI document describes Relay; fetch `GET /openapi.json` from the deployment."
   },

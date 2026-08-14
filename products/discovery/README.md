@@ -14,6 +14,16 @@ The profile uses a deliberately selected DCAT 3 / DCAT-AP 3.0.1 / BRegDCAT-AP
 alignment subset. It claims neither full DCAT-AP nor BRegDCAT-AP conformance.
 The pinned versions and terms are in `contracts/standards-profile.yaml`.
 
+The relying-party SDK is available in Rust as `registry-discovery-client`, in
+Node.js as `@registrystack/discovery-client`, and in Python as
+`registry-discovery-client`. All three perform the same bounded search,
+Evidence Type resolution, and ambiguity-safe exact selection. Their saved
+selection is inert public metadata, not a trust decision or native request.
+Starting with Registry Stack v0.22.0, install the Node.js package as
+`@registrystack/discovery-client@<version>` or the Python package as
+`registry-discovery-client==<version>`, using the exact version that matches
+the deployment.
+
 Run `scripts/check-contracts.sh` to validate the resources and their
 traceability. The normal operator flow, owned by `discoveryctl`, is offline
 `check`, one explicit `build`, deployment of an immutable index, then restart.

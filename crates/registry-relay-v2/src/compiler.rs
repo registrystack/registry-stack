@@ -15,6 +15,7 @@ use crate::contract::{
     DateInputType, DatePrecision, Handling, IdentificationMethod, PropertyBindingDefinition,
     RegistryContract, ReviewStatus, SearchQueryDefinition, SourceProfile, StatisticalValueType,
     TransformDefinition, MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES,
+    MAXIMUM_PUBLICATION_JURISDICTIONS,
 };
 use crate::cursor::MAXIMUM_CURSOR_ORDER_VALUES;
 use crate::model::{
@@ -640,6 +641,7 @@ impl<'a> Compiler<'a> {
         }
         if let Some(publication) = &self.contract.publication {
             if publication.jurisdictions.is_empty()
+                || publication.jurisdictions.len() > MAXIMUM_PUBLICATION_JURISDICTIONS
                 || publication
                     .jurisdictions
                     .iter()
@@ -652,7 +654,7 @@ impl<'a> Compiler<'a> {
                 self.error(
                     "publication.jurisdictions_invalid",
                     "publication.jurisdictions",
-                    "published jurisdictions must be a non-empty, sorted, duplicate-free set of globally scoped URIs",
+                    "published jurisdictions must contain between 1 and 128 sorted, duplicate-free globally scoped URIs",
                 );
             }
             for (value, location) in [
@@ -5101,6 +5103,31 @@ fn to_camel_case(value: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn publication_jurisdictions_are_bounded_before_artifact_generation() {
+        let jurisdictions = |count| {
+            (0..count)
+                .map(|index| format!("https://example.invalid/jurisdictions/{index:03}"))
+                .collect()
+        };
+        let mut contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        contract.publication = Some(crate::contract::Publication {
+            jurisdictions: jurisdictions(MAXIMUM_PUBLICATION_JURISDICTIONS),
+        });
+        compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect("the shared profile boundary compiles");
+
+        contract.publication = Some(crate::contract::Publication {
+            jurisdictions: jurisdictions(MAXIMUM_PUBLICATION_JURISDICTIONS + 1),
+        });
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("an over-bound publication must fail during compilation");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "publication.jurisdictions_invalid"
+                && diagnostic.location == "publication.jurisdictions"
+        }));
+    }
 
     #[test]
     fn starter_never_marks_classification_reviewed() {

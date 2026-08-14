@@ -76,7 +76,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
             for step in clients["steps"]
             if step.get("name") == "Build, package, and smoke Linux Node clients"
         )
-        self.assertIn("for client in evidence relay", build)
+        self.assertIn("for client in discovery evidence relay", build)
         helper_call = "release/scripts/build-linux-node-client"
         self.assertIn(helper_call, build)
         for argument in (

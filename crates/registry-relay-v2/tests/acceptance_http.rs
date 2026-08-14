@@ -651,6 +651,24 @@ async fn provider_discovery_description_route_serves_compiled_exact_bytes_withou
             .await
             .expect("response body reads");
         assert_eq!(body.as_ref(), expected.as_slice(), "{project}");
+
+        // The authentication bypass is deliberately scoped to the public
+        // Discovery advertisement. Existing public artifact semantics still
+        // authenticate a bearer when the caller supplies one.
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v2/artifacts/capability-inventory")
+                    .header(AUTHORIZATION, "Bearer malformed")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{project}");
     }
 }
 

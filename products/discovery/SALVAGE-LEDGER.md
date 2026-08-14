@@ -134,11 +134,13 @@ products/federation/scripts/validate_optional_profile_exclusions.py
 
 ## Preserve for later
 
-These deltas contain non-Rust bindings, sealed-package lifecycle work,
+These deltas contain Federation-shaped non-Rust bindings, sealed-package lifecycle work,
 provider-routing research, installer or release work, distribution evidence, or
-release-workflow integration that has no current Discovery journey. They remain
-only on the backup branch and are summarized in
-`products/discovery/FUTURE-WORK.md`.
+release-workflow integration that does not fit the current Discovery journey.
+The dedicated Discovery Node.js and Python bindings were implemented against
+the smaller Discovery client API rather than reviving these Federation
+surfaces. The listed deltas remain only on the backup branch and the still
+deferred capabilities are summarized in `products/discovery/FUTURE-WORK.md`.
 
 ```text
 .github/workflows/nightly-security.yml

@@ -501,7 +501,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.discovery_contracts == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -1069,6 +1069,7 @@ jobs:
           node-version: 22.12.0
           cache: npm
           cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
 
@@ -1076,7 +1077,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-evidence-client-node registry-relay-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -1091,7 +1092,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-evidence-client-py registry-relay-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"
@@ -1135,6 +1136,7 @@ jobs:
           node-version: 22.20.0
           cache: npm
           cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
 
@@ -1152,7 +1154,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in evidence relay; do
+          for client in discovery evidence relay; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \

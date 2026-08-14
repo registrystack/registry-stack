@@ -76,6 +76,10 @@ RELAY_V2_OPENAPI_RELEASE_SURFACE_PATHS = (
 )
 NODE_CLIENT_RELEASE_SURFACES = (
     (
+        "crates/registry-discovery-client-node",
+        "@registrystack/discovery-client",
+    ),
+    (
         "crates/registry-evidence-client-node",
         "@registrystack/evidence-client",
     ),
@@ -85,6 +89,11 @@ NODE_CLIENT_RELEASE_SURFACES = (
     ),
 )
 PYTHON_CLIENT_RELEASE_SURFACES = (
+    (
+        "crates/registry-discovery-client-py",
+        "registry-discovery-client",
+        "discovery-client-sdk",
+    ),
     (
         "crates/registry-evidence-client-py",
         "registry-evidence-client",
@@ -148,6 +157,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
             expected_inventory.add("registry-docs")
         if parsed_version >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
             expected_inventory.update({"relay-client-node", "relay-client-python"})
+        if parsed_version >= (0, 22, 0):
+            expected_inventory.update({"discovery-client-node", "discovery-client-python"})
         missing = sorted(expected_inventory - artifact_names)
         unexpected = sorted(artifact_names - expected_inventory)
         if missing or unexpected:
@@ -1305,6 +1316,7 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
             )
         surfaces.extend((package_path, lock_path, loader_path))
         if expected_name in {
+            "@registrystack/discovery-client",
             "@registrystack/evidence-client",
             "@registrystack/relay-client",
         }:

@@ -3058,6 +3058,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-discovery-client-node"
+version = "0.22.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-discovery-client",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "registry-discovery-client-py"
+version = "0.22.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-discovery-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "registry-discovery-profile"
 version = "0.22.0"
 dependencies = [

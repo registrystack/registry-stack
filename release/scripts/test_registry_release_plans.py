@@ -36,6 +36,7 @@ RELAY_V2_ARTIFACT_INVENTORY = (
     "relayctl",
 )
 RELAY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 19, 1)
+DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 22, 0)
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -79,6 +80,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
     )
     if version_tuple >= RELAY_CLIENT_PACKAGE_MINIMUM_VERSION:
         inventory += ("relay-client-node", "relay-client-python")
+    if version_tuple >= DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION:
+        inventory += ("discovery-client-node", "discovery-client-python")
     data = {
         "stack": {
             "release": release_id,
@@ -325,6 +328,10 @@ version = "1.1.0"
         )
         for relative_root, name in (
             (
+                "crates/registry-discovery-client-node",
+                "@registrystack/discovery-client",
+            ),
+            (
                 "crates/registry-evidence-client-node",
                 "@registrystack/evidence-client",
             ),
@@ -382,6 +389,11 @@ version = "1.1.0"
                 "if (bindingPackageVersion !== '1.1.0') throw new Error();\n",
             )
         for relative_root, name, dependency in (
+            (
+                "crates/registry-discovery-client-py",
+                "registry-discovery-client",
+                "discovery-client-sdk",
+            ),
             (
                 "crates/registry-evidence-client-py",
                 "registry-evidence-client",
@@ -592,6 +604,9 @@ class RegistryReleasePlanTest(unittest.TestCase):
             {change["path"] for change in plan["changes"]},
         )
         for required_surface in (
+            "crates/registry-discovery-client-node/package.json",
+            "crates/registry-discovery-client-node/index.js",
+            "crates/registry-discovery-client-py/pyproject.toml",
             "crates/registry-evidence-client-node/package.json",
             "crates/registry-evidence-client-node/index.js",
             "crates/registry-relay-client-py/pyproject.toml",

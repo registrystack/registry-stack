@@ -509,7 +509,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         (
             "publish_client_npm:",
             "publish_client_pypi:",
-            "client: [evidence, relay]",
+            "client: [discovery, evidence, relay]",
             "id-token: write",
             "environment: npm",
             "environment: pypi-evidence",

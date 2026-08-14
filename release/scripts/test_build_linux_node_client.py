@@ -170,9 +170,9 @@ class BuildLinuxNodeClientTest(unittest.TestCase):
         )
 
     def test_routes_x64_pair_through_exact_zig_target(self) -> None:
-        self.make_client("relay", "x86_64-unknown-linux-gnu", "linux-x64-gnu")
+        self.make_client("discovery", "x86_64-unknown-linux-gnu", "linux-x64-gnu")
         result = self.run_build(
-            client="relay",
+            client="discovery",
             target="x86_64-unknown-linux-gnu",
             platform="linux-x64-gnu",
         )

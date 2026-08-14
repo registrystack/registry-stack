@@ -256,6 +256,7 @@ class CiChangesTest(unittest.TestCase):
                 "crates/registry-evidence/src/server.rs",
                 "crates/registry-evidencectl/src/authoring.rs",
                 "crates/registry-evidencectl/src/build.rs",
+                "crates/registry-evidencectl/src/fixtures.rs",
                 "crates/registry-evidencectl/tests/production_build.rs",
                 "crates/registry-relay-http-contract/src/lib.rs",
                 "crates/registry-relay-v2/src/api.rs",
@@ -736,12 +737,21 @@ class CiChangesTest(unittest.TestCase):
         # the npm suite, the type-drift check, and the Python unittest suite for
         # exactly the changes most able to break them.
         for path in (
+            "crates/registry-discovery-client/src/client.rs",
             "crates/registry-evidence-client/src/client.rs",
             "crates/registry-evidence-verifier/src/lib.rs",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["client_bindings"])
+                if "registry-discovery-client" in path:
+                    self.assertIn(
+                        "registry-discovery-client-node", outputs["rust_packages"]
+                    )
+                    self.assertIn(
+                        "registry-discovery-client-py", outputs["rust_packages"]
+                    )
+                    continue
                 self.assertIn(
                     "registry-evidence-client-node", outputs["rust_packages"]
                 )
@@ -751,8 +761,10 @@ class CiChangesTest(unittest.TestCase):
         self,
     ) -> None:
         for path in (
+            "crates/registry-discovery-client-node/src/lib.rs",
             "crates/registry-evidence-client-node/src/lib.rs",
             "crates/registry-relay-client-node/src/lib.rs",
+            "crates/registry-discovery-client/src/client.rs",
             "crates/registry-evidence-client/src/client.rs",
             "crates/registry-relay-client/src/client.rs",
             "crates/registry-platform-httputil/src/lib.rs",
@@ -771,6 +783,7 @@ class CiChangesTest(unittest.TestCase):
             "rust-toolchain.toml",
             "release/requirements/maturin-1.9.6.txt",
             "release/scripts/build-linux-node-client",
+            "release/scripts/smoke-discovery-client-package.js",
             "release/scripts/smoke-evidence-client-package.js",
             "release/scripts/smoke-relay-client-package.js",
             "release/scripts/test_build_linux_node_client.py",

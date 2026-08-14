@@ -15,6 +15,8 @@ SHARDS = {
     "discovery": (
         "registry-discovery",
         "registry-discovery-client",
+        "registry-discovery-client-node",
+        "registry-discovery-client-py",
         "registry-discovery-profile",
         "registry-discoveryctl",
     ),
@@ -82,6 +84,7 @@ DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
     "crates/registry-evidence/src/server.rs",
     "crates/registry-evidencectl/src/authoring.rs",
     "crates/registry-evidencectl/src/build.rs",
+    "crates/registry-evidencectl/src/fixtures.rs",
     "crates/registry-evidencectl/tests/production_build.rs",
     "crates/registry-relay-http-contract/src/lib.rs",
     "crates/registry-relay-v2/src/api.rs",
@@ -196,26 +199,33 @@ CLI_REFERENCE_INPUTS = (
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
-# Binding crates stay in EVIDENCE_PACKAGES and the `evidence` shard, because
-# their own source is covered by check-source-neutrality.sh, and that is what
-# makes `evidence_contracts` run the neutrality check against them. Every
-# binding also selects its own job, whose npm, type-drift and unittest suites
-# are the only cover its full API gets.
+# Each binding stays in its owning product shard. Every binding also selects
+# the shared native-client job, whose npm, generated-type, and Python unittest
+# suites are the only cover its full language API receives.
 EVIDENCE_BINDING_PACKAGES = frozenset(
     {"registry-evidence-client-node", "registry-evidence-client-py"}
 )
 RELAY_BINDING_PACKAGES = frozenset(
     {"registry-relay-client-node", "registry-relay-client-py"}
 )
-NATIVE_BINDING_PACKAGES = EVIDENCE_BINDING_PACKAGES | RELAY_BINDING_PACKAGES
+DISCOVERY_BINDING_PACKAGES = frozenset(
+    {"registry-discovery-client-node", "registry-discovery-client-py"}
+)
+NATIVE_BINDING_PACKAGES = (
+    DISCOVERY_BINDING_PACKAGES | EVIDENCE_BINDING_PACKAGES | RELAY_BINDING_PACKAGES
+)
 LINUX_NODE_BINDING_PACKAGES = frozenset(
-    {"registry-evidence-client-node", "registry-relay-client-node"}
+    {
+        "registry-discovery-client-node",
+        "registry-evidence-client-node",
+        "registry-relay-client-node",
+    }
 )
 
 # Inputs that can change the production Linux Node client recipe without
 # changing either binding crate. This proof is deliberately selected from the
 # actual changed paths rather than `complete`: push and merge-queue CI use
-# `--all` for their Rust matrices, and an unrelated change must not rebuild two
+# `--all` for their Rust matrices, and an unrelated change must not rebuild all
 # release addons merely because those matrices are complete.
 LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
     {
@@ -227,6 +237,7 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
         "Cargo.toml",
         "release/requirements/maturin-1.9.6.txt",
         "release/scripts/build-linux-node-client",
+        "release/scripts/smoke-discovery-client-package.js",
         "release/scripts/smoke-evidence-client-package.js",
         "release/scripts/smoke-relay-client-package.js",
         "release/scripts/test_build_linux_node_client.py",
