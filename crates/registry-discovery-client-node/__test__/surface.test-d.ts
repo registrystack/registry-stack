@@ -1,5 +1,7 @@
 import { DiscoveryClient, selectExact, type ServiceSelection } from '../client';
 
+declare function expectType<T>(value: T): void;
+
 async function useDiscoveryClient(): Promise<void> {
   const client = new DiscoveryClient('https://discovery.example.invalid/');
   const response = await client.searchServices({ serviceKind: ['evidence'] });
@@ -7,7 +9,7 @@ async function useDiscoveryClient(): Promise<void> {
     recordId: response.items[0].recordId,
     matchedCapability: { kind: 'evidence-type', id: 'urn:example:type' },
   });
-  selection.originContentDigest;
+  expectType<string>(selection.originContentDigest);
 }
 
 void useDiscoveryClient;

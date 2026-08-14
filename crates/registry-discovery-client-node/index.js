@@ -619,7 +619,7 @@ if (!nativeBinding || forceWasi) {
     }
     return null
   }
-  if (!wasiBindingLoaded && (!__napiWasiFlavorRequested || __napiWasiFlavor === "wasm32-wasi")) {
+  if (!__napiWasiFlavorRequested || __napiWasiFlavor === "wasm32-wasi") {
     let candidateError = null
     let candidateFailed = false
     try {
