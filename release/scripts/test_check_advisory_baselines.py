@@ -24,15 +24,15 @@ LIVE_BASELINES = (
     ROOT / "release/security/mint-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:0727843669569ad8816d9863d695f9450c0507894d859bfacb1b5b98354c76c2",
-    "evidence": "sha256:833392109397d3365067ba542475ff5b63a91986a785bf5d4f9ec4fe685c2a9d",
-    "mint": "sha256:caeebab010a3d3634a52ce977a7f0a2a03f444378695eb49ebf5b89ebdf84bfb",
+    "relay": "sha256:0249df2c016c38bd1fd4ab89f69f819471eab84a733a9ed0b996b354ef00d887",
+    "evidence": "sha256:3ad995a2324d777a0c41c6d65635977514b132653916581b3e3e40f98225add3",
+    "mint": "sha256:cc8f139d7755151dd6876f054d52c684214b128e3ab7978e90180c0b9ea4fb12",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "b9f6d12d7d4b62199558351087487550eedb2bdc"
+LIVE_REFERENCE_SOURCE_REVISION = "0ddd1fa6481ef0154d9f11a13815ba35ab942053"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "official_candidate",
-    "evidence": "local_reproduction",
-    "mint": "local_reproduction",
+    "evidence": "official_candidate",
+    "mint": "official_candidate",
 }
 LIVE_EXECUTABLES = {
     "relay": "/usr/local/bin/relay",
@@ -1368,7 +1368,7 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                         list(normalized.findings),
                         normalized.image,
                         synthetic_baseline,
-                        self.module.parse_date("2026-08-13", "today"),
+                        self.module.parse_date("2026-08-14", "today"),
                         self.rootfs,
                         live_assertion["reference_image_digest"],
                         copy.deepcopy(baseline["runtime"]["config"]),
