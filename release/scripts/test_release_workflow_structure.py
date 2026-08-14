@@ -786,7 +786,21 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         )
         self.assertEqual(
             document["jobs"]["promote-images"]["permissions"],
-            {"actions": "read", "contents": "read", "packages": "write"},
+            {"actions": "read", "contents": "write", "packages": "write"},
+        )
+
+    def test_image_promotion_can_reread_the_bound_draft(self) -> None:
+        _, document = workflow("release.yml")
+        promote = document["jobs"]["promote-images"]
+        self.assertEqual("write", promote["permissions"]["contents"])
+        reconcile = step_run(
+            document,
+            "promote-images",
+            "Reconcile exact staged draft before first public image write",
+        )
+        self.assertIn(
+            'gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}"',
+            reconcile,
         )
 
     def test_binds_an_annotated_tag_to_exact_candidate_and_main_revisions(self) -> None:
