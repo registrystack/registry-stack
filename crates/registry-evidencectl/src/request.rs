@@ -34,7 +34,10 @@ use crate::{
 
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
-const MAX_SELECTOR_VALUE_BYTES: usize = 200;
+// The selected profile applies its exact per-field and aggregate limits. Keep
+// this parser at the published contract envelope so it cannot reject a value
+// that the profile legitimately permits.
+const MAX_SELECTOR_VALUE_BYTES: usize = 8 * 1024;
 const MAX_SUBJECTS_FILE_BYTES: u64 = 16 * 1024;
 const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_CONTEXT_BYTES: u64 = 256 * 1024;
@@ -1188,6 +1191,33 @@ mod tests {
                 "person": {"integer_string": "7", "integer": 7, "flag": false}
             })
         );
+    }
+
+    #[test]
+    fn progressive_selector_values_accept_the_contract_wide_maximum() {
+        let value = "x".repeat(MAX_SELECTOR_VALUE_BYTES);
+
+        let direct = parse_progressive_selector_value(&value)
+            .expect("a direct selector at the contract-wide maximum parses");
+        assert_eq!(
+            serde_json::to_value(direct).expect("direct selector serializes"),
+            serde_json::json!(value)
+        );
+
+        let from_file = progressive_selector_value(ProgressiveSelectorValue::String(value.clone()))
+            .expect("a file selector at the contract-wide maximum parses");
+        assert_eq!(
+            serde_json::to_value(from_file).expect("file selector serializes"),
+            serde_json::json!(value)
+        );
+    }
+
+    #[test]
+    fn progressive_selector_values_refuse_above_the_contract_wide_maximum() {
+        let value = "x".repeat(MAX_SELECTOR_VALUE_BYTES + 1);
+
+        assert!(parse_progressive_selector_value(&value).is_err());
+        assert!(progressive_selector_value(ProgressiveSelectorValue::String(value)).is_err());
     }
 
     #[test]

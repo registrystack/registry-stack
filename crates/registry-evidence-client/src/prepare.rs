@@ -50,8 +50,11 @@ pub const MAXIMUM_HOLDER_KEYS: usize = 16;
 pub const MAXIMUM_EXPECTED_OUTPUTS: usize = 16;
 /// Longest identifier any expectation may carry.
 pub const MAXIMUM_IDENTIFIER_BYTES: usize = 512;
-/// Longest string a selector value may carry.
-pub const MAXIMUM_SELECTOR_STRING_BYTES: usize = 512;
+/// Longest string a selector value may carry under the published contract.
+///
+/// A selected definition still applies its narrower per-field and aggregate
+/// bounds before this shared preparation boundary.
+pub const MAXIMUM_SELECTOR_STRING_BYTES: usize = 8 * 1024;
 /// Smallest selector integer the request contract accepts. The bound is the
 /// range a double represents exactly, so the value survives every JSON reader
 /// between here and the source.
@@ -1562,6 +1565,30 @@ mod tests {
             PreparedEvidenceRequest::new(spec)
                 .unwrap_or_else(|error| panic!("{value} was refused: {error}"));
         }
+    }
+
+    #[test]
+    fn selector_strings_enforce_the_contract_wide_envelope() {
+        let mut at_the_ceiling = spec();
+        at_the_ceiling.subjects[0].selector_values = Some(vec![(
+            "record_reference".to_owned(),
+            SelectorValue::from("x".repeat(MAXIMUM_SELECTOR_STRING_BYTES)),
+        )]);
+        PreparedEvidenceRequest::new(at_the_ceiling)
+            .expect("the contract-wide selector string ceiling is accepted");
+
+        let mut above_the_ceiling = spec();
+        above_the_ceiling.subjects[0].selector_values = Some(vec![(
+            "record_reference".to_owned(),
+            SelectorValue::from("x".repeat(MAXIMUM_SELECTOR_STRING_BYTES + 1)),
+        )]);
+        assert_eq!(
+            PreparedEvidenceRequest::new(above_the_ceiling)
+                .expect_err("a selector string above the contract-wide ceiling is refused"),
+            EvidenceClientError::configuration(
+                "each selector string value must be present and bounded"
+            )
+        );
     }
 
     #[test]

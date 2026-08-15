@@ -4,10 +4,12 @@ use std::{
     env, fmt,
     fs::File,
     io::Read as _,
+    net::{IpAddr, Ipv6Addr},
     path::{Path, PathBuf},
 };
 
 use registry_platform_crypto::PrivateJwk;
+use registry_platform_httputil::is_cloud_metadata_ip;
 use serde::{Deserialize, Serialize};
 
 use crate::{error::EvidenceClientError, prepare::MAXIMUM_IDENTIFIER_BYTES, JwksDocument};
@@ -97,7 +99,9 @@ impl EvidenceClientProfile {
             && base_url.port().is_some_and(|port| port != 0);
         match self.trust {
             TrustProfile::HttpsDiscovery | TrustProfile::PinnedJwks { .. }
-                if !origin_only || base_url.scheme() != "https" =>
+                if !origin_only
+                    || base_url.scheme() != "https"
+                    || strict_fetch_refuses_literal_origin(&base_url) =>
             {
                 return Err(profile_error())
             }
@@ -157,6 +161,44 @@ impl EvidenceClientProfile {
         }
         Ok(catalog.into_definitions())
     }
+}
+
+fn strict_fetch_refuses_literal_origin(url: &url::Url) -> bool {
+    let ip = match url.host() {
+        Some(url::Host::Ipv4(ip)) => IpAddr::V4(ip),
+        Some(url::Host::Ipv6(ip)) => IpAddr::V6(ip),
+        Some(url::Host::Domain(_)) | None => return false,
+    };
+    match normalize_ipv4_mapped(ip) {
+        IpAddr::V4(ip) => {
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || is_cloud_metadata_ip(IpAddr::V4(ip))
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || is_ipv6_unicast_link_local(ip)
+                || is_cloud_metadata_ip(IpAddr::V6(ip))
+        }
+    }
+}
+
+fn normalize_ipv4_mapped(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(ip)),
+        IpAddr::V4(ip) => IpAddr::V4(ip),
+    }
+}
+
+fn is_ipv6_unicast_link_local(ip: Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xffc0) == 0xfe80
 }
 
 fn valid_expected_identity(value: &str) -> bool {
@@ -427,6 +469,61 @@ mod tests {
         ] {
             assert!(profile(rejected).validate().is_err(), "{rejected}");
         }
+    }
+
+    #[test]
+    fn strict_profiles_refuse_literal_origins_the_fetch_policy_will_deny() {
+        let profile = |base_url: &str, trust: TrustProfile| EvidenceClientProfile {
+            schema: EVIDENCE_CLIENT_PROFILE_SCHEMA_V1.to_owned(),
+            base_url: base_url.to_owned(),
+            client_id: "client".to_owned(),
+            private_key: PrivateKeyReference::Environment {
+                variable: "EVIDENCE_KEY".to_owned(),
+            },
+            trust,
+            contracts: ContractsProfile::Published,
+            verification: VerificationProfile::default(),
+            maximum_metadata_cache_seconds: DEFAULT_METADATA_CACHE_SECONDS,
+            expected: ExpectedServiceProfile::default(),
+            origin_directory: None,
+        };
+
+        for base_url in [
+            "https://127.0.0.1",
+            "https://10.0.0.1",
+            "https://169.254.1.1",
+            "https://169.254.169.254",
+            "https://100.100.100.200",
+            "https://[::1]",
+            "https://[fd00::1]",
+            "https://[fe80::1]",
+            "https://[fd00:ec2::254]",
+        ] {
+            assert!(
+                profile(base_url, TrustProfile::HttpsDiscovery)
+                    .validate()
+                    .is_err(),
+                "HTTPS discovery accepted {base_url}"
+            );
+            assert!(
+                profile(
+                    base_url,
+                    TrustProfile::PinnedJwks {
+                        file: PathBuf::from("trust/evidence.jwks"),
+                    },
+                )
+                .validate()
+                .is_err(),
+                "pinned-JWKS discovery accepted {base_url}"
+            );
+        }
+
+        profile(
+            "http://127.0.0.1:8080",
+            TrustProfile::LocalLoopbackDiscovery,
+        )
+        .validate()
+        .expect("the explicit local-loopback profile remains available");
     }
 
     #[test]

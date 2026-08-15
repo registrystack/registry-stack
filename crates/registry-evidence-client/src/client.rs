@@ -651,39 +651,43 @@ impl EvidenceClient {
             .send()
             .await
             .map_err(|error| EvidenceClientError::transport(outbound::send_failure_kind(&error)))?;
+        let response_status = response.status();
         if validate_response_headers(response.headers()).is_err() {
-            return Err(metadata_protocol_failure());
+            return Err(metadata_protocol_failure_with_status(response_status));
         }
-        let response_etag = metadata_etag(response.headers())?;
-        if response.status() == StatusCode::NOT_MODIFIED {
+        let response_etag = metadata_etag(response.headers())
+            .map_err(|_| metadata_protocol_failure_with_status(response_status))?;
+        if response_status == StatusCode::NOT_MODIFIED {
             let (value, requested_etag, previous_cache_seconds) =
-                previous.ok_or_else(metadata_protocol_failure)?;
-            let requested_etag = requested_etag.ok_or_else(metadata_protocol_failure)?;
+                previous.ok_or_else(|| metadata_protocol_failure_with_status(response_status))?;
+            let requested_etag = requested_etag
+                .ok_or_else(|| metadata_protocol_failure_with_status(response_status))?;
             if response_etag
                 .as_ref()
                 .is_some_and(|etag| etag != requested_etag)
             {
-                return Err(metadata_protocol_failure());
+                return Err(metadata_protocol_failure_with_status(response_status));
             }
             let cache_seconds = metadata_cache_seconds(
                 response.headers(),
                 maximum_cache_seconds,
                 Some(previous_cache_seconds),
-            )?;
+            )
+            .map_err(|_| metadata_protocol_failure_with_status(response_status))?;
             return Ok(PublicDocument {
                 value: value.clone(),
                 etag: response_etag.or_else(|| Some(requested_etag.clone())),
                 cache_seconds,
             });
         }
-        if !response.status().is_success()
+        if !response_status.is_success()
             || response
                 .headers()
                 .get(CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
                 .is_none_or(|value| !essence(value).eq_ignore_ascii_case(media_type))
         {
-            return Err(metadata_protocol_failure());
+            return Err(metadata_protocol_failure_with_status(response_status));
         }
         let cache_seconds =
             metadata_cache_seconds(response.headers(), maximum_cache_seconds, None)?;
@@ -1333,8 +1337,12 @@ fn batch_protocol_failure(trace_id: Option<String>) -> EvidenceClientError {
 }
 
 fn metadata_protocol_failure() -> EvidenceClientError {
+    metadata_protocol_failure_with_status(StatusCode::OK)
+}
+
+fn metadata_protocol_failure_with_status(status: StatusCode) -> EvidenceClientError {
     EvidenceClientError::Protocol {
-        status: StatusCode::OK.as_u16(),
+        status: status.as_u16(),
         code: None,
         trace_id: None,
         retry_after_seconds: None,
@@ -3517,6 +3525,48 @@ mod tests {
             .expect("conditional metadata response");
         assert_eq!(first.value, second.value);
         assert_eq!(second.cache_seconds, 60);
+    }
+
+    #[tokio::test]
+    async fn public_metadata_refusals_preserve_the_http_status_without_values() {
+        for status in [404_u16, 429, 503] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/metadata"))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let fixture = signed_evidence();
+            let client = client_for(&server.uri(), &fixture);
+            let url = Url::parse(&format!("{}/metadata", server.uri())).expect("metadata URL");
+
+            let result = client
+                .public_json::<serde_json::Value>(
+                    url,
+                    JSON_MEDIA_TYPE,
+                    None,
+                    600,
+                    &FetchUrlPolicy::dev(),
+                )
+                .await;
+            let Err(error) = result else {
+                panic!("a metadata refusal was accepted as a document");
+            };
+
+            assert!(
+                matches!(
+                    error,
+                    EvidenceClientError::Protocol {
+                        status: observed,
+                        code: None,
+                        trace_id: None,
+                        retry_after_seconds: None,
+                    } if observed == status
+                ),
+                "metadata status {status} was not preserved value-free"
+            );
+        }
     }
 
     #[tokio::test]
