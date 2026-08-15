@@ -91,6 +91,7 @@
       "testId": "discovery_client::selection_is_not_trust",
       "tests": [
         {"path": "crates/registry-discovery-client/src/selection.rs", "name": "discovery_metadata_has_no_trust_or_native_io_capability"},
+        {"path": "crates/registry-discovery-client/src/selection.rs", "name": "exact_selection_refuses_binding_identity_drift"},
         {"path": "crates/registry-discovery-client/src/selection.rs", "name": "persisted_selection_refuses_binding_identity_drift"},
         {"path": "crates/registry-discovery-client/tests/native_journey.rs", "name": "complete_evidence_and_relay_journeys_build_select_trust_and_invoke_natively"}
       ]

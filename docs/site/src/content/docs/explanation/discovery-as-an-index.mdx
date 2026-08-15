@@ -151,6 +151,9 @@ for (const evidenceTypeId of context.evidenceTypeIds) {
     evidenceType: checked.matchedCapability.id,
   });
   const verified = await evidence.requestAndVerify(prepared);
+  for (const claim of verified.evidence.supportedValues) {
+    console.log(claim.providesValueFor, claim.value);
+  }
 }
 ```
 
@@ -176,8 +179,13 @@ selection = select_relay_service(results, {
     },
 })
 checked = validate_selection(selection)
-adopter_trust.require_relay(checked)
+resource = adopter_trust.require_relay(checked)
 relay = RelayClient(checked["endpointUrl"], authorization=native_authorization)
+page = relay.list_records(resource, page_size=1)
+if page["kind"] != "complete" or not page["value"]["items"]:
+    raise RuntimeError("Relay returned no records")
+record = page["value"]["items"][0]
+print(record["recordIdentifier"], record["domainData"])
 ```
 
 The chooser is application-owned because Discovery does not rank results. The libraries validate the
@@ -186,14 +194,22 @@ selection before returning the native base URL. They do not decide whether the s
 issuer, operator, endpoint, or capability is trusted. Keep that decision in the application's native
 Evidence or Relay trust configuration. Native definitions and local policy still supply Evidence
 purpose, audience, issuer and provider identity, configuration revision, selectors, and expected
-outputs. Native Relay metadata supplies the concrete resource and operation.
+outputs. The JavaScript example reads values only from the payload that the native Evidence client
+has verified. Native Relay metadata supplies the concrete resource and operation. In the Python
+example, the adopter-owned trust mapping returns that reviewed resource identifier, and
+`list_records` performs the native Relay request. The returned record remains a Relay response, not
+Discovery metadata.
 
 {/* Evidence: `crates/registry-discovery-client-node/src/lib.rs` and
     `crates/registry-discovery-client-py/src/lib.rs` are thin bindings over
     `registry-discovery-client`. Their language-level loopback tests exercise typed search, complete
     resolution context, correlated Relay selection, and persisted-selection validation.
     `crates/registry-discovery-client/src/selection.rs`,
-    test `discovery_metadata_has_no_trust_or_native_io_capability`, binds the shared trust boundary. */}
+    test `discovery_metadata_has_no_trust_or_native_io_capability`, binds the shared trust boundary.
+    `crates/registry-evidence-client-node/src/lib.rs`, `EvidenceClient::request_and_verify`, returns
+    the verified Evidence payload used by the JavaScript example.
+    `crates/registry-relay-client-py/src/lib.rs`, `RelayClient::list_records`, performs the bounded
+    native exchange and returns the decoded record collection. */}
 
 ## Why the split reduces maintenance
 

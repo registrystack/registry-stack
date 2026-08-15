@@ -195,7 +195,7 @@ pub fn compile_contract(
         }],
     })?;
 
-    Ok(CompiledRegistry {
+    let registry = CompiledRegistry {
         contract_revision,
         contract_id: contract.metadata.id.clone(),
         contract_version: contract.metadata.version.clone(),
@@ -250,7 +250,21 @@ pub fn compile_contract(
             classifications: contract.metadata_visibility.classifications,
             processing: contract.metadata_visibility.processing,
         },
-    })
+    };
+    if let Some(publication) = &registry.publication {
+        if crate::artifacts::discovery_description(&registry, &publication.jurisdictions).is_err() {
+            return Err(CompileReport {
+                diagnostics: vec![Diagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: "publication.description_bound_exceeded".into(),
+                    location: "publication".into(),
+                    message: "the complete public Discovery description exceeds the shared profile bounds"
+                        .into(),
+                }],
+            });
+        }
+    }
+    Ok(registry)
 }
 
 /// Compile the complete governed file closure. Production packaging and
@@ -5203,6 +5217,38 @@ pub(crate) mod tests {
                 diagnostic.code == expected_code && diagnostic.location == expected_location
             }));
         }
+    }
+
+    #[test]
+    fn complete_publication_projection_bound_fails_during_compilation() {
+        let mut contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        contract.publication = Some(crate::contract::Publication {
+            jurisdictions: vec!["urn:example:jurisdiction".into()],
+        });
+        contract.registry.name = "n".repeat(registry_discovery_profile::MAX_STRING_CHARACTERS);
+        contract.registry.authoritative_scope =
+            "s".repeat(registry_discovery_profile::MAX_STRING_CHARACTERS);
+        let template = contract.resources[0].clone();
+        contract.resources = (0..MAXIMUM_RESOURCES)
+            .map(|index| {
+                let mut resource = template.clone();
+                resource.id = format!("resource-{index:03}");
+                resource.semantic_class =
+                    format!("https://example.invalid/semantic-class/{index:03}");
+                resource
+            })
+            .collect();
+
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("an over-bound complete publication must fail during compilation");
+        assert!(
+            report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "publication.description_bound_exceeded"
+                    && diagnostic.location == "publication"
+            }),
+            "unexpected diagnostics: {:?}",
+            report.diagnostics
+        );
     }
 
     #[test]

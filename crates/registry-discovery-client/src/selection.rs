@@ -369,6 +369,19 @@ impl ServiceSearchSelectionExt for ServiceSearchResponse {
             _ => return Err(DiscoveryClientError::AmbiguousSelection),
         };
         validate_service(service).map_err(|_| DiscoveryClientError::Protocol)?;
+        let expected_binding_id = derive_binding_id(
+            &service.service_id,
+            service.service_kind,
+            &service.endpoint_url,
+            &service.conforms_to,
+            &service.evidence_type_ids,
+            &service.semantic_class_ids,
+            &service.operation_family_ids,
+        )
+        .map_err(|_| DiscoveryClientError::Protocol)?;
+        if service.binding_id != expected_binding_id {
+            return Err(DiscoveryClientError::Protocol);
+        }
         if !capability_matches(service, &request.matched_capability) {
             return Err(DiscoveryClientError::CapabilityMismatch);
         }
@@ -734,6 +747,20 @@ mod tests {
         assert_eq!(
             response.select_exact(wrong),
             Err(DiscoveryClientError::CapabilityMismatch)
+        );
+    }
+
+    #[test]
+    fn exact_selection_refuses_binding_identity_drift() {
+        let mut record = service();
+        record.endpoint_url = "https://other.example/evidence".into();
+        let response = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
+            items: vec![record],
+        };
+        assert_eq!(
+            response.select_only(MatchedCapability::EvidenceType("urn:evidence".into())),
+            Err(DiscoveryClientError::Protocol)
         );
     }
 

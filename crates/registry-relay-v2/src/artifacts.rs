@@ -484,22 +484,24 @@ const CONSULTATION_SEARCH_FAMILY: &str =
 const AGGREGATE_DATA_STATISTICAL_DATAFLOW_FAMILY: &str =
     "https://registrystack.org/discovery/operation-family/relay-v2/statistical-dataflow";
 
-fn discovery_description(
+pub(crate) fn discovery_description(
     registry: &CompiledRegistry,
     jurisdictions: &[String],
 ) -> Result<Vec<u8>, ArtifactError> {
     let mut bindings: BTreeSet<(Vec<String>, Vec<String>)> = BTreeSet::new();
-    for resource in &registry.resources {
-        for operation in &resource.operations {
-            if operation
-                .access_profiles
-                .iter()
-                .any(|profile| matches!(profile.access, CompiledAccess::Public))
-            {
-                bindings.insert((
-                    vec![resource.semantic_class.clone()],
-                    vec![operation_family(operation.pattern).to_owned()],
-                ));
+    if registry.metadata_visibility.resources != Visibility::OperatorOnly {
+        for resource in &registry.resources {
+            for operation in &resource.operations {
+                if operation
+                    .access_profiles
+                    .iter()
+                    .any(|profile| matches!(profile.access, CompiledAccess::Public))
+                {
+                    bindings.insert((
+                        vec![resource.semantic_class.clone()],
+                        vec![operation_family(operation.pattern).to_owned()],
+                    ));
+                }
             }
         }
     }
@@ -2025,6 +2027,33 @@ mod tests {
             .expect("operator-only statistical description satisfies the shared profile");
         assert!(operator_only.services().iter().all(|service| {
             service.operation_family_ids() != [AGGREGATE_DATA_STATISTICAL_DATAFLOW_FAMILY]
+        }));
+    }
+
+    #[test]
+    fn provider_discovery_description_excludes_operator_only_resource_bindings() {
+        let contract = RegistryContract::parse_yaml(compiler_tests::valid_contract())
+            .expect("contract parses");
+        let mut registry = compile_contract_with_governed_files(
+            &contract,
+            &[compiler_tests::observed_schema()],
+            CompileProfile::Production,
+            &compiler_tests::governed_files(),
+        )
+        .expect("contract compiles");
+        registry.publication = Some(crate::model::CompiledPublication {
+            jurisdictions: vec!["urn:example:jurisdiction:acceptance".into()],
+        });
+        registry.metadata_visibility.resources = Visibility::OperatorOnly;
+        registry.resources[0].operations[0].access_profiles[0].access = CompiledAccess::Public;
+
+        let bytes =
+            discovery_description(&registry, &["urn:example:jurisdiction:acceptance".into()])
+                .expect("operator-only resource description renders");
+        let description = registry_discovery_profile::parse_description(&bytes)
+            .expect("operator-only resource description satisfies the profile");
+        assert!(description.services().iter().all(|service| {
+            service.semantic_class_ids().is_empty() && service.operation_family_ids().is_empty()
         }));
     }
 

@@ -495,10 +495,14 @@ fn validate_text(field: &'static str, value: &str) -> Result<(), ProfileError> {
     Ok(())
 }
 
+/// Whether a globally scoped identifier satisfies the shared public profile.
+#[must_use]
+pub fn is_valid_identifier(value: &str) -> bool {
+    is_valid_public_text(value) && Url::parse(value).is_ok_and(|parsed| !parsed.scheme().is_empty())
+}
+
 fn validate_identifier(field: &'static str, value: &str) -> Result<(), ProfileError> {
-    validate_text(field, value)?;
-    let parsed = Url::parse(value).map_err(|_| ProfileError::PublicField(field))?;
-    if parsed.scheme().is_empty() {
+    if !is_valid_identifier(value) {
         return Err(ProfileError::PublicField(field));
     }
     Ok(())
