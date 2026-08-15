@@ -72,9 +72,12 @@ changes remain an explicit build-and-restart operation.
   The Relay exception is scoped to `discovery-description`; a regression test
   preserves supplied-bearer authentication for every other public artifact.
 - The build owns exact approved HTTPS target, redirect, proxy, private-network,
-  resource-bound, provenance, and atomic-write controls.
+  resource-bound, provenance, completion-time, and durably synced atomic-write
+  controls.
 - Discovery output cannot create native trust or cause credentials or provider
   traffic before the adopter's existing local acceptance.
+- Runtime request bodies are admitted before buffering under fixed concurrency;
+  malformed form encoding and request media parameters fail closed.
 - Problems and diagnostics are value-free and bounded.
 
 Security traceability: `products/discovery/contracts/security-invariant-matrix.yaml`.

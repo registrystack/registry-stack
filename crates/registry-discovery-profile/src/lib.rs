@@ -498,7 +498,9 @@ fn validate_text(field: &'static str, value: &str) -> Result<(), ProfileError> {
 /// Whether a globally scoped identifier satisfies the shared public profile.
 #[must_use]
 pub fn is_valid_identifier(value: &str) -> bool {
-    is_valid_public_text(value) && Url::parse(value).is_ok_and(|parsed| !parsed.scheme().is_empty())
+    is_valid_public_text(value)
+        && !value.chars().any(char::is_whitespace)
+        && Url::parse(value).is_ok_and(|parsed| !parsed.scheme().is_empty())
 }
 
 fn validate_identifier(field: &'static str, value: &str) -> Result<(), ProfileError> {
@@ -673,6 +675,20 @@ mod tests {
         assert!(matches!(
             parse_description(&serde_json::to_vec(&value).expect("render")),
             Err(ProfileError::BindingIdentity)
+        ));
+    }
+
+    #[test]
+    fn identifiers_refuse_literal_whitespace_before_url_parsing() {
+        for invalid in [
+            "urn:example:service with-space",
+            "urn:example:service\u{00a0}with-non-breaking-space",
+            "urn:example:service\u{2003}with-em-space",
+        ] {
+            assert!(!is_valid_identifier(invalid), "{invalid:?}");
+        }
+        assert!(is_valid_identifier(
+            "https://example.org/vocabulary#RegisteredBusiness"
         ));
     }
 

@@ -16,7 +16,7 @@ use registry_platform_httpsec::{security_headers, CspBuilder};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thiserror::Error;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tower_http::trace::TraceLayer;
 
 use crate::model::{
@@ -33,6 +33,7 @@ const OPENAPI_JSON: &str = "application/vnd.oai.openapi+json;version=3.1";
 const HEALTH_BYTES: &[u8] = br#"{"status":"ok"}"#;
 const READY_BYTES: &[u8] = br#"{"status":"ready"}"#;
 const BLOCKING_QUERY_CAPACITY: usize = 4;
+const BUFFERED_BODY_CAPACITY: usize = 4;
 
 pub struct DiscoveryService {
     directory: Directory,
@@ -92,10 +93,40 @@ impl DiscoveryService {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct HttpLimits {
     maximum_request_bytes: usize,
     request_timeout: Duration,
+    buffered_bodies: BufferedBodyExecutor,
+}
+
+#[derive(Clone)]
+struct BufferedBodyExecutor {
+    permits: Arc<Semaphore>,
+}
+
+struct BufferedBody {
+    bytes: Bytes,
+    permit: OwnedSemaphorePermit,
+}
+
+impl BufferedBodyExecutor {
+    fn new(capacity: usize) -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(capacity)),
+        }
+    }
+
+    async fn buffer(&self, body: Body, maximum_bytes: usize) -> Result<BufferedBody, ProblemCode> {
+        let permit = Arc::clone(&self.permits)
+            .acquire_owned()
+            .await
+            .map_err(|_| ProblemCode::Unavailable)?;
+        let bytes = to_bytes(body, maximum_bytes)
+            .await
+            .map_err(|_| ProblemCode::InvalidRequest)?;
+        Ok(BufferedBody { bytes, permit })
+    }
 }
 
 pub fn router(
@@ -123,6 +154,7 @@ pub fn router(
             HttpLimits {
                 maximum_request_bytes,
                 request_timeout,
+                buffered_bodies: BufferedBodyExecutor::new(BUFFERED_BODY_CAPACITY),
             },
             enforce_http_limits,
         ))
@@ -157,12 +189,19 @@ async fn enforce_http_limits(
 ) -> Response<Body> {
     let exchange = async move {
         let (parts, body) = request.into_parts();
-        let bytes = match to_bytes(body, limits.maximum_request_bytes).await {
-            Ok(bytes) => bytes,
-            Err(_) => return ProblemCode::InvalidRequest.response(),
-        };
-        next.run(Request::from_parts(parts, Body::from(bytes)))
+        let BufferedBody { bytes, permit } = match limits
+            .buffered_bodies
+            .buffer(body, limits.maximum_request_bytes)
             .await
+        {
+            Ok(buffered) => buffered,
+            Err(error) => return error.response(),
+        };
+        let response = next
+            .run(Request::from_parts(parts, Body::from(bytes)))
+            .await;
+        drop(permit);
+        response
     };
     match tokio::time::timeout(limits.request_timeout, exchange).await {
         Ok(response) => response,
@@ -242,11 +281,26 @@ fn json_media_type(headers: &HeaderMap) -> bool {
     if values.next().is_some() {
         return false;
     }
-    value
-        .to_str()
-        .ok()
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case(JSON))
+    let Ok(value) = value.to_str() else {
+        return false;
+    };
+    let mut parts = value.split(';');
+    let Some(media_type) = parts.next() else {
+        return false;
+    };
+    if !media_type.trim().eq_ignore_ascii_case(JSON) {
+        return false;
+    }
+    let Some(parameter) = parts.next() else {
+        return true;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    let Some((name, value)) = parameter.split_once('=') else {
+        return false;
+    };
+    name.trim().eq_ignore_ascii_case("charset") && value.trim().eq_ignore_ascii_case("utf-8")
 }
 
 fn bounded_json_bytes<T: Serialize>(
@@ -479,6 +533,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_body_capacity_is_acquired_before_buffering_and_recovers() {
+        let executor = BufferedBodyExecutor::new(1);
+        let held = Arc::clone(&executor.permits)
+            .acquire_owned()
+            .await
+            .expect("the first request holds the only body permit");
+        let (body_polled_tx, mut body_polled_rx) = tokio::sync::oneshot::channel();
+        let body = Body::from_stream(futures::stream::once(async move {
+            let _ = body_polled_tx.send(());
+            Ok::<_, std::convert::Infallible>(Bytes::from_static(b"second-body"))
+        }));
+        let second_executor = executor.clone();
+        let second = tokio::spawn(async move { second_executor.buffer(body, 1024).await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut body_polled_rx)
+                .await
+                .is_err(),
+            "the second body must not be polled before capacity is available"
+        );
+
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(1), &mut body_polled_rx)
+            .await
+            .expect("the body is polled after admission")
+            .expect("the body reports its first poll");
+        let buffered = tokio::time::timeout(Duration::from_secs(1), second)
+            .await
+            .expect("body capacity returns")
+            .expect("buffer task joins")
+            .expect("body buffers");
+        assert_eq!(buffered.bytes.as_ref(), b"second-body");
+        drop(buffered);
+
+        let recovered = executor
+            .buffer(Body::from("third-body"), 1024)
+            .await
+            .expect("the body executor remains available");
+        assert_eq!(recovered.bytes.as_ref(), b"third-body");
+    }
+
+    #[tokio::test]
     async fn openapi_route_serves_the_exact_embedded_bytes() {
         let response = app(10)
             .oneshot(Request::get(OPENAPI_ROUTE).body(Body::empty()).unwrap())
@@ -618,6 +713,50 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn request_media_type_accepts_only_bare_or_utf8_json() {
+        for accepted in [
+            "application/json",
+            "application/json; charset=utf-8",
+            "Application/JSON ; CHARSET = UTF-8",
+        ] {
+            let response = app(10)
+                .oneshot(
+                    Request::post(EVIDENCE_TYPES_ROUTE)
+                        .header(CONTENT_TYPE, accepted)
+                        .body(Body::from(
+                            br#"{"requirementId":"urn:example:requirement"}"#.as_slice(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{accepted}");
+        }
+
+        for rejected in [
+            "application/json; garbage",
+            "application/json; charset",
+            "application/json; charset=us-ascii",
+            "application/json; charset=utf-8; profile=example",
+            "application/json; =utf-8",
+            "application/json;",
+        ] {
+            let response = app(10)
+                .oneshot(
+                    Request::post(EVIDENCE_TYPES_ROUTE)
+                        .header(CONTENT_TYPE, rejected)
+                        .body(Body::from(
+                            br#"{"requirementId":"urn:example:requirement"}"#.as_slice(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{rejected}");
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

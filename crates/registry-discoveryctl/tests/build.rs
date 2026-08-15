@@ -14,7 +14,7 @@ use registry_discovery_profile::{
     render_description, DiscoveryDescription, ServiceDescription, ServiceKind, ServiceRoles,
     MEDIA_TYPE,
 };
-use registry_discoveryctl::{build_project_at, BuildError};
+use registry_discoveryctl::{build_project, build_project_at, BuildError};
 use tempfile::TempDir;
 use time::{macros::datetime, OffsetDateTime};
 
@@ -253,6 +253,32 @@ async fn build_fetches_each_origin_once_and_preserves_semantic_revisions() {
     assert_eq!(first.catalog_revision, second.catalog_revision);
     assert_eq!(first.mapping_revision, second.mapping_revision);
     assert_ne!(first.built_at, second.built_at);
+    task.abort();
+}
+
+#[tokio::test]
+async fn production_build_time_is_captured_after_origin_collection() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let (catalog_url, task) = provider(description(), StatusCode::OK, Arc::clone(&counter)).await;
+    let project = authoring_project(&catalog_url);
+    let output = project.path().join("index.json");
+
+    let index = build_project(project.path(), &output, true)
+        .await
+        .expect("production build");
+    let fetched_at = OffsetDateTime::parse(
+        &index.origins[0].fetched_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .expect("origin fetch timestamp");
+    let built_at = OffsetDateTime::parse(
+        &index.built_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .expect("build timestamp");
+
+    assert!(built_at >= fetched_at);
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
     task.abort();
 }
 
@@ -569,29 +595,24 @@ async fn compiled_service_bound_leaves_the_previous_output_untouched() {
     task.abort();
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn write_failure_preserves_previous_output_and_leaves_no_visible_temporary_file() {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let counter = Arc::new(AtomicUsize::new(0));
     let (catalog_url, task) = provider(description(), StatusCode::OK, Arc::clone(&counter)).await;
     let project = authoring_project(&catalog_url);
     let deployment = project.path().join("deployment");
     fs::create_dir(&deployment).expect("deployment directory");
     let output = deployment.join("index.json");
-    fs::write(&output, b"previous-index-canary").expect("previous index");
-    fs::set_permissions(&deployment, fs::Permissions::from_mode(0o555))
-        .expect("read-only deployment directory");
+    fs::create_dir(&output).expect("existing deployment target directory");
+    let canary = output.join("previous-index-canary");
+    fs::write(&canary, b"previous-index-canary").expect("previous target canary");
 
     let result = build_project_at(project.path(), &output, true, OffsetDateTime::UNIX_EPOCH).await;
 
-    fs::set_permissions(&deployment, fs::Permissions::from_mode(0o755))
-        .expect("restore deployment directory");
     assert!(matches!(result, Err(BuildError::Write)));
     assert_eq!(counter.load(Ordering::SeqCst), 1);
     assert_eq!(
-        fs::read(&output).expect("previous output"),
+        fs::read(&canary).expect("previous target canary"),
         b"previous-index-canary"
     );
     let entries = fs::read_dir(&deployment)

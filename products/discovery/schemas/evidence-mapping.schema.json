@@ -20,7 +20,7 @@
     }
   },
   "$defs": {
-    "identifier": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 4096},
+    "identifier": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 4096, "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$"},
     "alternative": {
       "type": "object",
       "additionalProperties": false,

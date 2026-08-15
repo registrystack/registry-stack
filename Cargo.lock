@@ -3006,6 +3006,7 @@ dependencies = [
  "axum",
  "axum-test",
  "clap",
+ "futures",
  "http",
  "registry-discovery-profile",
  "registry-platform-canonical-json",

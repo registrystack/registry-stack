@@ -50,6 +50,12 @@
       "value": ["urn:example:evidence-type:adult-status", "urn:example:evidence-type:adult-status"]
     },
     {
+      "name": "mapping-refuses-whitespace-in-semantic-identifier",
+      "contract": "evidence-mapping",
+      "pointer": "/mappingId",
+      "value": "urn:example:mapping with-space"
+    },
+    {
       "name": "runtime-refuses-unknown-root-member",
       "contract": "runtime",
       "pointer": "/unexpected",
@@ -98,6 +104,12 @@
       "value": ["urn:example:class:private"]
     },
     {
+      "name": "index-refuses-whitespace-in-semantic-identifier",
+      "contract": "index",
+      "pointer": "/services/0/serviceId",
+      "value": "urn:example:service with-space"
+    },
+    {
       "name": "index-refuses-whitespace-before-url-parsing",
       "contract": "index",
       "pointer": "/services/0/endpointUrl",
@@ -126,6 +138,12 @@
       "contract": "profile",
       "pointer": "/services/0/serviceId",
       "value": "relative/service"
+    },
+    {
+      "name": "profile-refuses-whitespace-in-semantic-identifier",
+      "contract": "profile",
+      "pointer": "/services/0/serviceId",
+      "value": "urn:example:service with-space"
     },
     {
       "name": "profile-refuses-query-bearing-endpoint",

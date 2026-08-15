@@ -122,7 +122,7 @@ fn resolved_alternatives(mapping: &CompiledEvidenceMapping) -> Vec<ResolvedAlter
 }
 
 pub fn parse_service_filters(raw_query: &str) -> Result<ServiceFilters, QueryError> {
-    if raw_query.len() > MAXIMUM_QUERY_BYTES {
+    if raw_query.len() > MAXIMUM_QUERY_BYTES || !strict_form_encoding(raw_query) {
         return Err(QueryError::InvalidRequest);
     }
     let mut filters = ServiceFilters::default();
@@ -160,6 +160,44 @@ pub fn parse_service_filters(raw_query: &str) -> Result<ServiceFilters, QueryErr
     }
     validate_service_filters(&filters)?;
     Ok(filters)
+}
+
+fn strict_form_encoding(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'%' => {
+                let Some(high) = bytes.get(offset + 1).and_then(|byte| hex_value(*byte)) else {
+                    return false;
+                };
+                let Some(low) = bytes.get(offset + 2).and_then(|byte| hex_value(*byte)) else {
+                    return false;
+                };
+                decoded.push((high << 4) | low);
+                offset += 3;
+            }
+            b'+' => {
+                decoded.push(b' ');
+                offset += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                offset += 1;
+            }
+        }
+    }
+    std::str::from_utf8(&decoded).is_ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub fn validate_service_filters(filters: &ServiceFilters) -> Result<(), QueryError> {
@@ -330,6 +368,24 @@ mod tests {
             parse_service_filters("serviceKind=evidence&semanticClass=urn%3Aclass"),
             Err(QueryError::InvalidRequest)
         );
+    }
+
+    #[test]
+    fn malformed_percent_encoding_and_invalid_utf8_are_refused() {
+        for invalid in [
+            "serviceId=urn%",
+            "serviceId=urn%2",
+            "serviceId=urn%2Gexample",
+            "serviceId=urn%FFexample",
+            "serviceId=urn%C3%28example",
+        ] {
+            assert_eq!(
+                parse_service_filters(invalid),
+                Err(QueryError::InvalidRequest),
+                "{invalid}"
+            );
+        }
+        assert!(parse_service_filters("serviceId=urn%3Aexample%3Aservice").is_ok());
     }
 
     #[test]

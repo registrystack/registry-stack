@@ -493,6 +493,7 @@ pub fn valid_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.chars().count() <= MAXIMUM_IDENTIFIER_CHARACTERS
         && value.trim() == value
+        && !value.chars().any(char::is_whitespace)
         && !value.bytes().any(|byte| byte.is_ascii_control())
 }
 
@@ -623,6 +624,8 @@ pub(crate) mod tests {
         assert!(valid_identifier("origin-a"));
         assert!(!valid_identifier(" origin-a"));
         assert!(!valid_identifier("origin-a "));
+        assert!(!valid_identifier("origin a"));
+        assert!(!valid_identifier("origin\u{00a0}a"));
     }
 
     #[test]

@@ -136,13 +136,15 @@ built catalogRevision=sha256:<64-lowercase-hex-digits> mappingRevision=sha256:<6
 ```
 
 The build fetches every enabled origin once, records the exact fetched-byte digest and fetch time,
-and replaces the output only after the complete index validates. Run it again only when you intend
-to publish a new index revision.
+and records `builtAt` after every origin has been collected and the semantic revisions compile.
+The builder validates and syncs the complete file before replacing the active index, then syncs the
+deployment directory. Run the build again only when you intend to publish a new index revision.
 
 {/* Evidence: `crates/registry-discoveryctl/src/build.rs`, `fetch_origins()` and `atomic_replace()`;
     `crates/registry-discoveryctl/tests/build.rs`,
     `build_fetches_each_origin_once_and_preserves_semantic_revisions` and
-    `failed_origin_fetch_leaves_the_previous_output_untouched`. */}
+    `production_build_time_is_captured_after_origin_collection`; the production `atomic_replace()`
+    path calls `sync_all()` for the staged file and its parent directory. */}
 
 ## Deploy and restart the service
 
@@ -182,10 +184,16 @@ curl --fail-with-body "http://127.0.0.1:8080/ready"
 
 The runtime accepts only its listener, relative index path, limits, and log level. It does not carry
 provider credentials, origin-fetch configuration, mappings, or application trust configuration.
+The runtime acquires one of four request-body permits before reading a body and holds the permit
+through request handling. It also rejects malformed percent escapes, invalid UTF-8 query values,
+duplicate media-type headers, and request media parameters other than UTF-8 JSON.
 
 {/* Evidence: `crates/registry-discovery/src/startup.rs`, `RuntimeConfig`, `load_runtime()`, and
     test `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`;
-    `crates/registry-discovery/src/server.rs`, `READY_ROUTE`. */}
+    `crates/registry-discovery/src/server.rs`, tests
+    `request_body_capacity_is_acquired_before_buffering_and_recovers` and
+    `request_media_type_accepts_only_bare_or_utf8_json`; `crates/registry-discovery/src/query.rs`,
+    test `malformed_percent_encoding_and_invalid_utf8_are_refused`. */}
 
 ## Verify resolution and exact search
 

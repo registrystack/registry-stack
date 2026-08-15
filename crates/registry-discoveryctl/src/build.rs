@@ -44,11 +44,13 @@ pub async fn build_project(
     output: &Path,
     allow_loopback: bool,
 ) -> Result<DiscoveryIndex, BuildError> {
-    build_project_at(
+    build_project_with_timeouts(
         project_root,
         output,
         allow_loopback,
-        OffsetDateTime::now_utc(),
+        None,
+        DNS_TIMEOUT,
+        FETCH_TIMEOUT,
     )
     .await
 }
@@ -59,27 +61,26 @@ pub async fn build_project_at(
     allow_loopback: bool,
     built_at: OffsetDateTime,
 ) -> Result<DiscoveryIndex, BuildError> {
-    build_project_at_with_timeouts(
+    build_project_with_timeouts(
         project_root,
         output,
         allow_loopback,
-        built_at,
+        Some(built_at),
         DNS_TIMEOUT,
         FETCH_TIMEOUT,
     )
     .await
 }
 
-async fn build_project_at_with_timeouts(
+async fn build_project_with_timeouts(
     project_root: &Path,
     output: &Path,
     allow_loopback: bool,
-    built_at: OffsetDateTime,
+    fixed_built_at: Option<OffsetDateTime>,
     dns_timeout: Duration,
     fetch_timeout: Duration,
 ) -> Result<DiscoveryIndex, BuildError> {
     let checked = check_project(project_root, allow_loopback)?;
-    let timestamp = built_at.format(&Rfc3339).map_err(|_| BuildError::Compile)?;
     let (mut origins, mut services) =
         fetch_origins(&checked, allow_loopback, dns_timeout, fetch_timeout).await?;
     origins.sort_by(|left, right| left.origin_id.cmp(&right.origin_id));
@@ -91,11 +92,17 @@ async fn build_project_at_with_timeouts(
             .then(left.jurisdiction.cmp(&right.jurisdiction))
             .then(left.mapping_id.cmp(&right.mapping_id))
     });
+    let catalog_revision = catalog_revision(&services).map_err(|_| BuildError::Compile)?;
+    let mapping_revision = mapping_revision(&mappings).map_err(|_| BuildError::Compile)?;
+    let timestamp = fixed_built_at
+        .unwrap_or_else(OffsetDateTime::now_utc)
+        .format(&Rfc3339)
+        .map_err(|_| BuildError::Compile)?;
 
     let index = DiscoveryIndex {
         schema_version: INDEX_SCHEMA.to_owned(),
-        catalog_revision: catalog_revision(&services).map_err(|_| BuildError::Compile)?,
-        mapping_revision: mapping_revision(&mappings).map_err(|_| BuildError::Compile)?,
+        catalog_revision,
+        mapping_revision,
         built_at: timestamp,
         origins,
         services,
@@ -270,6 +277,7 @@ fn atomic_replace(output: &Path, bytes: &[u8]) -> Result<(), BuildError> {
         .sync_all()
         .map_err(|_| BuildError::Write)?;
     temporary.persist(output).map_err(|_| BuildError::Write)?;
+    sync_parent_directory(parent)?;
     Ok(())
 }
 
@@ -289,6 +297,18 @@ fn set_output_permissions(file: &std::fs::File) -> Result<(), BuildError> {
 
 #[cfg(not(unix))]
 fn set_output_permissions(_file: &std::fs::File) -> Result<(), BuildError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(parent: &Path) -> Result<(), BuildError> {
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| BuildError::Write)
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_parent: &Path) -> Result<(), BuildError> {
     Ok(())
 }
 
@@ -414,11 +434,11 @@ mod tests {
         let project_path = project.path().to_path_buf();
         let build_output = output.clone();
         let mut build = tokio::spawn(async move {
-            build_project_at_with_timeouts(
+            build_project_with_timeouts(
                 &project_path,
                 &build_output,
                 true,
-                OffsetDateTime::UNIX_EPOCH,
+                Some(OffsetDateTime::UNIX_EPOCH),
                 DNS_TIMEOUT,
                 Duration::from_millis(500),
             )
