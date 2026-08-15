@@ -5,6 +5,12 @@ import { tmpdir } from 'node:os';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import {
+  constants as zlibConstants,
+  crc32,
+  deflateRawSync,
+  gunzipSync,
+} from 'node:zlib';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
 import {
   archiveOutputDirectory,
@@ -170,6 +176,28 @@ async function replaceFile(path, contents) {
   }
 }
 
+const deterministicGzipHeader = Buffer.from([
+  0x1f, 0x8b, 0x08, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+  0x02, 0xff,
+]);
+
+function deterministicGzip(contents) {
+  // zlib records the host OS in its gzip header, so gzipSync emits different
+  // bytes on macOS and Linux. Build the framing explicitly with no optional
+  // fields, zero mtime, maximum-compression XFL, and the unknown-OS marker.
+  const compressed = deflateRawSync(contents, {
+    level: 9,
+    memLevel: 8,
+    strategy: zlibConstants.Z_DEFAULT_STRATEGY,
+    windowBits: 15,
+  });
+  const trailer = Buffer.alloc(8);
+  trailer.writeUInt32LE(crc32(contents), 0);
+  trailer.writeUInt32LE(contents.length >>> 0, 4);
+  return Buffer.concat([deterministicGzipHeader, compressed, trailer]);
+}
+
 export async function normalizePagefindGzipMetadata(outputRoot) {
   const pagefindRoot = resolve(outputRoot, 'pagefind');
   let pagefindInfo;
@@ -204,9 +232,16 @@ export async function normalizePagefindGzipMetadata(outputRoot) {
       throw new Error(`generated Pagefind WebAssembly must use gzip framing: ${path}`);
     }
     files += 1;
-    if (contents.subarray(4, 8).some((byte) => byte !== 0)) {
-      const updated = Buffer.from(contents);
-      updated.fill(0, 4, 8);
+    let uncompressed;
+    try {
+      uncompressed = gunzipSync(contents);
+    } catch (error) {
+      throw new Error(`generated Pagefind WebAssembly must be valid gzip: ${path}`, {
+        cause: error,
+      });
+    }
+    const updated = deterministicGzip(uncompressed);
+    if (!contents.equals(updated)) {
       await replaceFile(path, updated);
       normalized += 1;
     }
