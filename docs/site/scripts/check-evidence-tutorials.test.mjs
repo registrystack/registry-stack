@@ -39,7 +39,7 @@ async function runShell(script) {
 test('the dry-run gate registers the shared Evidence start tutorials', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /first-evidence-assertion: 27 sh fences, 23 executed/u);
+  assert.match(output, /first-evidence-assertion: 21 sh fences, 19 executed/u);
   assert.match(output, /request-evidence-as-sd-jwt-vc: 16 sh fences, 16 executed/u);
   assert.match(
     output,
@@ -73,17 +73,6 @@ test('--only accepts the current first Evidence tutorial', async () => {
   assert.ok(branch, 'the first Evidence replay spec must exist');
   assert.match(branch, /stop-background/u);
   assert.match(branch, /run:5-6/u);
-  assert.match(branch, /git clone https:\/\/github\.com\/registrystack\/registry-stack\.git/u);
-  assert.match(branch, /cargo build --locked --release/u);
-  assert.match(branch, /evidencectl client profile create/u);
-  assert.match(branch, /--local-loopback-discovery/u);
-  assert.match(branch, /registry-evidence-client-py/u);
-  assert.match(branch, /CLIENT_PACKAGE_SOURCE=/u);
-  assert.match(branch, /PACKAGE_NAME=/u);
-  assert.match(branch, /source mock generate/u);
-  assert.match(branch, /--case person-123/u);
-  assert.match(branch, /--case person-456/u);
-  assert.match(branch, /--case person-789/u);
   assert.match(branch, /source mock check --config mocks\/source\.yaml/u);
 });
 
@@ -257,11 +246,11 @@ test('--only refuses an unpublished legacy tutorial', async () => {
   assert.match(output, /not a registered Evidence tutorial/u);
 });
 
-// The replay runs inside a clean Debian userland holding a shell, coreutils,
-// Python, and the toolset under test. An undeclared interpreter fails
-// mid-journey, where the transcript looks like a tutorial defect, so the gate
-// and everything it emits stay on that explicit floor.
-test('the gate depends on no interpreter beyond the supplied Python and Node runtimes', async () => {
+// The replay runs inside a clean Debian userland holding a shell, coreutils
+// and the toolset under test. An interpreter the container does not carry
+// fails mid-journey, where the transcript makes it look like a tutorial
+// defect, so the gate and everything it emits stay on that floor.
+test('the gate depends on no interpreter beyond the replay userland', async () => {
   const source = await readFile(gate, 'utf8');
   const offenders = source
     .split('\n')
@@ -271,17 +260,10 @@ test('the gate depends on no interpreter beyond the supplied Python and Node run
     // matches, never an interpreter it runs, so they are removed before the
     // line is judged rather than exempting whole lines that carry them.
     .map(([number, line]) => [number, line.replaceAll(/python-(?:client|module)/gu, '')])
-    .filter(([, line]) => /\b(?:npm|npx|python3?|ruby|perl)\b/u.test(line))
+    .filter(([, line]) => /\b(?:node|npm|npx|python3?|ruby|perl)\b/u.test(line))
     // A save step names the Markdown fence language as data. It extracts that
     // fence with the shell helper and does not execute the named interpreter.
-    .filter(([, line]) => !/^\s*"save:[^"]+\|[^|]+\|\d+\|[^"]+",?$/u.test(line))
-    // This is another required Markdown literal, not a gate command.
-    .filter(([, line]) => !/^\s*"TUTORIAL_MISMATCH_BINDING=1 python age-check\.py"/u.test(line))
-    // The first assertion tutorial deliberately executes its Python lane. The
-    // runner resolves one configured interpreter and exposes only that binary
-    // under the `python` name created by an activated virtual environment.
-    .filter(([, line]) => !/^\s*PYTHON_CLIENT_BIN="\$\(command -v python3 \|\| true\)"$/u.test(line))
-    .filter(([, line]) => !/^\s*ln -sf "\$PYTHON_CLIENT_BIN" "\$SHIM_DIR\/python"$/u.test(line));
+    .filter(([, line]) => !/^\s*"save:[^"]+\|[^|]+\|\d+\|[^"]+",?$/u.test(line));
   assert.deepEqual(offenders, [], 'the gate must not reach for an interpreter');
 });
 

@@ -249,13 +249,13 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
 )
 
 # A package is exempt from the tutorial trigger only while no tutorial runs it.
-# `request-evidence-from-an-application` imports both Evidence bindings, so a
-# change to either has to replay that tutorial. Move a package out of this set
-# as soon as a registered tutorial exercises it, or its regressions reach
-# readers before they reach CI. The registered OID4VCI
+# The Python binding is what `request-evidence-from-an-application` imports, so
+# a change to it has to replay that tutorial and is not listed here. Move a
+# package out of this set as soon as a registered tutorial exercises it, or its
+# regressions reach readers before they reach CI. The registered OID4VCI
 # interoperability tutorial builds the adapter and executes its sanitized
 # wallet-flow test, so the adapter is deliberately not exempt.
-EVIDENCE_TUTORIAL_EXEMPT_PACKAGES = frozenset()
+EVIDENCE_TUTORIAL_EXEMPT_PACKAGES = frozenset({"registry-evidence-client-node"})
 
 # The gate also builds and runs `mint`, because one tutorial serves assertions
 # to a caller holding a real Mint-issued token.
