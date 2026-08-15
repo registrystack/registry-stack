@@ -803,7 +803,7 @@
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "ca929458ed01d1acd15da510fd4d114c28c854c0c2ad686f1a82cc3bed5b3021"
+        "sha256": "11101d8c32539b21051940790c36d72a3fb2dddd6a4ad10796623b456a55431d"
       },
       "artifact": {
         "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha1.json",
