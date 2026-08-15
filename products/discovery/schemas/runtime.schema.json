@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/discovery/schema/runtime-v1alpha1.json",
+  "title": "Registry Discovery runtime configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "listener", "indexPath", "limits", "logLevel"],
+  "properties": {
+    "schemaVersion": {"const": "registry-discovery/runtime/v1alpha1"},
+    "listener": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address"],
+      "properties": {
+        "address": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "An IPv4 or bracketed IPv6 SocketAddr literal. Port zero is valid and requests an ephemeral listener, matching Rust SocketAddr parsing.",
+          "allOf": [
+            {"$ref": "#/$defs/socketPort"},
+            {
+              "anyOf": [
+                {"$ref": "#/$defs/ipv4SocketHost"},
+                {"$ref": "#/$defs/ipv6HexSocketHost"},
+                {"$ref": "#/$defs/ipv6MixedSocketHost"}
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "indexPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(?:[^/]+/)*[^/]+$",
+      "not": {"pattern": "(^|/)\\.{1,2}(/|$)"},
+      "description": "Relative normal path resolved beside this runtime file."
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maximumRequestBytes", "maximumResponseBytes", "maximumResultRecords", "maximumResultAlternatives", "requestTimeoutSeconds", "shutdownTimeoutSeconds"],
+      "properties": {
+        "maximumRequestBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "maximumResponseBytes": {"type": "integer", "minimum": 65536, "maximum": 16777216},
+        "maximumResultRecords": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "maximumResultAlternatives": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "requestTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        "shutdownTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 300}
+      }
+    },
+    "logLevel": {"enum": ["error", "warn", "info"]}
+  },
+  "$defs": {
+    "socketPort": {
+      "description": "A decimal u16 port, including zero and Rust-compatible leading zeroes.",
+      "pattern": ":0*(?:[0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+    },
+    "ipv4SocketHost": {
+      "description": "Four canonical decimal IPv4 octets followed by a decimal port.",
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0):[0-9]+$"
+    },
+    "ipv6HexSocketHost": {
+      "description": "A bracketed hexadecimal IPv6 literal, including every RFC 3986 compression position, followed by a decimal port.",
+      "pattern": "^\\[(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,7}:|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}|(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}|(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}|(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}|[0-9A-Fa-f]{1,4}:(?:(?::[0-9A-Fa-f]{1,4}){1,6})|:(?:(?::[0-9A-Fa-f]{1,4}){1,7}|:))\\]:[0-9]+$"
+    },
+    "ipv6MixedSocketHost": {
+      "description": "A bracketed IPv6 literal whose final 32 bits use canonical dotted-decimal IPv4 notation, followed by a decimal port.",
+      "pattern": "^\\[(?:(?:[0-9A-Fa-f]{1,4}:){6}|::(?:[0-9A-Fa-f]{1,4}:){5}|(?:[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){4}|(?:(?:[0-9A-Fa-f]{1,4}:){0,1}[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){3}|(?:(?:[0-9A-Fa-f]{1,4}:){0,2}[0-9A-Fa-f]{1,4})?::(?:[0-9A-Fa-f]{1,4}:){2}|(?:(?:[0-9A-Fa-f]{1,4}:){0,3}[0-9A-Fa-f]{1,4})?::[0-9A-Fa-f]{1,4}:|(?:(?:[0-9A-Fa-f]{1,4}:){0,4}[0-9A-Fa-f]{1,4})?::)(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)\\]:[0-9]+$"
+    }
+  }
+}

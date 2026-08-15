@@ -760,7 +760,7 @@ class GateInventoryTest(unittest.TestCase):
             for step in job["steps"]
             if step.get("name") == "Prove production Linux Node client recipe"
         )
-        self.assertIn("for client in evidence relay", proof)
+        self.assertIn("for client in discovery evidence relay", proof)
         self.assertIn("release/scripts/build-linux-node-client", proof)
         self.assertIn('--target "${{ matrix.target }}"', proof)
         self.assertIn('--napi-platform "${{ matrix.napi_platform }}"', proof)

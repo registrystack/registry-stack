@@ -37,6 +37,12 @@ dependency runs one way only in production: no Evidence crate depends on
 
 | Area | Owns |
 |---|---|
+| `crates/registry-discovery` | Immutable Registry Discovery index runtime and the `discovery` binary |
+| `crates/registry-discovery-profile` | Closed provider-publication profile shared by Evidence and Relay |
+| `crates/registry-discovery-client` | Rust relying-party SDK for bounded search, resolution, and inert exact selections |
+| `crates/registry-discovery-client-node` | Node.js binding for `registry-discovery-client`, via napi-rs |
+| `crates/registry-discovery-client-py` | Python binding for `registry-discovery-client`, via PyO3 |
+| `crates/registry-discoveryctl` | Offline origin and mapping checks plus immutable index builds |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
 | `crates/registry-evidence-verifier` | Portable Evidence response verification, shared by the runtime and client tooling |
 | `crates/registry-evidence-client` | Evidence relying-party SDK: requests assertions and verifies them via `registry-evidence-verifier` |
@@ -60,6 +66,17 @@ dependency runs one way only in production: no Evidence crate depends on
 Relay V2 is implemented by `registry-relay-v2` and `registry-relayctl`. Its
 approved contracts, coequal acceptance projects, and gates live under
 `products/relay-v2`.
+
+Registry Discovery is a curated index over public provider descriptions, not
+a trust broker, authorization service, protocol adapter, or data proxy.
+`registry-discovery-profile` is the narrow shared publication contract that
+Evidence and Relay depend on; it contains no runtime, source access, trust, or
+native-client behavior. Discovery fetches only an operator-approved origin
+list during an offline build, serves one immutable index, and leaves endpoint
+trust plus native Evidence or Relay invocation to the relying application.
+The Rust, Node.js, and Python Discovery clients must preserve that boundary:
+they may search, resolve, validate, and persist inert exact selections, but
+must never turn catalog metadata into trust or credentials.
 
 Relay V2 editor support uses the shared in-memory authoring compiler in
 `registry-relay-v2`; the language server must not observe SQLite or source
@@ -200,6 +217,29 @@ products/evidence/scripts/check-contracts.sh
 products/evidence/scripts/check-source-neutrality.sh
 products/evidence/scripts/check-verifier-portability.sh
 products/evidence/scripts/check-config-key-paths.sh
+```
+
+Registry Discovery contracts and end-to-end client handoff:
+
+```bash
+products/discovery/scripts/check-contracts.sh
+products/discovery/scripts/test-http.sh
+products/discovery/scripts/test-adopter-tutorial.sh
+```
+
+Registry Discovery language bindings, from their respective crate directories:
+
+```bash
+cd crates/registry-discovery-client-node
+npm ci
+npm run build:debug
+npm test
+npm run check:types
+
+cd ../registry-discovery-client-py
+cargo build --locked -p registry-discovery-client-py --lib \
+  --features registry-discovery-client-py/extension-module
+python3 -m unittest discover -s tests/python -v
 ```
 
 The last check holds every Evidence configuration reference in exact parity

@@ -960,6 +960,8 @@ fn is_ipv6_unicast_link_local(ip: Ipv6Addr) -> bool {
 mod tests {
     #![allow(deprecated)]
 
+    use std::process::Command;
+
     use super::*;
     use axum::{
         body::Body,
@@ -1012,6 +1014,56 @@ mod tests {
             .await
             .expect("request succeeds");
         assert_eq!(response.status(), StatusCode::FOUND);
+    }
+
+    #[test]
+    fn outbound_clients_ignore_ambient_proxy_variables_in_an_isolated_process() {
+        if std::env::var_os("REGISTRY_HTTP_PROXY_CHILD").is_some() {
+            return;
+        }
+        let status = Command::new(std::env::current_exe().expect("test executable"))
+            .arg("--exact")
+            .arg("tests::outbound_clients_ignore_ambient_proxy_variables_child")
+            .arg("--nocapture")
+            .env("REGISTRY_HTTP_PROXY_CHILD", "1")
+            .env("HTTP_PROXY", "http://127.0.0.1:1")
+            .env("HTTPS_PROXY", "http://127.0.0.1:1")
+            .env("ALL_PROXY", "http://127.0.0.1:1")
+            .env("NO_PROXY", "")
+            .env("http_proxy", "http://127.0.0.1:1")
+            .env("https_proxy", "http://127.0.0.1:1")
+            .env("all_proxy", "http://127.0.0.1:1")
+            .env("no_proxy", "")
+            .status()
+            .expect("spawn isolated proxy test");
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn outbound_clients_ignore_ambient_proxy_variables_child() {
+        if std::env::var_os("REGISTRY_HTTP_PROXY_CHILD").is_none() {
+            return;
+        }
+        let base = serve(Router::new().route("/target", get(|| async { "direct" }))).await;
+
+        let response = OutboundClientBuilder::new()
+            .build()
+            .get(format!("{base}/target"))
+            .send()
+            .await
+            .expect("the hardened service client connects directly");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let url = reqwest::Url::parse(&format!("{base}/target")).expect("target URL");
+        let response = FetchUrlPolicy::dev()
+            .validate_dns_pinned_for_immediate_fetch(&url)
+            .expect("development loopback target")
+            .immediate_get()
+            .expect("pinned request")
+            .send()
+            .await
+            .expect("the exact-target client connects directly");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]

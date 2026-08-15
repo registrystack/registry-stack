@@ -58,6 +58,7 @@ use crate::{
 const EVIDENCE_ROUTE: &str = "/v1/evidence";
 const EVIDENCE_BATCH_ROUTE: &str = "/v1/evidence/batch";
 const DEFINITIONS_ROUTE: &str = "/v1/evidence-definitions";
+const DISCOVERY_ROUTE: &str = "/catalog.jsonld";
 const HEALTH_ROUTE: &str = "/health";
 const OPENAPI_ROUTE: &str = "/openapi.json";
 const READY_ROUTE: &str = "/ready";
@@ -68,10 +69,11 @@ const JWT_VC_ISSUER_ROUTE: &str = "/.well-known/jwt-vc-issuer";
 ///
 /// Operational telemetry labels requests with a member of this set or with a
 /// single fixed unmatched label, so a caller cannot introduce a label value.
-pub(crate) const ROUTE_TEMPLATES: [&str; 8] = [
+pub(crate) const ROUTE_TEMPLATES: [&str; 9] = [
     EVIDENCE_ROUTE,
     EVIDENCE_BATCH_ROUTE,
     DEFINITIONS_ROUTE,
+    DISCOVERY_ROUTE,
     HEALTH_ROUTE,
     OPENAPI_ROUTE,
     READY_ROUTE,
@@ -154,6 +156,10 @@ fn build_app_with_tracker_at(
         .route(EVIDENCE_ROUTE, post(create_evidence))
         .route(EVIDENCE_BATCH_ROUTE, post(create_evidence_batch))
         .route(DEFINITIONS_ROUTE, get(discover_evidence))
+        .route(
+            DISCOVERY_ROUTE,
+            get(discovery_description).head(unknown_route),
+        )
         .route(HEALTH_ROUTE, get(health))
         .route(OPENAPI_ROUTE, get(openapi))
         .route(READY_ROUTE, get(ready))
@@ -754,6 +760,20 @@ async fn discover_evidence(
 
 async fn health() -> Response {
     static_json_response(StatusCode::OK, r#"{"status":"ok"}"#)
+}
+
+/// Serve only the immutable provider-publication bytes compiled from the
+/// governed bundle. This path performs no authentication, source access,
+/// assertion evaluation, signing, or Evidence audit write.
+async fn discovery_description(State(state): State<Arc<ServerState>>) -> Response {
+    match state.runtime.bundle().discovery_description() {
+        Some(description) => bytes_response(
+            StatusCode::OK,
+            registry_discovery_profile::MEDIA_TYPE,
+            description.to_vec(),
+        ),
+        None => empty_response(StatusCode::NOT_FOUND),
+    }
 }
 
 /// Publish the generated public contract. The document is static release

@@ -1759,6 +1759,65 @@
         "summary": "Publish JWT VC Issuer Metadata for the SD-JWT VC response format"
       }
     },
+    "/catalog.jsonld": {
+      "get": {
+        "description": "A deterministic closed projection of governed public Evidence service facts. This route is intentionally unauthenticated and performs no source access, assertion evaluation, signing, or Evidence audit write.",
+        "operationId": "getProviderDiscoveryDescription",
+        "responses": {
+          "200": {
+            "content": {
+              "application/ld+json;profile=\"https://registrystack.org/discovery/profile/v1alpha1\"": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The provider-published Registry Discovery description",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This bundle does not publish a description",
+            "headers": {
+              "Cache-Control": {
+                "description": "Evidence responses are never cacheable.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Fetch the provider-published Registry Discovery description"
+      }
+    },
     "/health": {
       "get": {
         "operationId": "getHealth",

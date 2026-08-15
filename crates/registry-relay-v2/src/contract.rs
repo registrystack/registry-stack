@@ -161,6 +161,8 @@ pub struct RegistryContract {
     pub metadata: ContractMetadata,
     pub registry: RegistryDefinition,
     pub governance: Governance,
+    #[serde(default)]
+    pub publication: Option<Publication>,
     pub semantics: Semantics,
     pub classifications: ClassificationCatalog,
     pub sources: OrderedMap<SourceDefinition>,
@@ -169,6 +171,23 @@ pub struct RegistryContract {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statistical_datasets: Vec<StatisticalDatasetDefinition>,
     pub metadata_visibility: MetadataVisibility,
+}
+
+pub const MAXIMUM_PUBLICATION_JURISDICTIONS: usize =
+    registry_discovery_profile::MAX_IDENTIFIER_VALUES;
+
+/// Public facts the Registry author explicitly elects to publish for
+/// discovery. All other description fields are derived from already governed
+/// Registry identity, service, role, and operation contracts.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Publication {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(min = 1, max = MAXIMUM_PUBLICATION_JURISDICTIONS))
+    )]
+    pub jurisdictions: Vec<String>,
 }
 
 impl RegistryContract {

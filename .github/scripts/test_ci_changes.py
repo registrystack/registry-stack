@@ -14,6 +14,9 @@ from typing import Any
 
 from ci_changes import (
     CLI_REFERENCE_INPUTS,
+    DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS,
+    DISCOVERY_PROVIDER_INPUTS,
+    DISCOVERY_TUTORIAL_INPUTS,
     EVIDENCE_AUTHORING_GUIDE_IMPLEMENTATION_INPUTS,
     EVIDENCE_TUTORIAL_INPUTS,
     IDENTIFIER_CATALOG_INPUTS,
@@ -209,6 +212,94 @@ class CiChangesTest(unittest.TestCase):
         self.assertCountEqual(assigned, self.workspace.package_names)
         self.assertEqual(len(assigned), len(set(assigned)))
 
+    def test_discovery_product_material_selects_the_complete_product_gate(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("products/discovery/contracts/security-invariant-matrix.yaml",),
+        )
+        for package in SHARDS["discovery"]:
+            self.assertIn(package, outputs["rust_packages"])
+        # The product contract governs the shared provider-publication profile,
+        # so its reverse-dependency closure must exercise both publishers and
+        # their owning tooling as well as the Discovery crates themselves.
+        self.assertIn("registry-evidence", outputs["rust_packages"])
+        self.assertIn("registry-relay-v2", outputs["rust_packages"])
+        self.assertTrue(outputs["discovery_contracts"])
+        self.assertEqual(
+            {entry["name"] for entry in outputs["rust_matrix"]["include"]},
+            {"developer-tools", "discovery", "evidence", "mint", "relay-v2"},
+        )
+
+    def test_discovery_profile_changes_select_reverse_dependents_and_contracts(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("crates/registry-discovery-profile/src/lib.rs",),
+        )
+        self.assertIn("registry-discovery-profile", outputs["rust_packages"])
+        self.assertIn("registry-discovery", outputs["rust_packages"])
+        self.assertIn("registry-discoveryctl", outputs["rust_packages"])
+        self.assertTrue(outputs["discovery_contracts"])
+
+    def test_every_provider_publication_implementation_path_selects_discovery_contracts(
+        self,
+    ) -> None:
+        self.assertEqual(
+            set(DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS),
+            {
+                "crates/registry-evidence/src/bundle.rs",
+                "crates/registry-evidence/src/cli.rs",
+                "crates/registry-evidence/src/config.rs",
+                "crates/registry-evidence/src/contracts.rs",
+                "crates/registry-evidence/src/discovery.rs",
+                "crates/registry-evidence/src/main.rs",
+                "crates/registry-evidence/src/runtime_tests.rs",
+                "crates/registry-evidence/src/server.rs",
+                "crates/registry-evidencectl/src/authoring.rs",
+                "crates/registry-evidencectl/src/build.rs",
+                "crates/registry-evidencectl/src/fixtures.rs",
+                "crates/registry-evidencectl/tests/production_build.rs",
+                "crates/registry-relay-http-contract/src/lib.rs",
+                "crates/registry-relay-v2/src/api.rs",
+                "crates/registry-relay-v2/src/artifacts.rs",
+                "crates/registry-relay-v2/src/compiler.rs",
+                "crates/registry-relay-v2/src/contract.rs",
+                "crates/registry-relay-v2/src/model.rs",
+                "crates/registry-relay-v2/src/package.rs",
+                "crates/registry-relay-v2/src/server.rs",
+                "crates/registry-relay-v2/src/tooling.rs",
+                "crates/registry-relay-v2/tests/acceptance_http.rs",
+            },
+        )
+        for path in DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS:
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["discovery_contracts"])
+
+    def test_every_provider_publication_product_input_selects_discovery_contracts(
+        self,
+    ) -> None:
+        product_patterns = set(DISCOVERY_PROVIDER_INPUTS).difference(
+            DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS
+        )
+        self.assertTrue(product_patterns)
+        for pattern in product_patterns:
+            matches = sorted(Path().glob(pattern))
+            with self.subTest(pattern=pattern):
+                self.assertTrue(matches, f"provider input pattern matches nothing: {pattern}")
+            for path in matches:
+                with self.subTest(pattern=pattern, path=path):
+                    self.assertTrue(
+                        classify(self.workspace, (path.as_posix(),))[
+                            "discovery_contracts"
+                        ]
+                    )
+
+    def test_every_discovery_tutorial_input_replays_the_product_gate(self) -> None:
+        for path in DISCOVERY_TUTORIAL_INPUTS:
+            with self.subTest(path=path):
+                self.assertTrue(Path(path).is_file())
+                self.assertTrue(classify(self.workspace, (path,))["discovery_contracts"])
+
     def test_relay_v2_paths_select_the_editor_and_reverse_dependents(self) -> None:
         outputs = classify(
             self.workspace,
@@ -272,6 +363,9 @@ class CiChangesTest(unittest.TestCase):
                 "registry-cli-docs",
                 "registry-relayctl",
                 "registry-evidencectl",
+                # The Discovery client owns the cross-product journey against
+                # a real Relay router through this dev-dependency edge.
+                "registry-discovery-client",
             },
         )
         self.assertTrue(outputs["relay_v2_contracts"])
@@ -409,14 +503,15 @@ class CiChangesTest(unittest.TestCase):
     def test_evidence_code_and_product_contracts_select_its_shards_and_drift_gate(self) -> None:
         # A path inside the runtime crate seeds that crate alone. registry-mint
         # dev-depends on registry-evidence so its compatibility test proves
-        # Evidence accepts a minted token. Changing Evidence must therefore run
-        # the mint shard too.
+        # Evidence accepts a minted token. The Discovery client also drives a
+        # real Evidence router. Changing Evidence must therefore run both test
+        # consumers.
         outputs = classify(self.workspace, ("crates/registry-evidence/src/source.rs",))
         self.assertTrue(outputs["evidence_contracts"])
         self.assertIn("registry-evidence", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"developer-tools", "evidence", "mint"},
+            {"developer-tools", "discovery", "evidence", "mint"},
         )
 
         # A products/evidence path belongs to no crate directory, so it seeds
@@ -438,6 +533,7 @@ class CiChangesTest(unittest.TestCase):
                 self.assertEqual(
                     {entry["name"] for entry in outputs["rust_matrix"]["include"]},
                     {
+                        "discovery",
                         "evidence",
                         "mint",
                         "relay-v2",
@@ -567,7 +663,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(outputs["evidence_contracts"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"relay-client", "relay-v2"},
+            {"discovery", "relay-client", "relay-v2"},
         )
         relay_client_matrix = next(
             entry
@@ -641,12 +737,21 @@ class CiChangesTest(unittest.TestCase):
         # the npm suite, the type-drift check, and the Python unittest suite for
         # exactly the changes most able to break them.
         for path in (
+            "crates/registry-discovery-client/src/client.rs",
             "crates/registry-evidence-client/src/client.rs",
             "crates/registry-evidence-verifier/src/lib.rs",
         ):
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
                 self.assertTrue(outputs["client_bindings"])
+                if "registry-discovery-client" in path:
+                    self.assertIn(
+                        "registry-discovery-client-node", outputs["rust_packages"]
+                    )
+                    self.assertIn(
+                        "registry-discovery-client-py", outputs["rust_packages"]
+                    )
+                    continue
                 self.assertIn(
                     "registry-evidence-client-node", outputs["rust_packages"]
                 )
@@ -656,8 +761,10 @@ class CiChangesTest(unittest.TestCase):
         self,
     ) -> None:
         for path in (
+            "crates/registry-discovery-client-node/src/lib.rs",
             "crates/registry-evidence-client-node/src/lib.rs",
             "crates/registry-relay-client-node/src/lib.rs",
+            "crates/registry-discovery-client/src/client.rs",
             "crates/registry-evidence-client/src/client.rs",
             "crates/registry-relay-client/src/client.rs",
             "crates/registry-platform-httputil/src/lib.rs",
@@ -676,6 +783,7 @@ class CiChangesTest(unittest.TestCase):
             "rust-toolchain.toml",
             "release/requirements/maturin-1.9.6.txt",
             "release/scripts/build-linux-node-client",
+            "release/scripts/smoke-discovery-client-package.js",
             "release/scripts/smoke-evidence-client-package.js",
             "release/scripts/smoke-relay-client-package.js",
             "release/scripts/test_build_linux_node_client.py",
@@ -715,6 +823,11 @@ class CiChangesTest(unittest.TestCase):
 
     def test_current_contract_gates_replace_the_retired_notary_gate(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("\n  discovery-contracts:\n", workflow)
+        self.assertIn("products/discovery/scripts/check-contracts.sh", workflow)
+        self.assertIn(
+            "products/discovery/scripts/test-adopter-tutorial.sh", workflow
+        )
         self.assertIn("\n  evidence-contracts:\n", workflow)
         self.assertIn("products/evidence/scripts/check-contracts.sh", workflow)
         self.assertIn(
@@ -732,6 +845,7 @@ class CiChangesTest(unittest.TestCase):
         rust_result = workflow.split("\n  rust-result:\n", 1)[1].split(
             "\n  release-tool:\n", 1
         )[0]
+        self.assertIn("\n      - discovery-contracts\n", rust_result)
         self.assertIn("\n      - evidence-contracts\n", rust_result)
         self.assertIn("\n      - relay-v2-contracts\n", rust_result)
         self.assertIn("\n      - relay-client-contracts\n", rust_result)

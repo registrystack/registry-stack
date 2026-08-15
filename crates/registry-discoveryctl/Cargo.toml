@@ -1,0 +1,41 @@
+[package]
+name = "registry-discoveryctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Offline Registry Discovery catalog authoring and immutable index builds."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "discoveryctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+hex.workspace = true
+registry-discovery.workspace = true
+registry-discovery-profile.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-httputil.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+jsonschema.workspace = true
+registry-discovery = { workspace = true, features = ["server"] }
+tempfile.workspace = true

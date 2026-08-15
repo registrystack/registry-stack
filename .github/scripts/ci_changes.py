@@ -12,6 +12,14 @@ from typing import Any, Iterable
 
 
 SHARDS = {
+    "discovery": (
+        "registry-discovery",
+        "registry-discovery-client",
+        "registry-discovery-client-node",
+        "registry-discovery-client-py",
+        "registry-discovery-profile",
+        "registry-discoveryctl",
+    ),
     "platform": (
         "registry-platform-audit",
         "registry-platform-authcommon",
@@ -55,10 +63,60 @@ SHARDS = {
 }
 
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
+DISCOVERY_PACKAGES = frozenset(SHARDS["discovery"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
 RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
+
+# Provider publication is part of the Discovery product contract even though
+# Evidence and Relay own its generation and serving code. Keep this explicit:
+# a publisher-only change must run the cross-product profile and journey gates
+# without relying on an incidental reverse dev-dependency.
+DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
+    "crates/registry-evidence/src/bundle.rs",
+    "crates/registry-evidence/src/cli.rs",
+    "crates/registry-evidence/src/config.rs",
+    "crates/registry-evidence/src/contracts.rs",
+    "crates/registry-evidence/src/discovery.rs",
+    "crates/registry-evidence/src/main.rs",
+    "crates/registry-evidence/src/runtime_tests.rs",
+    "crates/registry-evidence/src/server.rs",
+    "crates/registry-evidencectl/src/authoring.rs",
+    "crates/registry-evidencectl/src/build.rs",
+    "crates/registry-evidencectl/src/fixtures.rs",
+    "crates/registry-evidencectl/tests/production_build.rs",
+    "crates/registry-relay-http-contract/src/lib.rs",
+    "crates/registry-relay-v2/src/api.rs",
+    "crates/registry-relay-v2/src/artifacts.rs",
+    "crates/registry-relay-v2/src/compiler.rs",
+    "crates/registry-relay-v2/src/contract.rs",
+    "crates/registry-relay-v2/src/model.rs",
+    "crates/registry-relay-v2/src/package.rs",
+    "crates/registry-relay-v2/src/server.rs",
+    "crates/registry-relay-v2/src/tooling.rs",
+    "crates/registry-relay-v2/tests/acceptance_http.rs",
+)
+DISCOVERY_PROVIDER_INPUTS = DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS + (
+    "products/evidence/contracts/bundle.schema.yaml",
+    "products/evidence/fixtures/acceptance/*/catalog.jsonld",
+    "products/evidence/fixtures/acceptance/*/evidence.yaml",
+    "products/evidence/generated/registry-evidence.openapi.json",
+    "products/relay-v2/acceptance/*/expected-http.yaml",
+    "products/relay-v2/acceptance/*/registry.yaml",
+    "products/relay-v2/contracts/acceptance-scenario-matrix.yaml",
+    "products/relay-v2/contracts/artifact-inventory.yaml",
+    "products/relay-v2/contracts/generated-baselines.yaml",
+)
+
+# The full reader journey is a Discovery product gate, not only a docs lint.
+# A tutorial-only edit must replay the same provider, operator, consumer, and
+# native-client handoff that the page promises.
+DISCOVERY_TUTORIAL_INPUTS = (
+    "docs/site/scripts/check-discovery-tutorial.sh",
+    "docs/site/scripts/check-discovery-tutorial.test.mjs",
+    "docs/site/src/content/docs/tutorials/publish-and-consume-discovery-index.mdx",
+)
 
 # Every input the Evidence tutorial gate replays or is built from. The tutorial
 # pages and helper scripts here must stay in step with the gate's own registry
@@ -141,26 +199,33 @@ CLI_REFERENCE_INPUTS = (
 )
 CLI_REFERENCE_PATTERNS = tuple(pattern for pattern, _ in CLI_REFERENCE_INPUTS)
 
-# Binding crates stay in EVIDENCE_PACKAGES and the `evidence` shard, because
-# their own source is covered by check-source-neutrality.sh, and that is what
-# makes `evidence_contracts` run the neutrality check against them. Every
-# binding also selects its own job, whose npm, type-drift and unittest suites
-# are the only cover its full API gets.
+# Each binding stays in its owning product shard. Every binding also selects
+# the shared native-client job, whose npm, generated-type, and Python unittest
+# suites are the only cover its full language API receives.
 EVIDENCE_BINDING_PACKAGES = frozenset(
     {"registry-evidence-client-node", "registry-evidence-client-py"}
 )
 RELAY_BINDING_PACKAGES = frozenset(
     {"registry-relay-client-node", "registry-relay-client-py"}
 )
-NATIVE_BINDING_PACKAGES = EVIDENCE_BINDING_PACKAGES | RELAY_BINDING_PACKAGES
+DISCOVERY_BINDING_PACKAGES = frozenset(
+    {"registry-discovery-client-node", "registry-discovery-client-py"}
+)
+NATIVE_BINDING_PACKAGES = (
+    DISCOVERY_BINDING_PACKAGES | EVIDENCE_BINDING_PACKAGES | RELAY_BINDING_PACKAGES
+)
 LINUX_NODE_BINDING_PACKAGES = frozenset(
-    {"registry-evidence-client-node", "registry-relay-client-node"}
+    {
+        "registry-discovery-client-node",
+        "registry-evidence-client-node",
+        "registry-relay-client-node",
+    }
 )
 
 # Inputs that can change the production Linux Node client recipe without
 # changing either binding crate. This proof is deliberately selected from the
 # actual changed paths rather than `complete`: push and merge-queue CI use
-# `--all` for their Rust matrices, and an unrelated change must not rebuild two
+# `--all` for their Rust matrices, and an unrelated change must not rebuild all
 # release addons merely because those matrices are complete.
 LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
     {
@@ -172,6 +237,7 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
         "Cargo.toml",
         "release/requirements/maturin-1.9.6.txt",
         "release/scripts/build-linux-node-client",
+        "release/scripts/smoke-discovery-client-package.js",
         "release/scripts/smoke-evidence-client-package.js",
         "release/scripts/smoke-relay-client-package.js",
         "release/scripts/test_build_linux_node_client.py",
@@ -440,6 +506,8 @@ def classify(
                 continue
             if path.startswith("products/evidence/"):
                 seeds.update(EVIDENCE_PACKAGES)
+            elif path.startswith("products/discovery/"):
+                seeds.update(DISCOVERY_PACKAGES)
             elif path.startswith("products/manifest/"):
                 seeds.update(MANIFEST_PACKAGES)
             elif path.startswith("products/platform/"):
@@ -632,6 +700,10 @@ def classify(
         "rust_packages": sorted(affected),
         "platform": platform,
         "platform_hygiene": platform_hygiene,
+        "discovery_contracts": complete
+        or bool(affected & DISCOVERY_PACKAGES)
+        or any(matches(path, *DISCOVERY_PROVIDER_INPUTS) for path in paths)
+        or any(path in DISCOVERY_TUTORIAL_INPUTS for path in paths),
         "relay_v2_contracts": bool(affected & RELAY_V2_PACKAGES),
         "relay_client_contracts": bool(affected & RELAY_CLIENT_PACKAGES),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),

@@ -1,0 +1,38 @@
+{
+  "name": "@registrystack/discovery-client",
+  "version": "0.22.0",
+  "description": "Node.js binding for the Registry Discovery client, via napi-rs.",
+  "license": "Apache-2.0",
+  "publishConfig": { "access": "public", "provenance": true },
+  "repository": { "type": "git", "url": "https://github.com/registrystack/registry-stack" },
+  "main": "client.js",
+  "types": "client.d.ts",
+  "exports": { ".": { "types": "./client.d.ts", "default": "./client.js" } },
+  "files": ["client.js", "client.d.ts", "index.js", "index.d.ts", "*.node"],
+  "napi": {
+    "binaryName": "discovery-client",
+    "targets": [
+      "aarch64-apple-darwin",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-gnu"
+    ]
+  },
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "build": "napi build --platform --release && npm run normalize:loader",
+    "build:debug": "napi build --platform && npm run normalize:loader",
+    "test": "node --test __test__/*.test.js",
+    "check:types": "napi build --platform --release --dts index.d.ts.check && npm run normalize:loader && cmp index.d.ts index.d.ts.check && rm -f index.d.ts.check && tsc --noEmit --strict --skipLibCheck false --types node --moduleResolution node16 --module node16 --target es2022 client.d.ts __test__/surface.test-d.ts",
+    "normalize:loader": "node scripts/normalize-napi-loader.js"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.8.2",
+    "@types/node": "22.20.1",
+    "typescript": "6.0.3"
+  },
+  "optionalDependencies": {
+    "@registrystack/discovery-client-darwin-arm64": "0.22.0",
+    "@registrystack/discovery-client-linux-arm64-gnu": "0.22.0",
+    "@registrystack/discovery-client-linux-x64-gnu": "0.22.0"
+  }
+}

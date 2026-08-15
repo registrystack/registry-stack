@@ -2,6 +2,7 @@ version: 1
 assuranceProfile: evidence-grade
 service: {providerId: https://evidence.example.org, trustDomain: https://trust.example.org}
 issuer: {id: https://authority.example.org}
+publication: {serviceId: urn:example:production:evidence-service, title: Production Evidence service, description: Production minimum-disclosure Evidence service, endpointUrl: https://evidence.example.org, jurisdictions: [urn:example:jurisdiction:production]}
 authentication:
   kind: oidc-access-token
   issuer: https://mint.example.org

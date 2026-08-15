@@ -1,0 +1,28 @@
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <http://purl.org/dc/terms/conformsTo> <https://registrystack.org/relay/profile/v2> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <http://purl.org/dc/terms/description> "One exact public semantic class and operation family tuple" .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <http://purl.org/dc/terms/spatial> <https://publications.europa.eu/resource/authority/territory/DEU> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <http://purl.org/dc/terms/title> "Shared Relay search binding" .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <http://www.w3.org/ns/dcat#endpointURL> <https://relay.example.org> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <https://registrystack.org/discovery/vocab/v1alpha1#operationFamilyId> <https://example.org/operations#search> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <https://registrystack.org/discovery/vocab/v1alpha1#operatorId> <urn:example:operator> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <https://registrystack.org/discovery/vocab/v1alpha1#registryAuthorityId> <urn:example:authority> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <https://registrystack.org/discovery/vocab/v1alpha1#semanticClassId> <https://example.org/vocab#RegisteredBusiness> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <https://registrystack.org/discovery/vocab/v1alpha1#serviceId> <urn:example:service:shared-relay> .
+<urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> <https://registrystack.org/discovery/vocab/v1alpha1#serviceKind> "relay" .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <http://purl.org/dc/terms/conformsTo> <https://registrystack.org/relay/profile/v2> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <http://purl.org/dc/terms/description> "A separate exact public semantic class and operation family tuple" .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <http://purl.org/dc/terms/spatial> <https://publications.europa.eu/resource/authority/territory/DEU> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <http://purl.org/dc/terms/title> "Shared Relay lookup binding" .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#DataService> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <http://www.w3.org/ns/dcat#endpointURL> <https://relay.example.org> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <https://registrystack.org/discovery/vocab/v1alpha1#operationFamilyId> <https://example.org/operations#lookup> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <https://registrystack.org/discovery/vocab/v1alpha1#operatorId> <urn:example:operator> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <https://registrystack.org/discovery/vocab/v1alpha1#registryAuthorityId> <urn:example:authority> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <https://registrystack.org/discovery/vocab/v1alpha1#semanticClassId> <https://example.org/vocab#Person> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <https://registrystack.org/discovery/vocab/v1alpha1#serviceId> <urn:example:service:shared-relay> .
+<urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> <https://registrystack.org/discovery/vocab/v1alpha1#serviceKind> "relay" .
+_:catalog <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/dcat#Catalog> .
+_:catalog <http://www.w3.org/ns/dcat#service> <urn:registrystack:discovery:binding:sha256:b656d363871acb25cc8fce88863b6782a60bd7be3eb00dc6ae09d9a532c4203e> .
+_:catalog <http://www.w3.org/ns/dcat#service> <urn:registrystack:discovery:binding:sha256:f347e0da0897c48163f2da565b842c2ebb1e02ff7f5f979e46054644d23e2e54> .
+_:catalog <https://registrystack.org/discovery/vocab/v1alpha1#profile> "registry-discovery-v1alpha1" .

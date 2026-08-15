@@ -21,6 +21,7 @@ service:
   providerId: https://provider.invalid
   trustDomain: urn:example:fixture:trust-domain:acceptance
 issuer: {id: urn:example:fixture:issuer:authority}
+publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication:
   kind: oidc-access-token
   issuer: https://identity.invalid

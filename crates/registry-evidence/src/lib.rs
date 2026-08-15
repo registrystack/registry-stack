@@ -11,6 +11,7 @@ pub mod bundle;
 pub mod cli;
 pub mod config;
 pub mod contracts;
+pub mod discovery;
 pub mod kernel;
 pub mod local_verification;
 pub mod model;

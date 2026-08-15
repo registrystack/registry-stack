@@ -3000,6 +3000,128 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-discovery"
+version = "0.22.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "clap",
+ "futures",
+ "http",
+ "registry-discovery-profile",
+ "registry-platform-canonical-json",
+ "registry-platform-httpsec",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "registry-discovery-client"
+version = "0.22.0"
+dependencies = [
+ "axum",
+ "base64",
+ "chrono",
+ "registry-discovery",
+ "registry-discovery-profile",
+ "registry-discoveryctl",
+ "registry-evidence",
+ "registry-evidence-client",
+ "registry-evidence-verifier",
+ "registry-platform-canonical-json",
+ "registry-platform-crypto",
+ "registry-platform-httputil",
+ "registry-platform-sqlite",
+ "registry-relay-client",
+ "registry-relay-v2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "registry-discovery-client-node"
+version = "0.22.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "registry-discovery-client",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "registry-discovery-client-py"
+version = "0.22.0"
+dependencies = [
+ "pyo3",
+ "pyo3-build-config",
+ "registry-discovery-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-discovery-profile"
+version = "0.22.0"
+dependencies = [
+ "registry-platform-canonical-json",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "url",
+]
+
+[[package]]
+name = "registry-discoveryctl"
+version = "0.22.0"
+dependencies = [
+ "axum",
+ "clap",
+ "hex",
+ "jsonschema",
+ "registry-discovery",
+ "registry-discovery-profile",
+ "registry-platform-buildinfo",
+ "registry-platform-canonical-json",
+ "registry-platform-httputil",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "registry-evidence"
 version = "0.22.0"
 dependencies = [
@@ -3021,6 +3143,7 @@ dependencies = [
  "p256",
  "rand_core 0.6.4",
  "rcgen",
+ "registry-discovery-profile",
  "registry-evidence-verifier",
  "registry-platform-audit",
  "registry-platform-authcommon",
@@ -3612,6 +3735,7 @@ dependencies = [
  "jsonwebtoken",
  "oxjsonld",
  "p256",
+ "registry-discovery-profile",
  "registry-mint",
  "registry-platform-audit",
  "registry-platform-authcommon",

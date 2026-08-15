@@ -75,6 +75,12 @@ pub enum Command {
         #[arg(long)]
         explain: bool,
     },
+    /// Internal Evidencectl seam for deterministic provider-publication compilation.
+    #[command(hide = true)]
+    RenderDiscoveryDescription {
+        #[arg(long)]
+        config: PathBuf,
+    },
     /// Start the native Evidence Gateway HTTP service.
     Serve,
     /// Re-verify one stored signed response offline against a pinned key set.
@@ -175,6 +181,7 @@ mod tests {
         for hidden in [
             "bundle-check",
             "bundle-evaluate",
+            "render-discovery-description",
             "prepare-local-relying-procedure",
             "local-audit-last-operation",
         ] {

@@ -1387,6 +1387,25 @@ fn openapi_document(
                     }
                 }
             },
+            "/catalog.jsonld": {
+                "get": {
+                    "operationId": "getProviderDiscoveryDescription",
+                    "summary": "Fetch the provider-published Registry Discovery description",
+                    "description": "A deterministic closed projection of governed public Evidence service facts. This route is intentionally unauthenticated and performs no source access, assertion evaluation, signing, or Evidence audit write.",
+                    "security": [],
+                    "responses": {
+                        "200": {
+                            "description": "The provider-published Registry Discovery description",
+                            "headers": response_headers(None),
+                            "content": {registry_discovery_profile::MEDIA_TYPE: {"schema": {"type": "object"}}}
+                        },
+                        "404": {
+                            "description": "This bundle does not publish a description",
+                            "headers": response_headers(None)
+                        }
+                    }
+                }
+            },
             "/.well-known/evidence/jwks.json": {
                 "get": {
                     "operationId": "getEvidenceJwks",
@@ -1550,6 +1569,7 @@ mod tests {
             [
                 "/.well-known/evidence/jwks.json",
                 "/.well-known/jwt-vc-issuer",
+                "/catalog.jsonld",
                 "/health",
                 "/openapi.json",
                 "/ready",
@@ -1565,6 +1585,10 @@ mod tests {
         );
         assert_eq!(
             document["paths"]["/openapi.json"]["get"]["security"],
+            json!([])
+        );
+        assert_eq!(
+            document["paths"]["/catalog.jsonld"]["get"]["security"],
             json!([])
         );
         assert!(

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path};
 
 use chrono::DateTime;
+use registry_discovery_profile::{is_valid_endpoint_url, is_valid_public_text};
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,6 +16,7 @@ use crate::contract::{
     DateInputType, DatePrecision, Handling, IdentificationMethod, PropertyBindingDefinition,
     RegistryContract, ReviewStatus, SearchQueryDefinition, SourceProfile, StatisticalValueType,
     TransformDefinition, MAXIMUM_ACCESS_PROFILE_IDENTIFIER_BYTES,
+    MAXIMUM_PUBLICATION_JURISDICTIONS,
 };
 use crate::cursor::MAXIMUM_CURSOR_ORDER_VALUES;
 use crate::model::{
@@ -193,7 +195,7 @@ pub fn compile_contract(
         }],
     })?;
 
-    Ok(CompiledRegistry {
+    let registry = CompiledRegistry {
         contract_revision,
         contract_id: contract.metadata.id.clone(),
         contract_version: contract.metadata.version.clone(),
@@ -218,6 +220,11 @@ pub fn compile_contract(
         controller_identifier: contract.governance.controller.clone(),
         publisher_identifier: contract.governance.publisher.clone(),
         audit_owner_identifier: contract.governance.audit_owner.clone(),
+        publication: contract.publication.as_ref().map(|publication| {
+            crate::model::CompiledPublication {
+                jurisdictions: publication.jurisdictions.clone(),
+            }
+        }),
         local_vocabulary: contract.semantics.local_vocabulary.clone(),
         semantic_alignments: contract.semantics.alignments.clone(),
         governed_files: Vec::new(),
@@ -243,7 +250,21 @@ pub fn compile_contract(
             classifications: contract.metadata_visibility.classifications,
             processing: contract.metadata_visibility.processing,
         },
-    })
+    };
+    if let Some(publication) = &registry.publication {
+        if crate::artifacts::discovery_description(&registry, &publication.jurisdictions).is_err() {
+            return Err(CompileReport {
+                diagnostics: vec![Diagnostic {
+                    severity: DiagnosticSeverity::Error,
+                    code: "publication.description_bound_exceeded".into(),
+                    location: "publication".into(),
+                    message: "the complete public Discovery description exceeds the shared profile bounds"
+                        .into(),
+                }],
+            });
+        }
+    }
+    Ok(registry)
 }
 
 /// Compile the complete governed file closure. Production packaging and
@@ -631,6 +652,85 @@ impl<'a> Compiler<'a> {
                     location,
                     "governance role identifiers must be non-empty",
                 );
+            }
+        }
+        if let Some(publication) = &self.contract.publication {
+            if publication.jurisdictions.is_empty()
+                || publication.jurisdictions.len() > MAXIMUM_PUBLICATION_JURISDICTIONS
+                || publication
+                    .jurisdictions
+                    .iter()
+                    .any(|value| !is_valid_public_text(value) || !valid_global_identifier(value))
+                || publication
+                    .jurisdictions
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+            {
+                self.error(
+                    "publication.jurisdictions_invalid",
+                    "publication.jurisdictions",
+                    "published jurisdictions must contain between 1 and 128 sorted, duplicate-free globally scoped URIs",
+                );
+            }
+            for (value, code, location, message) in [
+                (
+                    self.contract.registry.registry_identifier.as_str(),
+                    "publication.service_identifier_invalid",
+                    "registry.registryIdentifier",
+                    "the published service identifier must satisfy the shared Registry Discovery profile",
+                ),
+                (
+                    self.contract.registry.name.as_str(),
+                    "publication.title_invalid",
+                    "registry.name",
+                    "the published title must satisfy the shared Registry Discovery profile",
+                ),
+                (
+                    self.contract.registry.authoritative_scope.as_str(),
+                    "publication.description_invalid",
+                    "registry.authoritativeScope",
+                    "the published description must satisfy the shared Registry Discovery profile",
+                ),
+            ] {
+                if !is_valid_public_text(value) {
+                    self.error(code, location, message);
+                }
+            }
+            if !is_valid_endpoint_url(&self.contract.registry.base_uri, true) {
+                self.error(
+                    "publication.endpoint_invalid",
+                    "registry.baseUri",
+                    "the published endpoint must satisfy the shared Registry Discovery profile",
+                );
+            }
+            for (value, location) in [
+                (
+                    self.contract.registry.authority.identifier.as_str(),
+                    "registry.authority.identifier",
+                ),
+                (
+                    self.contract.governance.publisher.as_str(),
+                    "governance.publisher",
+                ),
+            ] {
+                if !is_valid_public_text(value) || !valid_global_identifier(value) {
+                    self.error(
+                        "publication.role_identifier_invalid",
+                        location,
+                        "a role published for discovery must be a globally scoped URI",
+                    );
+                }
+            }
+            if let Some(operator) = &self.contract.registry.operator {
+                if !is_valid_public_text(&operator.identifier)
+                    || !valid_global_identifier(&operator.identifier)
+                {
+                    self.error(
+                        "publication.role_identifier_invalid",
+                        "registry.operator.identifier",
+                        "a role published for discovery must be a globally scoped URI",
+                    );
+                }
             }
         }
         if !valid_relative_reference(&self.contract.classifications.provenance_ref) {
@@ -5051,6 +5151,105 @@ fn to_camel_case(value: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn publication_jurisdictions_are_bounded_before_artifact_generation() {
+        let jurisdictions = |count| {
+            (0..count)
+                .map(|index| format!("https://example.invalid/jurisdictions/{index:03}"))
+                .collect()
+        };
+        let mut contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        contract.publication = Some(crate::contract::Publication {
+            jurisdictions: jurisdictions(MAXIMUM_PUBLICATION_JURISDICTIONS),
+        });
+        compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect("the shared profile boundary compiles");
+
+        contract.publication = Some(crate::contract::Publication {
+            jurisdictions: jurisdictions(MAXIMUM_PUBLICATION_JURISDICTIONS + 1),
+        });
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("an over-bound publication must fail during compilation");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "publication.jurisdictions_invalid"
+                && diagnostic.location == "publication.jurisdictions"
+        }));
+    }
+
+    #[test]
+    fn publication_projection_fields_fail_during_compilation() {
+        let invalid_fields = [
+            (
+                "publication.endpoint_invalid",
+                "registry.baseUri",
+                "public-http-endpoint",
+            ),
+            ("publication.title_invalid", "registry.name", "padded-title"),
+            (
+                "publication.description_invalid",
+                "registry.authoritativeScope",
+                "controlled-description",
+            ),
+        ];
+
+        for (expected_code, expected_location, case) in invalid_fields {
+            let mut contract =
+                RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+            contract.publication = Some(crate::contract::Publication {
+                jurisdictions: vec!["urn:example:jurisdiction".into()],
+            });
+            match case {
+                "public-http-endpoint" => {
+                    contract.registry.base_uri = "http://relay.example/registry/".into();
+                }
+                "padded-title" => contract.registry.name = " padded ".into(),
+                "controlled-description" => {
+                    contract.registry.authoritative_scope = "line\nbreak".into();
+                }
+                _ => unreachable!("closed test cases"),
+            }
+
+            let report =
+                compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                    .expect_err("invalid Discovery publication fields fail compilation");
+            assert!(report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == expected_code && diagnostic.location == expected_location
+            }));
+        }
+    }
+
+    #[test]
+    fn complete_publication_projection_bound_fails_during_compilation() {
+        let mut contract = RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+        contract.publication = Some(crate::contract::Publication {
+            jurisdictions: vec!["urn:example:jurisdiction".into()],
+        });
+        contract.registry.name = "n".repeat(registry_discovery_profile::MAX_STRING_CHARACTERS);
+        contract.registry.authoritative_scope =
+            "s".repeat(registry_discovery_profile::MAX_STRING_CHARACTERS);
+        let template = contract.resources[0].clone();
+        contract.resources = (0..MAXIMUM_RESOURCES)
+            .map(|index| {
+                let mut resource = template.clone();
+                resource.id = format!("resource-{index:03}");
+                resource.semantic_class =
+                    format!("https://example.invalid/semantic-class/{index:03}");
+                resource
+            })
+            .collect();
+
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("an over-bound complete publication must fail during compilation");
+        assert!(
+            report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "publication.description_bound_exceeded"
+                    && diagnostic.location == "publication"
+            }),
+            "unexpected diagnostics: {:?}",
+            report.diagnostics
+        );
+    }
 
     #[test]
     fn starter_never_marks_classification_reviewed() {

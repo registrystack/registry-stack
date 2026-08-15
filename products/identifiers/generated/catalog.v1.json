@@ -16,6 +16,82 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/problems/registry-discovery/invalid-request",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Invalid request",
+      "description": "The Discovery request is invalid.",
+      "source": {
+        "path": "crates/registry-discovery/src/problem.rs",
+        "sha256": "119d013635a62cb0d6cc38a81a7bc03d6a58371fa882180bbfd37847c65e6364"
+      },
+      "problem": {
+        "code": "invalid-request",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-discovery/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Not found",
+      "description": "The requested Discovery resource was not found.",
+      "source": {
+        "path": "crates/registry-discovery/src/problem.rs",
+        "sha256": "119d013635a62cb0d6cc38a81a7bc03d6a58371fa882180bbfd37847c65e6364"
+      },
+      "problem": {
+        "code": "not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Result bound exceeded",
+      "description": "The complete Discovery result exceeds its configured bound.",
+      "source": {
+        "path": "crates/registry-discovery/src/problem.rs",
+        "sha256": "119d013635a62cb0d6cc38a81a7bc03d6a58371fa882180bbfd37847c65e6364"
+      },
+      "problem": {
+        "code": "result-bound-exceeded",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-discovery/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Unavailable",
+      "description": "Registry Discovery is temporarily unavailable.",
+      "source": {
+        "path": "crates/registry-discovery/src/problem.rs",
+        "sha256": "119d013635a62cb0d6cc38a81a7bc03d6a58371fa882180bbfd37847c65e6364"
+      },
+      "problem": {
+        "code": "unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential",
       "kind": "problem",
       "status": "active",
@@ -727,7 +803,7 @@
       "description": "Relay V2 generated public JSON Schema.",
       "source": {
         "path": "crates/registry-relay-v2/src/artifacts.rs",
-        "sha256": "c5e67fc35ba9ef7e6b5eccfca9b66149ffa7fd2c37e95648fffb929b3e0e9d72"
+        "sha256": "11101d8c32539b21051940790c36d72a3fb2dddd6a4ad10796623b456a55431d"
       },
       "artifact": {
         "path": "products/identifiers/generated/artifacts/registry-relay/audit-event/v2alpha1.json",
@@ -745,11 +821,11 @@
       "description": "Relay V2 authoring JSON Schema.",
       "source": {
         "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "caed080f4eef3c39d8728cb56722d8d7f5cad6342d46750a0046eb2c5defc186"
+        "sha256": "d7a3d7b6dc9c1904fc067f0779c941ff247b26feb3a62f8d391b04f463c5a2ca"
       },
       "artifact": {
         "path": "crates/registry-relayctl/schemas/authoring/registry.schema.json",
-        "sha256": "caed080f4eef3c39d8728cb56722d8d7f5cad6342d46750a0046eb2c5defc186",
+        "sha256": "d7a3d7b6dc9c1904fc067f0779c941ff247b26feb3a62f8d391b04f463c5a2ca",
         "mediaType": "application/schema+json"
       }
     },
@@ -781,7 +857,7 @@
       "description": "Relay V2 Registry Core predicate binding a controlled property to its codelist.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "5614126aba7d38bff956209b6e68823b142e9f2ddf3c294d2f279cec72938218"
+        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
       }
     },
     {
@@ -794,7 +870,7 @@
       "description": "Relay V2 Registry Core predicate identifying a spatial property's coordinate reference system.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "5614126aba7d38bff956209b6e68823b142e9f2ddf3c294d2f279cec72938218"
+        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
       }
     },
     {
@@ -807,7 +883,7 @@
       "description": "Vocabulary base for Relay V2 Registry Core semantic predicates.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "5614126aba7d38bff956209b6e68823b142e9f2ddf3c294d2f279cec72938218"
+        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
       }
     },
     {
@@ -820,7 +896,7 @@
       "description": "Relay V2 Registry Core predicate identifying a spatial property's geometry type.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "5614126aba7d38bff956209b6e68823b142e9f2ddf3c294d2f279cec72938218"
+        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
       }
     },
     {
@@ -833,7 +909,7 @@
       "description": "Ordered Relay V2 technical handling levels: public, internal, confidential, and restricted.",
       "source": {
         "path": "products/relay-v2/CONCEPT.md",
-        "sha256": "4de98e61b1067df8497be96d90aa55db9a28d5215a87db23e1dd64af8635ab0e"
+        "sha256": "9ffd47dc4e72770e924d050aa3e1d47225db3dc78bd762570a85a96f4a416799"
       }
     },
     {
@@ -846,7 +922,7 @@
       "description": "Relay V2 Registry Core predicate indicating whether a source value is required.",
       "source": {
         "path": "crates/registry-relay-v2/src/semantics.rs",
-        "sha256": "5614126aba7d38bff956209b6e68823b142e9f2ddf3c294d2f279cec72938218"
+        "sha256": "bac9c3e6ca299349a4bcde2ad51b77decff32efa268278722f5d17d436a76b00"
       }
     }
   ]

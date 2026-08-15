@@ -27,6 +27,8 @@ governance:
   controller: urn:example:institution:social-protection-authority
   publisher: urn:example:institution:social-registry-office
   auditOwner: urn:example:institution:internal-audit
+publication:
+  jurisdictions: [urn:example:jurisdiction:acceptance]
 semantics:
   localVocabulary: https://social-registry.example.invalid/vocabulary/
   alignments: []

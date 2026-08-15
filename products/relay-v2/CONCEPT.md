@@ -597,6 +597,16 @@ Operator-only artifacts stay in the sealed package and CLI and are never
 mounted. Semantic transparency must not accidentally publish sensitive schema,
 selector, classification, or processing details.
 
+Each Registry may publish one deterministic Registry Discovery provider
+description through the existing public artifact route. The contract authors
+only jurisdictions; compilation derives service identity, endpoint, public
+roles, conformance, and capability identifiers. Protected-only operations
+contribute no capability identifiers. Each exact public semantic-class and
+operation-family pair is a separate binding identity, so JSON-LD or index
+processing cannot combine capabilities from different resources. Source,
+selector, access-policy,
+credential, signing, audit, and runtime fields are outside the closed profile.
+
 Exact lookup returns a stable unresolved outcome for no match, ambiguous match,
 or a Record hidden by policy. A selected malformed source Record fails as
 `source.unavailable`. Syntactically invalid requests receive a bounded public

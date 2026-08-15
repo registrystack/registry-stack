@@ -43,6 +43,7 @@ jobs:
       rust_packages: ${{ steps.filter.outputs.rust_packages }}
       platform: ${{ steps.filter.outputs.platform }}
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
+      discovery_contracts: ${{ steps.filter.outputs.discovery_contracts }}
       relay_v2_contracts: ${{ steps.filter.outputs.relay_v2_contracts }}
       relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
@@ -495,6 +496,40 @@ jobs:
       - name: Enforce Evidence configuration reference parity
         run: products/evidence/scripts/check-config-key-paths.sh
 
+  discovery-contracts:
+    name: Registry Discovery product contracts
+    needs: changes
+    if: needs.changes.outputs.discovery_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@258712b0b7b1ddf8bddc9fc3b0faca682b2736c3 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.16"
+
+      - name: Registry Discovery contract consistency
+        run: products/discovery/scripts/check-contracts.sh
+
+      - name: Registry Discovery HTTP journeys
+        run: products/discovery/scripts/test-http.sh
+
+      - name: Registry Discovery clean-checkout adopter tutorial
+        run: products/discovery/scripts/test-adopter-tutorial.sh
+
   relay-v2-contracts:
     name: Relay V2 product contracts
     needs: changes
@@ -581,6 +616,7 @@ jobs:
       - rust-policy
       - rust-quality
       - rust-tests
+      - discovery-contracts
       - evidence-contracts
       - relay-v2-contracts
       - relay-client-contracts
@@ -1033,6 +1069,7 @@ jobs:
           node-version: 22.12.0
           cache: npm
           cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
 
@@ -1040,7 +1077,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-evidence-client-node registry-relay-client-node; do
+          for client in registry-discovery-client-node registry-evidence-client-node registry-relay-client-node; do
             (
               cd "crates/${client}"
               npm ci
@@ -1055,7 +1092,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in registry-evidence-client-py registry-relay-client-py; do
+          for client in registry-discovery-client-py registry-evidence-client-py registry-relay-client-py; do
             cargo build --locked -p "${client}" --lib --features "${client}/extension-module"
             (
               cd "crates/${client}"
@@ -1099,6 +1136,7 @@ jobs:
           node-version: 22.20.0
           cache: npm
           cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
 
@@ -1116,7 +1154,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in evidence relay; do
+          for client in discovery evidence relay; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             release/scripts/build-linux-node-client \

@@ -1,6 +1,12 @@
 schemaVersion: relay.registrystack.org/artifact-inventory/v1alpha1
 product: relay-v2
 artifacts:
+  - id: discovery-description
+    mediaType: 'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"'
+    visibility: public
+    source: compiled-registry
+    generated: true
+    invariant: One deterministic provider-publication description is derived from governed public facts, with a distinct binding identity for each exact public semantic-class and operation-family pair; protected operations, access profiles, scopes, source bindings, columns, selectors, and runtime secrets are absent.
   - id: openapi-full
     mediaType: application/yaml
     visibility: operator-only

@@ -49,6 +49,8 @@ struct TargetGovernance {
     assurance_profile: String,
     service: Value,
     issuer: Value,
+    #[serde(default)]
+    publication: Option<Value>,
     authentication: Value,
     audit: Value,
     subject_binding: Value,
@@ -94,6 +96,9 @@ impl TargetGovernance {
         ]);
         if let Some(response_formats) = self.response_formats {
             object.insert("responseFormats".to_owned(), response_formats);
+        }
+        if let Some(publication) = self.publication {
+            object.insert("publication".to_owned(), publication);
         }
         Ok(Value::Object(object))
     }
@@ -223,6 +228,7 @@ fn prepare_candidate(
         deployment_target,
         staging_root,
         governed_bundle,
+        evidence_bin,
     )?;
     interruption.check()?;
     reject_review_markers(&compiled.bundle_path)?;

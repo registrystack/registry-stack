@@ -49,6 +49,7 @@ ACCESS_PROFILE_CONCEALMENT_STEPS = {
     "civil-event": {"supervisory-access-profile-denied", "invalid-access-profile"},
 }
 SECURITY_INVARIANT_IDS = {
+    "sec-provider-public-projection",
     "sec-contract-runtime-separation",
     "sec-package-activation-integrity",
     "sec-one-registry-boundary",
@@ -560,6 +561,7 @@ def validate_statistical_acceptance(errors: list[str]) -> None:
         path = str(step.get("request", {}).get("path", ""))
         allowed = (
             path == "/v2"
+            or path == "/v2/artifacts/discovery-description"
             or re.fullmatch(
                 r"/sdmx/v2/data/dataflow/[^/]+/[^/]+/[^/]+(?:/[^/]+)?", path
             )
@@ -570,7 +572,7 @@ def validate_statistical_acceptance(errors: list[str]) -> None:
         )
         if not allowed:
             errors.append(
-                "labour-statistics: only dataflow data and dataflow/datastructure structure routes are allowed"
+                "labour-statistics: only provider discovery, dataflow data, and dataflow/datastructure structure routes are allowed"
             )
     expected_media = {
         "dataflow-structure": "application/vnd.sdmx.structure+json;version=2.1.0",

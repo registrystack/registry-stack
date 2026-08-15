@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "registry-discovery/standards-profile/v1alpha1",
+  "conformanceClaim": {
+    "dcatAp": false,
+    "bregDcatAp": false,
+    "reason": "Registry Discovery implements a closed selected-term application profile, not the complete mandatory class and constraint sets of either application profile."
+  },
+  "standards": [
+    {"name": "DCAT", "version": "3", "status": "W3C Recommendation 2024-08-22", "url": "https://www.w3.org/TR/2024/REC-vocab-dcat-3-20240822/"},
+    {"name": "DCAT-AP", "version": "3.0.1", "status": "Recommendation targeted for selected alignment", "url": "https://semiceu.github.io/DCAT-AP/releases/3.0.1/"},
+    {"name": "BRegDCAT-AP", "version": "3.0.0", "status": "Working Draft", "url": "https://semiceu.github.io/BRegDCAT-AP/releases/3.0.0/"},
+    {"name": "BRegDCAT-AP", "version": "2.1.0", "status": "Latest published release", "url": "https://github.com/SEMICeu/BregDCAT-AP/tree/main/releases/2.1.0"}
+  ],
+  "selectedTerms": {
+    "dcat": ["dcat:Catalog", "dcat:DataService", "dcat:endpointURL", "dcat:service"],
+    "dct": ["dct:title", "dct:description", "dct:conformsTo", "dct:spatial"],
+    "registryExtensionNamespace": "https://registrystack.org/discovery/vocab/v1alpha1#",
+    "registryExtensionTerms": ["profile", "serviceId", "serviceKind", "publisherId", "operatorId", "registryAuthorityId", "legalIssuerId", "technicalProviderId", "evidenceTypeId", "semanticClassId", "operationFamilyId"]
+  }
+}

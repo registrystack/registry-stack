@@ -39,6 +39,42 @@ Most adopters should need to edit only:
 Changing Rust, defining a source-product plugin, or adding a product-specific
 configuration variant is not part of ordinary adoption.
 
+## Publish the service for discovery
+
+Put the public facts that cannot be derived into the governed target:
+
+```yaml
+publication:
+  serviceId: urn:example:evidence-service
+  title: National Evidence service
+  description: Minimum-disclosure assertions from the responsible authority
+  endpointUrl: https://evidence.example.org
+  jurisdictions: [urn:example:jurisdiction:national]
+```
+
+`endpointUrl` is the native Evidence client base URL, not the
+`/v1/evidence` request route. HTTPS is required outside local authoring; local
+fixtures may use numeric loopback HTTP. Evidence derives the legal issuer,
+technical provider, exact compatible binding-and-response capability profiles,
+and evidence type identifiers from the governed bundle. Binding modes and
+response formats are never independent tags that a client could combine into
+an impossible operation. Evidence publishes one record with a distinct derived
+`bindingId` for each exact Evidence Type and compatible profile pair, which
+also prevents cross-requirement matches. Build the production candidate with:
+
+```sh
+evidencectl build --project <project> --target <target> --output <candidate>
+```
+
+The command compiles, validates, seals, and atomically publishes
+`bundle/catalog.jsonld`; ordinary target-host package and bundle checks verify
+the same bytes.
+Evidence validates exact regeneration at startup and serves those packaged bytes
+at `GET /catalog.jsonld` without authentication, source access, signing, or
+audit work. This public-facts projection supports search and is not a trust
+anchor. Provider-public-projection tests exclude private source, credential,
+policy, script, selector, and audit configuration.
+
 ## Provider prerequisites
 
 Decide compatibility before authoring scripts. These are the prerequisites for
@@ -1372,6 +1408,15 @@ authorityProfiles.*.requesterTags[]
 holderBoundBatchMaxSize
 issuer
 issuer.id
+publication
+publication.description
+publication.endpointUrl
+publication.jurisdictions
+publication.jurisdictions[]
+publication.operatorId
+publication.publisherId
+publication.serviceId
+publication.title
 rateLimits
 rateLimits.burstPerPrincipal
 rateLimits.failedSelectorAttemptsPerPrincipalAuthorityPerMinute

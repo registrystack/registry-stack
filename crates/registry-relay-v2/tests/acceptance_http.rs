@@ -581,6 +581,98 @@ async fn all_four_registry_http_journeys_use_the_real_router() {
 }
 
 #[tokio::test]
+async fn provider_discovery_description_route_serves_compiled_exact_bytes_without_authentication() {
+    for project in PROJECTS {
+        let harness = ProjectHarness::open(project).await;
+        let expected = harness
+            .service
+            .artifacts
+            .get("artifacts/discovery.jsonld")
+            .expect("maintained Registry publishes a description")
+            .content
+            .clone();
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v2/artifacts/discovery-description")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK, "{project}");
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static(
+                "application/ld+json;profile=\"https://registrystack.org/discovery/profile/v1alpha1\""
+            )),
+            "{project}"
+        );
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("response body reads");
+        assert_eq!(body.as_ref(), expected.as_slice(), "{project}");
+        if project == "labour-statistics" {
+            let description = registry_discovery_profile::parse_description(&body)
+                .expect("maintained labour-statistics publication satisfies the shared profile");
+            let statistical = description
+                .services()
+                .iter()
+                .filter(|service| {
+                    service.operation_family_ids()
+                        == ["https://registrystack.org/discovery/operation-family/relay-v2/statistical-dataflow"]
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(statistical.len(), 1);
+            assert!(statistical[0].semantic_class_ids().is_empty());
+        }
+
+        // If the public-artifact branch performed optional bearer
+        // authentication, this malformed credential would be rejected before
+        // the compiled bytes were served.
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v2/artifacts/discovery-description")
+                    .header(AUTHORIZATION, "Bearer malformed")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK, "{project}");
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("response body reads");
+        assert_eq!(body.as_ref(), expected.as_slice(), "{project}");
+
+        // The authentication bypass is deliberately scoped to the public
+        // Discovery advertisement. Existing public artifact semantics still
+        // authenticate a bearer when the caller supplies one.
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/v2/artifacts/capability-inventory")
+                    .header(AUTHORIZATION, "Bearer malformed")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{project}");
+    }
+}
+
+#[tokio::test]
 async fn rust_client_drives_the_real_relay_router_across_the_public_surface() {
     let mut business = ProjectHarness::open("business-registry").await;
     let business_loopback = ClientLoopback::start(&business, None).await;

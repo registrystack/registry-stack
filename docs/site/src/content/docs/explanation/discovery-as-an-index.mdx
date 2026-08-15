@@ -1,0 +1,231 @@
+---
+title: Registry Discovery is an index
+description: Registry Discovery curates provider advertisements and origin provenance without becoming a provider trust or invocation layer.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-08-14"
+doc_type: explanation
+locale: en
+standards_referenced:
+  - dcat
+  - bregdcat-ap
+  - json-ld
+  - shacl
+---
+
+Registry Discovery is a curated index of public Evidence Gateway and Registry Relay advertisements.
+It resembles a Yahoo-style directory: the catalog operator decides which public descriptions to
+index, and an application decides whether to trust and directly use a selected provider.
+
+{/* Evidence: `products/discovery/README.md` defines Discovery as a curated, read-only index;
+    `products/discovery/DECISIONS.md`, ADR-001, defines advertisements with origin provenance and
+    assigns native trust and invocation to the adopting application. */}
+
+## A small role between providers and applications
+
+A provider publishes one closed JSON-LD description containing its public service advertisement.
+The catalog operator keeps an explicit allowlist of those description URLs and performs a bounded,
+one-shot build. The build records each origin URL, fetched-byte digest, and fetch time beside every
+indexed service record.
+
+{/* Evidence: `crates/registry-discovery-profile/src/lib.rs`, `DiscoveryDescription` and
+    `ServiceDescription`, define the closed provider publication. `crates/registry-discoveryctl/src/project.rs`,
+    `ApprovedOrigin`, defines the explicit origin list. `crates/registry-discoveryctl/src/build.rs`,
+    `fetch_origins()`, populates `OriginSummary` and `ServiceRecord` provenance. */}
+
+The profile uses a selected set of Data Catalog Vocabulary (DCAT) 3, DCAT-AP 3.0.1, and
+BRegDCAT-AP terms. Registry Discovery does not claim full DCAT-AP or BRegDCAT-AP conformance.
+Its offline tooling transforms only this pinned context and evaluates a selected Shapes Constraint
+Language (SHACL) subset; the service runtime does not perform RDF or SHACL processing.
+
+{/* Evidence: `products/discovery/contracts/standards-profile.yaml` records the pinned standards,
+    selected terms, and no-conformance claim. `products/discovery/DECISIONS.md`, ADR-002, assigns
+    offline RDF and SHACL work to product tooling and excludes it from runtime behavior. */}
+
+## What the catalog indexes
+
+An index record preserves a service's public title, description, endpoint URL, roles, jurisdictions,
+profile identifiers, and product-specific capability identifiers. Evidence Gateway advertisements
+carry evidence type IDs. Registry Relay advertisements carry semantic class IDs or operation family
+IDs. A protected-only Relay may intentionally expose neither public capability collection.
+
+{/* Evidence: `crates/registry-discovery/src/model.rs`, `ServiceRecord`, defines the indexed fields.
+    `crates/registry-discovery-profile/src/lib.rs`, `ServiceDescription::validate()`, enforces
+    product-kind capability combinations. `products/discovery/ACCEPTANCE-JOURNEYS.md` specifies the
+    protected-only Relay advertisement case. */}
+
+The origin fields answer a narrower question than provider trust: which approved URL supplied these
+bytes for this index revision? They let an application retain provenance during selection. They do
+not attest that the provider, its endpoint, or its claims are trustworthy.
+
+{/* Evidence: `crates/registry-discovery/src/model.rs`, `OriginSummary` and `ServiceRecord` origin
+    fields; `crates/registry-discovery-client/src/selection.rs`, `ServiceSelection`, retains the
+    origin fields while `discovery_metadata_has_no_trust_or_native_io_capability` excludes trust
+    material. */}
+
+## What the catalog does not do
+
+Registry Discovery is neither a provider federation nor an application gateway. It has no provider
+registration flow, trust store, authorization decision, credentials, request proxy, procedure model,
+ranking rule, writable catalog, or mutation route. Its fixed service surface is health, readiness,
+OpenAPI, service search, and evidence-type resolution.
+
+{/* Evidence: `products/discovery/DECISIONS.md`, ADR-001 and ADR-005;
+    `crates/registry-discovery/src/server.rs`, route constants and
+    `real_router_exposes_only_the_fixed_read_only_surface`; `crates/registry-discovery/src/startup.rs`,
+    `runtime_is_closed_and_contains_no_origin_mapping_trust_or_fetch_configuration`. */}
+
+That boundary keeps responsibility in the native products. Evidence Gateway remains the product that
+answers a fixed requirement and issues its signed, minimum-disclosure assertion. Registry Relay
+remains the product that exposes its governed protected read surface. Discovery only helps an
+application find their public advertisements.
+
+{/* Evidence: `products/discovery/ACCEPTANCE-JOURNEYS.md` separates the Evidence and Relay journeys
+    and calls for direct native invocation after selection. `products/discovery/README.md` excludes
+    credential issuance, proxying, trust, and authorization from Discovery. */}
+
+## What an application does with a result
+
+For Evidence Gateway, an application resolves a requirement and jurisdiction to Evidence Type
+alternatives. Each alternative is an AND-list. The application searches and selects one provider for
+every required type. For Registry Relay, the application searches the public semantic class and
+operation family as one correlated tuple, then explicitly selects one record. Discovery preserves the
+complete Evidence resolution context, Relay tuple, catalog revision, and origin provenance.
+
+{/* Evidence: `crates/registry-discovery/src/query.rs`, `Directory::resolve_evidence_types()` and
+    `Directory::search_services()`; `crates/registry-discovery-client/src/selection.rs`,
+    `EvidenceTypeResolveSelectionExt`, `ServiceSearchSelectionExt::select_evidence()`,
+    `ServiceSearchSelectionExt::select_relay()`, and the typed selection fields. */}
+
+After selection, the application makes a local native trust decision and calls the advertised endpoint
+directly with its Evidence Gateway or Registry Relay client. Discovery selection contains public
+metadata only. It cannot carry a trust anchor, credential, request, or response into that native call.
+
+{/* Evidence: `crates/registry-discovery-client/src/selection.rs`,
+    `discovery_metadata_has_no_trust_or_native_io_capability`; `products/discovery/DECISIONS.md`,
+    ADR-001. */}
+
+## The same client workflow in Rust, Node.js, and Python
+
+The maintained clients expose the same three steps in each language: resolve an Evidence requirement
+when needed, search with exact filters, then convert one exact record into a serializable selection.
+Node.js applications use `@registrystack/discovery-client`; Python applications use
+`registry-discovery-client`; Rust applications use `registry-discovery-client`.
+
+```js
+const {
+  DiscoveryClient,
+  selectEvidenceAlternative,
+  selectEvidenceService,
+  validateSelection,
+} = require('@registrystack/discovery-client');
+const { EvidenceClient } = require('@registrystack/evidence-client');
+
+const discovery = new DiscoveryClient('https://discovery.example/');
+const resolved = await discovery.resolveEvidenceTypes({
+  requirementId: 'urn:example:requirement',
+  jurisdiction: 'urn:example:jurisdiction',
+});
+const context = selectEvidenceAlternative(resolved, 'urn:example:evidence-type-list');
+
+for (const evidenceTypeId of context.evidenceTypeIds) {
+  const results = await discovery.searchEvidenceServices({
+    evidenceTypeId,
+    ...(context.jurisdiction ? { jurisdiction: context.jurisdiction } : {}),
+  });
+  const record = await adopterChooseRecord(results.items);
+  const selection = selectEvidenceService(results, {
+    recordId: record.recordId,
+    evidenceTypeId,
+    resolution: context,
+  });
+  const checked = validateSelection(selection);
+  adopterTrust.requireEvidence(checked);
+  const evidence = new EvidenceClient({ baseUrl: checked.endpointUrl, ...nativeConfig });
+  if (!checked.evidenceResolution) throw new Error('missing Evidence resolution');
+  const prepared = evidence.prepare({
+    ...localEvidencePolicy,
+    requirement: checked.evidenceResolution.requirementId,
+    evidenceType: checked.matchedCapability.id,
+  });
+  const verified = await evidence.requestAndVerify(prepared);
+  for (const claim of verified.evidence.supportedValues) {
+    console.log(claim.providesValueFor, claim.value);
+  }
+}
+```
+
+```python
+from registry_discovery_client import (
+    DiscoveryClient,
+    select_relay_service,
+    validate_selection,
+)
+from registry_relay_client import RelayClient
+
+discovery = DiscoveryClient("https://discovery.example/")
+results = discovery.search_relay_services({
+    "semanticClassId": "urn:example:registered-business",
+    "operationFamilyId": "urn:example:consultation-list",
+})
+record = adopter_choose_record(results["items"])
+selection = select_relay_service(results, {
+    "recordId": record["recordId"],
+    "capabilityMatch": {
+        "semanticClassId": "urn:example:registered-business",
+        "operationFamilyId": "urn:example:consultation-list",
+    },
+})
+checked = validate_selection(selection)
+resource = adopter_trust.require_relay(checked)
+relay = RelayClient(checked["endpointUrl"], authorization=native_authorization)
+page = relay.list_records(resource, page_size=1)
+if page["kind"] != "complete" or not page["value"]["items"]:
+    raise RuntimeError("Relay returned no records")
+record = page["value"]["items"][0]
+print(record["recordIdentifier"], record["domainData"])
+```
+
+The chooser is application-owned because Discovery does not rank results. The libraries validate the
+server response, complete Evidence alternative or Relay tuple, exact capability match, and any loaded
+selection before returning the native base URL. They do not decide whether the selected origin,
+issuer, operator, endpoint, or capability is trusted. Keep that decision in the application's native
+Evidence or Relay trust configuration. Native definitions and local policy still supply Evidence
+purpose, audience, issuer and provider identity, configuration revision, selectors, and expected
+outputs. The JavaScript example reads values only from the payload that the native Evidence client
+has verified. Native Relay metadata supplies the concrete resource and operation. In the Python
+example, the adopter-owned trust mapping returns that reviewed resource identifier, and
+`list_records` performs the native Relay request. The returned record remains a Relay response, not
+Discovery metadata.
+
+{/* Evidence: `crates/registry-discovery-client-node/src/lib.rs` and
+    `crates/registry-discovery-client-py/src/lib.rs` are thin bindings over
+    `registry-discovery-client`. Their language-level loopback tests exercise typed search, complete
+    resolution context, correlated Relay selection, and persisted-selection validation.
+    `crates/registry-discovery-client/src/selection.rs`,
+    test `discovery_metadata_has_no_trust_or_native_io_capability`, binds the shared trust boundary.
+    `crates/registry-evidence-client-node/src/lib.rs`, `EvidenceClient::request_and_verify`, returns
+    the verified Evidence payload used by the JavaScript example.
+    `crates/registry-relay-client-py/src/lib.rs`, `RelayClient::list_records`, performs the bounded
+    native exchange and returns the decoded record collection. */}
+
+## Why the split reduces maintenance
+
+The provider maintains one public description URL. The catalog operator maintains a small explicit
+origins file, any evidence-type mappings, and an intentional build-and-restart loop. The application
+maintains native provider trust where it already belongs. No component must synchronize a central
+provider registration database, shared credentials, or a proxy policy.
+
+{/* Evidence: `products/discovery/README.md` describes the normal operator flow;
+    `crates/registry-discoveryctl/src/project.rs` defines the two authoring inputs;
+    `products/discovery/DECISIONS.md`, ADR-001, excludes registration, credentials, proxying, and
+    trust-store concerns. */}
+
+## Related
+
+- [Publish and consume a Registry Discovery index](../../tutorials/publish-and-consume-discovery-index/)
+- [Build and run a Registry Discovery index](../../configure/discovery/)
+- [Records stay home](../records-stay-home/)
+- [Architecture](../architecture/)

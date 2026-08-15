@@ -43,6 +43,7 @@ registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-sqlite.workspace = true
+registry-discovery-profile.workspace = true
 registry-relay-http-contract.workspace = true
 reqwest.workspace = true
 rustix.workspace = true

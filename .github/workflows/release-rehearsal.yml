@@ -111,6 +111,7 @@ jobs:
           node-version: 22.20.0
           cache: npm
           cache-dependency-path: |
+            crates/registry-discovery-client-node/package-lock.json
             crates/registry-evidence-client-node/package-lock.json
             crates/registry-relay-client-node/package-lock.json
 
@@ -129,7 +130,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for client in evidence relay; do
+          for client in discovery evidence relay; do
             client_dir="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
             (cd "${client_dir}" && npm ci)
             test "$(node -p "require('${client_dir}/package.json').version")" = \

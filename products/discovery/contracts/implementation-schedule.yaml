@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "registry-discovery/implementation-schedule/v1alpha1",
+  "phases": [
+    {"id": "phase-0", "name": "Contract reset", "exit": "The salvage ledger, future-work ledger, product boundary, and supported public surface are reviewed."},
+    {"id": "phase-1", "name": "Profile and publication", "exit": "Evidence and Relay generate deterministic closed profile bytes from validated public inputs and package them."},
+    {"id": "phase-2", "name": "Immutable build", "exit": "discoveryctl validates origins and mappings offline, performs a bounded one-shot build, and emits an atomic index."},
+    {"id": "phase-3", "name": "Read-only discovery", "exit": "The runtime serves only probes, OpenAPI, exact service search, and evidence-type resolution from one immutable index."},
+    {"id": "phase-4", "name": "Native journeys", "exit": "One Evidence and one Relay journey prove explicit selection, existing local trust, and direct native invocation."}
+  ]
+}

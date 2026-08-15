@@ -18,6 +18,9 @@ authorizations:
     scopes: [registry:business:premises-search-registrar]
     claims: {}
 steps:
+  - id: provider-discovery-description
+    request: {method: GET, path: /v2/artifacts/discovery-description}
+    expect: {status: 200, mediaType: 'application/ld+json;profile="https://registrystack.org/discovery/profile/v1alpha1"'}
   - id: registry-discovery
     request: {method: GET, path: /v2}
     expect:

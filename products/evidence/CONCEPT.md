@@ -32,9 +32,12 @@ permit an explicitly requested, visibly unsigned JSON envelope for development
 or consumers that cannot process JWS. Unsigned output is transport-authenticated
 convenience data, not later-verifiable evidence and never a fallback from
 signing failure. Evidence does not retrieve or deliver documents, issue holder
-credentials, run a general policy engine, expose a public or dynamic catalog, or
-implement OOTS. It does expose an authenticated, requester-scoped description of
-complete request shapes already authorized by the deployed bundle. Those
+credentials, run a general policy engine, expose a public requester-entitlement
+or definition catalog, or implement OOTS. It exposes an authenticated,
+requester-scoped description of complete request shapes already authorized by
+the deployed bundle, plus a closed public provider advertisement that another
+service may index. The advertisement is neither searchable inside Evidence nor
+a trust or access decision. Those
 deferred capabilities remain separate future profiles and must not shape the
 initial runtime beyond stable identifiers and transport-neutral domain objects.
 
@@ -142,7 +145,7 @@ to invoke. This is the same reasoning that already admits a fixed HTTP request:
 a bundle-fixed instruction to a source that no request input may reshape is not
 a query language, whatever syntax it happens to be written in.
 
-Document evidence, credential status and revocation, transaction-bound replay protection, OOTS execution, public or federated catalogs, response-led multi-source fulfillment, source-planning scripts, and the delegated-agent grant profile of section 15.3 are explicitly deferred. A multi-verifier holder credential is not among them: section 15.8 defines the declared holder-bound subject binding that produces one, together with the privacy analysis that binding requires, and it still adds no credential lifecycle and no delivery protocol. A fixed set of sources the bundle declares and orders is not response-led and is included under section 15.7. Deferring that profile does not defer the optional delegated actor identity of section 8.1: version one carries an actor in the authenticated authority context and authorizes it there, but consumes no agent grant record and exposes no agent-facing operations. The closed requester-scoped definition response is not a catalog or authorization source.
+Document evidence, credential status and revocation, transaction-bound replay protection, OOTS execution, a public requester-entitlement or definition catalog, searchable, mutable, aggregate, or federated catalogs, response-led multi-source fulfillment, source-planning scripts, and the delegated-agent grant profile of section 15.3 are explicitly deferred. A multi-verifier holder credential is not among them: section 15.8 defines the declared holder-bound subject binding that produces one, together with the privacy analysis that binding requires, and it still adds no credential lifecycle and no delivery protocol. A fixed set of sources the bundle declares and orders is not response-led and is included under section 15.7. Deferring that profile does not defer the optional delegated actor identity of section 8.1: version one carries an actor in the authenticated authority context and authorizes it there, but consumes no agent grant record and exposes no agent-facing operations. The closed requester-scoped definition response is not a catalog or authorization source. The closed public provider advertisement remains allowed because it is a package-derived publication for indexing, not a catalog runtime.
 
 ## 5. Design principles
 
@@ -2322,6 +2325,9 @@ mandatory default and includes:
   `POST /v1/evidence` singular assertions plus bounded audience-scoped
   `POST /v1/evidence/batch` requests with one fixed-size nonce per ordered
   subject set;
+- unauthenticated `GET /catalog.jsonld` provider publication as deterministic,
+  packaged Registry Discovery profile bytes derived only from a closed public allowlist,
+  with no source, authorization, signing, or audit execution;
 - one active ES256/P-256 service signing key with RFC 7638 identity, explicit
   published and revoked key sets, default flattened JWS JSON responses, a
   governed explicitly selected unsigned envelope, and a public JWKS endpoint;

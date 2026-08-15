@@ -67,9 +67,11 @@ matched grant both permit that response format, under the frozen profile in
 lifecycle, status lists, OID4VCI, presentation verification,
 nonce or replay storage beyond stateless request-nonce echo and comparison,
 server-issued challenges, OOTS execution, federation, delegated agents, MCP,
-workflow, public or federated catalogs, runtime policy, runtime bundle mutation,
+workflow, a public requester-entitlement or definition catalog, a searchable,
+mutable, aggregate, or federated catalog, runtime policy, runtime bundle mutation,
 multi-source fulfillment, source planning, an application database, a message
-broker, or workers.
+broker, or workers. It may serve the closed public provider advertisement that
+another service indexes without treating the advertisement as trust or access.
 
 DHIS2 and OpenCRVS are compatibility-shaped test profiles only. Their names and
 behavior may appear in tests, sanitized fixtures, test-only bundles, and local

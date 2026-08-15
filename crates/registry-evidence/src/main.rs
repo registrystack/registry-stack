@@ -297,6 +297,20 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             );
             Ok(ExitCode::SUCCESS)
         }
+        Command::RenderDiscoveryDescription { config } => {
+            let bytes = fs::read(config)
+                .map_err(|_| CliError("Evidence discovery description rendering failed"))?;
+            let config = EvidenceConfig::parse_yaml(&bytes)
+                .map_err(|_| CliError("Evidence discovery description rendering failed"))?;
+            if let Some(rendered) = registry_evidence::discovery::render(&config)
+                .map_err(|_| CliError("Evidence discovery description rendering failed"))?
+            {
+                std::io::stdout()
+                    .write_all(&rendered)
+                    .map_err(|_| CliError("Evidence discovery description rendering failed"))?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Serve => {
             install_operational_logging();
             let runtime = Arc::new(

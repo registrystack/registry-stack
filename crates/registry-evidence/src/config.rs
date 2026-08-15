@@ -362,6 +362,8 @@ pub struct EvidenceConfig {
     pub assurance_profile: AssuranceProfile,
     pub service: ServiceConfig,
     pub issuer: IssuerConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<PublicationConfig>,
     pub authentication: AuthenticationConfig,
     pub audit: AuditConfig,
     pub subject_binding: SubjectBindingConfig,
@@ -488,6 +490,9 @@ impl EvidenceConfig {
         validate_uri(&self.service.provider_id)?;
         validate_uri(&self.service.trust_domain)?;
         validate_uri(&self.issuer.id)?;
+        if let Some(publication) = &self.publication {
+            publication.validate(self.assurance_profile)?;
+        }
         self.authentication.validate(self.assurance_profile)?;
         self.audit.validate()?;
         self.subject_binding.validate()?;
@@ -575,7 +580,11 @@ impl EvidenceConfig {
 
         self.validate_acquisition_capabilities()?;
         self.validate_holder_bound_requirements()?;
-        self.validate_cross_references()
+        self.validate_cross_references()?;
+        if self.publication.is_some() && crate::discovery::render(self).is_err() {
+            return invalid("provider publication cannot be rendered");
+        }
+        Ok(())
     }
 
     /// Refuse a holder-bound requirement no request could ever reach, and one
@@ -1029,6 +1038,72 @@ pub struct ServiceConfig {
 #[serde(deny_unknown_fields)]
 pub struct IssuerConfig {
     pub id: String,
+}
+
+/// Public facts that cannot be derived from the governed Evidence service,
+/// issuer, formats, bindings, and requirement inventory.
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublicationConfig {
+    pub service_id: String,
+    pub title: String,
+    pub description: String,
+    pub endpoint_url: String,
+    pub jurisdictions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_id: Option<String>,
+}
+
+impl PublicationConfig {
+    fn validate(&self, assurance_profile: AssuranceProfile) -> Result<(), ConfigError> {
+        validate_publication_identifier(&self.service_id)?;
+        if !registry_discovery_profile::is_valid_public_text(&self.title) {
+            return invalid("publication title is invalid");
+        }
+        if !registry_discovery_profile::is_valid_public_text(&self.description) {
+            return invalid("publication description is invalid");
+        }
+        if self.endpoint_url.chars().count() > 512
+            || !registry_discovery_profile::is_valid_endpoint_url(
+                &self.endpoint_url,
+                assurance_profile == AssuranceProfile::Local,
+            )
+        {
+            return invalid("publication endpoint URL is invalid");
+        }
+        validate_len(
+            self.jurisdictions.len(),
+            1,
+            128,
+            "publication jurisdictions",
+        )?;
+        if self
+            .jurisdictions
+            .iter()
+            .any(|jurisdiction| validate_publication_identifier(jurisdiction).is_err())
+            || self.jurisdictions.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return invalid(
+                "publication jurisdictions must be sorted, unique, globally scoped URIs",
+            );
+        }
+        for role in [&self.publisher_id, &self.operator_id]
+            .into_iter()
+            .flatten()
+        {
+            validate_publication_identifier(role)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_publication_identifier(value: &str) -> Result<(), ConfigError> {
+    if value.chars().count() > 512 || !registry_discovery_profile::is_valid_identifier(value) {
+        return invalid("publication URI is invalid");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
@@ -5339,6 +5414,172 @@ mod tests {
                 candidate.validate().is_err(),
                 "{profile:?} inherited the local HTTP exception"
             );
+        }
+    }
+
+    #[test]
+    fn publication_endpoint_requires_https_or_local_loopback_http() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        let publication = config.publication.as_mut().expect("publication configured");
+        publication.endpoint_url = "http://evidence.example.invalid".to_owned();
+        assert!(
+            config.validate().is_err(),
+            "a non-local deployment must reject cleartext publication"
+        );
+
+        config.assurance_profile = AssuranceProfile::Local;
+        for endpoint in [
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+        ] {
+            config
+                .publication
+                .as_mut()
+                .expect("publication configured")
+                .endpoint_url = endpoint.to_owned();
+            config
+                .validate()
+                .unwrap_or_else(|_| panic!("local assurance rejected {endpoint}"));
+            crate::discovery::render(&config)
+                .unwrap_or_else(|_| panic!("valid local publication did not render: {endpoint}"));
+        }
+        for endpoint in [
+            "http://127.0.0.2:8080",
+            "http://127.1:8080",
+            "http://LOCALHOST:8080",
+            "http://[::2]:8080",
+            " http://127.0.0.1:8080",
+            "http://127.0.0.1:8080\n",
+            "http://127.0.0.1:8080/catalog .jsonld",
+            "http://127.0.0.1:8080/catalog\u{0007}.jsonld",
+        ] {
+            config
+                .publication
+                .as_mut()
+                .expect("publication configured")
+                .endpoint_url = endpoint.to_owned();
+            assert!(config.validate().is_err(), "accepted {endpoint:?}");
+        }
+    }
+
+    #[test]
+    fn publication_public_text_matches_shared_profile_and_schema_and_always_renders() {
+        let validator = bundle_contract_validator();
+        let fixture = include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        );
+        for field in ["title", "description"] {
+            for (value, accepted) in [
+                (
+                    "é".repeat(registry_discovery_profile::MAX_STRING_CHARACTERS),
+                    true,
+                ),
+                (
+                    "é".repeat(registry_discovery_profile::MAX_STRING_CHARACTERS + 1),
+                    false,
+                ),
+                (" leading".to_owned(), false),
+                ("trailing ".to_owned(), false),
+                ("embedded\u{0007}control".to_owned(), false),
+            ] {
+                let mut config = EvidenceConfig::parse_yaml(fixture)
+                    .expect("strict fixture validates before the mutation");
+                let publication = config.publication.as_mut().expect("publication configured");
+                match field {
+                    "title" => publication.title.clone_from(&value),
+                    "description" => publication.description.clone_from(&value),
+                    _ => unreachable!("closed publication field list"),
+                }
+                assert_eq!(
+                    config.validate().is_ok(),
+                    accepted,
+                    "Rust/profile parity for {field} at {} scalars",
+                    value.chars().count()
+                );
+
+                let mut instance = bundle_contract_instance(fixture);
+                instance["publication"][field] = serde_json::json!(value);
+                assert_eq!(
+                    validator.is_valid(&instance),
+                    accepted,
+                    "schema/profile parity for {field}"
+                );
+
+                if accepted {
+                    let rendered = crate::discovery::render(&config)
+                        .expect("every valid publication renders")
+                        .expect("publication remains configured");
+                    registry_discovery_profile::parse_description(&rendered)
+                        .expect("every valid publication renders a parseable description");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn publication_uri_bounds_count_unicode_characters_and_always_render() {
+        let validator = bundle_contract_validator();
+        let fixture = include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        );
+        let prefix = "https://example.invalid/";
+        let boundary = format!("{prefix}{}", "é".repeat(512 - prefix.chars().count()));
+        let oversized = format!("{boundary}é");
+        assert!(
+            boundary.len() > 512,
+            "the boundary must exceed 512 UTF-8 bytes"
+        );
+
+        for field in [
+            "serviceId",
+            "endpointUrl",
+            "jurisdictions",
+            "publisherId",
+            "operatorId",
+        ] {
+            for (value, accepted) in [(&boundary, true), (&oversized, false)] {
+                let mut config = EvidenceConfig::parse_yaml(fixture)
+                    .expect("strict fixture validates before the mutation");
+                let publication = config.publication.as_mut().expect("publication configured");
+                match field {
+                    "serviceId" => publication.service_id.clone_from(value),
+                    "endpointUrl" => publication.endpoint_url.clone_from(value),
+                    "jurisdictions" => publication.jurisdictions = vec![value.clone()],
+                    "publisherId" => publication.publisher_id = Some(value.clone()),
+                    "operatorId" => publication.operator_id = Some(value.clone()),
+                    _ => unreachable!("closed publication URI field list"),
+                }
+                assert_eq!(
+                    config.validate().is_ok(),
+                    accepted,
+                    "Rust/profile parity for {field} at {} scalars",
+                    value.chars().count()
+                );
+
+                let mut instance = bundle_contract_instance(fixture);
+                instance["publication"][field] = if field == "jurisdictions" {
+                    serde_json::json!([value])
+                } else {
+                    serde_json::json!(value)
+                };
+                assert_eq!(
+                    validator.is_valid(&instance),
+                    accepted,
+                    "schema/profile parity for {field}"
+                );
+
+                if accepted {
+                    let rendered = crate::discovery::render(&config)
+                        .expect("every valid publication renders")
+                        .expect("publication remains configured");
+                    registry_discovery_profile::parse_description(&rendered)
+                        .expect("every valid publication renders a parseable description");
+                }
+            }
         }
     }
 

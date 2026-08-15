@@ -1,0 +1,10 @@
+schemaVersion: registry-discovery/origins/v1alpha1
+origins:
+  - originId: tutorial-evidence
+    catalogUrl: http://127.0.0.1:38090/evidence.jsonld
+    profile: registry-discovery-v1alpha1
+    enabled: true
+  - originId: tutorial-relay
+    catalogUrl: http://127.0.0.1:38090/relay.jsonld
+    profile: registry-discovery-v1alpha1
+    enabled: true

@@ -91,6 +91,8 @@ pub struct CompiledRegistry {
     pub controller_identifier: String,
     pub publisher_identifier: String,
     pub audit_owner_identifier: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<CompiledPublication>,
     pub local_vocabulary: String,
     pub semantic_alignments: Vec<SemanticAlignment>,
     pub governed_files: Vec<CompiledGovernedFile>,
@@ -101,6 +103,12 @@ pub struct CompiledRegistry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statistical_datasets: Vec<CompiledStatisticalDataset>,
     pub metadata_visibility: CompiledMetadataVisibility,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompiledPublication {
+    pub jurisdictions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

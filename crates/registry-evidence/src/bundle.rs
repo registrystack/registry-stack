@@ -33,6 +33,7 @@ pub const MAX_SCRIPT_BYTES: u64 = 64 * 1024;
 pub const MAX_PUBLIC_JWK_BYTES: u64 = 64 * 1024;
 
 const CONFIG_FILE: &str = "evidence.yaml";
+pub const DISCOVERY_DESCRIPTION_FILE: &str = "catalog.jsonld";
 const RUNTIME_FILE: &str = "runtime.yaml";
 const REVISION_DOMAIN: &[u8] = b"registry.evidence.bundle-revision/v1\0";
 const RUNTIME_REVISION_DOMAIN: &[u8] = b"registry.evidence.runtime-revision/v1\0";
@@ -43,6 +44,7 @@ const REQUIREMENT_REVISION_DOMAIN: &[u8] = b"registry.evidence.requirement-revis
 const PROJECTION_PATH: &str = "evidence.yaml#requirement";
 /// Projected member holding the bundle's declared acquisition capabilities.
 const ACQUISITION_CAPABILITIES: &str = "acquisitionCapabilities";
+const PROVIDER_PUBLICATION: &str = "publication";
 const MAX_CA_BUNDLE_BYTES: u64 = 1024 * 1024;
 /// Bytes folded into an extract's digest per read. An extract is sized by the
 /// register it holds rather than by a byte cap, so it is digested in chunks of
@@ -282,6 +284,7 @@ pub struct Bundle {
     revision: String,
     requirement_revisions: BTreeMap<String, String>,
     files: BTreeMap<String, Vec<u8>>,
+    discovery_description: Option<Vec<u8>>,
     pub scripts: BTreeMap<String, CompiledScript>,
     pub fact_schemas: BTreeMap<String, JsonValue>,
     pub codelists: BTreeMap<String, Codelist>,
@@ -484,6 +487,28 @@ impl Bundle {
         let config = EvidenceConfig::parse_yaml(config_bytes)
             .map_err(|error| BundleError::Config(ArtifactFault::new(CONFIG_FILE, error.fault())))?;
         validate_file_closure(&config, &files)?;
+        let expected_description = crate::discovery::render(&config)
+            .map_err(|_| invalid_artifact("the provider discovery description is invalid"))?;
+        let discovery_description = match expected_description {
+            Some(expected) => {
+                let packaged = files.get(DISCOVERY_DESCRIPTION_FILE).ok_or_else(|| {
+                    unknown_file(
+                        DISCOVERY_DESCRIPTION_FILE,
+                        "the configured provider discovery description is missing",
+                    )
+                })?;
+                if packaged != &expected {
+                    return Err(BundleError::InvalidArtifact(ArtifactFault::new(
+                        DISCOVERY_DESCRIPTION_FILE,
+                        SchemaFault::because(
+                            "the packaged provider discovery description does not match its deterministic projection",
+                        ),
+                    )));
+                }
+                Some(packaged.clone())
+            }
+            None => None,
+        };
 
         let scripts = load_scripts(&config, &files)?;
         let fact_schemas = load_fact_schemas(&config, &files)?;
@@ -501,6 +526,7 @@ impl Bundle {
             revision,
             requirement_revisions,
             files,
+            discovery_description,
             scripts,
             fact_schemas,
             codelists,
@@ -538,6 +564,11 @@ impl Bundle {
 
     pub fn artifact(&self, path: &str) -> Option<&[u8]> {
         self.files.get(path).map(Vec::as_slice)
+    }
+
+    /// Exact deterministic bytes served by the public discovery route.
+    pub fn discovery_description(&self) -> Option<&[u8]> {
+        self.discovery_description.as_deref()
     }
 
     pub fn script(&self, path: &ArtifactPath) -> Option<&CompiledScript> {
@@ -653,7 +684,7 @@ fn collect_paths(
                 if !ALLOWED_DIRECTORIES.contains(&top) {
                     return Err(BundleError::InvalidPath);
                 }
-            } else if relative != CONFIG_FILE {
+            } else if !matches!(relative.as_str(), CONFIG_FILE | DISCOVERY_DESCRIPTION_FILE) {
                 return Err(unknown_file(
                     &relative,
                     "bundle root contains a file other than the configuration",
@@ -967,6 +998,9 @@ fn validate_file_closure(
     files: &BTreeMap<String, Vec<u8>>,
 ) -> Result<(), BundleError> {
     let mut expected = BTreeSet::from([CONFIG_FILE.to_owned()]);
+    if config.publication.is_some() {
+        expected.insert(DISCOVERY_DESCRIPTION_FILE.to_owned());
+    }
     for (_, source) in config.sources.iter() {
         expected.extend(source_artifact_paths(source));
     }
@@ -2763,9 +2797,10 @@ fn requirement_selector_profiles(
 /// only the four members that hold per-requirement configuration, keeping this
 /// requirement's own entries: the requirement itself, every source its bounded
 /// acquisition names, the selector profiles it can be served through, and the authority
-/// grants that offer it. Every other member is kept exactly as configured, so a
-/// configuration member added later is covered without revisiting this
-/// projection.
+/// grants that offer it. Provider-publication metadata is deliberately removed:
+/// it changes catalog search, not the assertion semantics a relying party pins.
+/// Every other member is kept exactly as configured, so a configuration member
+/// added later is covered without revisiting this projection.
 ///
 /// Starting from the parsed configuration rather than the file bytes is what
 /// makes the projection possible at all, and it is faithful because the
@@ -2781,6 +2816,7 @@ fn canonical_projection(
     let members = document
         .as_object_mut()
         .ok_or_else(|| invalid_artifact("the configuration does not project as a mapping"))?;
+    members.remove(PROVIDER_PUBLICATION);
     let requirement_value = serde_json::to_value(requirement)
         .map_err(|_| invalid_artifact("the requirement does not project"))?;
     members.insert(
@@ -3096,6 +3132,32 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn provider_publication_changes_leave_requirement_semantic_revisions_alone() {
+        let (before, after) = revisions_across_edit(|root| {
+            let config_path = root.join(CONFIG_FILE);
+            let mut text = fs::read_to_string(&config_path).expect("the configuration reads");
+            let original = "title: Synthetic Evidence service";
+            assert_eq!(text.matches(original).count(), 1, "fixture title is stable");
+            text = text.replace(original, "title: Reviewed Evidence service");
+            fs::write(&config_path, text).expect("the configuration writes");
+            let config = EvidenceConfig::parse_yaml(
+                &fs::read(&config_path).expect("the edited configuration reads"),
+            )
+            .expect("the edited configuration parses");
+            let description = crate::discovery::render(&config)
+                .expect("the edited description renders")
+                .expect("publication remains configured");
+            fs::write(root.join(DISCOVERY_DESCRIPTION_FILE), description)
+                .expect("the edited description writes");
+        });
+        assert_eq!(
+            before, after,
+            "provider-publication metadata is not assertion semantics"
+        );
+    }
+
     /// Declaring a gated acquisition capability is a bundle-wide statement that
     /// gates one requirement at a time. A requirement acquiring through a
     /// frozen Version 1 form behaves identically whether or not some sibling
@@ -3286,7 +3348,7 @@ mod tests {
         }
     }
 
-    /// The projection keeps every configuration member. A member it dropped
+    /// The projection keeps every assertion-semantic configuration member. A member it dropped
     /// would stop being covered by any revision, which is a silently narrower
     /// tripwire rather than a visible failure, so the member list is asserted
     /// against the configuration itself instead of a copy of it.
@@ -3315,6 +3377,7 @@ mod tests {
                 .as_object()
                 .expect("the configuration is a mapping")
                 .keys()
+                .filter(|key| key.as_str() != PROVIDER_PUBLICATION)
                 .collect::<BTreeSet<_>>()
         );
         // Only the four per-requirement members are narrowed, and each keeps
@@ -4111,6 +4174,58 @@ mod tests {
             "the configuration references an artifact the bundle does not contain"
         );
         set_tree_mode(missing.path(), 0o755, 0o444);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn packaged_provider_discovery_description_must_match_exact_regeneration() {
+        let missing = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", missing.path());
+        fs::remove_file(missing.path().join(DISCOVERY_DESCRIPTION_FILE))
+            .expect("remove packaged description");
+        set_tree_mode(missing.path(), 0o555, 0o444);
+        let error = Bundle::load(missing.path()).expect_err("missing description fails closed");
+        assert_eq!(
+            error.artifact_fault().expect("artifact fault").artifact(),
+            DISCOVERY_DESCRIPTION_FILE
+        );
+        set_tree_mode(missing.path(), 0o755, 0o644);
+
+        let drifted = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", drifted.path());
+        fs::write(drifted.path().join(DISCOVERY_DESCRIPTION_FILE), b"{}\n")
+            .expect("drift packaged description");
+        set_tree_mode(drifted.path(), 0o555, 0o444);
+        let error = Bundle::load(drifted.path()).expect_err("drifted description fails closed");
+        let fault = error.artifact_fault().expect("artifact fault");
+        assert_eq!(fault.artifact(), DISCOVERY_DESCRIPTION_FILE);
+        assert_eq!(
+            fault.fault().cause(),
+            "the packaged provider discovery description does not match its deterministic projection"
+        );
+        set_tree_mode(drifted.path(), 0o755, 0o644);
+
+        let unconfigured = tempfile::tempdir().expect("temporary bundle");
+        copy_acceptance_bundle("adult-status", unconfigured.path());
+        let config_path = unconfigured.path().join(CONFIG_FILE);
+        let config = fs::read_to_string(&config_path).expect("read configuration");
+        let without_publication = config
+            .lines()
+            .filter(|line| !line.starts_with("publication:"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        fs::write(&config_path, without_publication).expect("remove publication declaration");
+        set_tree_mode(unconfigured.path(), 0o555, 0o444);
+        let error = Bundle::load(unconfigured.path())
+            .expect_err("an unconfigured packaged description fails closed");
+        let fault = error.artifact_fault().expect("artifact fault");
+        assert_eq!(fault.artifact(), DISCOVERY_DESCRIPTION_FILE);
+        assert_eq!(
+            fault.fault().cause(),
+            "the bundle contains an artifact the configuration does not reference"
+        );
+        set_tree_mode(unconfigured.path(), 0o755, 0o644);
     }
 
     #[cfg(unix)]
