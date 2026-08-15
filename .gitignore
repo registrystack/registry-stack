@@ -11,9 +11,7 @@ __pycache__/
 .DS_Store
 
 # Local agent tooling (private skills are symlinked here; never commit).
-# Only the shared project commands in /.claude/commands/ are tracked.
-/.claude/*
-!/.claude/commands/
+/.claude/
 /.playwright-mcp/
 /worktrees/
 /*.png
