@@ -1660,6 +1660,20 @@ fn rewrite_for_local_profile(
         1,
     );
     fs::write(&configuration_path, document).expect("the local configuration is written");
+    regenerate_discovery_description(bundle_root);
+}
+
+fn regenerate_discovery_description(bundle_root: &Path) {
+    let config = registry_evidence::config::EvidenceConfig::parse_yaml(
+        &fs::read(bundle_root.join("evidence.yaml"))
+            .expect("the rewritten configuration is readable"),
+    )
+    .expect("the rewritten configuration validates");
+    let description = registry_evidence::discovery::render(&config)
+        .expect("the provider description renders")
+        .expect("the acceptance publication remains configured");
+    fs::write(bundle_root.join("catalog.jsonld"), description)
+        .expect("the provider description is regenerated");
 }
 
 fn runtime_document(

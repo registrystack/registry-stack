@@ -9,7 +9,7 @@
       "marker": "evidence-bundle-key-paths",
       "status": "frozen",
       "reference": "products/evidence/reference/request-adapter/deployment-projects/CONFIG.md",
-      "field_count": 274,
+      "field_count": 277,
       "fields": [
         {
           "key_path": "acquisitionCapabilities",
@@ -1559,6 +1559,22 @@
           "runtime_validation": null
         },
         {
+          "key_path": "requirements[].concepts[].handle",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Stable application-facing key for this output in typed client result maps. It is governed explicitly and is never inferred from the concept URI.",
+          "runtime_validation": null
+        },
+        {
           "key_path": "requirements[].concepts[].id",
           "kind": "property",
           "type": "string",
@@ -2055,6 +2071,22 @@
           ],
           "conditional_constraints": [],
           "description": "Bundle-relative path to this requirement's sanitized fixture suite; omitting it is accepted only under `assuranceProfile: local`, and `production` or `evidence-grade` refuse to load without it and its complete case coverage.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "requirements[].handle",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "pattern: ^[a-z][a-z0-9._-]{0,127}$"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Stable application-facing identifier for selecting this requirement's complete published definition. It is governed explicitly and is never inferred from the requirement URI.",
           "runtime_validation": null
         },
         {
@@ -2570,6 +2602,23 @@
             ]
           ],
           "description": "Technical provider URI placed in every assertion as `providedBy`. Enabling `sd-jwt-vc` outside local assurance requires this value to be the stable HTTPS origin of the deployment, because issuer metadata and the published JWKS URI are derived from that origin.",
+          "runtime_validation": null
+        },
+        {
+          "key_path": "service.publicOrigin",
+          "kind": "property",
+          "type": "string",
+          "required": "yes",
+          "values": null,
+          "values_conditional": false,
+          "constraints": [
+            [
+              "format: uri",
+              "maxLength: 512"
+            ]
+          ],
+          "conditional_constraints": [],
+          "description": "Exact public origin of this Evidence protected resource. Production and evidence-grade deployments require a canonical HTTPS origin. The local assurance profile also permits canonical HTTP on numeric 127.0.0.1 with an explicit non-zero port for supervised tutorials.",
           "runtime_validation": null
         },
         {

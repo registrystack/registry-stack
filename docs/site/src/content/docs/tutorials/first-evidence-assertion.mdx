@@ -20,11 +20,17 @@ Evidence Gateway reads an authorized source record, answers a preconfigured ques
 governed answer. In this tutorial, you will ask "Is this person an adult?" without returning the
 person's name or date of birth.
 
+:::caution[Unreleased API]
+This development-docs tutorial exercises the progressive client API from a source checkout.
+Registry Stack `v0.22.0` ships the client bindings, but not this API. Build the checkout as shown
+below instead of substituting the `v0.22.0` client assets.
+:::
+
 <QuickstartMeta
   outcome="One governed adult-status answer verified as signed JWS and SD-JWT VC, without the source record."
-  time="About 20 minutes"
+  time="About 30 minutes after the toolchain is installed"
   level="Local development with synthetic data"
-  prerequisites={['Python 3', 'A shell with curl', 'An editor', 'Linux or macOS']}
+  prerequisites={['Git', 'Rust and Cargo', 'Python 3', 'Node.js 22.12 or later for the Node.js lane', 'A shell with curl', 'An editor', 'Linux or macOS']}
 />
 
 ## Understand the flow
@@ -48,17 +54,25 @@ Before the request, Registry Mint gives the tutorial caller short-lived local au
 Evidence Gateway and the registry process the identifier and date of birth to answer the question, but the
 released assertion contains only the governed answer and an opaque subject binding.
 
-## Install Evidence Gateway
+## Build the preview toolset
 
-Install the latest Evidence Gateway toolset:
+Clone Registry Stack and build the exact Evidence Gateway toolset this development tutorial exercises:
 
 ```sh
-curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
+git clone https://github.com/registrystack/registry-stack.git registry-stack-progressive
+REGISTRY_STACK_SOURCE="$PWD/registry-stack-progressive"
+cargo build --locked --release \
+  --manifest-path "$REGISTRY_STACK_SOURCE/Cargo.toml" \
+  -p registry-evidence \
+  -p registry-evidencectl \
+  -p registry-mint
+export REGISTRY_STACK_SOURCE
+export PATH="$REGISTRY_STACK_SOURCE/target/release:$PATH"
 evidencectl --version
 ```
 
-The installer provides `evidencectl` and the local Evidence Gateway and Registry Mint runtimes used later
-in the tutorial.
+The build provides `evidencectl` and the local Evidence Gateway and Registry Mint runtimes used later
+in the tutorial. The `REGISTRY_STACK_SOURCE` path is also used to build the two client bindings.
 
 ## Preview a synthetic source
 
@@ -371,9 +385,9 @@ the first terminal.
 
 ## Request an assertion
 
-Choose one client path. The curl path uses the `evidencectl` installation from the start of this
-tutorial. The Python and Node.js clients are release assets rather than packages published to PyPI
-or npm. They require Cosign and download the first Registry Stack release carrying this client API.
+Choose one client path. The curl path uses the `evidencectl` build from the start of this tutorial. The
+Python and Node.js paths build the same checked-out client source, so no lane claims an unreleased
+artifact contains the progressive API.
 
 <ClientLanguageTabs>
 <Fragment slot="curl">
@@ -389,77 +403,46 @@ echo ready
 </Fragment>
 <Fragment slot="python">
 
-Python requires Python 3.10 or later. Create a virtual environment, download the wheel for this
-machine, and authenticate the release checksum before installing it:
+Python requires Python 3.10 or later. Create a virtual environment, build the extension module, and
+place it in an owner-local import directory:
 
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
 
-VERSION=0.21.1
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) PLATFORM="manylinux_2_17_x86_64.manylinux2014_x86_64" ;;
-  Linux-aarch64|Linux-arm64) PLATFORM="manylinux_2_17_aarch64.manylinux2014_aarch64" ;;
-  Darwin-arm64) PLATFORM="macosx_11_0_arm64" ;;
-  *) echo "No prebuilt Evidence Python client for this platform" >&2; exit 1 ;;
-esac
-ASSET="registry_evidence_client-${VERSION}-cp310-abi3-${PLATFORM}.whl"
-RELEASE="https://github.com/registrystack/registry-stack/releases/download/v${VERSION}"
-BUNDLE="registry-stack-v${VERSION}-SHA256SUMS.sigstore.json"
-curl -fLO "${RELEASE}/${ASSET}"
-curl -fLO "${RELEASE}/SHA256SUMS"
-curl -fLO "${RELEASE}/${BUNDLE}"
-cosign verify-blob SHA256SUMS \
-  --bundle "${BUNDLE}" \
-  --certificate-identity \
-    'https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/heads/main' \
-  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
-awk -v asset="${ASSET}" '$2 == asset {print}' SHA256SUMS > client-SHA256SUMS
-test "$(wc -l < client-SHA256SUMS)" -eq 1
+CARGO_TARGET_DIR="$REGISTRY_STACK_SOURCE/target/tutorial-client"
+cargo build --locked --release \
+  --manifest-path "$REGISTRY_STACK_SOURCE/Cargo.toml" \
+  -p registry-evidence-client-py --lib \
+  --features registry-evidence-client-py/extension-module \
+  --target-dir "$CARGO_TARGET_DIR"
 case "$(uname -s)" in
-  Darwin) shasum -a 256 --check client-SHA256SUMS ;;
-  Linux) sha256sum --check --strict client-SHA256SUMS ;;
+  Darwin) BUILT_MODULE="$CARGO_TARGET_DIR/release/libregistry_evidence_client.dylib" ;;
+  Linux) BUILT_MODULE="$CARGO_TARGET_DIR/release/libregistry_evidence_client.so" ;;
+  *) echo "The Evidence Python client preview supports Linux and macOS" >&2; exit 1 ;;
 esac
-python -m pip install "./${ASSET}"
+mkdir -p python-module
+cp "$BUILT_MODULE" python-module/registry_evidence_client.so
+export PYTHONPATH="$PWD/python-module"
 echo ready
 ```
 
 </Fragment>
 <Fragment slot="node">
 
-Node.js requires version 22.12 or later. Create an application directory, download the package for
-this machine, and authenticate the release checksum before installing it:
+Node.js requires version 22.12 or later. Build and pack the binding from the same checkout, then
+install the local package without fetching its optional released native packages:
 
 ```sh
 mkdir -p node-client
-cd node-client
+NODE_CLIENT_DIR="$PWD/node-client"
+CLIENT_PACKAGE_SOURCE="$REGISTRY_STACK_SOURCE/crates/registry-evidence-client-node"
+npm --prefix "$CLIENT_PACKAGE_SOURCE" ci
+npm --prefix "$CLIENT_PACKAGE_SOURCE" run build
+PACKAGE_NAME="$(cd "$CLIENT_PACKAGE_SOURCE" && npm pack --silent --pack-destination "$NODE_CLIENT_DIR")"
+cd "$NODE_CLIENT_DIR"
 npm init -y >/dev/null
-
-VERSION=0.21.1
-case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) PLATFORM="linux-amd64-glibc" ;;
-  Linux-aarch64|Linux-arm64) PLATFORM="linux-arm64-glibc" ;;
-  Darwin-arm64) PLATFORM="macos-arm64" ;;
-  *) echo "No prebuilt Evidence Node.js client for this platform" >&2; exit 1 ;;
-esac
-ASSET="evidence-client-node-v${VERSION}-${PLATFORM}.tgz"
-RELEASE="https://github.com/registrystack/registry-stack/releases/download/v${VERSION}"
-BUNDLE="registry-stack-v${VERSION}-SHA256SUMS.sigstore.json"
-curl -fLO "${RELEASE}/${ASSET}"
-curl -fLO "${RELEASE}/SHA256SUMS"
-curl -fLO "${RELEASE}/${BUNDLE}"
-cosign verify-blob SHA256SUMS \
-  --bundle "${BUNDLE}" \
-  --certificate-identity \
-    'https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/heads/main' \
-  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
-awk -v asset="${ASSET}" '$2 == asset {print}' SHA256SUMS > client-SHA256SUMS
-test "$(wc -l < client-SHA256SUMS)" -eq 1
-case "$(uname -s)" in
-  Darwin) shasum -a 256 --check client-SHA256SUMS ;;
-  Linux) sha256sum --check --strict client-SHA256SUMS ;;
-esac
-npm install "./${ASSET}"
+npm install --omit=optional "./${PACKAGE_NAME}"
 cd ..
 echo ready
 ```

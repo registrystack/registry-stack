@@ -612,13 +612,17 @@ fn append_generated_case(args: GenerateArgs) -> Result<ExitCode> {
     let replacement = plan::render_plan(&checked.plan)?;
     let config_directory = root.join(config.parent().unwrap_or_else(|| Path::new(".")));
     files::ensure_confined_absent(&config_directory, &body_path)?;
-    files::replace_confined(&root, &config, &original, &replacement)?;
+    let recovery = files::replace_confined(&root, &config, &original, &replacement)?;
     let publication = PublicationFile::new(&body_path, body);
-    let published = files::publish_missing(&config_directory, &[publication]).context(
-        "the case was added to the config but its body was not created; rerun generate --config to complete it",
-    )?;
+    let published = files::publish_missing(&config_directory, &[publication]).with_context(|| {
+        format!(
+            "the case was added to the config but its body was not created; the previous config is preserved at {}; rerun generate --config to complete it",
+            recovery.display()
+        )
+    })?;
 
     println!("Updated {}", config.display());
+    println!("Preserved previous config at {}", recovery.display());
     for path in published {
         println!(
             "Created {}",

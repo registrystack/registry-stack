@@ -183,7 +183,7 @@ load_spec() {
 			"background:10"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
 			"run:11-12"
-			# Stand in for the documented authenticated v0.21.1 SDK installs.
+			# Use this checkout in place of the development tutorial's fresh clone.
 			"python-client"
 			"node-client"
 			"run:15-17"
@@ -193,7 +193,8 @@ load_spec() {
 			"run:19-26"
 		)
 		SPEC_LITERALS=(
-			"releases/latest/download/evidencectl-install.sh | bash"
+			"git clone https://github.com/registrystack/registry-stack.git registry-stack-progressive"
+			"cargo build --locked --release"
 			"evidencectl source mock serve --openapi tutorial-source.openapi.yaml --seed 1"
 			"evidencectl source mock generate"
 			"--config mocks/source.yaml"
@@ -209,10 +210,10 @@ load_spec() {
 			"--out client.json"
 			"evidencectl source mock serve --config mocks/source.yaml"
 			"evidencectl new adult-status"
-			"VERSION=0.21.1"
-			'registry_evidence_client-${VERSION}-cp310-abi3-${PLATFORM}.whl'
-			'evidence-client-node-v${VERSION}-${PLATFORM}.tgz'
-			"cosign verify-blob SHA256SUMS"
+			"-p registry-evidence-client-py --lib"
+			"python-module/registry_evidence_client.so"
+			'CLIENT_PACKAGE_SOURCE="$REGISTRY_STACK_SOURCE/crates/registry-evidence-client-node"'
+			'PACKAGE_NAME="$(cd "$CLIENT_PACKAGE_SOURCE"'
 			"evidencectl request prepare"
 			"--profile client.json"
 			"--requirement adult-status"
@@ -679,11 +680,10 @@ prepare_toolset() {
 # The Python client extension module, built once for whichever tutorials import
 # it.
 #
-# The documented build clones the repository at the installed runtime's release
-# tag, which is the right instruction for a reader and the wrong one for this
-# gate: it needs the network, and it would prove a released client rather than
-# the one in this checkout. Building the same crate from here instead is what
-# makes a client regression fail this gate on the commit that introduces it.
+# The development tutorial documents a fresh source clone, which needs the network and could
+# move independently while this gate runs. Building the same crate from this
+# checkout instead makes a client regression fail on the commit that introduces
+# it while preserving the tutorial's source-build boundary.
 # The documented commands stay pinned as SPEC_LITERALS, so an edit to them
 # still has to be deliberate.
 # The module is built for the stable ABI, so one built outside this script

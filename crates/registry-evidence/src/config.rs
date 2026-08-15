@@ -1046,6 +1046,9 @@ fn validate_public_origin(
     value: &str,
     assurance_profile: AssuranceProfile,
 ) -> Result<(), ConfigError> {
+    if value.chars().count() > 512 {
+        return invalid("service publicOrigin exceeds its maximum length");
+    }
     let url = Url::parse(value)
         .map_err(|_| ConfigError::Invalid("service publicOrigin is not a canonical origin"))?;
     if !url.username().is_empty()
@@ -5388,6 +5391,23 @@ mod tests {
             candidate.service.public_origin = invalid.to_owned();
             assert!(candidate.validate().is_err(), "accepted {invalid}");
         }
+    }
+
+    #[test]
+    fn public_origin_enforces_the_schema_character_bound() {
+        let boundary = format!("https://{}xx", "a.".repeat(251));
+        let oversized = format!("{boundary}x");
+        assert_eq!(boundary.chars().count(), 512);
+        assert_eq!(oversized.chars().count(), 513);
+
+        assert!(
+            validate_public_origin(&boundary, AssuranceProfile::Production).is_ok(),
+            "the schema boundary must remain accepted"
+        );
+        assert_eq!(
+            validate_public_origin(&oversized, AssuranceProfile::Production),
+            invalid("service publicOrigin exceeds its maximum length")
+        );
     }
 
     #[test]

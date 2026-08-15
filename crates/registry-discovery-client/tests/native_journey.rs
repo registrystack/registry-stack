@@ -715,7 +715,9 @@ fn evidence_spec(selection: &ServiceSelection) -> EvidenceRequestSpec {
         }],
         holder_keys: Vec::new(),
         expected_outputs: vec![ExpectedOutputDocument {
+            handle: "adult-status".into(),
             concept: CONCEPT.into(),
+            required: true,
             form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
         }],
         maximum_assertion_lifetime_seconds: 300,

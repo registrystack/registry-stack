@@ -72,7 +72,7 @@ pub(crate) const PROTECTED_RESOURCE_METADATA_ROUTE: &str = "/.well-known/oauth-p
 ///
 /// Operational telemetry labels requests with a member of this set or with a
 /// single fixed unmatched label, so a caller cannot introduce a label value.
-pub(crate) const ROUTE_TEMPLATES: [&str; 9] = [
+pub(crate) const ROUTE_TEMPLATES: [&str; 10] = [
     EVIDENCE_ROUTE,
     EVIDENCE_BATCH_ROUTE,
     DEFINITIONS_ROUTE,

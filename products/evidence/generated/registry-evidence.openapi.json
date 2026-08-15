@@ -199,6 +199,10 @@
             "maxLength": 512,
             "type": "string"
           },
+          "handle": {
+            "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+            "type": "string"
+          },
           "kind": {
             "enum": [
               "criterion",
@@ -227,6 +231,21 @@
             "maxLength": 512,
             "type": "string"
           },
+          "responseFormats": {
+            "items": {
+              "enum": [
+                "signed-jws",
+                "unsigned-json",
+                "sd-jwt-vc",
+                "sd-jwt-vc-batch"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
           "subjectBindingMode": {
             "description": "What the subject bindings in this requirement's assertions are derived under. The vocabulary is closed and carries no default: absence means audience-scoped, stated here so a relying party reading a definition without the key knows the requirement issues audience-scoped assertions and is not reading an omission it has to resolve elsewhere. A definition that does carry the key states the mode explicitly.",
             "enum": [
@@ -246,11 +265,13 @@
           }
         },
         "required": [
+          "handle",
           "requirement",
           "configurationRevision",
           "kind",
           "evidenceType",
           "purpose",
+          "responseFormats",
           "referenceFrameworks",
           "subjects",
           "concepts"
@@ -260,30 +281,83 @@
       "EvidenceDefinitionConcept": {
         "additionalProperties": false,
         "properties": {
-          "form": {
-            "enum": [
-              "boolean",
-              "controlled-code",
-              "controlled-category",
-              "bounded-integer",
-              "bounded-decimal",
-              "date-bucket",
-              "time-bucket",
-              "audience-scoped-entity-reference",
-              "controlled-code-list",
-              "entity-reference-list",
-              "reviewed-structured-value"
-            ],
-            "type": "string"
-          },
-          "id": {
+          "concept": {
             "format": "uri",
             "maxLength": 512,
             "type": "string"
+          },
+          "form": {
+            "oneOf": [
+              {
+                "enum": [
+                  "boolean",
+                  "integer",
+                  "string",
+                  "date-bucket",
+                  "time-bucket",
+                  "entity-reference",
+                  "structured"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "list": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "items": {
+                        "enum": [
+                          "string",
+                          "entity-reference"
+                        ],
+                        "type": "string"
+                      },
+                      "maximumItems": {
+                        "maximum": 64,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "minimumItems": {
+                        "maximum": 64,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      "unique": {
+                        "enum": [
+                          true
+                        ],
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "items",
+                      "minimumItems",
+                      "maximumItems",
+                      "unique"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "list"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "handle": {
+            "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
           }
         },
         "required": [
-          "id",
+          "handle",
+          "concept",
+          "required",
           "form"
         ],
         "type": "object"
@@ -355,6 +429,11 @@
             ],
             "type": "string"
           },
+          "audience": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          },
           "definitions": {
             "items": {
               "$ref": "#/components/schemas/EvidenceDefinition"
@@ -389,6 +468,7 @@
         "required": [
           "schema",
           "assuranceProfile",
+          "audience",
           "issuedBy",
           "providedBy",
           "holderBoundBatchMaxSize",
@@ -1452,6 +1532,48 @@
         "title": "Evidence public problem Version 1",
         "type": "object"
       },
+      "ProtectedResourceMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "authorization_servers": {
+            "items": {
+              "format": "uri",
+              "maxLength": 512,
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "bearer_methods_supported": {
+            "items": {
+              "const": "header"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "jwks_uri": {
+            "format": "uri",
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "resource": {
+            "format": "uri",
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource",
+          "authorization_servers",
+          "jwks_uri",
+          "bearer_methods_supported"
+        ],
+        "type": "object"
+      },
       "PublicValue": {
         "anyOf": [
           {
@@ -1689,6 +1811,18 @@
     "/.well-known/evidence/jwks.json": {
       "get": {
         "operationId": "getEvidenceJwks",
+        "parameters": [
+          {
+            "description": "The exact strong entity tag from a prior response.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "pattern": "^\"[a-f0-9]{64}\"$",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1701,11 +1835,46 @@
             "description": "Evidence public verification keys",
             "headers": {
               "Cache-Control": {
-                "description": "Evidence responses are never cacheable.",
+                "description": "Public metadata may be cached for at most ten minutes.",
                 "schema": {
                   "enum": [
-                    "no-store"
+                    "public, max-age=600"
                   ],
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong SHA-256 entity tag over the exact response bytes.",
+                "schema": {
+                  "pattern": "^\"[a-f0-9]{64}\"$",
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The public key set is unchanged",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public metadata may be cached for at most ten minutes.",
+                "schema": {
+                  "enum": [
+                    "public, max-age=600"
+                  ],
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong SHA-256 entity tag over the exact response bytes.",
+                "schema": {
+                  "pattern": "^\"[a-f0-9]{64}\"$",
                   "type": "string"
                 }
               },
@@ -1726,6 +1895,18 @@
       "get": {
         "description": "Discovery is not a trust anchor. The document republishes the same public keys under the provider identity the assertion names, and resolution is meaningful only when that identity is the HTTPS origin of the deployment.",
         "operationId": "getJwtVcIssuerMetadata",
+        "parameters": [
+          {
+            "description": "The exact strong entity tag from a prior response.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "pattern": "^\"[a-f0-9]{64}\"$",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -1738,11 +1919,46 @@
             "description": "Provider identity and public verification keys",
             "headers": {
               "Cache-Control": {
-                "description": "Evidence responses are never cacheable.",
+                "description": "Public metadata may be cached for at most ten minutes.",
                 "schema": {
                   "enum": [
-                    "no-store"
+                    "public, max-age=600"
                   ],
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong SHA-256 entity tag over the exact response bytes.",
+                "schema": {
+                  "pattern": "^\"[a-f0-9]{64}\"$",
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The issuer metadata is unchanged",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public metadata may be cached for at most ten minutes.",
+                "schema": {
+                  "enum": [
+                    "public, max-age=600"
+                  ],
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong SHA-256 entity tag over the exact response bytes.",
+                "schema": {
+                  "pattern": "^\"[a-f0-9]{64}\"$",
                   "type": "string"
                 }
               },
@@ -1757,6 +1973,91 @@
           }
         },
         "summary": "Publish JWT VC Issuer Metadata for the SD-JWT VC response format"
+      }
+    },
+    "/.well-known/oauth-protected-resource": {
+      "get": {
+        "description": "RFC 9728 metadata binds this exact Evidence resource origin to one authorization-server issuer, the Evidence response JWKS, and header-only bearer transport. It contains no requester-scoped or operator-private configuration.",
+        "operationId": "getProtectedResourceMetadata",
+        "parameters": [
+          {
+            "description": "The exact strong entity tag from a prior response.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "pattern": "^\"[a-f0-9]{64}\"$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedResourceMetadata"
+                }
+              }
+            },
+            "description": "OAuth protected-resource metadata",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public metadata may be cached for at most ten minutes.",
+                "schema": {
+                  "enum": [
+                    "public, max-age=600"
+                  ],
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong SHA-256 entity tag over the exact response bytes.",
+                "schema": {
+                  "pattern": "^\"[a-f0-9]{64}\"$",
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The protected-resource metadata is unchanged",
+            "headers": {
+              "Cache-Control": {
+                "description": "Public metadata may be cached for at most ten minutes.",
+                "schema": {
+                  "enum": [
+                    "public, max-age=600"
+                  ],
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Strong SHA-256 entity tag over the exact response bytes.",
+                "schema": {
+                  "pattern": "^\"[a-f0-9]{64}\"$",
+                  "type": "string"
+                }
+              },
+              "traceparent": {
+                "description": "Effective W3C trace context. One valid inbound traceparent is retained; missing, invalid, or duplicate values are replaced and tracestate is never reflected.",
+                "schema": {
+                  "pattern": "^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-[0-9a-f]{2}$",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "summary": "Publish OAuth protected-resource metadata"
       }
     },
     "/catalog.jsonld": {
@@ -2320,9 +2621,7 @@
               },
               "WWW-Authenticate": {
                 "schema": {
-                  "enum": [
-                    "Bearer realm=\"registry-evidence\""
-                  ],
+                  "pattern": "^Bearer realm=\\\"registry-evidence\\\", resource_metadata=\\\"https?://[^\\\"]+/\\.well-known/oauth-protected-resource\\\"$",
                   "type": "string"
                 }
               },
@@ -2937,9 +3236,7 @@
               },
               "WWW-Authenticate": {
                 "schema": {
-                  "enum": [
-                    "Bearer realm=\"registry-evidence\""
-                  ],
+                  "pattern": "^Bearer realm=\\\"registry-evidence\\\", resource_metadata=\\\"https?://[^\\\"]+/\\.well-known/oauth-protected-resource\\\"$",
                   "type": "string"
                 }
               },
@@ -3346,9 +3643,7 @@
               },
               "WWW-Authenticate": {
                 "schema": {
-                  "enum": [
-                    "Bearer realm=\"registry-evidence\""
-                  ],
+                  "pattern": "^Bearer realm=\\\"registry-evidence\\\", resource_metadata=\\\"https?://[^\\\"]+/\\.well-known/oauth-protected-resource\\\"$",
                   "type": "string"
                 }
               },

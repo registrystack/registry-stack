@@ -137,6 +137,7 @@ entries:
   - id: sec-discovery-requester-scoped
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: public_origin_is_canonical_https_or_the_exact_local_loopback_exception}
+      - {file: crates/registry-evidence/src/config.rs, name: public_origin_enforces_the_schema_character_bound}
       - {file: crates/registry-evidence/src/model.rs, name: debug_surfaces_redact_requests_facts_disclosures_and_signed_payloads}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: real_router_serves_all_definitions_concurrently_without_crossing_boundaries}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_requires_authentication_and_returns_no_unentitled_definitions}
@@ -152,6 +153,7 @@ entries:
       - {file: crates/registry-evidence-client/src/client.rs, name: an_unknown_response_key_never_triggers_metadata_refresh}
       - {file: crates/registry-evidence-client/src/client.rs, name: a_redirect_is_refused_and_the_credential_never_follows_it}
       - {file: crates/registry-evidence-client/src/client.rs, name: public_metadata_redirects_are_not_followed}
+      - {file: crates/registry-evidence-client/src/client.rs, name: progressive_batch_format_refuses_before_metadata_or_token_exchange}
       - {file: crates/registry-evidence-client/tests/against_a_real_deployment.rs, name: a_local_profile_completes_first_use_then_matches_the_opaque_receipt}
   - id: sec-missing-or-writable-bundle-fails
     tests: [{file: crates/registry-evidence/src/bundle.rs, name: writable_bundle_and_unknown_files_fail_closed}]

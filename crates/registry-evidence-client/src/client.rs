@@ -342,6 +342,7 @@ impl EvidenceClient {
         &self,
         request: AudienceScopedRequest,
     ) -> Result<VerifiedAudienceScopedEvidence, EvidenceClientError> {
+        validate_progressive_response_format(request.response_format)?;
         let state = self.progressive_state()?;
         let snapshot = self.progressive_snapshot(state).await?;
         let definition = select_definition(&snapshot.definitions, &request)?.clone();
@@ -386,6 +387,7 @@ impl EvidenceClient {
         &self,
         request: AudienceScopedRequest,
     ) -> Result<ProgressivePreparedRequest, EvidenceClientError> {
+        validate_progressive_response_format(request.response_format)?;
         let state = self.progressive_state()?;
         let snapshot = self.progressive_snapshot(state).await?;
         let definition = select_definition(&snapshot.definitions, &request)?.clone();
@@ -1337,6 +1339,17 @@ fn metadata_protocol_failure() -> EvidenceClientError {
         trace_id: None,
         retry_after_seconds: None,
     }
+}
+
+fn validate_progressive_response_format(
+    format: EvidenceResponseFormat,
+) -> Result<(), EvidenceClientError> {
+    if !format.is_verifiable_alone() {
+        return Err(EvidenceClientError::configuration(
+            "an audience-scoped progressive request requires one verifiable response; use the holder-bound batch API for issuance packaging",
+        ));
+    }
+    Ok(())
 }
 
 fn authorization_metadata_source_matches(cached_issuer: &str, announced_issuer: &str) -> bool {
@@ -3149,6 +3162,70 @@ mod tests {
                 }
             ),
             "{failure:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn progressive_batch_format_refuses_before_metadata_or_token_exchange() {
+        const PRIVATE_KEY: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let profile = EvidenceClientProfile::from_slice(
+            serde_json::json!({
+                "schema": crate::EVIDENCE_CLIENT_PROFILE_SCHEMA_V1,
+                "baseUrl": server.uri(),
+                "clientId": "progressive-test-client",
+                "privateKey": {
+                    "source": "environment",
+                    "variable": "UNUSED_PROGRESSIVE_TEST_KEY"
+                },
+                "trust": {"type": "local-loopback-discovery"}
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .expect("the local progressive profile parses");
+        let client = EvidenceClient::from_profile_with_key(
+            profile,
+            PrivateJwk::parse(PRIVATE_KEY).expect("the test key parses"),
+        )
+        .expect("the progressive client builds");
+        let request = || {
+            AudienceScopedRequest::new("status-check", std::collections::BTreeMap::new())
+                .with_response_format(EvidenceResponseFormat::SdJwtVcBatch)
+        };
+
+        let request_failure = match client.request(request()).await {
+            Ok(_) => panic!("request accepted batch issuance"),
+            Err(failure) => failure,
+        };
+        let prepare_failure = match client.prepare_progressive(request()).await {
+            Ok(_) => panic!("prepare accepted batch issuance"),
+            Err(failure) => failure,
+        };
+        for failure in [request_failure, prepare_failure] {
+            assert!(
+                matches!(
+                    failure,
+                    EvidenceClientError::Configuration {
+                        reason: "an audience-scoped progressive request requires one verifiable response; use the holder-bound batch API for issuance packaging"
+                    }
+                ),
+                "{failure:?}"
+            );
+        }
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("the server records requests")
+                .is_empty(),
+            "unsupported local input must not trigger discovery or token exchange"
         );
     }
 
