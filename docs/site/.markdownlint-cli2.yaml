@@ -41,7 +41,6 @@ ignores:
   - "node_modules/**"
   - "dist/**"
   - "src/data/generated/**"
-  - ".research/**"
   - ".repo-docs-cache/**"
   - ".release-docsets/**"
   - "docs/**"
