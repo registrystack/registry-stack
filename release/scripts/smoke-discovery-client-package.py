@@ -12,7 +12,7 @@ RESPONSE = {
     "items": [
         {
             "recordId": "record-a",
-            "bindingId": "urn:example:binding:a",
+            "bindingId": "urn:registrystack:discovery:binding:sha256:3a316636cd4b722c008a02dcf61633c7be64aa85bc9d3c20d932a0a2e8e06129",
             "serviceId": "urn:example:service:a",
             "serviceKind": "evidence",
             "title": "Evidence service",
