@@ -12,8 +12,6 @@ use crate::model::{
     MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS, MAXIMUM_TEXT_CHARACTERS,
     MAXIMUM_VALUES_PER_FIELD, MINIMUM_HTTP_RESPONSE_BYTES,
 };
-use crate::problem::ProblemCode;
-
 pub const HEALTH_ROUTE: &str = "/health";
 pub const READY_ROUTE: &str = "/ready";
 pub const OPENAPI_ROUTE: &str = "/openapi.json";
@@ -32,6 +30,28 @@ const PUBLIC_URL_PATTERN: &str =
     "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?!.*//)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$";
 const TEXT_PATTERN: &str = "^[^\\u0000-\\u001f\\u007f-\\u009f]+$";
 const URI_IDENTIFIER_PATTERN: &str = "^[A-Za-z][A-Za-z0-9+.-]*:";
+pub(crate) const PROBLEM_CONTRACTS: [(&str, &str, u16); 4] = [
+    (
+        "https://id.registrystack.org/problems/registry-discovery/invalid-request",
+        "Invalid request",
+        400,
+    ),
+    (
+        "https://id.registrystack.org/problems/registry-discovery/not-found",
+        "Not found",
+        404,
+    ),
+    (
+        "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded",
+        "Result bound exceeded",
+        422,
+    ),
+    (
+        "https://id.registrystack.org/problems/registry-discovery/unavailable",
+        "Unavailable",
+        503,
+    ),
+];
 
 trait WireSchema {
     const NAME: &'static str;
@@ -467,21 +487,18 @@ fn bounded_array_schema(
 }
 
 fn problem_schema() -> Value {
-    let variants = ProblemCode::ALL
+    let variants = PROBLEM_CONTRACTS
         .into_iter()
-        .map(|problem| {
+        .map(|(type_uri, title, status)| {
             object_schema(
                 &["type", "title", "status"],
                 &[
                     (
                         "type",
-                        json!({"type": "string", "format": "uri", "const": problem.type_uri()}),
+                        json!({"type": "string", "format": "uri", "const": type_uri}),
                     ),
-                    ("title", json!({"type": "string", "const": problem.title()})),
-                    (
-                        "status",
-                        json!({"type": "integer", "const": problem.status().as_u16()}),
-                    ),
+                    ("title", json!({"type": "string", "const": title})),
+                    ("status", json!({"type": "integer", "const": status})),
                 ],
             )
         })
@@ -641,14 +658,11 @@ mod tests {
             MAXIMUM_IDENTIFIER_CHARACTERS
         );
         let problems = schemas["Problem"]["oneOf"].as_array().unwrap();
-        assert_eq!(problems.len(), ProblemCode::ALL.len());
-        for (schema, problem) in problems.iter().zip(ProblemCode::ALL) {
-            assert_eq!(schema["properties"]["type"]["const"], problem.type_uri());
-            assert_eq!(schema["properties"]["title"]["const"], problem.title());
-            assert_eq!(
-                schema["properties"]["status"]["const"],
-                problem.status().as_u16()
-            );
+        assert_eq!(problems.len(), PROBLEM_CONTRACTS.len());
+        for (schema, (type_uri, title, status)) in problems.iter().zip(PROBLEM_CONTRACTS) {
+            assert_eq!(schema["properties"]["type"]["const"], type_uri);
+            assert_eq!(schema["properties"]["title"]["const"], title);
+            assert_eq!(schema["properties"]["status"]["const"], status);
         }
     }
 

@@ -133,6 +133,11 @@ mod tests {
             assert!(problem
                 .type_uri()
                 .starts_with("https://id.registrystack.org/problems/registry-discovery/"));
+            assert!(crate::openapi::PROBLEM_CONTRACTS.contains(&(
+                problem.type_uri(),
+                problem.title(),
+                problem.status().as_u16(),
+            )));
         }
     }
 }
