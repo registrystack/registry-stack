@@ -524,6 +524,20 @@ fn validate_resolve_response(
 ) -> Result<(), DiscoveryClientError> {
     if response.requirement_id != request.requirement_id
         || response.jurisdiction != request.jurisdiction
+    {
+        return Err(DiscoveryClientError::Protocol);
+    }
+    validate_resolve_response_shape(response)
+}
+
+pub(crate) fn validate_resolve_response_shape(
+    response: &EvidenceTypeResolveResponse,
+) -> Result<(), DiscoveryClientError> {
+    if !valid_uri_identifier(&response.requirement_id)
+        || response
+            .jurisdiction
+            .as_deref()
+            .is_some_and(|value| !valid_uri_identifier(value))
         || !valid_digest(&response.mapping_revision)
         || response.alternatives.len() > MAXIMUM_RESULT_ALTERNATIVES
     {
@@ -569,20 +583,25 @@ fn validate_search_response(
     filters: &ServiceFilters,
     response: &ServiceSearchResponse,
 ) -> Result<(), DiscoveryClientError> {
-    if !valid_digest(&response.catalog_revision)
-        || response.items.len() > MAXIMUM_RESULT_RECORDS
-        || response
-            .items
-            .windows(2)
-            .any(|pair| pair[0].record_id >= pair[1].record_id)
+    validate_search_response_shape(response)?;
+    if response
+        .items
+        .iter()
+        .any(|service| !service_matches_filters(service, filters))
     {
+        return Err(DiscoveryClientError::Protocol);
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_search_response_shape(
+    response: &ServiceSearchResponse,
+) -> Result<(), DiscoveryClientError> {
+    if !valid_digest(&response.catalog_revision) || response.items.len() > MAXIMUM_RESULT_RECORDS {
         return Err(DiscoveryClientError::Protocol);
     }
     for service in &response.items {
         validate_service(service).map_err(|_| DiscoveryClientError::Protocol)?;
-        if !service_matches_filters(service, filters) {
-            return Err(DiscoveryClientError::Protocol);
-        }
     }
     Ok(())
 }
@@ -909,6 +928,20 @@ mod tests {
             validate_resolve_response(&request, &response),
             Err(DiscoveryClientError::Protocol)
         );
+    }
+
+    #[test]
+    fn search_response_accepts_schema_valid_item_order() {
+        let first = service();
+        let mut second = first.clone();
+        second.record_id = "record-b".into();
+        let response = ServiceSearchResponse {
+            catalog_revision: format!("sha256:{}", "2".repeat(64)),
+            items: vec![second, first],
+        };
+
+        validate_search_response(&ServiceFilters::default(), &response)
+            .expect("the wire contract does not rank or order search results");
     }
 
     #[test]

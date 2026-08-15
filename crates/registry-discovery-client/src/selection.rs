@@ -9,7 +9,10 @@ use registry_discovery_profile::derive_binding_id;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::{DiscoveryClientError, EvidenceServiceQuery};
+use crate::{
+    client::{validate_resolve_response_shape, validate_search_response_shape},
+    DiscoveryClientError, EvidenceServiceQuery,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "id", rename_all = "kebab-case")]
@@ -79,6 +82,7 @@ impl EvidenceTypeResolveSelectionExt for EvidenceTypeResolveResponse {
         &self,
         evidence_type_list_id: &str,
     ) -> Result<EvidenceResolutionContext, DiscoveryClientError> {
+        validate_resolve_response_shape(self)?;
         let mut matches = self
             .alternatives
             .iter()
@@ -93,6 +97,7 @@ impl EvidenceTypeResolveSelectionExt for EvidenceTypeResolveResponse {
     }
 
     fn select_only_alternative(&self) -> Result<EvidenceResolutionContext, DiscoveryClientError> {
+        validate_resolve_response_shape(self)?;
         let [alternative] = self.alternatives.as_slice() else {
             return Err(if self.alternatives.is_empty() {
                 DiscoveryClientError::NoMatchingAlternative
@@ -350,11 +355,11 @@ impl ServiceSearchSelectionExt for ServiceSearchResponse {
         &self,
         request: SelectionRequest,
     ) -> Result<ServiceSelection, DiscoveryClientError> {
-        if !valid_digest(&self.catalog_revision)
-            || request
-                .mapping_revision
-                .as_deref()
-                .is_some_and(|revision| !valid_digest(revision))
+        validate_search_response_shape(self)?;
+        if request
+            .mapping_revision
+            .as_deref()
+            .is_some_and(|revision| !valid_digest(revision))
         {
             return Err(DiscoveryClientError::Query);
         }
@@ -417,6 +422,7 @@ impl ServiceSearchSelectionExt for ServiceSearchResponse {
         &self,
         matched_capability: MatchedCapability,
     ) -> Result<ServiceSelection, DiscoveryClientError> {
+        validate_search_response_shape(self)?;
         let [service] = self.items.as_slice() else {
             return Err(if self.items.is_empty() {
                 DiscoveryClientError::NoMatchingService
@@ -665,6 +671,7 @@ pub fn validate_service_selection(
 mod tests {
     use registry_discovery::{
         catalog_revision, EvidenceTypeResolveResponse, ResolvedAlternative, ServiceSearchResponse,
+        MAXIMUM_RESULT_ALTERNATIVES,
     };
 
     use super::*;
@@ -882,7 +889,7 @@ mod tests {
         };
         assert_eq!(
             response.select_only_alternative(),
-            Err(DiscoveryClientError::Query)
+            Err(DiscoveryClientError::Protocol)
         );
 
         let record = service();
@@ -903,6 +910,33 @@ mod tests {
         persisted.evidence_resolution = Some(oversized);
         assert_eq!(
             validate_service_selection(&persisted),
+            Err(DiscoveryClientError::Protocol)
+        );
+    }
+
+    #[test]
+    fn evidence_alternative_selection_refuses_an_over_bound_response() {
+        let alternatives = (0..=MAXIMUM_RESULT_ALTERNATIVES)
+            .map(|index| ResolvedAlternative {
+                evidence_type_list_id: format!("urn:list:{index:04}"),
+                evidence_type_ids: vec![format!("urn:evidence:{index:04}")],
+                mapping_id: "urn:mapping".into(),
+                mapping_authority_id: "urn:mapping-authority".into(),
+            })
+            .collect::<Vec<_>>();
+        let response = EvidenceTypeResolveResponse {
+            requirement_id: "urn:requirement".into(),
+            jurisdiction: None,
+            mapping_revision: format!("sha256:{}", "2".repeat(64)),
+            alternatives,
+        };
+
+        assert_eq!(
+            response.select_alternative("urn:list:0000"),
+            Err(DiscoveryClientError::Protocol)
+        );
+        assert_eq!(
+            response.select_only_alternative(),
             Err(DiscoveryClientError::Protocol)
         );
     }

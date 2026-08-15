@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import http.server
 import json
 import threading
@@ -19,10 +20,32 @@ from registry_discovery_client import (
 )
 
 
+def with_derived_binding_id(value: dict[str, object]) -> dict[str, object]:
+    identity = {
+        "conformsTo": value["conformsTo"],
+        "endpointUrl": value["endpointUrl"],
+        "evidenceTypeIds": value["evidenceTypeIds"],
+        "operationFamilyIds": value["operationFamilyIds"],
+        "semanticClassIds": value["semanticClassIds"],
+        "serviceId": value["serviceId"],
+        "serviceKind": value["serviceKind"],
+    }
+    canonical = json.dumps(
+        identity,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    digest = hashlib.sha256(canonical).hexdigest()
+    return {
+        **value,
+        "bindingId": f"urn:registrystack:discovery:binding:sha256:{digest}",
+    }
+
+
 DIGEST = "sha256:" + "1" * 64
-SERVICE = {
+SERVICE = with_derived_binding_id({
     "recordId": "record-a",
-    "bindingId": "urn:example:binding:a",
     "serviceId": "urn:example:service:a",
     "serviceKind": "evidence",
     "title": "Evidence service",
@@ -38,17 +61,16 @@ SERVICE = {
     "originUrl": "https://provider.example/catalog.jsonld",
     "originContentDigest": DIGEST,
     "originFetchedAt": "2026-08-15T00:00:00Z",
-}
-RELAY_SERVICE = {
+})
+RELAY_SERVICE = with_derived_binding_id({
     **SERVICE,
-    "bindingId": "urn:example:binding:relay",
     "serviceId": "urn:example:service:relay",
     "serviceKind": "relay",
     "registryAuthorityId": "urn:example:registry-authority",
     "evidenceTypeIds": [],
     "semanticClassIds": ["urn:example:registered-business"],
     "operationFamilyIds": ["urn:example:consultation-list"],
-}
+})
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -151,13 +173,12 @@ class DiscoveryClientTests(unittest.TestCase):
         items = []
         for index in range(1_100):
             suffix = f"{index:04d}"
-            items.append({
+            items.append(with_derived_binding_id({
                 **SERVICE,
                 "recordId": f"record-{suffix}",
-                "bindingId": f"urn:example:binding:{suffix}",
                 "serviceId": f"urn:example:service:{suffix}",
                 "description": "x" * 4_096,
-            })
+            }))
         response = {"catalogRevision": DIGEST, "items": items}
         encoded = json.dumps(response, separators=(",", ":")).encode()
         self.assertGreater(len(encoded), 4 * 1024 * 1024)
@@ -179,13 +200,13 @@ class DiscoveryClientTests(unittest.TestCase):
 
         semantic_classes = identifiers("semantic")
         operation_families = identifiers("operation")
-        service = {
+        service = with_derived_binding_id({
             **RELAY_SERVICE,
             "jurisdictions": identifiers("jurisdiction"),
             "conformsTo": identifiers("profile"),
             "semanticClassIds": semantic_classes,
             "operationFamilyIds": operation_families,
-        }
+        })
         selection = select_relay_service(
             {"catalogRevision": DIGEST, "items": [service]},
             {

@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const http = require('node:http');
 const test = require('node:test');
 const {
@@ -12,10 +13,26 @@ const {
   validateSelection,
 } = require('../client');
 
+function withDerivedBindingId(value) {
+  const identity = {
+    conformsTo: value.conformsTo,
+    endpointUrl: value.endpointUrl,
+    evidenceTypeIds: value.evidenceTypeIds,
+    operationFamilyIds: value.operationFamilyIds,
+    semanticClassIds: value.semanticClassIds,
+    serviceId: value.serviceId,
+    serviceKind: value.serviceKind,
+  };
+  const digest = crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+  return {
+    ...value,
+    bindingId: `urn:registrystack:discovery:binding:sha256:${digest}`,
+  };
+}
+
 const digest = `sha256:${'1'.repeat(64)}`;
-const service = {
+const service = withDerivedBindingId({
   recordId: 'record-a',
-  bindingId: 'urn:example:binding:a',
   serviceId: 'urn:example:service:a',
   serviceKind: 'evidence',
   title: 'Evidence service',
@@ -31,17 +48,16 @@ const service = {
   originUrl: 'https://provider.example/catalog.jsonld',
   originContentDigest: digest,
   originFetchedAt: '2026-08-15T00:00:00Z',
-};
-const relayService = {
+});
+const relayService = withDerivedBindingId({
   ...service,
-  bindingId: 'urn:example:binding:relay',
   serviceId: 'urn:example:service:relay',
   serviceKind: 'relay',
   registryAuthorityId: 'urn:example:registry-authority',
   evidenceTypeIds: [],
   semanticClassIds: ['urn:example:registered-business'],
   operationFamilyIds: ['urn:example:consultation-list'],
-};
+});
 
 test('search, resolve, and inert exact selection use the Rust client', async () => {
   const server = http.createServer((request, response) => {
@@ -122,10 +138,9 @@ test('a supported large response remains selectable', () => {
     { length: 128 },
     (_, index) => `urn:example:${name}:${String(index).padStart(3, '0')}`,
   );
-  const items = Array.from({ length: 200 }, (_, index) => ({
+  const items = Array.from({ length: 200 }, (_, index) => withDerivedBindingId({
     ...relayService,
     recordId: `record-${String(index).padStart(3, '0')}`,
-    bindingId: `urn:example:binding:relay:${String(index).padStart(3, '0')}`,
     serviceId: `urn:example:service:relay:${String(index).padStart(3, '0')}`,
     jurisdictions: identifiers('jurisdiction'),
     conformsTo: identifiers('profile'),
