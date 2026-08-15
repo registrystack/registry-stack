@@ -17,7 +17,7 @@
   "$defs": {
     "identifier": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^\\S(?:[^\\u0000-\\u001F\\u007F]*\\S)?$"},
     "uriIdentifier": {"allOf": [{"$ref": "#/$defs/identifier"}, {"format": "uri"}]},
-    "publicUrl": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 4096, "pattern": "^(?:https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$"},
+    "publicUrl": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 4096, "pattern": "^(?:https://[^\\s\\u0000-\\u001F\\u007F-\\u009F/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?!.*//)(?:/[^\\s\\u0000-\\u001F\\u007F-\\u009F?#]*)?$"},
     "text": {"type": "string", "minLength": 1, "maxLength": 16384, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$"},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "uriSet": {

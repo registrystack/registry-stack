@@ -13,7 +13,10 @@ pub const MAX_ORIGINS: usize = 128;
 pub const MAX_MAPPINGS: usize = 2_048;
 pub const MAX_ALTERNATIVES: usize = 32;
 pub const MAX_EVIDENCE_TYPES_PER_ALTERNATIVE: usize = 32;
-const MAX_AUTHORING_FILE_BYTES: u64 = 1024 * 1024;
+const MAX_ORIGINS_FILE_BYTES: u64 = 1024 * 1024;
+// Covers the complete 32-by-32 mapping shape with 4,096-scalar UTF-8 URIs
+// while retaining a finite per-file authoring bound.
+pub const MAX_MAPPING_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_IDENTIFIER_CHARACTERS: usize = 4_096;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -66,7 +69,7 @@ pub enum ProjectError {
 }
 
 pub fn check_project(root: &Path, allow_loopback: bool) -> Result<CheckedProject, ProjectError> {
-    let origins: OriginsFile = read_yaml(&root.join("origins.yaml"))?;
+    let origins: OriginsFile = read_yaml(&root.join("origins.yaml"), MAX_ORIGINS_FILE_BYTES)?;
     if origins.schema_version != ORIGINS_SCHEMA
         || origins.origins.is_empty()
         || origins.origins.len() > MAX_ORIGINS
@@ -95,7 +98,7 @@ pub fn check_project(root: &Path, allow_loopback: bool) -> Result<CheckedProject
     let mut mapping_ids = BTreeSet::new();
     let mut mapping_keys = BTreeSet::new();
     for path in mapping_paths {
-        let mut mapping: AuthoredEvidenceMapping = read_yaml(&path)?;
+        let mut mapping: AuthoredEvidenceMapping = read_yaml(&path, MAX_MAPPING_FILE_BYTES)?;
         validate_mapping(&mapping)?;
         for alternative in &mut mapping.alternatives {
             alternative.evidence_type_ids.sort();
@@ -135,7 +138,7 @@ fn mapping_paths(directory: &Path) -> Result<Vec<PathBuf>, ProjectError> {
             Some("yaml" | "yml")
         );
         if !metadata.file_type().is_file()
-            || metadata.len() > MAX_AUTHORING_FILE_BYTES
+            || metadata.len() > MAX_MAPPING_FILE_BYTES
             || !supported_extension
         {
             return Err(ProjectError::Invalid);
@@ -146,9 +149,12 @@ fn mapping_paths(directory: &Path) -> Result<Vec<PathBuf>, ProjectError> {
     Ok(paths)
 }
 
-fn read_yaml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, ProjectError> {
+fn read_yaml<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    maximum_bytes: u64,
+) -> Result<T, ProjectError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| ProjectError::Read)?;
-    if !metadata.file_type().is_file() || metadata.len() > MAX_AUTHORING_FILE_BYTES {
+    if !metadata.file_type().is_file() || metadata.len() > maximum_bytes {
         return Err(ProjectError::Invalid);
     }
     let bytes = fs::read(path).map_err(|_| ProjectError::Read)?;
@@ -315,5 +321,43 @@ alternatives:
             checked.mappings[0].mapping_id,
             "urn:example:mapping#fragment"
         );
+    }
+
+    #[test]
+    fn complete_schema_maximum_mapping_fits_the_authored_file_bound() {
+        fn identifier(prefix: &str) -> String {
+            format!(
+                "{prefix}{}",
+                "x".repeat(MAX_IDENTIFIER_CHARACTERS - prefix.chars().count())
+            )
+        }
+
+        let mut mapping = format!(
+            "schemaVersion: {MAPPING_SCHEMA}\nmappingId: {}\nmappingAuthorityId: {}\nrequirementId: {}\njurisdiction: {}\nalternatives:\n",
+            identifier("urn:example:mapping:"),
+            identifier("urn:example:authority:"),
+            identifier("urn:example:requirement:"),
+            identifier("urn:example:jurisdiction:"),
+        );
+        for alternative in 0..MAX_ALTERNATIVES {
+            mapping.push_str(&format!(
+                "  - evidenceTypeListId: {}\n    evidenceTypeIds:\n",
+                identifier(&format!("urn:example:list:{alternative:02}:"))
+            ));
+            for evidence_type in 0..MAX_EVIDENCE_TYPES_PER_ALTERNATIVE {
+                mapping.push_str(&format!(
+                    "      - {}\n",
+                    identifier(&format!(
+                        "urn:example:evidence:{alternative:02}:{evidence_type:02}:"
+                    ))
+                ));
+            }
+        }
+        assert!(mapping.len() > MAX_ORIGINS_FILE_BYTES as usize);
+        assert!(mapping.len() <= MAX_MAPPING_FILE_BYTES as usize);
+
+        let root = project(ORIGINS, &[("maximum.yaml", &mapping)]);
+        let checked = check_project(root.path(), false).expect("maximum mapping checks");
+        assert_eq!(checked.mappings[0].alternatives.len(), MAX_ALTERNATIVES);
     }
 }

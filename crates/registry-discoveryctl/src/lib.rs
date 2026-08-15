@@ -12,7 +12,8 @@ mod project;
 pub use build::{build_project, build_project_at, BuildError};
 pub use project::{
     check_project, ApprovedOrigin, AuthoredEvidenceMapping, AuthoredEvidenceTypeAlternative,
-    CheckedProject, OriginsFile, ProjectError, MAPPING_SCHEMA, ORIGINS_SCHEMA,
+    CheckedProject, OriginsFile, ProjectError, MAPPING_SCHEMA, MAX_MAPPING_FILE_BYTES,
+    ORIGINS_SCHEMA,
 };
 
 #[derive(Debug, Parser)]

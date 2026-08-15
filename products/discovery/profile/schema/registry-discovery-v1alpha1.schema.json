@@ -27,7 +27,7 @@
         "serviceKind": {"enum": ["evidence", "relay"]},
         "title": {"$ref": "#/$defs/text"},
         "description": {"$ref": "#/$defs/text"},
-        "endpointURL": {"type": "string", "format": "uri", "maxLength": 4096, "pattern": "^(?=[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$)(?:https://[^/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^?#]*)?$"},
+        "endpointURL": {"type": "string", "format": "uri", "maxLength": 4096, "pattern": "^(?=[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$)(?:https://[^/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?!.*//)(?:/[^?#]*)?$"},
         "publisherId": {"$ref": "#/$defs/identifier"},
         "operatorId": {"$ref": "#/$defs/identifier"},
         "registryAuthorityId": {"$ref": "#/$defs/identifier"},

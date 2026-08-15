@@ -28,6 +28,9 @@ Evidence or Relay trust and invokes the selected provider directly.
 - Aggregate query, response-media, URL, method, shutdown, and blocking-work
   limits enforced consistently across the server, client, schemas, and
   generated OpenAPI.
+- Four value-free Discovery problem types registered under
+  `https://id.registrystack.org/problems/registry-discovery/` and generated
+  into the public Registry Stack identifier catalog.
 - One Evidence and one Relay local acceptance journey, plus a clean-checkout
   adopter tutorial exercised in CI.
 

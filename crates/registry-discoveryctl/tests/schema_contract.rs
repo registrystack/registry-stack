@@ -9,7 +9,7 @@ use registry_discovery::{parse_index, prepare};
 use registry_discovery_profile::{
     parse_description, render_description, DiscoveryDescription, ServiceDescription,
 };
-use registry_discoveryctl::check_project;
+use registry_discoveryctl::{check_project, MAX_MAPPING_FILE_BYTES};
 use registry_platform_canonical_json::canonicalize_json;
 use serde_json::Value;
 
@@ -248,6 +248,15 @@ fn every_positive_fixture_satisfies_draft_2020_12_and_the_closed_rust_parser() {
             path.display()
         );
     }
+}
+
+#[test]
+fn mapping_schema_publishes_the_rust_authored_file_byte_bound() {
+    let schema = load_json("schemas/evidence-mapping.schema.json");
+    assert_eq!(
+        schema["x-maximumDocumentBytes"].as_u64(),
+        Some(MAX_MAPPING_FILE_BYTES)
+    );
 }
 
 #[test]

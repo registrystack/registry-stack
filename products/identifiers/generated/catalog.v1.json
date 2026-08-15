@@ -16,6 +16,82 @@
       }
     },
     {
+      "uri": "https://id.registrystack.org/problems/registry-discovery/invalid-request",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Invalid request",
+      "description": "The Discovery request is invalid.",
+      "source": {
+        "path": "crates/registry-discovery/src/problem.rs",
+        "sha256": "899768a2f68b4f3220aa49a4cbece304ab8df5ea4a9588ecb5dfeae2c74a25d9"
+      },
+      "problem": {
+        "code": "invalid-request",
+        "httpStatuses": [
+          400
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-discovery/not-found",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Not found",
+      "description": "The requested Discovery resource was not found.",
+      "source": {
+        "path": "crates/registry-discovery/src/problem.rs",
+        "sha256": "899768a2f68b4f3220aa49a4cbece304ab8df5ea4a9588ecb5dfeae2c74a25d9"
+      },
+      "problem": {
+        "code": "not-found",
+        "httpStatuses": [
+          404
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Result bound exceeded",
+      "description": "The complete Discovery result exceeds its configured bound.",
+      "source": {
+        "path": "crates/registry-discovery/src/problem.rs",
+        "sha256": "899768a2f68b4f3220aa49a4cbece304ab8df5ea4a9588ecb5dfeae2c74a25d9"
+      },
+      "problem": {
+        "code": "result-bound-exceeded",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-discovery/unavailable",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "discovery",
+      "title": "Unavailable",
+      "description": "Registry Discovery is temporarily unavailable.",
+      "source": {
+        "path": "crates/registry-discovery/src/problem.rs",
+        "sha256": "899768a2f68b4f3220aa49a4cbece304ab8df5ea4a9588ecb5dfeae2c74a25d9"
+      },
+      "problem": {
+        "code": "unavailable",
+        "httpStatuses": [
+          503
+        ]
+      }
+    },
+    {
       "uri": "https://id.registrystack.org/problems/registry-evidence/auth/invalid_credential",
       "kind": "problem",
       "status": "active",

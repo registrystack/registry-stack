@@ -258,7 +258,7 @@ fn sha256_digest(bytes: &[u8]) -> String {
 }
 
 fn atomic_replace(output: &Path, bytes: &[u8]) -> Result<(), BuildError> {
-    let parent = output.parent().ok_or(BuildError::Write)?;
+    let parent = effective_parent(output);
     if !parent.is_dir() {
         return Err(BuildError::Write);
     }
@@ -271,6 +271,12 @@ fn atomic_replace(output: &Path, bytes: &[u8]) -> Result<(), BuildError> {
         .map_err(|_| BuildError::Write)?;
     temporary.persist(output).map_err(|_| BuildError::Write)?;
     Ok(())
+}
+
+fn effective_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 #[cfg(unix)]
@@ -305,6 +311,15 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn a_bare_output_filename_uses_the_current_directory() {
+        assert_eq!(effective_parent(Path::new("index.json")), Path::new("."));
+        assert_eq!(
+            effective_parent(Path::new("output/index.json")),
+            Path::new("output")
+        );
+    }
 
     #[test]
     fn compiled_index_byte_overflow_preserves_the_previous_output() {

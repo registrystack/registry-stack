@@ -414,7 +414,8 @@ fn validate_selection<'py>(
     py: Python<'py>,
     selection: &Bound<'_, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let selection: ServiceSelection = python_to_rust(selection).map_err(|_| query_error(py))?;
+    let selection: ServiceSelection =
+        python_response_to_rust(selection).map_err(|_| query_error(py))?;
     validate_service_selection(&selection).map_err(|error| client_error(py, error))?;
     rust_to_python(py, &selection)
 }

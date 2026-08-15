@@ -169,6 +169,38 @@ class DiscoveryClientTests(unittest.TestCase):
         })
         self.assertEqual(selection["recordId"], "record-0000")
 
+    def test_supported_large_persisted_selection_remains_validatable(self) -> None:
+        def identifiers(namespace: str) -> list[str]:
+            values = []
+            for index in range(256):
+                prefix = f"urn:example:{namespace}:{index:03d}:"
+                values.append(prefix + "x" * (4_096 - len(prefix)))
+            return values
+
+        semantic_classes = identifiers("semantic")
+        operation_families = identifiers("operation")
+        service = {
+            **RELAY_SERVICE,
+            "jurisdictions": identifiers("jurisdiction"),
+            "conformsTo": identifiers("profile"),
+            "semanticClassIds": semantic_classes,
+            "operationFamilyIds": operation_families,
+        }
+        selection = select_relay_service(
+            {"catalogRevision": DIGEST, "items": [service]},
+            {
+                "recordId": service["recordId"],
+                "capabilityMatch": {
+                    "semanticClassId": semantic_classes[0],
+                    "operationFamilyId": operation_families[0],
+                },
+            },
+        )
+        encoded = json.dumps(selection, separators=(",", ":")).encode()
+        self.assertGreater(len(encoded), 4 * 1024 * 1024)
+        self.assertLess(len(encoded), 16 * 1024 * 1024)
+        self.assertEqual(validate_selection(selection)["recordId"], service["recordId"])
+
     def test_configuration_values_are_bounded_and_value_free(self) -> None:
         invalid_configurations = [
             {"request_timeout_seconds": 1e300},

@@ -475,22 +475,22 @@ fn problem_from_response(
         return Err(DiscoveryClientError::Protocol);
     }
     let problem = match body.type_uri.as_str() {
-        "https://registrystack.org/problems/discovery/invalid-request"
+        "https://id.registrystack.org/problems/registry-discovery/invalid-request"
             if status == StatusCode::BAD_REQUEST =>
         {
             DiscoveryProblem::InvalidRequest
         }
-        "https://registrystack.org/problems/discovery/not-found"
+        "https://id.registrystack.org/problems/registry-discovery/not-found"
             if status == StatusCode::NOT_FOUND =>
         {
             DiscoveryProblem::NotFound
         }
-        "https://registrystack.org/problems/discovery/result-bound-exceeded"
+        "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded"
             if status == StatusCode::UNPROCESSABLE_ENTITY =>
         {
             DiscoveryProblem::ResultBoundExceeded
         }
-        "https://registrystack.org/problems/discovery/unavailable"
+        "https://id.registrystack.org/problems/registry-discovery/unavailable"
             if status == StatusCode::SERVICE_UNAVAILABLE =>
         {
             DiscoveryProblem::Unavailable
@@ -717,7 +717,7 @@ mod tests {
                 response_with_media_type(
                     StatusCode::BAD_REQUEST,
                     "Application/Problem+JSON; charset=\"utf-8\"",
-                    br#"{"type":"https://registrystack.org/problems/discovery/invalid-request","title":"Invalid request","status":400}"#.to_vec(),
+                    br#"{"type":"https://id.registrystack.org/problems/registry-discovery/invalid-request","title":"Invalid request","status":400}"#.to_vec(),
                 )
             }
             Mode::WrongMediaType => search_response("text/plain"),

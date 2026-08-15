@@ -98,6 +98,12 @@
       "value": "https://provider.example/evidence path"
     },
     {
+      "name": "index-refuses-empty-endpoint-path-segments",
+      "contract": "index",
+      "pointer": "/services/0/endpointUrl",
+      "value": "https://provider.example/a//b"
+    },
+    {
       "name": "profile-refuses-unknown-root-member",
       "contract": "profile",
       "pointer": "/unexpected",
@@ -120,6 +126,12 @@
       "contract": "profile",
       "pointer": "/services/0/endpointURL",
       "value": "https://evidence.example.org?private=true"
+    },
+    {
+      "name": "profile-refuses-empty-endpoint-path-segments",
+      "contract": "profile",
+      "pointer": "/services/0/endpointURL",
+      "value": "https://evidence.example.org/a//b"
     },
     {
       "name": "profile-refuses-general-graph-form",

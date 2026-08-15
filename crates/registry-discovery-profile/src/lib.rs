@@ -527,12 +527,23 @@ pub fn is_valid_endpoint_url(value: &str, allow_loopback_http: bool) -> bool {
         || parsed.password().is_some()
         || parsed.fragment().is_some()
         || parsed.query().is_some()
+        || has_empty_non_trailing_path_segment(&parsed)
     {
         return false;
     }
     let explicit_loopback = exact_loopback_host(value, &parsed);
     parsed.scheme() == "https"
         || (allow_loopback_http && parsed.scheme() == "http" && explicit_loopback)
+}
+
+fn has_empty_non_trailing_path_segment(parsed: &Url) -> bool {
+    parsed.path_segments().is_some_and(|segments| {
+        let segments = segments.collect::<Vec<_>>();
+        segments
+            .iter()
+            .enumerate()
+            .any(|(index, segment)| segment.is_empty() && index + 1 < segments.len())
+    })
 }
 
 fn exact_loopback_host(value: &str, parsed: &Url) -> bool {
@@ -800,6 +811,7 @@ mod tests {
             "http://127.0.0.1:8080/catalog.jsonld\n",
             "https://evidence.example.org/catalog .jsonld",
             "https://evidence.example.org/catalog\u{0007}.jsonld",
+            "https://evidence.example.org/a//b",
         ] {
             assert!(
                 !is_valid_endpoint_url(refused, true),

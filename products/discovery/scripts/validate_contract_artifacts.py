@@ -111,6 +111,8 @@ def check_product_schemas_and_fixture() -> None:
     mapping = load(PRODUCT_SCHEMAS["evidence-mapping"])
     if mapping["properties"]["alternatives"].get("maxItems") != 32:
         fail("mapping schema must carry the authored-alternative hard bound")
+    if mapping.get("x-maximumDocumentBytes") != 20 * 1024 * 1024:
+        fail("mapping schema must publish the aggregate authored-file byte bound")
     runtime = load(PRODUCT_SCHEMAS["runtime"])
     if runtime["properties"]["limits"].get("additionalProperties") is not False:
         fail("runtime limit schema must be closed")

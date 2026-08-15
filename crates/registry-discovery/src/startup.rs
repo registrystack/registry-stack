@@ -172,12 +172,16 @@ pub fn load_runtime(path: &Path) -> Result<(PathBuf, RuntimeConfig), StartupErro
     let runtime: RuntimeConfig =
         serde_yaml_ng::from_slice(&bytes).map_err(|_| StartupError::RuntimeInvalid)?;
     validate_runtime(&runtime)?;
-    let root = path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
+    let root = effective_parent(path)
         .canonicalize()
         .map_err(|_| StartupError::RuntimeLoad)?;
     Ok((root, runtime))
+}
+
+fn effective_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 pub fn load_index(path: &Path) -> Result<DiscoveryIndex, StartupError> {
@@ -327,6 +331,15 @@ origins: [{ catalogUrl: https://attacker.invalid/catalog.jsonld }]
             symlink(root.join("index.json"), root.join("linked.json")).unwrap();
             assert!(safe_existing_file(root, "linked.json").is_err());
         }
+    }
+
+    #[test]
+    fn a_bare_runtime_filename_uses_the_current_directory() {
+        assert_eq!(effective_parent(Path::new("runtime.yaml")), Path::new("."));
+        assert_eq!(
+            effective_parent(Path::new("config/runtime.yaml")),
+            Path::new("config")
+        );
     }
 
     #[cfg(unix)]

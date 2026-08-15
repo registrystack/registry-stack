@@ -710,6 +710,20 @@ mod tests {
     }
 
     #[test]
+    fn selection_endpoint_validation_matches_native_client_base_urls() {
+        let mut record = service();
+        record.endpoint_url = "https://provider.example/a//b".into();
+        let response = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
+            items: vec![record],
+        };
+        assert_eq!(
+            response.select_only(MatchedCapability::EvidenceType("urn:evidence".into())),
+            Err(DiscoveryClientError::Protocol)
+        );
+    }
+
+    #[test]
     fn evidence_alternative_retains_the_complete_and_list_and_drives_each_search() {
         let response = EvidenceTypeResolveResponse {
             requirement_id: "urn:requirement".into(),

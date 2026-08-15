@@ -3,6 +3,16 @@
   "baseUrl": "https://id.registrystack.org",
   "problemSources": [
     {
+      "owner": "discovery",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "uriPrefix": "https://id.registrystack.org/problems/registry-discovery/",
+      "sourcePath": "crates/registry-discovery/src/problem.rs",
+      "exporterPath": "crates/registry-discovery/examples/problem-catalog.rs",
+      "cargoPackage": "registry-discovery",
+      "cargoExample": "problem-catalog"
+    },
+    {
       "owner": "relay-v2",
       "status": "active",
       "compatibilityLine": "relay-v2",
