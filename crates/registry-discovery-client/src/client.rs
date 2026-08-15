@@ -348,6 +348,9 @@ impl DiscoveryClient {
         validate_response_headers(response.headers())
             .map_err(|_| DiscoveryClientError::Protocol)?;
         let status = response.status();
+        if status.is_success() && status != StatusCode::OK {
+            return Err(DiscoveryClientError::Protocol);
+        }
         let content_type = response_content_type(response.headers());
         let maximum = if status.is_success() {
             self.maximum_response_bytes
@@ -640,6 +643,7 @@ mod tests {
         Oversized,
         UppercaseSuccessMediaType,
         UppercaseProblemMediaType,
+        UnexpectedSuccessStatus,
         WrongMediaType,
         DuplicateMediaType,
     }
@@ -719,6 +723,25 @@ mod tests {
                     "Application/Problem+JSON; charset=\"utf-8\"",
                     br#"{"type":"https://id.registrystack.org/problems/registry-discovery/invalid-request","title":"Invalid request","status":400}"#.to_vec(),
                 )
+            }
+            Mode::UnexpectedSuccessStatus
+                if request.uri().path().ends_with("evidence-types/resolve") =>
+            {
+                response_with_media_type(
+                    StatusCode::PARTIAL_CONTENT,
+                    JSON,
+                    serde_json::to_vec(&json!({
+                        "requirementId": "urn:requirement",
+                        "mappingRevision": format!("sha256:{}", "2".repeat(64)),
+                        "alternatives": []
+                    }))
+                    .unwrap(),
+                )
+            }
+            Mode::UnexpectedSuccessStatus => {
+                let mut response = search_response(JSON);
+                *response.status_mut() = StatusCode::CREATED;
+                response
             }
             Mode::WrongMediaType => search_response("text/plain"),
             Mode::DuplicateMediaType => {
@@ -882,6 +905,24 @@ mod tests {
             .search_services(ServiceFilters::default())
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn only_status_200_is_accepted_for_search_and_resolution() {
+        let (client, _) = client(Mode::UnexpectedSuccessStatus, 1024 * 1024).await;
+        assert_eq!(
+            client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Protocol)
+        );
+        assert_eq!(
+            client
+                .resolve_evidence_types(EvidenceTypeResolveRequest {
+                    requirement_id: "urn:requirement".into(),
+                    jurisdiction: None,
+                })
+                .await,
+            Err(DiscoveryClientError::Protocol)
+        );
     }
 
     #[tokio::test]
