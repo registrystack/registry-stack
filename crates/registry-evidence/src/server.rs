@@ -23,7 +23,8 @@ use axum::{
     extract::State,
     http::{
         header::{
-            ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, VARY,
+            ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, ETAG,
+            IF_NONE_MATCH, RETRY_AFTER, VARY,
         },
         HeaderMap, HeaderValue, Request, StatusCode,
     },
@@ -36,6 +37,7 @@ use registry_platform_authcommon::parse_bearer_token;
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_httpsec::CspBuilder;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tokio::{net::TcpListener, sync::Semaphore};
 
 use crate::{
@@ -64,12 +66,13 @@ const OPENAPI_ROUTE: &str = "/openapi.json";
 const READY_ROUTE: &str = "/ready";
 const JWKS_ROUTE: &str = "/.well-known/evidence/jwks.json";
 const JWT_VC_ISSUER_ROUTE: &str = "/.well-known/jwt-vc-issuer";
+pub(crate) const PROTECTED_RESOURCE_METADATA_ROUTE: &str = "/.well-known/oauth-protected-resource";
 
 /// Every route template this listener registers.
 ///
 /// Operational telemetry labels requests with a member of this set or with a
 /// single fixed unmatched label, so a caller cannot introduce a label value.
-pub(crate) const ROUTE_TEMPLATES: [&str; 9] = [
+pub(crate) const ROUTE_TEMPLATES: [&str; 10] = [
     EVIDENCE_ROUTE,
     EVIDENCE_BATCH_ROUTE,
     DEFINITIONS_ROUTE,
@@ -79,13 +82,18 @@ pub(crate) const ROUTE_TEMPLATES: [&str; 9] = [
     READY_ROUTE,
     JWKS_ROUTE,
     JWT_VC_ISSUER_ROUTE,
+    PROTECTED_RESOURCE_METADATA_ROUTE,
 ];
 
 const JSON_MEDIA_TYPE: &str = "application/json";
 const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 const RETRY_AFTER_SECONDS: &str = "1";
+const PUBLIC_METADATA_CACHE_CONTROL: &str = "public, max-age=600";
 pub(crate) const BEARER_AUTH_CHALLENGE: &str = "Bearer realm=\"registry-evidence\"";
+
+#[derive(Clone)]
+struct AuthenticationChallenge(HeaderValue);
 
 #[derive(Clone)]
 struct ServerState {
@@ -151,6 +159,13 @@ fn build_app_with_tracker_at(
         #[cfg(test)]
         evaluation_time,
     });
+    let public_origin = &state.runtime.bundle().config.service.public_origin;
+    let authentication_challenge = AuthenticationChallenge(
+        HeaderValue::from_str(&format!(
+            "Bearer realm=\"registry-evidence\", resource_metadata=\"{public_origin}{PROTECTED_RESOURCE_METADATA_ROUTE}\""
+        ))
+        .expect("validated public origin makes a valid challenge header"),
+    );
 
     let routes = Router::new()
         .route(EVIDENCE_ROUTE, post(create_evidence))
@@ -165,9 +180,17 @@ fn build_app_with_tracker_at(
         .route(READY_ROUTE, get(ready))
         .route(JWKS_ROUTE, get(jwks))
         .route(JWT_VC_ISSUER_ROUTE, get(jwt_vc_issuer_metadata))
+        .route(
+            PROTECTED_RESOURCE_METADATA_ROUTE,
+            get(protected_resource_metadata),
+        )
         .fallback(unknown_route)
         .method_not_allowed_fallback(unknown_route)
-        .with_state(state);
+        .with_state(state)
+        .layer(from_fn_with_state(
+            authentication_challenge,
+            attach_authentication_challenge,
+        ));
     let metrics = Arc::new(Metrics::new(rate_limiter, audit));
     (
         response_layers(routes, Arc::clone(&metrics)),
@@ -236,6 +259,20 @@ fn response_layers(routes: Router, metrics: Arc<Metrics>) -> Router {
         // Outermost, so that every response including both fallbacks carries a
         // correlation identifier and produces exactly one operational record.
         .layer(from_fn_with_state(metrics, observability::observe))
+}
+
+async fn attach_authentication_challenge(
+    State(challenge): State<AuthenticationChallenge>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    if response.status() == StatusCode::UNAUTHORIZED {
+        response
+            .headers_mut()
+            .insert(axum::http::header::WWW_AUTHENTICATE, challenge.0);
+    }
+    response
 }
 
 /// Bind the configured private listener and serve until graceful shutdown.
@@ -805,7 +842,7 @@ async fn ready(State(state): State<Arc<ServerState>>, request: Request<Body>) ->
 
 async fn jwks(State(state): State<Arc<ServerState>>, request: Request<Body>) -> Response {
     let operation = operation_id(request.extensions());
-    match serialize_response(StatusCode::OK, JWKS_MEDIA_TYPE, state.runtime.jwks()) {
+    match cacheable_serialized_response(JWKS_MEDIA_TYPE, state.runtime.jwks(), request.headers()) {
         Some(response) => response,
         None => problem_response(
             ProblemCode::ServiceUnavailable,
@@ -813,6 +850,43 @@ async fn jwks(State(state): State<Arc<ServerState>>, request: Request<Body>) -> 
             &operation,
         ),
     }
+}
+
+/// RFC 9728 protected-resource metadata. The document is public routing and
+/// trust-discovery material only: it contains no requester, entitlement,
+/// selector, source, or operator configuration.
+async fn protected_resource_metadata(
+    State(state): State<Arc<ServerState>>,
+    request: Request<Body>,
+) -> Response {
+    let operation = operation_id(request.extensions());
+    let public_origin = &state.runtime.bundle().config.service.public_origin;
+    let metadata = ProtectedResourceMetadata {
+        resource: public_origin,
+        authorization_servers: [&state.runtime.bundle().config.authentication.issuer],
+        jwks_uri: format!(
+            "{}{}",
+            public_origin,
+            state.runtime.bundle().config.signing.jwks_path
+        ),
+        bearer_methods_supported: ["header"],
+    };
+    match cacheable_serialized_response(JSON_MEDIA_TYPE, &metadata, request.headers()) {
+        Some(response) => response,
+        None => problem_response(
+            ProblemCode::ServiceUnavailable,
+            "release-serialization",
+            &operation,
+        ),
+    }
+}
+
+#[derive(Serialize)]
+struct ProtectedResourceMetadata<'a> {
+    resource: &'a str,
+    authorization_servers: [&'a str; 1],
+    jwks_uri: String,
+    bearer_methods_supported: [&'static str; 1],
 }
 
 /// JWT VC Issuer Metadata. Discovery is not a trust anchor: it republishes the
@@ -832,7 +906,7 @@ async fn jwt_vc_issuer_metadata(
             state.runtime.bundle().config.signing.jwks_path
         ),
     };
-    match serialize_response(StatusCode::OK, JSON_MEDIA_TYPE, &metadata) {
+    match cacheable_serialized_response(JSON_MEDIA_TYPE, &metadata, request.headers()) {
         Some(response) => response,
         None => problem_response(
             ProblemCode::ServiceUnavailable,
@@ -858,9 +932,11 @@ async fn unknown_route(request: Request<Body>) -> Response {
 
 async fn add_no_store(request: Request<Body>, next: Next) -> Response {
     let mut response = next.run(request).await;
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if !response.headers().contains_key(CACHE_CONTROL) {
+        response
+            .headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     response
 }
 
@@ -993,6 +1069,39 @@ fn serialize_response<T: Serialize>(
 ) -> Option<Response> {
     let bytes = serde_json::to_vec(value).ok()?;
     Some(bytes_response(status, media_type, bytes))
+}
+
+fn cacheable_serialized_response<T: Serialize>(
+    media_type: &'static str,
+    value: &T,
+    request_headers: &HeaderMap,
+) -> Option<Response> {
+    let bytes = serde_json::to_vec(value).ok()?;
+    let digest = Sha256::digest(&bytes);
+    let mut encoded = String::with_capacity(66);
+    encoded.push('"');
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    encoded.push('"');
+    let etag = HeaderValue::from_str(&encoded).ok()?;
+
+    let not_modified = {
+        let mut values = request_headers.get_all(IF_NONE_MATCH).iter();
+        matches!(values.next(), Some(value) if value == etag) && values.next().is_none()
+    };
+    let mut response = if not_modified {
+        empty_response(StatusCode::NOT_MODIFIED)
+    } else {
+        bytes_response(StatusCode::OK, media_type, bytes)
+    };
+    response.headers_mut().insert(ETAG, etag);
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(PUBLIC_METADATA_CACHE_CONTROL),
+    );
+    Some(response)
 }
 
 fn static_json_response(status: StatusCode, body: &'static str) -> Response {

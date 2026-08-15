@@ -3396,9 +3396,11 @@ fn validate_reference_bundle_mutation(
 ) -> Result<(), CliError> {
     let mut mutated = bundle.config.clone();
     let mut companion = requirement.clone();
+    companion.handle.push_str("-fixture-companion");
     companion.id.push_str(":fixture-companion");
     companion.evidence_type.push_str(":fixture-companion");
     for concept in &mut companion.concepts {
+        concept.handle.push_str("-fixture-companion");
         concept.id.push_str(":fixture-companion");
     }
     mutated.requirements.push(companion);
@@ -3976,7 +3978,9 @@ fn validate_companion_rejection(
     original.disclosure_guard.families = vec![shared_family.to_owned()];
     for index in 1..definitions.len() {
         let suffix = format!(":fixture-companion-{index}");
+        let handle_suffix = format!("-fixture-companion-{index}");
         let mut companion = requirement.clone();
+        companion.handle.push_str(&handle_suffix);
         companion.id.push_str(&suffix);
         companion.evidence_type.push_str(&suffix);
         companion.disclosure_guard.families = vec![shared_family.to_owned()];
@@ -3991,6 +3995,7 @@ fn validate_companion_rejection(
             .map_err(|_| CliError("fixture companion path is invalid"))?,
         );
         for concept in &mut companion.concepts {
+            concept.handle.push_str(&handle_suffix);
             concept.id.push_str(&suffix);
         }
         unsafe_config.requirements.push(companion);
@@ -4314,7 +4319,7 @@ mod tests {
         AuthorityKind, EvidenceAuditEvent, EvidenceAuditLog, ResponseProtection,
     };
     use registry_evidence::config::{AssuranceProfile, SubjectBindingMode};
-    use registry_evidence::verifier::ExpectedValueForm;
+    use registry_evidence::verifier::{ExpectedListItemForm, ExpectedValueForm};
     use std::fs;
 
     /// Every command that compiles a kernel renders the same two things: the
@@ -4418,10 +4423,12 @@ mod tests {
             ("entity-reference", ExpectedValueForm::EntityReference),
             ("structured", ExpectedValueForm::Structured),
             (
-                "{list: {minimumItems: 1, maximumItems: 2}}",
+                "{list: {items: string, minimumItems: 1, maximumItems: 2, unique: true}}",
                 ExpectedValueForm::List {
+                    item_form: ExpectedListItemForm::String,
                     minimum_items: 1,
                     maximum_items: 2,
+                    unique: true,
                 },
             ),
         ] {
@@ -4472,7 +4479,9 @@ mod tests {
              expectedSubjects:\n\
              \x20 - {{role: subject, binding: urn:evidence:subject:v1_{binding}}}\n\
              expectedOutputs:\n\
-             \x20 - concept: urn:example:concept\n\
+             \x20 - handle: example-concept\n\
+             \x20   concept: urn:example:concept\n\
+             \x20   required: true\n\
              \x20   {form}\n\
              revokedKeyIds: []\n\
              maximumAssertionLifetimeSeconds: 86400\n\

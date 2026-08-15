@@ -1,32 +1,81 @@
 {
-  "$comment": "The authenticated response contains only complete request shapes that match exactly one configured authority path. It never exposes source plans, scripts, credentials, requester tags, authority-profile identifiers, selector values, codelist values, or unrelated definitions.",
+  "$comment": "The authenticated response contains only complete request shapes that match exactly one configured authority path. It never exposes source plans, scripts, credentials, requester tags, authority-profile identifiers, selector values, codelist values, codelist paths, internal constraints, or unrelated definitions.",
   "$defs": {
     "concept": {
       "additionalProperties": false,
       "properties": {
-        "form": {
-          "enum": [
-            "boolean",
-            "controlled-code",
-            "controlled-category",
-            "bounded-integer",
-            "bounded-decimal",
-            "date-bucket",
-            "time-bucket",
-            "audience-scoped-entity-reference",
-            "controlled-code-list",
-            "entity-reference-list",
-            "reviewed-structured-value"
-          ]
-        },
-        "id": {
+        "concept": {
           "format": "uri",
           "maxLength": 512,
           "type": "string"
+        },
+        "form": {
+          "oneOf": [
+            {
+              "enum": [
+                "boolean",
+                "integer",
+                "string",
+                "date-bucket",
+                "time-bucket",
+                "entity-reference",
+                "structured"
+              ]
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "list": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "enum": [
+                        "string",
+                        "entity-reference"
+                      ]
+                    },
+                    "maximumItems": {
+                      "maximum": 64,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "minimumItems": {
+                      "maximum": 64,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "unique": {
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "minimumItems",
+                    "maximumItems",
+                    "unique"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "list"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "handle": {
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
         }
       },
       "required": [
-        "id",
+        "handle",
+        "concept",
+        "required",
         "form"
       ],
       "type": "object"
@@ -50,6 +99,10 @@
         "evidenceType": {
           "format": "uri",
           "maxLength": 512,
+          "type": "string"
+        },
+        "handle": {
+          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
           "type": "string"
         },
         "kind": {
@@ -79,6 +132,20 @@
           "maxLength": 512,
           "type": "string"
         },
+        "responseFormats": {
+          "items": {
+            "enum": [
+              "signed-jws",
+              "unsigned-json",
+              "sd-jwt-vc",
+              "sd-jwt-vc-batch"
+            ]
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
         "subjectBindingMode": {
           "description": "What the subject bindings in this requirement's assertions are derived under. The vocabulary is closed and carries no default: absence means audience-scoped, stated here so a relying party reading a definition without the key knows the requirement issues audience-scoped assertions and is not reading an omission it has to resolve elsewhere. A definition that does carry the key states the mode explicitly.",
           "enum": [
@@ -97,11 +164,13 @@
         }
       },
       "required": [
+        "handle",
         "requirement",
         "configurationRevision",
         "kind",
         "evidenceType",
         "purpose",
+        "responseFormats",
         "referenceFrameworks",
         "subjects",
         "concepts"
@@ -303,6 +372,11 @@
         "evidence-grade"
       ]
     },
+    "audience": {
+      "format": "uri",
+      "maxLength": 512,
+      "type": "string"
+    },
     "definitions": {
       "items": {
         "$ref": "#/$defs/definition"
@@ -334,6 +408,7 @@
   "required": [
     "schema",
     "assuranceProfile",
+    "audience",
     "issuedBy",
     "providedBy",
     "holderBoundBatchMaxSize",

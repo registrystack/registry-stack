@@ -136,11 +136,25 @@ entries:
       - {file: crates/registry-evidence/src/rhai_runtime.rs, name: derivation_decode_is_closed_and_retains_protected_types}
   - id: sec-discovery-requester-scoped
     tests:
+      - {file: crates/registry-evidence/src/config.rs, name: public_origin_is_canonical_https_or_the_exact_local_loopback_exception}
+      - {file: crates/registry-evidence/src/config.rs, name: public_origin_enforces_the_schema_character_bound}
       - {file: crates/registry-evidence/src/model.rs, name: debug_surfaces_redact_requests_facts_disclosures_and_signed_payloads}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: real_router_serves_all_definitions_concurrently_without_crossing_boundaries}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_requires_authentication_and_returns_no_unentitled_definitions}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambiguous}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: discovery_uses_the_bounded_per_principal_request_budget}
+      - {file: crates/registry-evidence-client/src/client.rs, name: strict_discovery_refuses_metadata_hosts_that_resolve_locally}
+      - {file: crates/registry-evidence-client/src/client.rs, name: local_discovery_accepts_only_exact_numeric_http_loopback_authorization_urls}
+      - {file: crates/registry-evidence-client/src/client.rs, name: authorization_server_issuer_must_match_the_announced_string_exactly}
+      - {file: crates/registry-evidence-client/src/client.rs, name: authorization_server_metadata_uses_the_rfc_8414_path_construction}
+      - {file: crates/registry-evidence-client/src/client.rs, name: metadata_cache_policy_honors_no_store_and_the_profile_ceiling}
+      - {file: crates/registry-evidence-client/src/client.rs, name: metadata_etags_are_strong_bounded_and_unambiguous}
+      - {file: crates/registry-evidence-client/src/client.rs, name: cached_public_metadata_revalidates_with_the_exact_strong_etag}
+      - {file: crates/registry-evidence-client/src/client.rs, name: an_unknown_response_key_never_triggers_metadata_refresh}
+      - {file: crates/registry-evidence-client/src/client.rs, name: a_redirect_is_refused_and_the_credential_never_follows_it}
+      - {file: crates/registry-evidence-client/src/client.rs, name: public_metadata_redirects_are_not_followed}
+      - {file: crates/registry-evidence-client/src/client.rs, name: progressive_batch_format_refuses_before_metadata_or_token_exchange}
+      - {file: crates/registry-evidence-client/tests/against_a_real_deployment.rs, name: a_local_profile_completes_first_use_then_matches_the_opaque_receipt}
   - id: sec-missing-or-writable-bundle-fails
     tests: [{file: crates/registry-evidence/src/bundle.rs, name: writable_bundle_and_unknown_files_fail_closed}]
   - id: sec-audit-order-and-failure
@@ -240,6 +254,8 @@ entries:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: expected_output_contract_is_exact_after_signature_verification}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authenticity_is_reported_separately_from_current_validity}
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: assertion_lifetime_above_the_accepted_maximum_fails}
+      - {file: crates/registry-evidence-client/src/progressive.rs, name: first_use_is_explicit_and_a_receipt_must_match_the_complete_scope}
+      - {file: crates/registry-evidence-client/tests/against_a_real_deployment.rs, name: a_local_profile_completes_first_use_then_matches_the_opaque_receipt}
   - id: sec-unsigned-envelope-not-jws
     tests:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: unsigned_envelope_is_rejected_by_the_strict_jws_verifier}
@@ -254,6 +270,8 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/source.rs, name: evidence_client_uses_rustls_and_fails_closed_on_an_unrecognized_certificate_authority}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_reset_transport_failure_yields_exactly_one_connection_attempt}
+      - {file: crates/registry-evidence-client/src/client.rs, name: a_prepared_request_reaches_the_deployment_at_most_once}
+      - {file: crates/registry-evidence-client/tests/against_a_real_deployment.rs, name: a_local_profile_completes_first_use_then_matches_the_opaque_receipt}
   - id: sec-jwks-route-config-parity
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: configured_jwks_path_is_mechanically_the_served_route}]
   - id: sec-source-response-shape-enforced

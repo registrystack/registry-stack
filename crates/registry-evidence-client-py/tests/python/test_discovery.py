@@ -33,11 +33,13 @@ JWKS_MEDIA_TYPE = "application/jwk-set+json"
 DEFINITIONS_DOCUMENT = {
     "schema": "registry.evidence-definitions/v1",
     "assuranceProfile": "local",
+    "audience": "urn:example:py-test:audience",
     "issuedBy": "https://issuer.example.test",
     "providedBy": "https://provider.example.test",
     "holderBoundBatchMaxSize": 4,
     "definitions": [
         {
+            "handle": "status",
             "requirement": "urn:example:py-test:requirement:status:v1",
             # Published per definition, so a relying party pins one requirement
             # without depending on the rest of the deployment.
@@ -45,6 +47,7 @@ DEFINITIONS_DOCUMENT = {
             "kind": "criterion",
             "evidenceType": "urn:example:py-test:evidence-type:status:v1",
             "purpose": "example-decision",
+            "responseFormats": ["signed-jws", "sd-jwt-vc"],
             "referenceFrameworks": ["urn:example:py-test:framework:status:v1"],
             "subjects": [
                 {
@@ -65,7 +68,12 @@ DEFINITIONS_DOCUMENT = {
                 }
             ],
             "concepts": [
-                {"id": "urn:example:py-test:concept:status-holds", "form": "boolean"}
+                {
+                    "handle": "status-holds",
+                    "concept": "urn:example:py-test:concept:status-holds",
+                    "required": True,
+                    "form": "boolean",
+                }
             ],
         }
     ],

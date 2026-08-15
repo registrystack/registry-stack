@@ -13,13 +13,25 @@ use registry_evidence_verifier::{
     model::SubjectBindingMode,
     verifier::{
         ExpectedFormDocument, ExpectedListDocument, ExpectedListFormDocument,
-        ExpectedOutputDocument, ExpectedScalarFormDocument,
+        ExpectedListItemFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
     },
     AssuranceProfile,
 };
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
+use std::collections::BTreeSet;
 
-use crate::prepare::MAXIMUM_HOLDER_KEYS;
+use chrono::NaiveDate;
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
+use url::Url;
+
+use crate::{
+    error::EvidenceClientError,
+    prepare::{
+        MAXIMUM_HOLDER_KEYS, MAXIMUM_IDENTIFIER_BYTES, MAXIMUM_SELECTOR_INTEGER,
+        MINIMUM_SELECTOR_INTEGER,
+    },
+    request::SelectorValue,
+    EvidenceResponseFormat,
+};
 
 pub const EVIDENCE_DEFINITIONS_SCHEMA_V1: &str = "registry.evidence-definitions/v1";
 
@@ -45,6 +57,7 @@ where
 pub struct EvidenceDefinitionsDocument {
     pub schema: String,
     pub assurance_profile: AssuranceProfile,
+    pub audience: String,
     pub issued_by: String,
     pub provided_by: String,
     /// Effective holder-bound batch ceiling published by the deployment.
@@ -62,6 +75,46 @@ pub struct EvidenceDefinitionsDocument {
 }
 
 impl EvidenceDefinitionsDocument {
+    /// Validate the complete client-safe catalog before any definition is used
+    /// to prepare a request.
+    ///
+    /// Strict deserialization closes the document vocabulary. This method
+    /// closes the relationships JSON types cannot express: handle and role
+    /// uniqueness, ordered bounds, effective format compatibility, and the
+    /// list uniqueness invariant. Published and reviewed catalogs both reach
+    /// this same check through progressive definition selection.
+    pub(crate) fn validate_for_progressive_request(&self) -> Result<(), EvidenceClientError> {
+        if self.schema != EVIDENCE_DEFINITIONS_SCHEMA_V1
+            || !bounded_uri(&self.audience)
+            || !bounded_uri(&self.issued_by)
+            || !bounded_uri(&self.provided_by)
+            || self.definitions.len() > 16_384
+        {
+            return Err(invalid_contract());
+        }
+
+        let mut definition_handles = BTreeSet::new();
+        for definition in &self.definitions {
+            if !valid_handle(&definition.handle)
+                || !definition_handles.insert(definition.handle.as_str())
+                || !bounded_uri(&definition.requirement)
+                || !configuration_revision(&definition.configuration_revision)
+                || !bounded_uri(&definition.evidence_type)
+                || !valid_purpose(&definition.purpose)
+                || !(1..=16).contains(&definition.reference_frameworks.len())
+                || !(1..=8).contains(&definition.subjects.len())
+                || !(1..=16).contains(&definition.concepts.len())
+                || !unique_uris(&definition.reference_frameworks)
+                || !valid_formats(definition)
+                || !valid_subjects(&definition.subjects)
+                || !valid_concepts(&definition.concepts)
+            {
+                return Err(invalid_contract());
+            }
+        }
+        Ok(())
+    }
+
     /// The single definition for one requirement identifier, when the
     /// requester is entitled to exactly one shape of it.
     ///
@@ -85,6 +138,7 @@ impl EvidenceDefinitionsDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceDefinition {
+    pub handle: String,
     pub requirement: String,
     /// The revision an assertion for this requirement carries. It covers this
     /// requirement's own configuration and artifact closure, so pinning it does
@@ -98,6 +152,7 @@ pub struct EvidenceDefinition {
     pub subject_binding_mode: Option<SubjectBindingMode>,
     pub evidence_type: String,
     pub purpose: String,
+    pub response_formats: Vec<DefinitionResponseFormat>,
     pub reference_frameworks: Vec<String>,
     pub subjects: Vec<DefinitionSubject>,
     pub concepts: Vec<DefinitionConcept>,
@@ -109,6 +164,33 @@ pub enum DefinitionKind {
     Criterion,
     InformationRequirement,
     Constraint,
+}
+
+/// Every effective response format a deployment may publish.
+///
+/// This is deliberately wider than [`EvidenceResponseFormat`], which names
+/// only formats this verifying client can request and consume. `unsigned-json`
+/// remains discoverable for catalog fidelity without becoming requestable by
+/// the progressive API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DefinitionResponseFormat {
+    SignedJws,
+    UnsignedJson,
+    SdJwtVc,
+    SdJwtVcBatch,
+}
+
+impl DefinitionResponseFormat {
+    #[must_use]
+    pub fn supports(self, requested: EvidenceResponseFormat) -> bool {
+        matches!(
+            (self, requested),
+            (Self::SignedJws, EvidenceResponseFormat::SignedJws)
+                | (Self::SdJwtVc, EvidenceResponseFormat::SdJwtVc)
+                | (Self::SdJwtVcBatch, EvidenceResponseFormat::SdJwtVcBatch)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -185,13 +267,196 @@ impl SelectorField {
             | Self::ControlledCode { name, .. } => name,
         }
     }
+
+    /// Whether a caller-supplied selector value has this published field's
+    /// exact scalar type and falls inside its public bounds.
+    pub(crate) fn accepts(&self, value: &SelectorValue) -> bool {
+        match (self, value) {
+            (
+                Self::String {
+                    minimum_bytes,
+                    maximum_bytes,
+                    ..
+                },
+                SelectorValue::String(value),
+            ) => (*minimum_bytes..=*maximum_bytes).contains(&(value.len() as u64)),
+            (Self::Date { .. }, SelectorValue::String(value)) => {
+                value.len() == 10 && NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+            }
+            (
+                Self::Integer {
+                    minimum, maximum, ..
+                },
+                SelectorValue::Integer(value),
+            ) => (*minimum..=*maximum).contains(value),
+            (Self::Boolean { .. }, SelectorValue::Boolean(_)) => true,
+            (Self::ControlledCode { maximum_bytes, .. }, SelectorValue::String(value)) => {
+                !value.is_empty() && value.len() as u64 <= *maximum_bytes
+            }
+            _ => false,
+        }
+    }
+}
+
+fn invalid_contract() -> EvidenceClientError {
+    EvidenceClientError::configuration(
+        "the client contract is malformed, ambiguous, or outside its closed bounds",
+    )
+}
+
+fn valid_handle(value: &str) -> bool {
+    bounded_lowercase_name(value, 128)
+}
+
+fn valid_purpose(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b':' | b'-')
+        })
+}
+
+fn bounded_lowercase_name(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn bounded_uri(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAXIMUM_IDENTIFIER_BYTES
+        && Url::parse(value).is_ok_and(|url| !url.scheme().is_empty())
+}
+
+fn configuration_revision(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    })
+}
+
+fn unique_uris(values: &[String]) -> bool {
+    let mut unique = BTreeSet::new();
+    values
+        .iter()
+        .all(|value| bounded_uri(value) && unique.insert(value.as_str()))
+}
+
+fn valid_formats(definition: &EvidenceDefinition) -> bool {
+    if definition.response_formats.is_empty() || definition.response_formats.len() > 4 {
+        return false;
+    }
+    let mut unique = BTreeSet::new();
+    if !definition
+        .response_formats
+        .iter()
+        .all(|format| unique.insert(*format))
+    {
+        return false;
+    }
+    let binding = definition
+        .subject_binding_mode
+        .unwrap_or(SubjectBindingMode::AudienceScoped);
+    match binding {
+        SubjectBindingMode::AudienceScoped => !definition
+            .response_formats
+            .contains(&DefinitionResponseFormat::SdJwtVcBatch),
+        SubjectBindingMode::HolderBound => {
+            !definition
+                .response_formats
+                .contains(&DefinitionResponseFormat::SignedJws)
+                && !definition
+                    .response_formats
+                    .contains(&DefinitionResponseFormat::UnsignedJson)
+        }
+    }
+}
+
+fn valid_subjects(subjects: &[DefinitionSubject]) -> bool {
+    let mut roles = BTreeSet::new();
+    subjects.iter().all(|subject| {
+        bounded_lowercase_name(&subject.role, 64)
+            && roles.insert(subject.role.as_str())
+            && bounded_lowercase_name(&subject.selector.profile, 128)
+            && (1..=16).contains(&subject.selector.fields.len())
+            && valid_selector_fields(&subject.selector.fields)
+    })
+}
+
+fn valid_selector_fields(fields: &[SelectorField]) -> bool {
+    let mut names = BTreeSet::new();
+    fields.iter().all(|field| {
+        if !bounded_lowercase_name(field.name(), 64) || !names.insert(field.name()) {
+            return false;
+        }
+        match field {
+            SelectorField::String {
+                minimum_bytes,
+                maximum_bytes,
+                ..
+            } => {
+                (1..=8192).contains(minimum_bytes)
+                    && (1..=8192).contains(maximum_bytes)
+                    && minimum_bytes <= maximum_bytes
+            }
+            SelectorField::Date { .. } | SelectorField::Boolean { .. } => true,
+            SelectorField::Integer {
+                minimum, maximum, ..
+            } => {
+                (MINIMUM_SELECTOR_INTEGER..=MAXIMUM_SELECTOR_INTEGER).contains(minimum)
+                    && (MINIMUM_SELECTOR_INTEGER..=MAXIMUM_SELECTOR_INTEGER).contains(maximum)
+                    && minimum <= maximum
+            }
+            SelectorField::ControlledCode {
+                scheme,
+                version,
+                maximum_bytes,
+                ..
+            } => {
+                bounded_uri(scheme)
+                    && !version.is_empty()
+                    && version.len() <= 128
+                    && (1..=8192).contains(maximum_bytes)
+            }
+        }
+    })
+}
+
+fn valid_concepts(concepts: &[DefinitionConcept]) -> bool {
+    let mut handles = BTreeSet::new();
+    let mut identifiers = BTreeSet::new();
+    concepts.iter().all(|concept| {
+        valid_handle(&concept.handle)
+            && handles.insert(concept.handle.as_str())
+            && bounded_uri(&concept.concept)
+            && identifiers.insert(concept.concept.as_str())
+            && match &concept.form {
+                DefinitionConceptForm::Scalar(_) => true,
+                DefinitionConceptForm::List(form) => {
+                    form.list.unique
+                        && (1..=64).contains(&form.list.minimum_items)
+                        && (1..=64).contains(&form.list.maximum_items)
+                        && form.list.minimum_items <= form.list.maximum_items
+                }
+            }
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DefinitionConcept {
-    pub id: String,
-    pub form: ConceptForm,
+    pub handle: String,
+    pub concept: String,
+    pub required: bool,
+    pub form: DefinitionConceptForm,
 }
 
 impl DefinitionConcept {
@@ -201,26 +466,32 @@ impl DefinitionConcept {
     #[must_use]
     pub fn scalar_expected_output(&self) -> Option<ExpectedOutputDocument> {
         self.form.scalar_form().map(|form| ExpectedOutputDocument {
-            concept: self.id.clone(),
+            handle: self.handle.clone(),
+            concept: self.concept.clone(),
+            required: self.required,
             form: ExpectedFormDocument::Scalar(form),
         })
     }
 
     /// The verification expectation for a concept whose declared form is a
-    /// collection. The bounds come from the relying procedure, not from
-    /// discovery, which does not publish them.
+    /// collection. The complete published definition supplies the bounds.
     #[must_use]
-    pub fn list_expected_output(
-        &self,
-        minimum_items: usize,
-        maximum_items: usize,
-    ) -> Option<ExpectedOutputDocument> {
-        self.form.is_list().then(|| ExpectedOutputDocument {
-            concept: self.id.clone(),
+    pub fn list_expected_output(&self) -> Option<ExpectedOutputDocument> {
+        self.form.list().map(|list| ExpectedOutputDocument {
+            handle: self.handle.clone(),
+            concept: self.concept.clone(),
+            required: self.required,
             form: ExpectedFormDocument::List(ExpectedListFormDocument {
                 list: ExpectedListDocument {
-                    minimum_items,
-                    maximum_items,
+                    items: match list.items {
+                        DefinitionListItemForm::String => ExpectedListItemFormDocument::String,
+                        DefinitionListItemForm::EntityReference => {
+                            ExpectedListItemFormDocument::EntityReference
+                        }
+                    },
+                    minimum_items: list.minimum_items,
+                    maximum_items: list.maximum_items,
+                    unique: list.unique,
                 },
             }),
         })
@@ -228,20 +499,67 @@ impl DefinitionConcept {
 }
 
 /// The declared public form of one concept.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum DefinitionConceptForm {
+    Scalar(ConceptForm),
+    List(DefinitionListForm),
+}
+
+impl DefinitionConceptForm {
+    fn scalar_form(&self) -> Option<ExpectedScalarFormDocument> {
+        match self {
+            Self::Scalar(form) => Some(form.expected()),
+            Self::List(_) => None,
+        }
+    }
+
+    fn list(&self) -> Option<&DefinitionList> {
+        match self {
+            Self::Scalar(_) => None,
+            Self::List(form) => Some(&form.list),
+        }
+    }
+
+    /// Whether this published output is a bounded list form.
+    #[must_use]
+    pub fn is_list(&self) -> bool {
+        matches!(self, Self::List(_))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefinitionListForm {
+    pub list: DefinitionList,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DefinitionList {
+    pub items: DefinitionListItemForm,
+    pub minimum_items: usize,
+    pub maximum_items: usize,
+    pub unique: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DefinitionListItemForm {
+    String,
+    EntityReference,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ConceptForm {
     Boolean,
-    ControlledCode,
-    ControlledCategory,
-    BoundedInteger,
-    BoundedDecimal,
+    Integer,
+    String,
     DateBucket,
     TimeBucket,
-    AudienceScopedEntityReference,
-    ControlledCodeList,
-    EntityReferenceList,
-    ReviewedStructuredValue,
+    EntityReference,
+    Structured,
 }
 
 impl ConceptForm {
@@ -251,26 +569,16 @@ impl ConceptForm {
     /// `supported-value-forms.yaml`. A bounded decimal is a JSON string
     /// carrying canonical decimal text, so its expected form is a string.
     #[must_use]
-    pub fn scalar_form(self) -> Option<ExpectedScalarFormDocument> {
+    pub fn expected(self) -> ExpectedScalarFormDocument {
         match self {
-            Self::Boolean => Some(ExpectedScalarFormDocument::Boolean),
-            Self::ControlledCode | Self::ControlledCategory | Self::BoundedDecimal => {
-                Some(ExpectedScalarFormDocument::String)
-            }
-            Self::BoundedInteger => Some(ExpectedScalarFormDocument::Integer),
-            Self::DateBucket => Some(ExpectedScalarFormDocument::DateBucket),
-            Self::TimeBucket => Some(ExpectedScalarFormDocument::TimeBucket),
-            Self::AudienceScopedEntityReference => {
-                Some(ExpectedScalarFormDocument::EntityReference)
-            }
-            Self::ReviewedStructuredValue => Some(ExpectedScalarFormDocument::Structured),
-            Self::ControlledCodeList | Self::EntityReferenceList => None,
+            Self::Boolean => ExpectedScalarFormDocument::Boolean,
+            Self::Integer => ExpectedScalarFormDocument::Integer,
+            Self::String => ExpectedScalarFormDocument::String,
+            Self::DateBucket => ExpectedScalarFormDocument::DateBucket,
+            Self::TimeBucket => ExpectedScalarFormDocument::TimeBucket,
+            Self::EntityReference => ExpectedScalarFormDocument::EntityReference,
+            Self::Structured => ExpectedScalarFormDocument::Structured,
         }
-    }
-
-    #[must_use]
-    pub fn is_list(self) -> bool {
-        matches!(self, Self::ControlledCodeList | Self::EntityReferenceList)
     }
 }
 
@@ -281,16 +589,19 @@ mod tests {
     const DOCUMENT: &str = r#"{
       "schema": "registry.evidence-definitions/v1",
       "assuranceProfile": "local",
+      "audience": "urn:example:client:audience:relying-party",
       "issuedBy": "urn:example:client:issuer",
       "providedBy": "urn:example:client:provider",
       "holderBoundBatchMaxSize": 4,
       "definitions": [
         {
+          "handle": "status-holds",
           "requirement": "urn:example:client:requirement:status:v1",
           "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
           "kind": "criterion",
           "evidenceType": "urn:example:client:evidence-type:status:v1",
           "purpose": "example-decision",
+          "responseFormats": ["signed-jws", "sd-jwt-vc"],
           "referenceFrameworks": ["urn:example:client:framework:status:v1"],
           "subjects": [
             {
@@ -309,7 +620,7 @@ mod tests {
               }
             }
           ],
-          "concepts": [{"id": "urn:example:client:concept:status-holds", "form": "boolean"}]
+          "concepts": [{"handle": "status-holds", "concept": "urn:example:client:concept:status-holds", "required": true, "form": "boolean"}]
         }
       ]
     }"#;
@@ -500,25 +811,134 @@ mod tests {
     }
 
     #[test]
+    fn progressive_catalog_validation_closes_handles_roles_concepts_and_formats() {
+        let cases = [
+            (
+                "invalid definition handle",
+                DOCUMENT.replace(r#""handle": "status-holds""#, r#""handle": "Uppercase""#),
+            ),
+            ("duplicate definition handle", {
+                let mut document = document();
+                let mut duplicate = document.definitions[0].clone();
+                duplicate.requirement = "urn:example:other".to_owned();
+                document.definitions.push(duplicate);
+                serde_json::to_string(&document).expect("document serializes")
+            }),
+            ("duplicate role", {
+                let mut document = document();
+                let duplicate = document.definitions[0].subjects[0].clone();
+                document.definitions[0].subjects.push(duplicate);
+                serde_json::to_string(&document).expect("document serializes")
+            }),
+            ("duplicate concept handle", {
+                let mut document = document();
+                let mut duplicate = document.definitions[0].concepts[0].clone();
+                duplicate.concept = "urn:example:another-concept".to_owned();
+                document.definitions[0].concepts.push(duplicate);
+                serde_json::to_string(&document).expect("document serializes")
+            }),
+            ("duplicate concept identifier", {
+                let mut document = document();
+                let mut duplicate = document.definitions[0].concepts[0].clone();
+                duplicate.handle = "another-concept".to_owned();
+                document.definitions[0].concepts.push(duplicate);
+                serde_json::to_string(&document).expect("document serializes")
+            }),
+            ("duplicate response format", {
+                let mut document = document();
+                document.definitions[0]
+                    .response_formats
+                    .push(DefinitionResponseFormat::SignedJws);
+                serde_json::to_string(&document).expect("document serializes")
+            }),
+        ];
+        for (label, serialized) in cases {
+            let document: EvidenceDefinitionsDocument =
+                serde_json::from_str(&serialized).expect("shape remains strict JSON");
+            assert!(
+                document.validate_for_progressive_request().is_err(),
+                "{label} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn progressive_catalog_validation_closes_selector_and_list_bounds() {
+        let list_document = |minimum_items, maximum_items, unique| {
+            let mut document = document();
+            document.definitions[0].concepts[0].form =
+                DefinitionConceptForm::List(DefinitionListForm {
+                    list: DefinitionList {
+                        items: DefinitionListItemForm::String,
+                        minimum_items,
+                        maximum_items,
+                        unique,
+                    },
+                });
+            document
+        };
+        for document in [
+            list_document(0, 1, true),
+            list_document(2, 1, true),
+            list_document(1, 65, true),
+            list_document(1, 2, false),
+        ] {
+            assert!(document.validate_for_progressive_request().is_err());
+        }
+
+        let mut string_bounds = document();
+        string_bounds.definitions[0].subjects[0].selector.fields[0] = SelectorField::String {
+            name: "record_reference".to_owned(),
+            minimum_bytes: 5,
+            maximum_bytes: 4,
+        };
+        assert!(string_bounds.validate_for_progressive_request().is_err());
+
+        let mut integer_bounds = document();
+        integer_bounds.definitions[0].subjects[0].selector.fields[2] = SelectorField::Integer {
+            name: "sequence".to_owned(),
+            minimum: 11,
+            maximum: 10,
+        };
+        assert!(integer_bounds.validate_for_progressive_request().is_err());
+    }
+
+    #[test]
+    fn progressive_catalog_validation_closes_schema_selector_and_binding_mode_drift() {
+        let mut wrong_schema = document();
+        wrong_schema.schema = "registry.evidence-client-contracts/v1".to_owned();
+        assert!(wrong_schema.validate_for_progressive_request().is_err());
+
+        let mut duplicate_selector = document();
+        let duplicate = duplicate_selector.definitions[0].subjects[0]
+            .selector
+            .fields[0]
+            .clone();
+        duplicate_selector.definitions[0].subjects[0]
+            .selector
+            .fields
+            .push(duplicate);
+        assert!(duplicate_selector
+            .validate_for_progressive_request()
+            .is_err());
+
+        let mut audience_batch = document();
+        audience_batch.definitions[0]
+            .response_formats
+            .push(DefinitionResponseFormat::SdJwtVcBatch);
+        assert!(audience_batch.validate_for_progressive_request().is_err());
+
+        let mut holder_signed = document();
+        holder_signed.definitions[0].subject_binding_mode = Some(SubjectBindingMode::HolderBound);
+        assert!(holder_signed.validate_for_progressive_request().is_err());
+    }
+
+    #[test]
     fn every_scalar_concept_form_maps_to_one_expected_value_form() {
         let cases = [
             (ConceptForm::Boolean, ExpectedScalarFormDocument::Boolean),
-            (
-                ConceptForm::ControlledCode,
-                ExpectedScalarFormDocument::String,
-            ),
-            (
-                ConceptForm::ControlledCategory,
-                ExpectedScalarFormDocument::String,
-            ),
-            (
-                ConceptForm::BoundedDecimal,
-                ExpectedScalarFormDocument::String,
-            ),
-            (
-                ConceptForm::BoundedInteger,
-                ExpectedScalarFormDocument::Integer,
-            ),
+            (ConceptForm::String, ExpectedScalarFormDocument::String),
+            (ConceptForm::Integer, ExpectedScalarFormDocument::Integer),
             (
                 ConceptForm::DateBucket,
                 ExpectedScalarFormDocument::DateBucket,
@@ -528,18 +948,20 @@ mod tests {
                 ExpectedScalarFormDocument::TimeBucket,
             ),
             (
-                ConceptForm::AudienceScopedEntityReference,
+                ConceptForm::EntityReference,
                 ExpectedScalarFormDocument::EntityReference,
             ),
             (
-                ConceptForm::ReviewedStructuredValue,
+                ConceptForm::Structured,
                 ExpectedScalarFormDocument::Structured,
             ),
         ];
         for (form, expected) in cases {
             let concept = DefinitionConcept {
-                id: "urn:example:client:concept:one".to_owned(),
-                form,
+                handle: "one".to_owned(),
+                concept: "urn:example:client:concept:one".to_owned(),
+                required: true,
+                form: DefinitionConceptForm::Scalar(form),
             };
             let output = concept
                 .scalar_expected_output()
@@ -551,27 +973,36 @@ mod tests {
                 serde_json::to_value(ExpectedFormDocument::Scalar(expected))
                     .expect("the form serializes")
             );
-            assert!(concept.list_expected_output(1, 2).is_none());
+            assert!(concept.list_expected_output().is_none());
         }
     }
 
     #[test]
     fn a_collection_concept_form_needs_caller_supplied_bounds() {
-        for form in [
-            ConceptForm::ControlledCodeList,
-            ConceptForm::EntityReferenceList,
+        for items in [
+            DefinitionListItemForm::String,
+            DefinitionListItemForm::EntityReference,
         ] {
             let concept = DefinitionConcept {
-                id: "urn:example:client:concept:many".to_owned(),
-                form,
+                handle: "many".to_owned(),
+                concept: "urn:example:client:concept:many".to_owned(),
+                required: true,
+                form: DefinitionConceptForm::List(DefinitionListForm {
+                    list: DefinitionList {
+                        items,
+                        minimum_items: 1,
+                        maximum_items: 4,
+                        unique: true,
+                    },
+                }),
             };
             assert!(concept.scalar_expected_output().is_none());
             let output = concept
-                .list_expected_output(1, 4)
+                .list_expected_output()
                 .expect("a collection form has a collection expectation");
             assert_eq!(
                 serde_json::to_value(&output.form).expect("the form serializes"),
-                serde_json::json!({"list": {"minimumItems": 1, "maximumItems": 4}})
+                serde_json::json!({"list": {"items": match items { DefinitionListItemForm::String => "string", DefinitionListItemForm::EntityReference => "entity-reference" }, "minimumItems": 1, "maximumItems": 4, "unique": true}})
             );
         }
     }

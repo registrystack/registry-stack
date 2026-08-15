@@ -1,0 +1,58 @@
+---
+title: "evidencectl client profile create command reference"
+description: "Generated syntax and options for evidencectl client profile create."
+status: draft
+draft: true
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "unreviewed"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+{/* Generated from Clap command definitions by scripts/generate-cli-reference.mjs. Run npm run generate. */}
+
+Create a strict profile containing only references to local key material.
+
+## Contract status
+
+This page is generated from the public Clap command tree for Registry Stack source version `0.22.0` and catalog SHA-256 `fe4105ba54e59e4bf4e02bd41ec52798b32451cc75977ebaecc71c6991f6e4e2`. Hidden implementation commands are omitted.
+
+## Usage
+
+```text
+evidencectl client profile create [OPTIONS] --base-url <BASE_URL> --client-id <CLIENT_ID> --out <OUT> <--private-key-file <PATH>|--private-key-env <VARIABLE>>
+```
+
+## Constraints
+
+| Condition | Requirement |
+| --- | --- |
+| Command invocation | Exactly one of `--private-key-file <PATH>`, `--private-key-env <VARIABLE>` is required. |
+| Command invocation | `--local-loopback-discovery` and `--pinned-jwks <PATH>` cannot be used together. |
+| Command invocation | `--private-key-env <VARIABLE>` and `--private-key-file <PATH>` cannot be used together. |
+
+## Options
+
+| Option | Always required | Default | Values | Environment | Description |
+| --- | --- | --- | --- | --- | --- |
+| `--base-url <BASE_URL>` | Yes | n/a | n/a | n/a | Evidence Gateway base URL. HTTPS is required by default |
+| `--client-id <CLIENT_ID>` | Yes | n/a | n/a | n/a | Registered OAuth client identifier |
+| `--private-key-file <PATH>` | No | n/a | n/a | n/a | Safe path to a private JWK, relative to the profile file |
+| `--private-key-env <VARIABLE>` | No | n/a | n/a | n/a | Environment variable holding the private JWK JSON |
+| `--local-loopback-discovery` | No | n/a | n/a | n/a | Permit discovery over plain HTTP only when the base URL is loopback |
+| `--pinned-jwks <PATH>` | No | n/a | n/a | n/a | Reviewed pinned JWKS file, relative to the profile file |
+| `--contracts-file <PATH>` | No | n/a | n/a | n/a | Reviewed contract catalog, relative to the profile file |
+| `--maximum-assertion-lifetime-seconds <MAXIMUM_ASSERTION_LIFETIME_SECONDS>` | No | `300` | n/a | n/a | Maximum accepted assertion lifetime in seconds |
+| `--clock-skew-seconds <CLOCK_SKEW_SECONDS>` | No | `30` | n/a | n/a | Accepted verifier clock skew in seconds |
+| `--expected-audience <EXPECTED_AUDIENCE>` | No | n/a | n/a | n/a | Optional expected audience override |
+| `--expected-issuer <EXPECTED_ISSUER>` | No | n/a | n/a | n/a | Optional expected Evidence issuer |
+| `--expected-provider <EXPECTED_PROVIDER>` | No | n/a | n/a | n/a | Optional expected Evidence provider |
+| `--out <OUT>` | Yes | n/a | n/a | n/a | New owner-only profile file |
+| `-h, --help` | No | n/a | n/a | n/a | Print help |
+
+## Generation contract
+
+Run `npm run generate` from `docs/site` after changing a public command, argument, option, default, environment binding, or help description.

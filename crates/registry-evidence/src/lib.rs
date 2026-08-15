@@ -1,5 +1,7 @@
 //! Evidence Version 1 minimum-disclosure assertion runtime.
 
+#![recursion_limit = "256"]
+
 #[cfg(not(unix))]
 compile_error!("registry-evidence Version 1 requires a Unix target for owner and file-identity security guarantees");
 

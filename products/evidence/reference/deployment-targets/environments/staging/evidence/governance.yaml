@@ -1,6 +1,6 @@
 version: 1
 assuranceProfile: production
-service: {providerId: https://evidence.staging.example.org, trustDomain: https://trust.staging.example.org}
+service: {providerId: https://evidence.staging.example.org, publicOrigin: https://evidence.staging.example.org, trustDomain: https://trust.staging.example.org}
 issuer: {id: https://authority.example.org}
 publication: {serviceId: urn:example:staging:evidence-service, title: Staging Evidence service, description: Staging minimum-disclosure Evidence service, endpointUrl: https://evidence.staging.example.org, jurisdictions: [urn:example:jurisdiction:staging]}
 authentication:

@@ -1,0 +1,23 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://registrystack.org/schemas/evidence/client-contracts-v1.json
+title: Reviewed Evidence client contracts Version 1
+description: >-
+  A requester-scoped, client-safe definition snapshot promoted only after the
+  relying application reviews it. It contains no source plan, script,
+  credential, requester tag, authority profile, selector value, codelist, or
+  internal constraint.
+type: object
+additionalProperties: false
+required: [schema, assuranceProfile, audience, issuedBy, providedBy, definitions]
+properties:
+  schema: {const: registry.evidence-client-contracts/v1}
+  assuranceProfile: {enum: [local, production, evidence-grade]}
+  audience: {type: string, format: uri, maxLength: 512}
+  issuedBy: {type: string, format: uri, maxLength: 512}
+  providedBy: {type: string, format: uri, maxLength: 512}
+  definitions:
+    type: array
+    maxItems: 16384
+    uniqueItems: true
+    items:
+      $ref: definitions.schema.yaml#/$defs/definition

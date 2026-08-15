@@ -36,7 +36,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{read_bounded, validate_response_headers};
+use crate::{read_bounded, validate_response_headers, FetchUrlError, FetchUrlPolicy};
 use async_trait::async_trait;
 use chrono::Utc;
 use registry_platform_authcommon::client_assertion::{
@@ -152,6 +152,7 @@ pub struct PrivateKeyJwtConfig {
     connect_timeout: Duration,
     user_agent: Option<String>,
     trusted_root_certificates: Option<Zeroizing<Vec<u8>>>,
+    fetch_url_policy: Option<FetchUrlPolicy>,
 }
 
 impl PrivateKeyJwtConfig {
@@ -176,6 +177,7 @@ impl PrivateKeyJwtConfig {
             connect_timeout: DEFAULT_CONNECT_TIMEOUT,
             user_agent: None,
             trusted_root_certificates: None,
+            fetch_url_policy: None,
         }
     }
 
@@ -237,6 +239,18 @@ impl PrivateKeyJwtConfig {
         self.trusted_root_certificates = Some(Zeroizing::new(pem_bundle.into()));
         self
     }
+
+    /// Validate and DNS-pin the token endpoint immediately before every POST.
+    ///
+    /// Existing consumers retain their configured-endpoint behavior unless
+    /// they opt in. Discovery-driven clients should always opt in, using
+    /// [`FetchUrlPolicy::strict`] in production and [`FetchUrlPolicy::dev`]
+    /// only for an explicitly selected local development profile.
+    #[must_use]
+    pub fn with_fetch_url_policy(mut self, policy: FetchUrlPolicy) -> Self {
+        self.fetch_url_policy = Some(policy);
+        self
+    }
 }
 
 impl fmt::Debug for PrivateKeyJwtConfig {
@@ -260,6 +274,7 @@ impl fmt::Debug for PrivateKeyJwtConfig {
             .field("request_timeout", &self.request_timeout)
             .field("connect_timeout", &self.connect_timeout)
             .field("user_agent", &self.user_agent)
+            .field("uses_dns_pinned_fetch", &self.fetch_url_policy.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -282,6 +297,11 @@ pub struct PrivateKeyJwt {
     refresh_margin_seconds: i64,
     client_key: PrivateJwk,
     key_id: String,
+    fetch_url_policy: Option<FetchUrlPolicy>,
+    request_timeout: Duration,
+    connect_timeout: Duration,
+    user_agent: Option<String>,
+    trusted_root_certificates: Option<Zeroizing<Vec<u8>>>,
     clock: Arc<dyn Clock>,
     /// The credential in hand, if it is still worth presenting.
     cached: RwLock<Option<CachedToken>>,
@@ -422,6 +442,11 @@ impl PrivateKeyJwt {
             refresh_margin_seconds: config.refresh_margin_seconds,
             client_key: config.client_key,
             key_id,
+            fetch_url_policy: config.fetch_url_policy,
+            request_timeout: config.request_timeout,
+            connect_timeout: config.connect_timeout,
+            user_agent: config.user_agent,
+            trusted_root_certificates: config.trusted_root_certificates,
             clock,
             cached: RwLock::new(None),
             refresh_lock: Mutex::new(()),
@@ -476,9 +501,28 @@ impl PrivateKeyJwt {
                 .finish(),
         );
 
-        let response = self
-            .http
-            .post(self.token_endpoint.clone())
+        let request = if let Some(policy) = &self.fetch_url_policy {
+            let validated = policy
+                .validate_dns_pinned_for_immediate_fetch_with_timeout(
+                    &self.token_endpoint,
+                    self.connect_timeout,
+                )
+                .await
+                .map_err(token_fetch_policy_failure)?;
+            validated
+                .immediate_post_with_outbound_options(
+                    self.request_timeout,
+                    self.connect_timeout,
+                    self.user_agent.as_deref(),
+                    self.trusted_root_certificates
+                        .as_deref()
+                        .map(|value| value.as_slice()),
+                )
+                .map_err(token_fetch_policy_failure)?
+        } else {
+            self.http.post(self.token_endpoint.clone())
+        };
+        let response = request
             .header(CONTENT_TYPE, FORM_MEDIA_TYPE)
             .header(ACCEPT, JSON_MEDIA_TYPE)
             .body(body.as_str().to_owned())
@@ -543,6 +587,28 @@ impl PrivateKeyJwt {
     }
 }
 
+fn token_fetch_policy_failure(error: FetchUrlError) -> TokenError {
+    match error {
+        FetchUrlError::Dns { .. } | FetchUrlError::NoAddresses => TokenError::Transport {
+            kind: super::TransportKind::Connect,
+        },
+        FetchUrlError::ValidationTimeout { .. } => TokenError::Transport {
+            kind: super::TransportKind::Timeout,
+        },
+        FetchUrlError::ValidationTask(_) => TokenError::Transport {
+            kind: super::TransportKind::Exchange,
+        },
+        FetchUrlError::ClientBuild(_) | FetchUrlError::OutboundClientBuild(_) => {
+            TokenError::Configuration {
+                reason: "the DNS-pinned token endpoint client could not be built",
+            }
+        }
+        _ => TokenError::Configuration {
+            reason: "the token endpoint is not permitted by the outbound fetch policy",
+        },
+    }
+}
+
 #[async_trait]
 impl TokenProvider for PrivateKeyJwt {
     async fn bearer_token(&self) -> Result<BearerToken, TokenError> {
@@ -586,6 +652,7 @@ impl fmt::Debug for PrivateKeyJwt {
                 &base_url_without_userinfo(&self.token_endpoint),
             )
             .field("client_id", &self.client_id)
+            .field("uses_dns_pinned_fetch", &self.fetch_url_policy.is_some())
             .field(
                 "audience",
                 &if self.audience_is_token_endpoint {
@@ -943,6 +1010,84 @@ mod tests {
             .await
             .expect("the mock server records its requests")
             .len()
+    }
+
+    #[test]
+    fn dns_pinning_is_opt_in_for_existing_configurations() {
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = provider(endpoint("https://tokens.example.org"), &clock);
+
+        assert!(provider.fetch_url_policy.is_none());
+        assert!(format!("{provider:?}").contains("uses_dns_pinned_fetch: false"));
+    }
+
+    #[tokio::test]
+    async fn opted_in_dev_policy_dns_pins_the_token_request() {
+        let server = token_endpoint_serving(issued(Some(300))).await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_fetch_url_policy(FetchUrlPolicy::dev()),
+            clock,
+        )
+        .expect("the DNS-pinned provider is usable");
+
+        provider
+            .bearer_token()
+            .await
+            .expect("the approved loopback endpoint issues a token");
+        assert_eq!(token_requests(&server).await, 1);
+    }
+
+    #[tokio::test]
+    async fn opted_in_strict_policy_rejects_a_hostname_resolving_to_loopback() {
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = PrivateKeyJwt::with_clock(
+            config(endpoint("https://localhost"), client_key(Some(KEY_ID)))
+                .with_fetch_url_policy(FetchUrlPolicy::strict()),
+            clock,
+        )
+        .expect("URL-shape validation precedes DNS policy validation");
+
+        assert!(matches!(
+            provider
+                .bearer_token()
+                .await
+                .expect_err("strict policy rejects loopback DNS"),
+            TokenError::Configuration {
+                reason: "the token endpoint is not permitted by the outbound fetch policy"
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_dns_pinned_token_request_does_not_follow_a_redirect() {
+        let elsewhere = token_endpoint_serving(issued(Some(300))).await;
+        let server = token_endpoint_serving(ResponseTemplate::new(302).insert_header(
+            "location",
+            format!("{}{TOKEN_PATH}", elsewhere.uri()).as_str(),
+        ))
+        .await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_fetch_url_policy(FetchUrlPolicy::dev()),
+            clock,
+        )
+        .expect("the DNS-pinned provider is usable");
+
+        assert!(matches!(
+            provider
+                .bearer_token()
+                .await
+                .expect_err("a redirect is not a token response"),
+            TokenError::Protocol { status: 302 }
+        ));
+        assert_eq!(
+            token_requests(&elsewhere).await,
+            0,
+            "the client assertion must not follow a redirect"
+        );
     }
 
     fn parts(assertion: &str) -> (Value, Value, Vec<u8>) {

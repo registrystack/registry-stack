@@ -2,6 +2,7 @@ version: 1
 assuranceProfile: evidence-grade
 service:
   providerId: urn:gov:example:evidence:opencrvs
+  publicOrigin: https://evidence.example.org
   trustDomain: urn:gov:example:trust-domain:civil-registration
 issuer:
   id: urn:gov:example:issuer:civil-registration-authority
@@ -218,7 +219,8 @@ authorityProfiles:
             selectorProfile: opencrvs-tracking-id-v1
             valueOrigin: request
 requirements:
-  - id: urn:gov:example:requirement:adult-status-from-birth:v1
+  - handle: adult-status-from-birth
+    id: urn:gov:example:requirement:adult-status-from-birth:v1
     kind: criterion
     acquisition:
       kind: single
@@ -241,7 +243,8 @@ requirements:
               fields: [tracking_id]
       parameters: {minimum_age_years: 18}
     concepts:
-      - id: urn:gov:example:concept:adult-status
+      - handle: adult-status
+        id: urn:gov:example:concept:adult-status
         form: boolean
         required: true
         constraints: {}
@@ -249,7 +252,8 @@ requirements:
     disclosureGuard:
       families: [urn:gov:example:disclosure-family:adult-status]
     existenceDisclosure: collapse-unresolved
-  - id: urn:gov:example:requirement:registered-parent-relationship:v1
+  - handle: registered-parent-relationship
+    id: urn:gov:example:requirement:registered-parent-relationship:v1
     kind: criterion
     acquisition:
       kind: single
@@ -281,7 +285,8 @@ requirements:
         candidate_reference_namespace: urn:gov:example:opencrvs:person
         relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
     concepts:
-      - id: urn:gov:example:concept:registered-parent-relationship-confirmed
+      - handle: relationship-confirmed
+        id: urn:gov:example:concept:registered-parent-relationship-confirmed
         form: boolean
         required: true
         constraints: {}
@@ -289,7 +294,8 @@ requirements:
     disclosureGuard:
       families: [urn:gov:example:disclosure-family:registered-parent-relationship]
     existenceDisclosure: collapse-unresolved
-  - id: urn:gov:example:requirement:identify-registered-parents:v1
+  - handle: identify-registered-parents
+    id: urn:gov:example:requirement:identify-registered-parents:v1
     kind: information-requirement
     acquisition:
       kind: single
@@ -313,7 +319,8 @@ requirements:
         reference_namespace: urn:gov:example:opencrvs:person
         relationship_set_contract: urn:gov:example:opencrvs:registered-parent-set:v1
     concepts:
-      - id: urn:gov:example:concept:registered-parent-references
+      - handle: parent-references
+        id: urn:gov:example:concept:registered-parent-references
         form: entity-reference-list
         required: true
         constraints:

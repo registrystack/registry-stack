@@ -95,6 +95,7 @@ pub struct OutboundClientBuilder {
     connect_timeout: Duration,
     user_agent: Option<String>,
     trusted_root_certificates: Option<zeroize::Zeroizing<Vec<u8>>>,
+    resolved_host: Option<(String, Vec<SocketAddr>)>,
 }
 
 impl std::fmt::Debug for OutboundClientBuilder {
@@ -108,6 +109,7 @@ impl std::fmt::Debug for OutboundClientBuilder {
                 "has_trusted_root_certificates",
                 &self.trusted_root_certificates.is_some(),
             )
+            .field("has_pinned_resolution", &self.resolved_host.is_some())
             .finish()
     }
 }
@@ -128,6 +130,7 @@ impl OutboundClientBuilder {
             connect_timeout: DEFAULT_OUTBOUND_CONNECT_TIMEOUT,
             user_agent: None,
             trusted_root_certificates: None,
+            resolved_host: None,
         }
     }
 
@@ -156,6 +159,16 @@ impl OutboundClientBuilder {
     #[must_use]
     pub fn trusted_root_certificates(mut self, pem_bundle: impl Into<Vec<u8>>) -> Self {
         self.trusted_root_certificates = Some(zeroize::Zeroizing::new(pem_bundle.into()));
+        self
+    }
+
+    /// Pin one host to addresses an outbound fetch policy already approved.
+    ///
+    /// This is crate-private because callers must not supply addresses without
+    /// first producing them through [`FetchUrlPolicy`].
+    #[must_use]
+    fn resolve_to_addrs(mut self, host: String, addrs: Vec<SocketAddr>) -> Self {
+        self.resolved_host = Some((host, addrs));
         self
     }
 
@@ -188,6 +201,9 @@ impl OutboundClientBuilder {
                 builder = builder.add_root_certificate(certificate);
             }
             builder = builder.tls_built_in_root_certs(false);
+        }
+        if let Some((host, addrs)) = self.resolved_host {
+            builder = builder.resolve_to_addrs(&host, &addrs);
         }
         builder
             .build()
@@ -768,6 +784,59 @@ impl ValidatedFetchUrl {
         self.immediate_request_with_timeout(reqwest::Method::POST, timeout)
     }
 
+    /// Build an immediate POST using the hardened service-client options while
+    /// retaining the DNS resolution this value approved.
+    ///
+    /// Kept crate-private so credential providers can share the platform's CA,
+    /// timeout, and User-Agent handling without exposing an API that accepts
+    /// unvalidated resolver overrides.
+    pub(crate) fn immediate_post_with_outbound_options(
+        &self,
+        request_timeout: Duration,
+        connect_timeout: Duration,
+        user_agent: Option<&str>,
+        trusted_root_certificates: Option<&[u8]>,
+    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        self.immediate_request_with_outbound_options(
+            reqwest::Method::POST,
+            request_timeout,
+            connect_timeout,
+            user_agent,
+            trusted_root_certificates,
+        )
+    }
+
+    fn immediate_request_with_outbound_options(
+        &self,
+        method: reqwest::Method,
+        request_timeout: Duration,
+        connect_timeout: Duration,
+        user_agent: Option<&str>,
+        trusted_root_certificates: Option<&[u8]>,
+    ) -> Result<reqwest::RequestBuilder, FetchUrlError> {
+        let host = self
+            .url
+            .host_str()
+            .ok_or(FetchUrlError::MissingHost)?
+            .to_owned();
+        let mut builder = OutboundClientBuilder::new()
+            .timeout(request_timeout)
+            .connect_timeout(connect_timeout)
+            .resolve_to_addrs(host, self.resolved_addrs.clone());
+        if let Some(user_agent) = user_agent {
+            builder = builder.user_agent(user_agent);
+        }
+        if let Some(certificates) = trusted_root_certificates {
+            builder = builder.trusted_root_certificates(certificates.to_vec());
+        }
+        let client = builder
+            .try_build()
+            .map_err(FetchUrlError::OutboundClientBuild)?;
+        Ok(client
+            .request(method, self.url.clone())
+            .timeout(request_timeout))
+    }
+
     /// Build an immediate request from this validated URL.
     pub fn immediate_request(
         &self,
@@ -830,6 +899,9 @@ pub enum FetchUrlError {
     /// Building a pinned client failed.
     #[error("failed to build pinned HTTP client: {0}")]
     ClientBuild(#[source] reqwest::Error),
+    /// Building a DNS-pinned credential client from the approved options failed.
+    #[error("failed to build pinned outbound client: {0}")]
+    OutboundClientBuild(#[source] OutboundClientBuildError),
     /// URL validation exceeded the caller's wall-clock bound.
     #[error("URL validation exceeded timeout {timeout:?}")]
     ValidationTimeout { timeout: Duration },

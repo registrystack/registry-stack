@@ -31,6 +31,7 @@ const DIRECTORY_MODE: Mode = Mode::from_raw_mode(0o755);
 const FILE_MODE: Mode = Mode::from_raw_mode(0o644);
 const STAGE_ATTEMPTS: usize = 16;
 const STAGE_PREFIX: &str = ".evidencectl-source-mock-stage-";
+const REPLACE_PREFIX: &str = ".evidencectl-source-mock-replace-";
 
 /// One already-validated artifact to publish relative to a mock root.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -236,6 +237,164 @@ pub(super) fn publish_initial_tree(
 /// bodies that are still missing.
 pub(super) fn publish_missing(root: &Path, files: &[PublicationFile]) -> Result<Vec<PathBuf>> {
     publish_missing_with(root, files, |_, _| Ok(()))
+}
+
+/// Refuse when a confined authoring path already exists.
+pub(super) fn ensure_confined_absent(root_path: &Path, relative_path: &Path) -> Result<()> {
+    let relative = relative_text(relative_path, "publication path")?;
+    validate_relative_path(&relative, "publication path")?;
+    let root = open_directory(root_path, "mock root")?;
+    ensure_destination_absent(&root, relative_path)
+}
+
+/// Atomically replace one confined regular file when its bytes still match the
+/// version the caller validated. No ancestor or leaf symlink is followed.
+pub(super) fn replace_confined(
+    root_path: &Path,
+    relative_path: &Path,
+    expected: &[u8],
+    replacement: &[u8],
+) -> Result<PathBuf> {
+    replace_confined_with(
+        root_path,
+        relative_path,
+        expected,
+        replacement,
+        || Ok(()),
+        || {},
+    )
+}
+
+fn replace_confined_with<F, G>(
+    root_path: &Path,
+    relative_path: &Path,
+    expected: &[u8],
+    replacement: &[u8],
+    mut before_exchange: F,
+    mut after_displaced_check: G,
+) -> Result<PathBuf>
+where
+    F: FnMut() -> Result<()>,
+    G: FnMut(),
+{
+    let relative = relative_text(relative_path, "replacement path")?;
+    validate_relative_path(&relative, "replacement path")?;
+    if replacement.is_empty() || replacement.len() > MAX_PUBLICATION_FILE_BYTES {
+        bail!("replacement file must be non-empty and bounded");
+    }
+
+    let root = open_directory(root_path, "mock root")?;
+    let (parent, leaf) = open_parent(&root, relative_path, false, None, "replacement path")?
+        .context("replacement parent does not exist")?;
+    lock_replacement(&parent)?;
+    refuse_changed_file(&parent, &leaf, expected)?;
+
+    let mut staged_name = None;
+    let result: Result<PathBuf> = (|| {
+        for _ in 0..STAGE_ATTEMPTS {
+            let mut random = [0_u8; 12];
+            getrandom::fill(&mut random).context("generating a replacement staging name")?;
+            let name = OsString::from(format!("{REPLACE_PREFIX}{}", hex::encode(random)));
+            match rustix::fs::openat(
+                &parent,
+                &name,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                FILE_MODE,
+            ) {
+                Ok(descriptor) => {
+                    staged_name = Some(name);
+                    let mut file = File::from(descriptor);
+                    file.write_all(replacement)
+                        .context("writing staged replacement")?;
+                    file.sync_all().context("persisting staged replacement")?;
+                    break;
+                }
+                Err(Errno::EXIST) => continue,
+                Err(error) => return Err(error).context("creating staged replacement"),
+            }
+        }
+        let name = staged_name
+            .clone()
+            .context("could not allocate a unique replacement staging file")?;
+
+        // Serialize cooperating writers, then use an atomic exchange so an
+        // editor that ignores the lock cannot be overwritten between this
+        // final check and publication. The exchanged-out inode is validated
+        // and retained: a writer that already holds it may still write after
+        // any byte check, so automatically unlinking it could lose that edit.
+        refuse_changed_file(&parent, &leaf, expected)?;
+        before_exchange()?;
+        rustix::fs::renameat_with(&parent, &name, &parent, &leaf, RenameFlags::EXCHANGE)
+            .context("publishing the updated mock config")?;
+        // From this point every error preserves whichever bytes the exchange
+        // moved under `name`; cleanup is safe only before publication.
+        staged_name = None;
+        let recovery = relative_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(&name);
+        if let Err(changed) = refuse_changed_file(&parent, &name, expected) {
+            if let Err(rollback) =
+                rustix::fs::renameat_with(&parent, &name, &parent, &leaf, RenameFlags::EXCHANGE)
+            {
+                return Err(rollback).with_context(|| {
+                    format!(
+                        "restoring a concurrently changed mock config failed; its bytes remain in {}",
+                        recovery.display()
+                    )
+                });
+            }
+            // After rollback `name` holds the generated candidate, but an
+            // editor could have opened that inode while it was visible at the
+            // config path. Retain it too: no byte check can make a later write
+            // through that descriptor safe to discard.
+            rustix::fs::fsync(&parent).with_context(|| {
+                format!(
+                    "persisting the restored mock config; the exchanged candidate remains at {}",
+                    recovery.display()
+                )
+            })?;
+            return Err(changed).with_context(|| {
+                format!(
+                    "the original config was restored; the exchanged candidate remains at {}",
+                    recovery.display()
+                )
+            });
+        }
+        after_displaced_check();
+        rustix::fs::fsync(&parent).with_context(|| {
+            format!(
+                "the mock config was exchanged and its previous inode remains at {}, but persisting the directory failed",
+                recovery.display()
+            )
+        })?;
+        Ok(recovery)
+    })();
+    if let Some(name) = staged_name {
+        let _ = rustix::fs::unlinkat(&parent, &name, AtFlags::empty());
+        let _ = rustix::fs::fsync(&parent);
+    }
+    result
+}
+
+fn lock_replacement(parent: &OwnedFd) -> Result<()> {
+    rustix::fs::flock(parent, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        .context("another source-mock config update is already active")
+}
+
+fn refuse_changed_file(parent: &OwnedFd, leaf: &OsStr, expected: &[u8]) -> Result<()> {
+    let descriptor = rustix::fs::openat(
+        parent,
+        leaf,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .context("opening the current mock config")?;
+    let actual = read_descriptor(descriptor, MAX_PUBLICATION_FILE_BYTES as u64, "mock config")?;
+    if actual != expected {
+        bail!("mock config changed while the generated case was prepared");
+    }
+    Ok(())
 }
 
 fn publish_missing_with<F>(
@@ -696,6 +855,172 @@ mod tests {
         );
         assert!(publish_initial_tree(&config, &files).is_err());
         assert_eq!(std::fs::read(&config).unwrap(), b"version: 1\n");
+    }
+
+    #[test]
+    fn confined_replacement_requires_the_validated_bytes_and_refuses_symlinks() {
+        let temporary = tempdir().unwrap();
+        std::fs::create_dir(temporary.path().join("mocks")).unwrap();
+        let config = temporary.path().join("mocks/source.yaml");
+        std::fs::write(&config, b"version: 1\n").unwrap();
+
+        replace_confined(
+            temporary.path(),
+            Path::new("mocks/source.yaml"),
+            b"version: 1\n",
+            b"version: 1\ncases: 2\n",
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&config).unwrap(), b"version: 1\ncases: 2\n");
+
+        assert!(replace_confined(
+            temporary.path(),
+            Path::new("mocks/source.yaml"),
+            b"version: 1\n",
+            b"changed: true\n",
+        )
+        .is_err());
+        assert_eq!(std::fs::read(&config).unwrap(), b"version: 1\ncases: 2\n");
+
+        let target = temporary.path().join("outside.yaml");
+        std::fs::write(&target, b"outside\n").unwrap();
+        let linked = temporary.path().join("mocks/linked.yaml");
+        symlink(&target, &linked).unwrap();
+        assert!(replace_confined(
+            temporary.path(),
+            Path::new("mocks/linked.yaml"),
+            b"outside\n",
+            b"replaced\n",
+        )
+        .is_err());
+        assert_eq!(std::fs::read(target).unwrap(), b"outside\n");
+    }
+
+    #[test]
+    fn confined_replacement_refuses_a_concurrent_writer_before_the_stale_check() {
+        let temporary = tempdir().unwrap();
+        let mock_root = temporary.path().join("mocks");
+        std::fs::create_dir(&mock_root).unwrap();
+        let config = mock_root.join("source.yaml");
+        std::fs::write(&config, b"version: 1\n").unwrap();
+
+        let root = open_directory(temporary.path(), "test root").unwrap();
+        let (parent, _) = open_parent(
+            &root,
+            Path::new("mocks/source.yaml"),
+            false,
+            None,
+            "test config",
+        )
+        .unwrap()
+        .unwrap();
+        lock_replacement(&parent).unwrap();
+
+        let failure = replace_confined(
+            temporary.path(),
+            Path::new("mocks/source.yaml"),
+            b"version: 1\n",
+            b"version: 2\n",
+        )
+        .expect_err("a concurrent replacement is refused");
+        assert!(
+            format!("{failure:#}").contains("another source-mock config update is already active"),
+            "{failure:#}"
+        );
+        assert_eq!(std::fs::read(config).unwrap(), b"version: 1\n");
+    }
+
+    #[test]
+    fn confined_replacement_preserves_an_edit_after_the_final_stale_check() {
+        let temporary = tempdir().unwrap();
+        let mock_root = temporary.path().join("mocks");
+        std::fs::create_dir(&mock_root).unwrap();
+        let config = mock_root.join("source.yaml");
+        std::fs::write(&config, b"version: 1\n").unwrap();
+
+        let failure = replace_confined_with(
+            temporary.path(),
+            Path::new("mocks/source.yaml"),
+            b"version: 1\n",
+            b"version: 2\n",
+            || {
+                let edited = mock_root.join("author-edit.yaml");
+                std::fs::write(&edited, b"author: edit\n")?;
+                std::fs::rename(edited, &config)?;
+                Ok(())
+            },
+            || {},
+        )
+        .expect_err("the compare-and-exchange detects the author edit");
+
+        assert!(
+            format!("{failure:#}")
+                .contains("mock config changed while the generated case was prepared"),
+            "{failure:#}"
+        );
+        assert_eq!(std::fs::read(&config).unwrap(), b"author: edit\n");
+        let recovery = std::fs::read_dir(&mock_root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(REPLACE_PREFIX)
+            })
+            .expect("the briefly published candidate remains recoverable");
+        assert_eq!(std::fs::read(recovery).unwrap(), b"version: 2\n");
+        assert!(!mock_root
+            .join(".evidencectl-source-mock-replace.lock")
+            .exists());
+    }
+
+    #[test]
+    fn confined_replacement_keeps_a_late_write_to_the_displaced_inode_recoverable() {
+        let temporary = tempdir().unwrap();
+        let mock_root = temporary.path().join("mocks");
+        std::fs::create_dir(&mock_root).unwrap();
+        let config = mock_root.join("source.yaml");
+        std::fs::write(&config, b"version: 1\n").unwrap();
+        let original_metadata = std::fs::metadata(&config).unwrap();
+        let mut author_descriptor = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&config)
+            .unwrap();
+
+        let recovery = replace_confined_with(
+            temporary.path(),
+            Path::new("mocks/source.yaml"),
+            b"version: 1\n",
+            b"version: 2\n",
+            || Ok(()),
+            || {
+                std::io::Seek::rewind(&mut author_descriptor).unwrap();
+                author_descriptor.set_len(0).unwrap();
+                std::io::Write::write_all(&mut author_descriptor, b"author: late edit\n").unwrap();
+                author_descriptor.sync_all().unwrap();
+            },
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&config).unwrap(), b"version: 2\n");
+        assert_eq!(
+            std::fs::read(temporary.path().join(&recovery)).unwrap(),
+            b"author: late edit\n"
+        );
+        let recovery_metadata = std::fs::metadata(temporary.path().join(&recovery)).unwrap();
+        assert_eq!(recovery_metadata.dev(), original_metadata.dev());
+        assert_eq!(recovery_metadata.ino(), original_metadata.ino());
+        assert_eq!(recovery.parent(), Some(Path::new("mocks")));
+        assert!(recovery
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(REPLACE_PREFIX));
+        assert!(!mock_root
+            .join(".evidencectl-source-mock-replace.lock")
+            .exists());
     }
 
     #[test]

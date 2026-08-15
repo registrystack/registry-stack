@@ -907,9 +907,11 @@ fn execute_bundle_mutation(
     );
     let mut mutated = bundle.config.clone();
     let mut companion = requirement.clone();
+    companion.handle.push_str("-fixture-companion");
     companion.id.push_str(":fixture-companion");
     companion.evidence_type.push_str(":fixture-companion");
     for concept in &mut companion.concepts {
+        concept.handle.push_str("-fixture-companion");
         concept.id.push_str(":fixture-companion");
     }
     mutated.requirements.push(companion);

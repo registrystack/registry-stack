@@ -10,9 +10,9 @@ use std::process::Command;
 
 /// The complete top-level subcommand set. Adding a command means adding it
 /// here; the point of the list is that an omission fails rather than passes.
-const TOP_LEVEL_COMMANDS: [&str; 12] = [
-    "access", "keygen", "jwks", "new", "build", "fixtures", "source", "dev", "request", "verify",
-    "audit", "tooling",
+const TOP_LEVEL_COMMANDS: [&str; 13] = [
+    "client", "access", "keygen", "jwks", "new", "build", "fixtures", "source", "dev", "request",
+    "verify", "audit", "tooling",
 ];
 
 #[test]
@@ -72,6 +72,23 @@ fn an_undeclared_command_is_still_refused() {
         !output.status.success(),
         "an unknown subcommand must not succeed"
     );
+}
+
+#[test]
+fn progressive_request_preparation_accepts_no_caller_supplied_selector() {
+    registry_evidencectl::command()
+        .try_get_matches_from([
+            "evidencectl",
+            "request",
+            "prepare",
+            "--profile",
+            "client.json",
+            "--requirement",
+            "authentication-derived-status",
+            "--name",
+            "authentication-derived-status",
+        ])
+        .expect("the published contract decides whether request-origin selectors are required");
 }
 
 fn evidencectl(arguments: &[&str]) -> String {

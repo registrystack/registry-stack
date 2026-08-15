@@ -1061,7 +1061,9 @@ fn local_relying_procedure_is_bearer_free_closed_and_selector_private() {
     assert_eq!(
         procedure["expectedOutputs"],
         json!([{
+            "handle": "is_adult",
             "concept": "urn:example:fixture:concept:adult-status",
+            "required": true,
             "form": "boolean"
         }])
     );

@@ -1,6 +1,6 @@
 version: 1
 assuranceProfile: evidence-grade
-service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}
+service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}
 issuer: {id: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication: {kind: oidc-access-token, issuer: https://identity.invalid, audiences: [evidence-fixture], tokenTypes: [at+jwt], algorithms: [ES256], jwksUri: https://identity.invalid/.well-known/jwks.json, principalClaim: sub, requesterTagsClaim: evidence_tags, evidenceAudienceClaim: evidence_audience, grantIdClaim: evidence_grant_id, grantAuthorityClaim: evidence_authority, maximumTokenLifetimeSeconds: 300, revokedKeyIds: []}
@@ -69,7 +69,8 @@ authorityProfiles:
             valueOrigin: authenticated-grant
             valueClaims: {person_reference: grant.candidate_parent.person_reference}
 requirements:
-  - id: urn:example:fixture:requirement:legal-parent-relationship:v1
+  - handle: legal-parent-relationship
+    id: urn:example:fixture:requirement:legal-parent-relationship:v1
     kind: criterion
     acquisition:
       kind: single
@@ -93,7 +94,7 @@ requirements:
         candidate_reference_namespace: urn:example:fixture:person-reference
         relationship_set_contract: urn:example:fixture:legal-parent-set:v1
         legal_authority_attestation: urn:example:fixture:governance:legal-parent-register:v1
-    concepts: [{id: urn:example:fixture:concept:legal-parent-relationship-confirmed, form: boolean, required: true, constraints: {}}]
+    concepts: [{handle: relationship-confirmed, id: urn:example:fixture:concept:legal-parent-relationship-confirmed, form: boolean, required: true, constraints: {}}]
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:legal-parent-relationship]}
     existenceDisclosure: collapse-unresolved

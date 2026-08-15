@@ -38,11 +38,13 @@ use chrono::Utc;
 use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use registry_evidence::{runtime::EvidenceRuntime, server};
 use registry_evidence_client::{
-    AssuranceProfile, ConceptForm, DefinitionCardinality, DefinitionKind, EvidenceClient,
-    EvidenceClientConfig, EvidenceClientError, EvidenceDefinitionsDocument, EvidenceRequestSpec,
-    OAuthErrorCode, PrivateKeyJwt, PrivateKeyJwtConfig, PublicValue, SelectorField, SelectorValue,
-    SelectorValueOrigin, StaticToken, SubjectExpectations, SubjectRequest, TokenError,
-    TokenProvider, TransportKind, VerificationError, EVIDENCE_DEFINITIONS_SCHEMA_V1,
+    AssuranceProfile, AudienceScopedRequest, ConceptForm, DefinitionCardinality, DefinitionKind,
+    EvidenceClient, EvidenceClientConfig, EvidenceClientError, EvidenceDefinitionsDocument,
+    EvidenceRequestSpec, EvidenceResponseFormat, OAuthErrorCode, PrivateKeyJwt,
+    PrivateKeyJwtConfig, PublicValue, SelectorField, SelectorValue, SelectorValueOrigin,
+    StaticToken, SubjectContinuity, SubjectExpectations, SubjectRequest, TokenError, TokenProvider,
+    TransportKind, VerificationError, VerifiedAudienceScopedEvidence,
+    EVIDENCE_DEFINITIONS_SCHEMA_V1,
 };
 use registry_mint::{
     config::MintConfig,
@@ -271,7 +273,10 @@ async fn discovery_publishes_shapes_this_client_parses_exactly() {
         "a request-origin selector publishes its fields"
     );
     assert_eq!(definition.concepts.len(), 1);
-    assert_eq!(definition.concepts[0].form, ConceptForm::Boolean);
+    assert_eq!(
+        definition.concepts[0].form,
+        registry_evidence_client::definitions::DefinitionConceptForm::Scalar(ConceptForm::Boolean)
+    );
     assert!(
         definition.concepts[0].scalar_expected_output().is_some(),
         "a boolean concept yields a scalar expectation"
@@ -549,6 +554,214 @@ async fn an_acquired_credential_completes_a_verified_exchange() {
     assert_eq!(evidence.audience, Some(RELYING_AUDIENCE.to_owned()));
     assert_eq!(evidence.subjects.len(), 1);
     assert!(evidence.subjects[0].binding.starts_with(BINDING_PREFIX));
+}
+
+/// A profile owns only application configuration while public service metadata
+/// closes the rest of the request. The in-memory key is the secret-manager seam:
+/// no client key is copied into the profile written for this exchange.
+#[tokio::test]
+async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
+    let issuer = start_token_issuer().await;
+    let deployment =
+        start_trusting_with_request_burst(resolved_source_answer(), Some(&issuer.origin), 100)
+            .await;
+    let profile_directory = tempfile::tempdir().expect("create an owner-only profile directory");
+    fs::set_permissions(profile_directory.path(), fs::Permissions::from_mode(0o700))
+        .expect("the profile directory is owner-only");
+    let profile_path = profile_directory.path().join("client.json");
+    fs::write(
+        &profile_path,
+        serde_json::to_vec_pretty(&json!({
+            "schema": "registry.evidence-client-profile/v1",
+            "baseUrl": deployment.base_url.as_str().trim_end_matches('/'),
+            "clientId": CLIENT_ID,
+            "privateKey": {"source": "file", "path": "unused-by-in-memory-key.jwk"},
+            "trust": {"type": "local-loopback-discovery"},
+            "contracts": {"type": "published"},
+            "verification": {
+                "maximumAssertionLifetimeSeconds": MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+                "clockSkewSeconds": CLOCK_SKEW_SECONDS
+            }
+        }))
+        .expect("the profile serializes"),
+    )
+    .expect("write the owner-only profile");
+    fs::set_permissions(&profile_path, fs::Permissions::from_mode(0o600))
+        .expect("the profile is owner-only");
+
+    let client =
+        EvidenceClient::from_profile_path_with_key(&profile_path, issuer.client_key.clone())
+            .expect("the local profile and in-memory registered key configure the client");
+    let request = || {
+        AudienceScopedRequest::new(
+            "adult-status",
+            std::collections::BTreeMap::from([
+                (
+                    "given_name".to_owned(),
+                    SelectorValue::from("synthetic-reader"),
+                ),
+                (
+                    "family_name".to_owned(),
+                    SelectorValue::from("synthetic-reader"),
+                ),
+                ("birth_date".to_owned(), SelectorValue::from("2000-01-01")),
+            ]),
+        )
+    };
+
+    let (first, concurrent_first) =
+        tokio::join!(client.request(request()), client.request(request()));
+    let first = first.expect("the profile-driven first use obtains and verifies an assertion");
+    let concurrent_first = concurrent_first
+        .expect("a concurrent profile-driven request obtains and verifies an assertion");
+    let (first_artifact, first_nonce, receipt) = match first {
+        VerifiedAudienceScopedEvidence::Assertion(verified) => {
+            assert!(
+                !verified.assertion_bytes().is_empty(),
+                "the exact JWS bytes are retained"
+            );
+            let artifact: Value = serde_json::from_slice(verified.assertion_bytes())
+                .expect("the retained response is flattened JWS JSON");
+            assert!(artifact["protected"].is_string());
+            assert!(artifact["payload"].is_string());
+            assert!(artifact["signature"].is_string());
+            assert_eq!(verified.values().len(), 1);
+            assert_eq!(
+                verified.value().expect("one published output"),
+                &PublicValue::Boolean(true)
+            );
+            assert!(
+                verified.trace_id().is_some(),
+                "the verified result carries the trace id"
+            );
+            let receipt = match verified.subject_continuity() {
+                SubjectContinuity::FirstUse { receipt } => receipt.clone(),
+                SubjectContinuity::Matched { .. } => panic!("the first result cannot be matched"),
+            };
+            (
+                verified.assertion_bytes().to_vec(),
+                verified.evidence().request_nonce.clone(),
+                receipt,
+            )
+        }
+        VerifiedAudienceScopedEvidence::Credential(_) => panic!("signed JWS is the default"),
+    };
+    match concurrent_first {
+        VerifiedAudienceScopedEvidence::Assertion(verified) => {
+            assert_ne!(verified.assertion_bytes(), first_artifact.as_slice());
+            assert_ne!(verified.evidence().request_nonce, first_nonce);
+            assert!(matches!(
+                verified.subject_continuity(),
+                SubjectContinuity::FirstUse { .. }
+            ));
+        }
+        VerifiedAudienceScopedEvidence::Credential(_) => panic!("signed JWS is the default"),
+    }
+
+    let matched_jws = client
+        .request(request().with_binding_receipt(receipt.clone()))
+        .await
+        .expect("the application-owned receipt pins the second request");
+    match matched_jws {
+        VerifiedAudienceScopedEvidence::Assertion(verified) => {
+            assert_ne!(verified.assertion_bytes(), first_artifact.as_slice());
+            assert_ne!(verified.evidence().request_nonce, first_nonce);
+            assert!(matches!(
+                verified.subject_continuity(),
+                SubjectContinuity::Matched { .. }
+            ));
+        }
+        VerifiedAudienceScopedEvidence::Credential(_) => panic!("signed JWS is the default"),
+    }
+    let matched_sd_jwt = client
+        .request(
+            request()
+                .with_response_format(EvidenceResponseFormat::SdJwtVc)
+                .with_binding_receipt(receipt),
+        )
+        .await
+        .expect("the same request can return an audience-scoped credential");
+    match matched_sd_jwt {
+        VerifiedAudienceScopedEvidence::Credential(verified) => {
+            assert!(!verified.credential().is_empty());
+            assert_eq!(verified.credential().split('.').count(), 3);
+            assert_eq!(verified.values().len(), 1);
+            assert_eq!(
+                verified.value().expect("one published output"),
+                &PublicValue::Boolean(true)
+            );
+            assert!(matches!(
+                verified.subject_continuity(),
+                SubjectContinuity::Matched { .. }
+            ));
+        }
+        VerifiedAudienceScopedEvidence::Assertion(_) => panic!("the selected format is SD-JWT VC"),
+    }
+    assert_eq!(
+        issuer.issued_credential_count(),
+        1,
+        "one cached client-credentials token carries concurrent and matched high-level requests"
+    );
+
+    let mut reviewed = serde_json::to_value(
+        client
+            .contracts_candidate()
+            .await
+            .expect("the authenticated deployment publishes a contract candidate"),
+    )
+    .expect("the candidate serializes");
+    reviewed["definitions"][0]["configurationRevision"] =
+        Value::String(format!("sha256:{}", "0".repeat(64)));
+    let reviewed_path = profile_directory.path().join("reviewed-contracts.json");
+    fs::write(
+        &reviewed_path,
+        serde_json::to_vec(&reviewed).expect("the reviewed catalog serializes"),
+    )
+    .expect("write the owner-owned reviewed catalog");
+    fs::set_permissions(&reviewed_path, fs::Permissions::from_mode(0o600))
+        .expect("the reviewed catalog is owner-only");
+    let reviewed_profile_path = profile_directory.path().join("reviewed-client.json");
+    fs::write(
+        &reviewed_profile_path,
+        serde_json::to_vec(&json!({
+            "schema": "registry.evidence-client-profile/v1",
+            "baseUrl": deployment.base_url.as_str().trim_end_matches('/'),
+            "clientId": CLIENT_ID,
+            "privateKey": {"source": "file", "path": "unused-by-in-memory-key.jwk"},
+            "trust": {"type": "local-loopback-discovery"},
+            "contracts": {"type": "reviewed", "file": "reviewed-contracts.json"},
+            "verification": {
+                "maximumAssertionLifetimeSeconds": MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+                "clockSkewSeconds": CLOCK_SKEW_SECONDS
+            }
+        }))
+        .expect("the reviewed profile serializes"),
+    )
+    .expect("write the reviewed profile");
+    fs::set_permissions(&reviewed_profile_path, fs::Permissions::from_mode(0o600))
+        .expect("the reviewed profile is owner-only");
+    let reviewed_client = EvidenceClient::from_profile_path_with_key(
+        &reviewed_profile_path,
+        issuer.client_key.clone(),
+    )
+    .expect("the reviewed profile configures the client");
+    let fresh_candidate = reviewed_client
+        .contracts_candidate()
+        .await
+        .expect("a reviewed profile can still fetch a fresh published candidate");
+    assert_ne!(
+        fresh_candidate.definitions[0].configuration_revision,
+        format!("sha256:{}", "0".repeat(64)),
+        "candidate fetching must not copy the already-reviewed catalog"
+    );
+    let reviewed_result = reviewed_client.request(request()).await;
+    let Err(reviewed_error) = reviewed_result else {
+        panic!("a reviewed revision cannot silently adopt a live revision");
+    };
+    assert_eq!(
+        reviewed_error,
+        EvidenceClientError::Verification(VerificationError::Policy)
+    );
 }
 
 /// A credential is acquired once and reused while it has life left. Two whole
@@ -959,6 +1172,20 @@ async fn start(source_answer: Value) -> Deployment {
 /// signs the credentials it presents. With one, the deployment fetches keys from
 /// that origin and only credentials that server issued are accepted.
 async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> Deployment {
+    start_trusting_with_request_burst(source_answer, external_issuer, 10).await
+}
+
+/// Start a deployment with an explicit request burst ceiling.
+///
+/// The progressive profile journey deliberately performs several authenticated
+/// metadata and assertion exchanges against one deployment. Giving that test a
+/// larger budget keeps its final contract-drift assertion independent of the
+/// runtime scheduler while every ordinary deployment retains the fixture limit.
+async fn start_trusting_with_request_burst(
+    source_answer: Value,
+    external_issuer: Option<&str>,
+    request_burst: u32,
+) -> Deployment {
     let source = MockServer::start().await;
     let auth_key = generate_key(AUTH_KEY_ID);
     let issuer = match external_issuer {
@@ -1007,7 +1234,14 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
         .kid
         .as_deref()
         .expect("the service key has a thumbprint");
-    rewrite_for_local_profile(&bundle_root, &source.uri(), &issuer, signing_key_id);
+    rewrite_for_local_profile(
+        &bundle_root,
+        &source.uri(),
+        &issuer,
+        &format!("http://127.0.0.1:{port}"),
+        signing_key_id,
+    );
+    rewrite_request_burst(&bundle_root, request_burst);
     fs::remove_file(
         bundle_root
             .join("public-keys")
@@ -1082,6 +1316,19 @@ async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> 
     .await;
     drop(port_handoff);
     deployment
+}
+
+fn rewrite_request_burst(bundle_root: &Path, request_burst: u32) {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut document =
+        fs::read_to_string(&configuration_path).expect("the staged configuration is readable");
+    replace_exact(
+        &mut document,
+        "burstPerPrincipal: 10",
+        &format!("burstPerPrincipal: {request_burst}"),
+        1,
+    );
+    fs::write(&configuration_path, document).expect("the request burst is written");
 }
 
 /// Wait until the service reports itself ready, or fail with the reason it did
@@ -1358,6 +1605,7 @@ fn rewrite_for_local_profile(
     bundle_root: &Path,
     source_origin: &str,
     issuer_origin: &str,
+    public_origin: &str,
     signing_key_id: &str,
 ) {
     let configuration_path = bundle_root.join("evidence.yaml");
@@ -1373,6 +1621,12 @@ fn rewrite_for_local_profile(
         &mut document,
         "baseUrl: https://source.invalid",
         &format!("baseUrl: {source_origin}"),
+        1,
+    );
+    replace_exact(
+        &mut document,
+        "publicOrigin: https://evidence.invalid",
+        &format!("publicOrigin: {public_origin}"),
         1,
     );
     replace_exact(
@@ -1395,11 +1649,31 @@ fn rewrite_for_local_profile(
     );
     replace_exact(
         &mut document,
+        "responseFormats: [signed-jws]",
+        "responseFormats: [signed-jws, sd-jwt-vc]",
+        2,
+    );
+    replace_exact(
+        &mut document,
         &format!("activePublicJwkFile: public-keys/{FIXTURE_SIGNING_KEY_ID}.jwk.json"),
         &format!("activePublicJwkFile: public-keys/{signing_key_id}.jwk.json"),
         1,
     );
     fs::write(&configuration_path, document).expect("the local configuration is written");
+    regenerate_discovery_description(bundle_root);
+}
+
+fn regenerate_discovery_description(bundle_root: &Path) {
+    let config = registry_evidence::config::EvidenceConfig::parse_yaml(
+        &fs::read(bundle_root.join("evidence.yaml"))
+            .expect("the rewritten configuration is readable"),
+    )
+    .expect("the rewritten configuration validates");
+    let description = registry_evidence::discovery::render(&config)
+        .expect("the provider description renders")
+        .expect("the acceptance publication remains configured");
+    fs::write(bundle_root.join("catalog.jsonld"), description)
+        .expect("the provider description is regenerated");
 }
 
 fn runtime_document(

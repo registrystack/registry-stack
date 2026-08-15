@@ -232,7 +232,9 @@ fn local_expected_outputs(
         .concepts
         .iter()
         .map(|concept| ExpectedOutputDocument {
+            handle: concept.handle.clone(),
             concept: concept.id.clone(),
+            required: concept.required,
             form: ExpectedFormDocument::Scalar(
                 local_expected_form(concept.form).expect("the local concept forms were validated"),
             ),

@@ -7,6 +7,68 @@ export * from './index'
 /** The signed response encoding closed before one request is sent. */
 export type EvidenceResponseFormat = 'signed-jws' | 'sd-jwt-vc'
 
+/** An opaque, versioned subject-continuity receipt owned by the application. */
+export interface SubjectBindingReceipt {
+  readonly schema: 'registry.evidence-subject-binding-receipt/v1'
+  readonly [field: string]: unknown
+}
+
+/**
+ * The hand-written progressive result view refines napi-rs's JSON-shaped
+ * generated declarations without pretending it can infer a domain-specific
+ * output type. Its discriminants mirror the native result exactly.
+ */
+export type ProgressiveSubjectContinuity =
+  | { readonly status: 'firstUse'; readonly receipt: SubjectBindingReceipt }
+  | { readonly status: 'matched'; readonly receipt: SubjectBindingReceipt }
+
+export interface ProgressiveVerifiedResult {
+  readonly evidence: unknown
+  readonly traceId?: string
+  readonly values: Readonly<Record<string, unknown>>
+  readonly value: unknown
+  readonly subjectContinuity: ProgressiveSubjectContinuity
+}
+
+export interface ProgressiveVerifiedAssertion extends ProgressiveVerifiedResult {
+  readonly assertion: Buffer
+}
+
+export interface ProgressiveVerifiedAudienceScopedCredential extends ProgressiveVerifiedResult {
+  readonly credential: string
+}
+
+export type ProgressiveResult =
+  | ({ readonly responseFormat: 'signed-jws' } & ProgressiveVerifiedAssertion)
+  | ({ readonly responseFormat: 'sd-jwt-vc' } & ProgressiveVerifiedAudienceScopedCredential)
+
+export type AudienceScopedRequest = {
+  requirement: string
+  responseFormat?: EvidenceResponseFormat
+  /** One request-origin subject. Node keeps the selector map explicit. */
+  selectors?: Readonly<Record<string, string | number | boolean>>
+  /** Multiple roles, or a request whose selector field needs a reserved name. */
+  subjects?: Readonly<Record<string, Readonly<Record<string, string | number | boolean>>>>
+  /** A prior receipt the application chose to retain. Nothing is persisted by this package. */
+  bindingReceipt?: SubjectBindingReceipt
+}
+
+/** Progressive methods merged into the native `EvidenceClient` declaration. */
+export interface EvidenceClient {
+  refreshMetadata(): Promise<void>
+  request(request: AudienceScopedRequest): Promise<ProgressiveResult>
+}
+
+/** Progressive factories merged into the native `EvidenceClient` value. */
+export namespace EvidenceClient {
+  /**
+   * Read an application-owned profile. `privateKeyJwk` is optional and is
+   * intended for an in-memory secret-manager result; it is never retained by
+   * the JavaScript wrapper.
+   */
+  function fromProfile(path: string, privateKeyJwk?: Readonly<Record<string, unknown>>): EvidenceClient
+}
+
 /**
  * A holder public key a request may present, as a public JWK.
  *

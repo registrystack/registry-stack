@@ -399,6 +399,7 @@ struct CompiledFacts {
 }
 
 struct BundleRequirement<'a> {
+    handle: String,
     requirement_uri: String,
     kind: &'static str,
     concepts: &'a [ConceptPlan],
@@ -1239,6 +1240,7 @@ fn compile_question_plan(
         &subjects,
         &source_id,
         &BundleRequirement {
+            handle: question.id.clone(),
             requirement_uri: requirement_uri.clone(),
             kind: requirement_kind,
             concepts: &concepts,
@@ -1318,6 +1320,7 @@ fn compile_referenced_question(
         &subjects,
         source_id,
         &BundleRequirement {
+            handle: question.id.clone(),
             requirement_uri: requirement_uri.clone(),
             kind: requirement_kind,
             concepts: &concepts,
@@ -2459,6 +2462,7 @@ fn render_governance_parts(
         .iter()
         .map(|concept| {
             let mut rendered = json!({
+                "handle": concept.concept_alias,
                 "id": concept.concept_uri,
                 "form": match concept.concept_form {
                     CompiledConceptForm::Boolean => "boolean",
@@ -2506,6 +2510,7 @@ fn render_governance_parts(
         derivation.insert("selectorInputs".to_owned(), Value::Array(selector_inputs));
     }
     let mut requirement_value = json!({
+            "handle": requirement.handle,
             "id": requirement.requirement_uri,
             "kind": requirement.kind,
             "acquisition": {
@@ -2607,6 +2612,7 @@ fn render_local_bundle(
         "service": {
             "providerId": local_uri("provider"),
             "trustDomain": local_uri("trust-domain"),
+            "publicOrigin": format!("http://127.0.0.1:{}", ports.evidence),
         },
         "issuer": {"id": local_uri("issuer")},
         "publication": {
@@ -3527,6 +3533,7 @@ properties:
         )
         .expect("bundle parses");
         assert_eq!(bundle["assuranceProfile"], "local");
+        assert_eq!(bundle["service"]["publicOrigin"], "http://127.0.0.1:8080");
         assert_eq!(bundle["responseFormats"], json!(["signed-jws"]));
         let source_id = local_source_id("adult-status");
         let selector_profile = local_selector_profile_id("adult-status");
@@ -3541,6 +3548,11 @@ properties:
         assert_eq!(
             bundle["requirements"][0]["acquisition"],
             json!({"kind": "single", "source": source_id})
+        );
+        assert_eq!(bundle["requirements"][0]["handle"], "adult-status");
+        assert_eq!(
+            bundle["requirements"][0]["concepts"][0]["handle"],
+            "is_adult"
         );
         assert!(bundle["requirements"][0].get("fixtures").is_none());
         assert_eq!(
@@ -4176,7 +4188,11 @@ factSchema: schemas/source-facts.schema.yaml
         let target = json!({
             "version": 1,
             "assuranceProfile": "production",
-            "service": {"providerId": "urn:authority:provider", "trustDomain": "urn:authority:trust"},
+            "service": {
+                "providerId": "urn:authority:provider",
+                "trustDomain": "urn:authority:trust",
+                "publicOrigin": "https://evidence.example.test"
+            },
             "issuer": {"id": "urn:authority:issuer"},
             "authentication": {},
             "audit": {},
@@ -4211,6 +4227,8 @@ factSchema: schemas/source-facts.schema.yaml
             ]
         );
         assert_eq!(requirements[0]["concepts"][0]["form"], "boolean");
+        assert_eq!(requirements[0]["handle"], "adult-status");
+        assert_eq!(requirements[0]["concepts"][0]["handle"], "is_adult");
         assert_eq!(
             requirements[1]["concepts"][0]["form"],
             "controlled-category"

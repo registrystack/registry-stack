@@ -16,7 +16,9 @@
   ],
   "expectedOutputs": [
     {
+      "handle": "status-holds",
       "concept": "urn:example:concept:status-holds",
+      "required": true,
       "form": "boolean"
     }
   ],

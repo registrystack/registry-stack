@@ -2,6 +2,7 @@ version: 1
 assuranceProfile: evidence-grade
 service:
   providerId: urn:gov:example:evidence:dhis2
+  publicOrigin: https://evidence.example.org
   trustDomain: urn:gov:example:trust-domain:social-protection
 issuer:
   id: urn:gov:example:issuer:population-authority
@@ -191,7 +192,8 @@ authorityProfiles:
             selectorProfile: tracked-entity-reference-v1
             valueOrigin: request
 requirements:
-  - id: urn:gov:example:requirement:adult-status:v1
+  - handle: adult-status
+    id: urn:gov:example:requirement:adult-status:v1
     kind: criterion
     acquisition:
       kind: single
@@ -214,7 +216,8 @@ requirements:
               fields: [record_reference]
       parameters: {minimum_age_years: 18}
     concepts:
-      - id: urn:gov:example:concept:adult-status
+      - handle: adult-status
+        id: urn:gov:example:concept:adult-status
         form: boolean
         required: true
         constraints: {}
@@ -222,7 +225,8 @@ requirements:
     disclosureGuard:
       families: [urn:gov:example:disclosure-family:adult-status]
     existenceDisclosure: collapse-unresolved
-  - id: urn:gov:example:requirement:professional-licence-status:v1
+  - handle: professional-licence-status
+    id: urn:gov:example:requirement:professional-licence-status:v1
     kind: criterion
     acquisition:
       kind: single
@@ -275,11 +279,13 @@ requirements:
               value: '365001'
             code: later
     concepts:
-      - id: urn:gov:example:concept:professional-licence-active
+      - handle: licence-active
+        id: urn:gov:example:concept:professional-licence-active
         form: boolean
         required: true
         constraints: {}
-      - id: urn:gov:example:concept:professional-licence-expiry-category
+      - handle: licence-expiry-category
+        id: urn:gov:example:concept:professional-licence-expiry-category
         form: controlled-category
         required: true
         constraints:

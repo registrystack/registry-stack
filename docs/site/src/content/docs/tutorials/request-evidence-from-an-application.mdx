@@ -326,7 +326,7 @@ definition = shapes[0]
 # Fail here, at review time, rather than at verification time. Verification
 # requires the response's value set to match the expectation exactly, so a
 # concept this application does not expect is as disqualifying as a missing one.
-offered = {concept["id"]: concept["form"] for concept in definition["concepts"]}
+offered = {concept["concept"]: concept["form"] for concept in definition["concepts"]}
 expected = {item["concept"]: item["form"] for item in EXPECTED_OUTPUTS}
 if offered.keys() != expected.keys():
     missing = sorted(expected.keys() - offered.keys())

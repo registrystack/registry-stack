@@ -1389,9 +1389,10 @@ another requester is not entitled to know.
 
 `GET /v1/evidence-definitions` authenticates the caller and returns only
 complete request shapes that match exactly one authority path. Each item
-contains the requirement's configuration revision, issuer, provider,
-requirement, Evidence Type,
-purpose, reference frameworks, output concepts and forms, complete subject
+contains a stable complete-definition handle, the requirement's configuration
+revision, requirement, Evidence Type, purpose, effective response formats,
+reference frameworks, stable output handles, concepts, required or optional
+status, forms and list bounds, complete subject
 roles, selector profiles, value origins, safe selector field types and
 bounds, and the requirement's declared subject binding mode, so a client learns
 before requesting whether the assertion it will receive is audience-scoped or
@@ -1414,7 +1415,10 @@ Possessing discovery metadata, a requirement identifier, or selector values
 never creates authority. `POST /v1/evidence` authenticates and authorizes the
 complete tuple again.
 
-The generated OpenAPI describes both operations. Operators separately publish
+The public `GET /.well-known/oauth-protected-resource` document binds the exact
+`service.publicOrigin` to one authorization-server issuer, the Evidence JWKS,
+and header-only Bearer transport. It contains no definition or entitlement
+data. The generated OpenAPI describes both operations. Operators separately publish
 static onboarding material for token acquisition, human labels, procedural and
 legal context, endpoint trust, and verifier policy through an existing API
 catalog, developer portal, configuration repository, or bilateral process.
@@ -2645,9 +2649,10 @@ This concept fixes the following decisions:
     `GET /v1/evidence-definitions`, which returns only complete request shapes
     matching exactly one authority path for the verified caller and exact
     bundle revision. Static onboarding owns token acquisition, human and legal
-    context, and verifier trust; OpenAPI describes the wire contract and JWKS
-    provides key discovery. Discovery metadata never creates authority, and no
-    public or cross-requester catalog exists.
+    context, and verifier trust; OpenAPI describes the wire contract, RFC 9728
+    metadata binds the public resource to its authorization server and JWKS,
+    and JWKS provides key discovery. Discovery metadata never creates
+    authority, and no public or cross-requester definition catalog exists.
 23. Each request carries one exact 32-byte random nonce. The service does not
     store, consume, or uniqueness-check it. An audience-scoped assertion echoes
     it, and strict signed verification compares it with an independently

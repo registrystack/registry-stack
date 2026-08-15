@@ -28,7 +28,6 @@ use crate::{
         Evidence, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch, FlattenedJws,
         JwksDocument, SdJwtVcBatchEnvelope, UnsignedEvidenceEnvelope,
     },
-    server::BEARER_AUTH_CHALLENGE,
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
     EVIDENCE_SD_JWT_VC_BATCH_MEDIA_TYPE, SD_JWT_VC_BATCH_SCHEMA_V1,
 };
@@ -534,12 +533,13 @@ fn definitions_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "schema", "assuranceProfile", "issuedBy", "providedBy",
+            "schema", "assuranceProfile", "audience", "issuedBy", "providedBy",
             "holderBoundBatchMaxSize", "definitions"
         ],
         "properties": {
             "schema": {"const": "registry.evidence-definitions/v1"},
             "assuranceProfile": {"enum": ["local", "production", "evidence-grade"]},
+            "audience": {"type": "string", "format": "uri", "maxLength": 512},
             "issuedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "providedBy": {"type": "string", "format": "uri", "maxLength": 512},
             "holderBoundBatchMaxSize": {
@@ -555,10 +555,11 @@ fn definitions_schema() -> Value {
             "definition": {
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "requirement", "configurationRevision", "kind", "evidenceType", "purpose",
-                    "referenceFrameworks", "subjects", "concepts"
+                    "handle", "requirement", "configurationRevision", "kind", "evidenceType", "purpose",
+                    "responseFormats", "referenceFrameworks", "subjects", "concepts"
                 ],
                 "properties": {
+                    "handle": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,127}$"},
                     "requirement": {"type": "string", "format": "uri", "maxLength": 512},
                     "configurationRevision": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
                     "kind": {"enum": ["criterion", "information-requirement", "constraint"]},
@@ -568,6 +569,10 @@ fn definitions_schema() -> Value {
                     },
                     "evidenceType": {"type": "string", "format": "uri", "maxLength": 512},
                     "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9._:-]{0,127}$"},
+                    "responseFormats": {
+                        "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true,
+                        "items": {"enum": ["signed-jws", "unsigned-json", "sd-jwt-vc", "sd-jwt-vc-batch"]}
+                    },
                     "referenceFrameworks": {
                         "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
                         "items": {"type": "string", "format": "uri", "maxLength": 512}
@@ -656,19 +661,33 @@ fn definitions_schema() -> Value {
             },
             "concept": {
                 "type": "object", "additionalProperties": false,
-                "required": ["id", "form"],
+                "required": ["handle", "concept", "required", "form"],
                 "properties": {
-                    "id": {"type": "string", "format": "uri", "maxLength": 512},
-                    "form": {"enum": [
-                        "boolean", "controlled-code", "controlled-category", "bounded-integer",
-                        "bounded-decimal", "date-bucket", "time-bucket",
-                        "audience-scoped-entity-reference", "controlled-code-list",
-                        "entity-reference-list", "reviewed-structured-value"
-                    ]}
+                    "handle": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,127}$"},
+                    "concept": {"type": "string", "format": "uri", "maxLength": 512},
+                    "required": {"type": "boolean"},
+                    "form": {
+                        "oneOf": [
+                            {"enum": ["boolean", "integer", "string", "date-bucket", "time-bucket", "entity-reference", "structured"]},
+                            {
+                                "type": "object", "additionalProperties": false, "required": ["list"],
+                                "properties": {"list": {
+                                    "type": "object", "additionalProperties": false,
+                                    "required": ["items", "minimumItems", "maximumItems", "unique"],
+                                    "properties": {
+                                        "items": {"enum": ["string", "entity-reference"]},
+                                        "minimumItems": {"type": "integer", "minimum": 1, "maximum": 64},
+                                        "maximumItems": {"type": "integer", "minimum": 1, "maximum": 64},
+                                        "unique": {"const": true}
+                                    }
+                                }}
+                            }
+                        ]
+                    }
                 }
             }
         },
-        "$comment": "The authenticated response contains only complete request shapes that match exactly one configured authority path. It never exposes source plans, scripts, credentials, requester tags, authority-profile identifiers, selector values, codelist values, or unrelated definitions."
+        "$comment": "The authenticated response contains only complete request shapes that match exactly one configured authority path. It never exposes source plans, scripts, credentials, requester tags, authority-profile identifiers, selector values, codelist values, codelist paths, internal constraints, or unrelated definitions."
     })
 }
 
@@ -999,6 +1018,38 @@ fn evidence_response_headers(extra: Option<(&str, Value)>) -> Value {
     headers
 }
 
+fn public_metadata_response_headers() -> Value {
+    let mut headers = response_headers(None);
+    let headers = headers
+        .as_object_mut()
+        .expect("response headers are an object");
+    headers.insert(
+        "Cache-Control".to_string(),
+        json!({
+            "description": "Public metadata may be cached for at most ten minutes.",
+            "schema": {"type": "string", "enum": ["public, max-age=600"]}
+        }),
+    );
+    headers.insert(
+        "ETag".to_string(),
+        json!({
+            "description": "Strong SHA-256 entity tag over the exact response bytes.",
+            "schema": {"type": "string", "pattern": "^\"[a-f0-9]{64}\"$"}
+        }),
+    );
+    Value::Object(headers.clone())
+}
+
+fn conditional_metadata_parameter() -> Value {
+    json!({
+        "name": "If-None-Match",
+        "in": "header",
+        "required": false,
+        "description": "The exact strong entity tag from a prior response.",
+        "schema": {"type": "string", "pattern": "^\"[a-f0-9]{64}\"$"}
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn openapi_document(
     request: &Value,
@@ -1158,6 +1209,26 @@ fn openapi_document(
         }),
     );
     schemas.insert(
+        "ProtectedResourceMetadata".to_string(),
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["resource", "authorization_servers", "jwks_uri", "bearer_methods_supported"],
+            "properties": {
+                "resource": {"type": "string", "format": "uri", "maxLength": 512},
+                "authorization_servers": {
+                    "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true,
+                    "items": {"type": "string", "format": "uri", "maxLength": 512}
+                },
+                "jwks_uri": {"type": "string", "format": "uri", "maxLength": 1024},
+                "bearer_methods_supported": {
+                    "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true,
+                    "items": {"const": "header"}
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "HealthStatus".to_string(),
         json!({
             "type": "object", "additionalProperties": false,
@@ -1210,9 +1281,7 @@ fn openapi_document(
                         },
                         "401": {
                             "description": "Authentication failed",
-                            "headers": evidence_response_headers(Some(("WWW-Authenticate", json!({
-                                "schema": {"type": "string", "enum": [BEARER_AUTH_CHALLENGE]}
-                            })))),
+                            "headers": evidence_response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
                             "content": problem_content(&["auth.invalid_credential"])
                         },
                         "403": {
@@ -1270,9 +1339,7 @@ fn openapi_document(
                         },
                         "401": {
                             "description": "Authentication failed",
-                            "headers": evidence_response_headers(Some(("WWW-Authenticate", json!({
-                                "schema": {"type": "string", "enum": [BEARER_AUTH_CHALLENGE]}
-                            })))),
+                            "headers": evidence_response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
                             "content": problem_content(&["auth.invalid_credential"])
                         },
                         "403": {
@@ -1318,9 +1385,7 @@ fn openapi_document(
                         },
                         "401": {
                             "description": "Authentication failed",
-                            "headers": response_headers(Some(("WWW-Authenticate", json!({
-                                "schema": {"type": "string", "enum": [BEARER_AUTH_CHALLENGE]}
-                            })))),
+                            "headers": response_headers(Some(("WWW-Authenticate", authentication_challenge_header()))),
                             "content": problem_content(&["auth.invalid_credential"])
                         },
                         "429": {
@@ -1410,11 +1475,15 @@ fn openapi_document(
                 "get": {
                     "operationId": "getEvidenceJwks",
                     "summary": "Publish the active and retained public verification keys",
-                    "responses": {"200": {
-                        "description": "Evidence public verification keys",
-                        "headers": response_headers(None),
-                        "content": {"application/jwk-set+json": {"schema": {"$ref": "#/components/schemas/JwksDocument"}}}
-                    }}
+                    "parameters": [conditional_metadata_parameter()],
+                    "responses": {
+                        "200": {
+                            "description": "Evidence public verification keys",
+                            "headers": public_metadata_response_headers(),
+                            "content": {"application/jwk-set+json": {"schema": {"$ref": "#/components/schemas/JwksDocument"}}}
+                        },
+                        "304": {"description": "The public key set is unchanged", "headers": public_metadata_response_headers()}
+                    }
                 }
             },
             "/.well-known/jwt-vc-issuer": {
@@ -1422,11 +1491,32 @@ fn openapi_document(
                     "operationId": "getJwtVcIssuerMetadata",
                     "summary": "Publish JWT VC Issuer Metadata for the SD-JWT VC response format",
                     "description": "Discovery is not a trust anchor. The document republishes the same public keys under the provider identity the assertion names, and resolution is meaningful only when that identity is the HTTPS origin of the deployment.",
-                    "responses": {"200": {
-                        "description": "Provider identity and public verification keys",
-                        "headers": response_headers(None),
-                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/JwtVcIssuerMetadata"}}}
-                    }}
+                    "parameters": [conditional_metadata_parameter()],
+                    "responses": {
+                        "200": {
+                            "description": "Provider identity and public verification keys",
+                            "headers": public_metadata_response_headers(),
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/JwtVcIssuerMetadata"}}}
+                        },
+                        "304": {"description": "The issuer metadata is unchanged", "headers": public_metadata_response_headers()}
+                    }
+                }
+            },
+            "/.well-known/oauth-protected-resource": {
+                "get": {
+                    "operationId": "getProtectedResourceMetadata",
+                    "summary": "Publish OAuth protected-resource metadata",
+                    "description": "RFC 9728 metadata binds this exact Evidence resource origin to one authorization-server issuer, the Evidence response JWKS, and header-only bearer transport. It contains no requester-scoped or operator-private configuration.",
+                    "security": [],
+                    "parameters": [conditional_metadata_parameter()],
+                    "responses": {
+                        "200": {
+                            "description": "OAuth protected-resource metadata",
+                            "headers": public_metadata_response_headers(),
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProtectedResourceMetadata"}}}
+                        },
+                        "304": {"description": "The protected-resource metadata is unchanged", "headers": public_metadata_response_headers()}
+                    }
                 }
             }
         },
@@ -1440,6 +1530,15 @@ fn openapi_document(
                 }
             },
             "schemas": Value::Object(schemas)
+        }
+    })
+}
+
+fn authentication_challenge_header() -> Value {
+    json!({
+        "schema": {
+            "type": "string",
+            "pattern": "^Bearer realm=\\\"registry-evidence\\\", resource_metadata=\\\"https?://[^\\\"]+/\\.well-known/oauth-protected-resource\\\"$"
         }
     })
 }
@@ -1504,6 +1603,7 @@ mod tests {
         let mut document = json!({
             "schema": "registry.evidence-definitions/v1",
             "assuranceProfile": "local",
+            "audience": "urn:example:audience",
             "issuedBy": "urn:example:issuer",
             "providedBy": "urn:example:provider",
             "holderBoundBatchMaxSize": 1,
@@ -1519,6 +1619,59 @@ mod tests {
             "the retained v1 identity intentionally has a new required member"
         );
         document["holderBoundBatchMaxSize"] = json!(17);
+        assert!(!compiled.is_valid(&document));
+    }
+
+    #[test]
+    fn definitions_publish_closed_optional_and_list_verification_policy() {
+        let compiled = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&definitions_schema())
+            .expect("definitions schema compiles");
+        let mut document = json!({
+            "schema": "registry.evidence-definitions/v1",
+            "assuranceProfile": "production",
+            "audience": "https://client.example.test",
+            "issuedBy": "urn:example:issuer",
+            "providedBy": "https://evidence.example.test",
+            "holderBoundBatchMaxSize": 1,
+            "definitions": [{
+                "handle": "membership",
+                "requirement": "urn:example:requirement:membership:v1",
+                "configurationRevision": format!("sha256:{}", "0".repeat(64)),
+                "kind": "information-requirement",
+                "evidenceType": "urn:example:evidence-type:membership:v1",
+                "purpose": "casework",
+                "responseFormats": ["signed-jws", "sd-jwt-vc"],
+                "referenceFrameworks": ["urn:example:framework:v1"],
+                "subjects": [{
+                    "role": "subject",
+                    "cardinality": "one",
+                    "selector": {
+                        "profile": "person-v1",
+                        "valueOrigin": "request",
+                        "fields": [{"type": "string", "name": "person_id", "minimumBytes": 1, "maximumBytes": 96}]
+                    }
+                }],
+                "concepts": [{
+                    "handle": "categories",
+                    "concept": "urn:example:concept:categories",
+                    "required": false,
+                    "form": {"list": {
+                        "items": "string",
+                        "minimumItems": 1,
+                        "maximumItems": 3,
+                        "unique": true
+                    }}
+                }]
+            }]
+        });
+        assert!(compiled.is_valid(&document));
+        document["definitions"][0]["concepts"][0]["form"]["list"]["unique"] = json!(false);
+        assert!(!compiled.is_valid(&document));
+        document["definitions"][0]["concepts"][0]["form"]["list"]["unique"] = json!(true);
+        document["definitions"][0]["concepts"][0]["internalConstraint"] = json!("protected");
         assert!(!compiled.is_valid(&document));
     }
 
@@ -1569,6 +1722,7 @@ mod tests {
             [
                 "/.well-known/evidence/jwks.json",
                 "/.well-known/jwt-vc-issuer",
+                "/.well-known/oauth-protected-resource",
                 "/catalog.jsonld",
                 "/health",
                 "/openapi.json",
@@ -1671,9 +1825,14 @@ mod tests {
                 .expect("responses is an object")
                 .values()
             {
+                let expected = if response["headers"]["ETag"].is_object() {
+                    json!(["public, max-age=600"])
+                } else {
+                    json!(["no-store"])
+                };
                 assert_eq!(
                     response["headers"]["Cache-Control"]["schema"]["enum"],
-                    json!(["no-store"])
+                    expected
                 );
             }
         }
@@ -1691,7 +1850,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_auth_challenge_matches_the_runtime_challenge_exactly() {
+    fn generated_auth_challenge_requires_the_rfc_9728_metadata_link() {
         let document = openapi_document(
             &request_schema(),
             &request_batch_schema(),
@@ -1711,8 +1870,8 @@ mod tests {
         ] {
             assert_eq!(
                 document["paths"][path][method]["responses"]["401"]["headers"]["WWW-Authenticate"]
-                    ["schema"]["enum"],
-                json!([BEARER_AUTH_CHALLENGE]),
+                    ["schema"]["pattern"],
+                json!("^Bearer realm=\\\"registry-evidence\\\", resource_metadata=\\\"https?://[^\\\"]+/\\.well-known/oauth-protected-resource\\\"$"),
                 "{method} {path}"
             );
         }
@@ -1831,15 +1990,18 @@ mod tests {
                 json!({
                     "schema": "registry.evidence-definitions/v1",
                     "assuranceProfile": "evidence-grade",
+                    "audience": "urn:example:audience",
                     "issuedBy": "urn:example:issuer",
                     "providedBy": "urn:example:provider",
                     "holderBoundBatchMaxSize": 4,
                     "definitions": [{
+                        "handle": "case-check",
                         "requirement": "urn:example:requirement:v1",
                         "configurationRevision": format!("sha256:{}", "0".repeat(64)),
                         "kind": "criterion",
                         "evidenceType": "urn:example:evidence-type:v1",
                         "purpose": "casework",
+                        "responseFormats": ["signed-jws"],
                         "referenceFrameworks": ["urn:example:framework:v1"],
                         "subjects": [{
                             "role": "subject",
@@ -1855,7 +2017,12 @@ mod tests {
                                 }]
                             }
                         }],
-                        "concepts": [{"id": "urn:example:concept", "form": "boolean"}]
+                        "concepts": [{
+                            "handle": "eligible",
+                            "concept": "urn:example:concept",
+                            "required": true,
+                            "form": "boolean"
+                        }]
                     }]
                 }),
             ),

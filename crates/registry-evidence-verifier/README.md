@@ -9,12 +9,15 @@ Portable verification core for signed Evidence Version 1 responses.
   relying-party policy.
 - `verifier::EvidenceVerificationPolicy` and its declarative
   `EvidenceVerificationPolicyDocument` form, including expected subjects,
-  expected output value forms, accepted assurance profile, request nonce echo,
-  accepted assertion lifetime, and clock skew. The accepted lifetime and the
-  clock skew are the two policy bounds that would fail open, so reading a
-  document and every conversion to a policy refuse a value the verification
-  policy contract forbids: an unusable policy is refused as an input, never
-  reported as a verification outcome.
+  stable concept handles, required and optional outputs, scalar and list value
+  forms, list item form, cardinality and uniqueness, accepted assurance
+  profile, request nonce echo, accepted assertion lifetime, and clock skew.
+  Required outputs must appear. Optional outputs may be absent, but remain
+  closed to their declared concept and form when present. Unknown or duplicate
+  outputs always fail. The accepted lifetime and clock skew are the two policy
+  bounds that would fail open, so reading a document and every conversion to a
+  policy refuse a value the verification policy contract forbids: an unusable
+  policy is refused as an input, never reported as a verification outcome.
 - `model` wire types: the closed `Evidence` payload, its public value forms,
   the flattened JWS response, the unsigned envelope, and the JWKS document.
 - `contracts::evidence_schema` and `contracts::evidence_contract_accepts`: the

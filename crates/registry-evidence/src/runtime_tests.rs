@@ -267,6 +267,10 @@ async fn first_curl_exercises_and_verifies_the_evidence_server() {
         "adapters/",
         "derivations/",
         "codelists/",
+        "valueClaims",
+        "requesterTags",
+        "authorityProfiles",
+        "constraints",
         "secret:",
     ] {
         assert!(!serialized_definitions.contains(prohibited));
@@ -508,13 +512,50 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
     let jwks = http.get("/.well-known/evidence/jwks.json").await;
     jwks.assert_status_ok();
     assert_eq!(jwks.header("content-type"), "application/jwk-set+json");
+    assert_eq!(jwks.header("cache-control"), "public, max-age=600");
+    let jwks_etag = jwks.header("etag");
     assert_eq!(
         jwks.json::<crate::model::JwksDocument>(),
         *fixture.runtime.jwks()
     );
+    let not_modified = http
+        .get("/.well-known/evidence/jwks.json")
+        .add_header("if-none-match", jwks_etag)
+        .await;
+    assert_eq!(not_modified.status_code(), StatusCode::NOT_MODIFIED);
+    assert_eq!(not_modified.header("cache-control"), "public, max-age=600");
+
+    let protected_resource = http.get("/.well-known/oauth-protected-resource").await;
+    protected_resource.assert_status_ok();
+    assert_eq!(
+        protected_resource.json::<Value>(),
+        json!({
+            "resource": fixture.runtime.bundle().config.service.public_origin,
+            "authorization_servers": [fixture.runtime.bundle().config.authentication.issuer],
+            "jwks_uri": format!(
+                "{}{}",
+                fixture.runtime.bundle().config.service.public_origin,
+                fixture.runtime.bundle().config.signing.jwks_path
+            ),
+            "bearer_methods_supported": ["header"]
+        })
+    );
+    assert_eq!(
+        protected_resource.header("cache-control"),
+        "public, max-age=600"
+    );
 
     let standard_token = access_token(None);
     let parent_token = access_token(Some(parent_grant_claims()));
+    let missing_credential = http.get("/v1/evidence-definitions").await;
+    missing_credential.assert_status_unauthorized();
+    assert_eq!(
+        missing_credential.header("www-authenticate"),
+        format!(
+            "Bearer realm=\"registry-evidence\", resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
+            fixture.runtime.bundle().config.service.public_origin
+        )
+    );
     let standard_discovery = http
         .get("/v1/evidence-definitions")
         .add_header("authorization", format!("Bearer {standard_token}"))
@@ -552,6 +593,14 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
         .iter()
         .find(|definition| definition.requirement.ends_with(":adult-status:v1"))
         .expect("authorized adult definition is discoverable");
+    assert_eq!(adult_definition.handle, "adult-status");
+    assert_eq!(
+        adult_definition.response_formats,
+        [ResponseFormat::SignedJws, ResponseFormat::UnsignedJson]
+    );
+    assert_eq!(adult_definition.concepts.len(), 1);
+    assert_eq!(adult_definition.concepts[0].handle, "is_adult");
+    assert!(adult_definition.concepts[0].required);
     assert!(adult_definition.subjects[0].selector.fields.iter().any(
         |field| matches!(field, EvidenceSelectorField::Date { name } if name == "birth_date")
     ));
@@ -1374,6 +1423,70 @@ async fn discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambig
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn discovery_refuses_duplicate_handles_visible_to_one_requester() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "    purposes: [fixture-eligibility]",
+        "    purposes: [fixture-eligibility, fixture-appeal]",
+        1,
+    );
+    replace_exact(
+        &mut configuration,
+        r#"      - requirement: urn:example:fixture:requirement:adult-status:v1
+        purpose: fixture-eligibility
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, unsigned-json]
+        subjects:
+          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}"#,
+        r#"      - requirement: urn:example:fixture:requirement:adult-status:v1
+        purpose: fixture-eligibility
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws, unsigned-json]
+        subjects:
+          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}
+      - requirement: urn:example:fixture:requirement:adult-status:v1
+        purpose: fixture-appeal
+        audienceFrom: authenticated-requester
+        responseFormats: [signed-jws]
+        subjects:
+          - {role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}"#,
+        1,
+    );
+    fs::write(&configuration_path, configuration).expect("test configuration is rewritten");
+    make_read_only(&prepared.bundle_root);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("two purpose-specific grants initialize"),
+    );
+    let http = TestServer::new(build_app(Arc::clone(&runtime)));
+
+    let response = http
+        .get("/v1/evidence-definitions")
+        .add_header("authorization", format!("Bearer {}", access_token(None)))
+        .await;
+    assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.json::<Value>()["code"],
+        json!("service.unavailable")
+    );
+    assert!(prepared
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+    assert!(fs::read_to_string(&prepared.audit_path)
+        .expect("audit is readable")
+        .is_empty());
 }
 
 #[tokio::test]
@@ -4302,8 +4415,8 @@ async fn holder_bound_acceptance() -> PreparedAcceptance {
     );
     replace_exact(
         &mut configuration,
-        "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
-        "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
+        "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
+        "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
         1,
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
@@ -5313,8 +5426,8 @@ async fn holder_bound_batch_acceptance(ceiling: u16) -> PreparedAcceptance {
     );
     replace_exact(
         &mut configuration,
-        "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
-        "  - id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
+        "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion",
+        "  - handle: adult-status\n    id: urn:example:fixture:requirement:adult-status:v1\n    kind: criterion\n    subjectBinding: holder-bound",
         1,
     );
     fs::write(&configuration_path, &configuration).expect("test configuration is rewritten");
@@ -6212,7 +6325,12 @@ fn demo_verification_policy_document(policy: &EvidenceVerificationPolicy) -> Str
         "expectedOutputs": policy
             .expected_outputs
             .iter()
-            .map(|output| json!({"concept": output.concept, "form": expected_form_document(&output.form)}))
+            .map(|output| json!({
+                "handle": output.handle,
+                "concept": output.concept,
+                "required": output.required,
+                "form": expected_form_document(&output.form)
+            }))
             .collect::<Vec<_>>(),
         "revokedKeyIds": policy.revoked_key_ids,
         "maximumAssertionLifetimeSeconds": policy.maximum_assertion_lifetime().as_secs(),
@@ -6232,9 +6350,22 @@ fn expected_form_document(form: &ExpectedValueForm) -> Value {
         ExpectedValueForm::EntityReference => json!("entity-reference"),
         ExpectedValueForm::Structured => json!("structured"),
         ExpectedValueForm::List {
+            item_form,
             minimum_items,
             maximum_items,
-        } => json!({"list": {"minimumItems": minimum_items, "maximumItems": maximum_items}}),
+            unique,
+        } => json!({"list": {
+            "items": match item_form {
+                crate::verifier::ExpectedListItemForm::String => "string",
+                crate::verifier::ExpectedListItemForm::EntityReference => "entity-reference",
+                crate::verifier::ExpectedListItemForm::LegacyAny => {
+                    panic!("legacy list policy is read-only")
+                }
+            },
+            "minimumItems": minimum_items,
+            "maximumItems": maximum_items,
+            "unique": unique
+        }}),
     }
 }
 
@@ -6324,7 +6455,9 @@ async fn reordered_grant_subjects_resolve_by_role_and_emit_declaration_order() {
         .supported_values
         .iter()
         .map(|value| crate::verifier::ExpectedOutput {
+            handle: "expected-value".to_owned(),
             concept: value.provides_value_for.clone(),
+            required: true,
             form: crate::verifier::ExpectedValueForm::Boolean,
         })
         .collect();

@@ -2,6 +2,7 @@ version: 1
 assuranceProfile: evidence-grade
 service:
   providerId: urn:gov:example:evidence:residence
+  publicOrigin: https://evidence.example.org
   trustDomain: urn:gov:example:trust-domain:social-protection
 issuer:
   id: urn:gov:example:issuer:residence-authority
@@ -119,7 +120,8 @@ authorityProfiles:
             selectorProfile: residence-record-v1
             valueOrigin: request
 requirements:
-  - id: urn:gov:example:requirement:residence-region:v1
+  - handle: residence-region
+    id: urn:gov:example:requirement:residence-region:v1
     kind: information-requirement
     acquisition:
       kind: single
@@ -141,7 +143,8 @@ requirements:
               fields: [record_reference]
       parameters: {}
     concepts:
-      - id: urn:gov:example:concept:residence-region
+      - handle: residence-region
+        id: urn:gov:example:concept:residence-region
         form: controlled-code
         required: true
         constraints:

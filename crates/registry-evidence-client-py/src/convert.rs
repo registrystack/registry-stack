@@ -15,7 +15,7 @@
 //! and [`json_to_python`] are the small explicit recursive functions that
 //! stand in for it.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use evidence_client_sdk::{
@@ -44,7 +44,7 @@ use url::Url;
 pub struct ConversionError(pub String);
 
 impl ConversionError {
-    fn new(message: impl Into<String>) -> Self {
+    pub fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
 }
@@ -321,7 +321,7 @@ pub fn json_to_python<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'py
 /// (`MINIMUM_SELECTOR_INTEGER..=MAXIMUM_SELECTOR_INTEGER`) is enforced later,
 /// by the real `EvidenceClient::prepare` call, once a genuine
 /// `EvidenceRequestSpec` exists.
-fn selector_value_from_json(value: &Value) -> Result<SelectorValue, ConversionError> {
+pub fn selector_value_from_json(value: &Value) -> Result<SelectorValue, ConversionError> {
     match value {
         Value::String(text) => Ok(SelectorValue::from(text.as_str())),
         Value::Bool(flag) => Ok(SelectorValue::from(*flag)),
@@ -334,6 +334,40 @@ fn selector_value_from_json(value: &Value) -> Result<SelectorValue, ConversionEr
             "a selector value must be a string, an integer, or a boolean",
         )),
     }
+}
+
+/// Convert the selector keywords captured by Python's progressive
+/// `EvidenceClient.request` surface. This layer only establishes the three
+/// JSON scalar shapes the SDK accepts. Requirement-specific selector profiles
+/// and their field set remain definition-driven checks in the Rust client.
+pub fn selector_values_from_json(
+    value: &Value,
+    what: &str,
+) -> Result<BTreeMap<String, SelectorValue>, ConversionError> {
+    let object = as_object(value, what)?;
+    object
+        .iter()
+        .map(|(name, value)| Ok((name.clone(), selector_value_from_json(value)?)))
+        .collect()
+}
+
+/// Convert the explicit multi-role `subjects` shape of the progressive Python
+/// API. The binding deliberately does not infer roles or selector profiles:
+/// the requester-scoped definition held by the Rust client closes those
+/// decisions before it sends a request.
+pub fn progressive_subjects_from_json(
+    value: &Value,
+) -> Result<BTreeMap<String, BTreeMap<String, SelectorValue>>, ConversionError> {
+    let subjects = as_object(value, "`subjects`")?;
+    subjects
+        .iter()
+        .map(|(role, selectors)| {
+            Ok((
+                role.clone(),
+                selector_values_from_json(selectors, "each `subjects` role value")?,
+            ))
+        })
+        .collect()
 }
 
 fn subject_request_from_json(value: &Value) -> Result<SubjectRequest, ConversionError> {

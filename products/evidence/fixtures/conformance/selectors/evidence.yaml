@@ -2,6 +2,7 @@ version: 1
 assuranceProfile: evidence-grade
 service:
   providerId: urn:example:fixture:provider:selector-conformance
+  publicOrigin: https://evidence.invalid
   trustDomain: urn:example:fixture:trust-domain:selector-conformance
 issuer: {id: urn:example:fixture:issuer:selector-conformance}
 authentication:
@@ -265,7 +266,8 @@ authorityProfiles:
           - {role: subject-a, selectorProfile: opaque-coordinates-v1, valueOrigin: request}
           - {role: subject-b, selectorProfile: demographics-with-event-v1, valueOrigin: request}
 requirements:
-  - id: urn:example:fixture:requirement:classification:v1
+  - handle: classification
+    id: urn:example:fixture:requirement:classification:v1
     kind: criterion
     acquisition:
       kind: single
@@ -278,11 +280,12 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/classification.rhai, parameters: {}}
     concepts:
-      - {id: urn:example:fixture:concept:classification, form: boolean, required: true, constraints: {}}
+      - {handle: classification, id: urn:example:fixture:concept:classification, form: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:classification]}
     existenceDisclosure: collapse-unresolved
-  - id: urn:example:fixture:requirement:property:v1
+  - handle: property
+    id: urn:example:fixture:requirement:property:v1
     kind: information-requirement
     acquisition:
       kind: single
@@ -295,11 +298,12 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/property.rhai, parameters: {}}
     concepts:
-      - {id: urn:example:fixture:concept:property, form: boolean, required: true, constraints: {}}
+      - {handle: property, id: urn:example:fixture:concept:property, form: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:property]}
     existenceDisclosure: collapse-unresolved
-  - id: urn:example:fixture:requirement:property-with-event:v1
+  - handle: property-with-event
+    id: urn:example:fixture:requirement:property-with-event:v1
     kind: information-requirement
     acquisition:
       kind: single
@@ -312,11 +316,12 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/property-with-event.rhai, parameters: {}}
     concepts:
-      - {id: urn:example:fixture:concept:property-with-event, form: boolean, required: true, constraints: {}}
+      - {handle: property-with-event, id: urn:example:fixture:concept:property-with-event, form: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:property-with-event]}
     existenceDisclosure: collapse-unresolved
-  - id: urn:example:fixture:requirement:relationship:v1
+  - handle: relationship
+    id: urn:example:fixture:requirement:relationship:v1
     kind: criterion
     acquisition:
       kind: single
@@ -330,11 +335,12 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/relationship.rhai, parameters: {}}
     concepts:
-      - {id: urn:example:fixture:concept:relationship, form: boolean, required: true, constraints: {}}
+      - {handle: relationship, id: urn:example:fixture:concept:relationship, form: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:relationship]}
     existenceDisclosure: collapse-unresolved
-  - id: urn:example:fixture:requirement:opaque:v1
+  - handle: opaque
+    id: urn:example:fixture:requirement:opaque:v1
     kind: information-requirement
     acquisition:
       kind: single
@@ -347,7 +353,7 @@ requirements:
     validitySeconds: 300
     derivation: {script: derivations/opaque.rhai, parameters: {}}
     concepts:
-      - {id: urn:example:fixture:concept:opaque, form: boolean, required: true, constraints: {}}
+      - {handle: opaque, id: urn:example:fixture:concept:opaque, form: boolean, required: true, constraints: {}}
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:opaque]}
     existenceDisclosure: collapse-unresolved

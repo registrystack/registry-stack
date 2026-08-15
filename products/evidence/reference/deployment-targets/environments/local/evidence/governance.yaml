@@ -1,6 +1,6 @@
 version: 1
 assuranceProfile: local
-service: {providerId: urn:example:local:evidence, trustDomain: urn:example:local:trust-domain}
+service: {providerId: urn:example:local:evidence, publicOrigin: http://127.0.0.1:8080, trustDomain: urn:example:local:trust-domain}
 issuer: {id: urn:example:issuer:authority}
 publication: {serviceId: urn:example:local:evidence-service, title: Local Evidence service, description: Local minimum-disclosure Evidence development service, endpointUrl: http://127.0.0.1:8080, jurisdictions: [urn:example:jurisdiction:local]}
 authentication:

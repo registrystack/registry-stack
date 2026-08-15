@@ -700,6 +700,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.AudienceScopedResult = nativeBinding.AudienceScopedResult
 module.exports.EvidenceClient = nativeBinding.EvidenceClient
 module.exports.PreparedEvidenceRequest = nativeBinding.PreparedEvidenceRequest
 module.exports.PreparedEvidenceRequestBatch = nativeBinding.PreparedEvidenceRequestBatch

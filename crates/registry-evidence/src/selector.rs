@@ -374,6 +374,10 @@ impl MatchedEntitlement {
         self.response_formats.contains(&format)
     }
 
+    pub(crate) fn response_formats(&self) -> &[ResponseFormat] {
+        &self.response_formats
+    }
+
     /// Report whether this one complete matched grant permits the binding mode
     /// the requirement is configured for. Permitting a serialization is not
     /// permitting a binding mode, so this is a separate question from

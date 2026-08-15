@@ -39,12 +39,13 @@ use crate::{
     kernel::{EvidenceConstruction, EvidenceScope, KernelError, OfflineKernel, ValueProjection},
     model::{
         request_nonce_is_canonical, EvidenceDefinition, EvidenceDefinitionConcept,
-        EvidenceDefinitionSelector, EvidenceDefinitionSubject, EvidenceDefinitions,
-        EvidenceRequest, EvidenceRequestBatch, EvidenceSelectorField, FlattenedJws, JwksDocument,
-        LookupResult, RequestedSelector, RequestedSubject, SdJwtVcBatchEnvelope,
-        SdJwtVcBatchEnvelopeType, SelectorValue, SubjectBinding, UnsignedEnvelopeType,
-        UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope, UnsignedIntegrityProtection,
-        EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
+        EvidenceDefinitionForm, EvidenceDefinitionList, EvidenceDefinitionListForm,
+        EvidenceDefinitionListItemForm, EvidenceDefinitionScalarForm, EvidenceDefinitionSelector,
+        EvidenceDefinitionSubject, EvidenceDefinitions, EvidenceRequest, EvidenceRequestBatch,
+        EvidenceSelectorField, FlattenedJws, JwksDocument, LookupResult, RequestedSelector,
+        RequestedSubject, SdJwtVcBatchEnvelope, SdJwtVcBatchEnvelopeType, SelectorValue,
+        SubjectBinding, UnsignedEnvelopeType, UnsignedEnvelopeWarning, UnsignedEvidenceEnvelope,
+        UnsignedIntegrityProtection, EVIDENCE_REQUEST_BATCH_MAX_ITEMS,
     },
     problem::ProblemCode,
     rate_limit::{EvidenceRateLimiter, RateLimitConfig, RateLimitError},
@@ -694,9 +695,25 @@ impl EvidenceRuntime {
             }
             definitions.push(self.discovery_definition(&request, &matched)?);
         }
+        let mut published_handles = BTreeSet::new();
+        if definitions
+            .iter()
+            .any(|definition| !published_handles.insert(definition.handle.as_str()))
+        {
+            // A handle selects a complete definition, not merely a requirement
+            // URI. Different grants may legitimately expose different shapes
+            // to different requesters, but one authenticated document must
+            // never make the public handle ambiguous. Refuse the complete
+            // document instead of publishing an arbitrary winner.
+            return Err(failure(
+                ProblemCode::ServiceUnavailable,
+                "discovery-ambiguous-handle",
+            ));
+        }
         let response = EvidenceDefinitions {
             schema: EVIDENCE_DEFINITIONS_SCHEMA_V1.to_owned(),
             assurance_profile: self.bundle().config.assurance_profile,
+            audience: context.evidence_audience().to_owned(),
             issued_by: self.bundle().config.issuer.id.clone(),
             provided_by: self.bundle().config.service.provider_id.clone(),
             holder_bound_batch_max_size: self.bundle().config.holder_bound_batch_ceiling(),
@@ -760,11 +777,8 @@ impl EvidenceRuntime {
         let concepts = requirement
             .concepts
             .iter()
-            .map(|concept| EvidenceDefinitionConcept {
-                id: concept.id.clone(),
-                form: concept_form_name(concept.form).to_owned(),
-            })
-            .collect();
+            .map(|concept| self.discovery_concept(concept))
+            .collect::<Result<Vec<_>, RuntimeFailure>>()?;
 
         let configuration_revision = self
             .bundle()
@@ -780,15 +794,98 @@ impl EvidenceRuntime {
         };
 
         Ok(EvidenceDefinition {
+            handle: requirement.handle.clone(),
             requirement: requirement.id.clone(),
             configuration_revision,
             kind: requirement_kind_name(requirement.kind).to_owned(),
             subject_binding_mode,
             evidence_type: requirement.evidence_type.clone(),
             purpose: request.purpose.clone(),
+            response_formats: self
+                .bundle()
+                .config
+                .response_formats
+                .iter()
+                .copied()
+                .filter(|format| {
+                    matched.response_formats().contains(format)
+                        && subject_binding_permits_response_format(
+                            requirement.subject_binding_mode(),
+                            *format,
+                        )
+                })
+                .collect(),
             reference_frameworks: requirement.reference_frameworks.clone(),
             subjects,
             concepts,
+        })
+    }
+
+    fn discovery_concept(
+        &self,
+        concept: &crate::config::ConceptConfig,
+    ) -> Result<EvidenceDefinitionConcept, RuntimeFailure> {
+        let form = match concept.form {
+            ConceptForm::Boolean => {
+                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::Boolean)
+            }
+            ConceptForm::BoundedInteger => {
+                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::Integer)
+            }
+            ConceptForm::ControlledCode | ConceptForm::ControlledCategory => {
+                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::String)
+            }
+            ConceptForm::BoundedDecimal => {
+                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::String)
+            }
+            ConceptForm::DateBucket => {
+                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::DateBucket)
+            }
+            ConceptForm::TimeBucket => {
+                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::TimeBucket)
+            }
+            ConceptForm::AudienceScopedEntityReference => {
+                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::EntityReference)
+            }
+            ConceptForm::ReviewedStructuredValue => {
+                EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::Structured)
+            }
+            ConceptForm::ControlledCodeList | ConceptForm::EntityReferenceList => {
+                let minimum_items = concept
+                    .constraints
+                    .get("minimumItems")
+                    .and_then(serde_norway::Value::as_u64)
+                    .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-concept"))?;
+                let maximum_items = concept
+                    .constraints
+                    .get("maximumItems")
+                    .and_then(serde_norway::Value::as_u64)
+                    .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-concept"))?;
+                let unique = concept
+                    .constraints
+                    .get("unique")
+                    .and_then(serde_norway::Value::as_bool)
+                    .ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "discovery-concept"))?;
+                let items = if concept.form == ConceptForm::ControlledCodeList {
+                    EvidenceDefinitionListItemForm::String
+                } else {
+                    EvidenceDefinitionListItemForm::EntityReference
+                };
+                EvidenceDefinitionForm::List(EvidenceDefinitionListForm {
+                    list: EvidenceDefinitionList {
+                        items,
+                        minimum_items,
+                        maximum_items,
+                        unique,
+                    },
+                })
+            }
+        };
+        Ok(EvidenceDefinitionConcept {
+            handle: concept.handle.clone(),
+            concept: concept.id.clone(),
+            required: concept.required,
+            form,
         })
     }
 
@@ -3617,22 +3714,6 @@ fn value_origin_name(origin: ValueOrigin) -> &'static str {
         ValueOrigin::AuthenticatedContext => "authenticated-context",
         ValueOrigin::AuthenticatedGrant => "authenticated-grant",
         ValueOrigin::Request => "request",
-    }
-}
-
-fn concept_form_name(form: ConceptForm) -> &'static str {
-    match form {
-        ConceptForm::Boolean => "boolean",
-        ConceptForm::ControlledCode => "controlled-code",
-        ConceptForm::ControlledCategory => "controlled-category",
-        ConceptForm::BoundedInteger => "bounded-integer",
-        ConceptForm::BoundedDecimal => "bounded-decimal",
-        ConceptForm::DateBucket => "date-bucket",
-        ConceptForm::TimeBucket => "time-bucket",
-        ConceptForm::AudienceScopedEntityReference => "audience-scoped-entity-reference",
-        ConceptForm::ControlledCodeList => "controlled-code-list",
-        ConceptForm::EntityReferenceList => "entity-reference-list",
-        ConceptForm::ReviewedStructuredValue => "reviewed-structured-value",
     }
 }
 

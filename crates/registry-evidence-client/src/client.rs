@@ -4,6 +4,11 @@
 //! makes about a response is the one the portable verifier makes for it, against
 //! the policy the caller closed before the request existed.
 
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use chrono::{DateTime, Utc};
 use registry_evidence_verifier::{
     model::{
@@ -12,17 +17,22 @@ use registry_evidence_verifier::{
     verifier::ExpectedSubjectDocument,
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
 };
-use registry_platform_httputil::{read_bounded, retry_after_seconds, validate_response_headers};
+use registry_platform_httputil::{
+    read_bounded, retry_after_seconds, validate_response_headers, FetchUrlPolicy,
+};
 use reqwest::{
-    header::{HeaderMap, ACCEPT, AUTHORIZATION, CONTENT_TYPE},
+    header::{
+        HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG,
+        IF_NONE_MATCH,
+    },
     Method, StatusCode,
 };
+use serde::Deserialize;
+use tokio::sync::Mutex;
 use url::Url;
 
 #[cfg(test)]
 use crate::problem::TRACEPARENT_HEADER;
-#[cfg(test)]
-use reqwest::header::HeaderValue;
 #[cfg(test)]
 use reqwest::header::RETRY_AFTER;
 
@@ -36,7 +46,13 @@ use crate::{
         EvidenceRequestSpec, HolderBoundRequestSpec, PreparedEvidenceRequest,
         PreparedHolderBoundRequest,
     },
+    private_key_jwt::{PrivateKeyJwt, PrivateKeyJwtConfig},
     problem::{essence, map_problem},
+    profile::{ContractsProfile, EvidenceClientProfile, TrustProfile},
+    progressive::{
+        progressive_result, select_definition, spec_from_definition, AudienceScopedRequest,
+        EvidenceClientContracts, ProgressivePreparedRequest, VerifiedAudienceScopedEvidence,
+    },
     request_batch::{
         EvidenceRequestBatchSpec, PreparedEvidenceRequestBatch, RawEvidenceRequestBatchResponse,
         VerifiedEvidenceRequestBatch, VerifiedEvidenceRequestBatchItem,
@@ -44,7 +60,9 @@ use crate::{
     },
     response_format::EvidenceResponseFormat,
     retained::RetainedEvidenceVerification,
+    token::TokenProvider,
 };
+use registry_platform_crypto::PrivateJwk;
 
 /// Path of the Evidence request endpoint.
 const EVIDENCE_PATH: &str = "v1/evidence";
@@ -78,10 +96,76 @@ enum Credential {
 }
 
 /// A relying party's connection to one Evidence deployment.
-#[derive(Debug)]
 pub struct EvidenceClient {
     config: EvidenceClientConfig,
     http: reqwest::Client,
+    progressive: Option<Arc<ProgressiveClientState>>,
+}
+
+impl std::fmt::Debug for EvidenceClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvidenceClient")
+            .field("config", &self.config)
+            .field("profile_driven", &self.progressive.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+struct ProgressiveClientState {
+    profile: EvidenceClientProfile,
+    private_key: PrivateJwk,
+    cache: Mutex<Option<CachedServiceSnapshot>>,
+}
+
+struct CachedServiceSnapshot {
+    value: ProgressiveServiceSnapshot,
+    expires_at: Instant,
+    stale_until: Instant,
+}
+
+#[derive(Clone)]
+struct ProgressiveSnapshot {
+    definitions: EvidenceDefinitionsDocument,
+    jwks: JwksDocument,
+    token_provider: Arc<dyn TokenProvider>,
+}
+
+#[derive(Clone)]
+struct ProgressiveServiceSnapshot {
+    protected: ProtectedResourceMetadata,
+    authorization: AuthorizationServerMetadata,
+    jwks: JwksDocument,
+    token_provider: Arc<dyn TokenProvider>,
+    protected_etag: Option<HeaderValue>,
+    authorization_etag: Option<HeaderValue>,
+    jwks_etag: Option<HeaderValue>,
+    protected_cache_seconds: u64,
+    authorization_cache_seconds: u64,
+    jwks_cache_seconds: u64,
+    cache_seconds: u64,
+}
+
+struct PublicDocument<T> {
+    value: T,
+    etag: Option<HeaderValue>,
+    cache_seconds: u64,
+}
+
+#[derive(Clone, Deserialize)]
+struct ProtectedResourceMetadata {
+    resource: String,
+    authorization_servers: Vec<String>,
+    jwks_uri: String,
+    bearer_methods_supported: Vec<String>,
+}
+
+#[derive(Clone, Deserialize)]
+struct AuthorizationServerMetadata {
+    issuer: String,
+    token_endpoint: String,
+    grant_types_supported: Vec<String>,
+    token_endpoint_auth_methods_supported: Vec<String>,
 }
 
 /// A signed response, read but not yet judged.
@@ -182,11 +266,451 @@ impl EvidenceClient {
         Self::build(config)
     }
 
+    /// Build the high-level client from a parsed application-owned profile.
+    pub fn from_profile(profile: EvidenceClientProfile) -> Result<Self, EvidenceClientError> {
+        let private_key = profile.load_private_key()?;
+        Self::from_profile_with_key(profile, private_key)
+    }
+
+    /// Build from a profile while supplying secret-manager key material in memory.
+    pub fn from_profile_with_key(
+        profile: EvidenceClientProfile,
+        private_key: PrivateJwk,
+    ) -> Result<Self, EvidenceClientError> {
+        profile.validate()?;
+        let base_url = Url::parse(&profile.base_url).map_err(|_| {
+            EvidenceClientError::configuration("the client profile is invalid or unavailable")
+        })?;
+        let config = EvidenceClientConfig::progressive(base_url)?;
+        config.validate()?;
+        let http = build_client(&config)?;
+        Ok(Self {
+            config,
+            http,
+            progressive: Some(Arc::new(ProgressiveClientState {
+                profile,
+                private_key,
+                cache: Mutex::new(None),
+            })),
+        })
+    }
+
+    pub fn from_profile_path(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile(EvidenceClientProfile::from_file(path)?)
+    }
+
+    pub fn from_profile_path_with_key(
+        path: impl AsRef<std::path::Path>,
+        private_key: PrivateJwk,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile_with_key(EvidenceClientProfile::from_file(path)?, private_key)
+    }
+
+    /// Invalidate cached public metadata and acquire a fresh closed snapshot.
+    pub async fn refresh_metadata(&self) -> Result<(), EvidenceClientError> {
+        let state = self.progressive_state()?;
+        let mut cache = state.cache.lock().await;
+        let previous = cache.take();
+        let snapshot = match self
+            .acquire_service_snapshot(state, previous.as_ref().map(|value| &value.value))
+            .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                *cache = previous;
+                return Err(error);
+            }
+        };
+        let now = Instant::now();
+        let (expires_at, stale_until) = cache_deadlines(
+            now,
+            snapshot.cache_seconds,
+            state.profile.maximum_metadata_cache_seconds,
+        );
+        *cache = Some(CachedServiceSnapshot {
+            expires_at,
+            stale_until,
+            value: snapshot,
+        });
+        Ok(())
+    }
+
+    /// Discover, prepare, send once, and verify one audience-scoped result.
+    pub async fn request(
+        &self,
+        request: AudienceScopedRequest,
+    ) -> Result<VerifiedAudienceScopedEvidence, EvidenceClientError> {
+        validate_progressive_response_format(request.response_format)?;
+        let state = self.progressive_state()?;
+        let snapshot = self.progressive_snapshot(state).await?;
+        let definition = select_definition(&snapshot.definitions, &request)?.clone();
+        let spec = spec_from_definition(
+            &snapshot.definitions,
+            &definition,
+            &request,
+            state
+                .profile
+                .verification
+                .maximum_assertion_lifetime_seconds,
+            state.profile.verification.clock_skew_seconds,
+        )?;
+        let matched = request.binding_receipt.is_some();
+        let client = EvidenceClient::new(EvidenceClientConfig::new(
+            self.config.base_url.clone(),
+            Arc::clone(&snapshot.token_provider),
+            snapshot.jwks.clone(),
+            Vec::new(),
+        ))?;
+        let prepared = client.prepare(spec)?;
+        let raw = client.send(&prepared).await?;
+        let verified = client.verify(&prepared, &raw)?;
+        progressive_result(&definition, request.response_format, raw, verified, matched)
+    }
+
+    /// Fetch the requester-scoped, client-safe catalog candidate for review.
+    pub async fn contracts_candidate(
+        &self,
+    ) -> Result<EvidenceClientContracts, EvidenceClientError> {
+        let state = self.progressive_state()?;
+        let service = self.progressive_service_snapshot(state).await?;
+        let definitions = self.discover_published_definitions(&service).await?;
+        definitions.validate_for_progressive_request()?;
+        validate_profile_expectations(&state.profile, &definitions)?;
+        Ok(definitions.into())
+    }
+
+    /// Prepare owner-only artifacts for a caller that will perform the single
+    /// HTTP POST itself, while retaining the same offline verification context.
+    pub async fn prepare_progressive(
+        &self,
+        request: AudienceScopedRequest,
+    ) -> Result<ProgressivePreparedRequest, EvidenceClientError> {
+        validate_progressive_response_format(request.response_format)?;
+        let state = self.progressive_state()?;
+        let snapshot = self.progressive_snapshot(state).await?;
+        let definition = select_definition(&snapshot.definitions, &request)?.clone();
+        let spec = spec_from_definition(
+            &snapshot.definitions,
+            &definition,
+            &request,
+            state
+                .profile
+                .verification
+                .maximum_assertion_lifetime_seconds,
+            state.profile.verification.clock_skew_seconds,
+        )?;
+        let client = EvidenceClient::new(EvidenceClientConfig::new(
+            self.config.base_url.clone(),
+            Arc::clone(&snapshot.token_provider),
+            snapshot.jwks.clone(),
+            Vec::new(),
+        ))?;
+        let prepared = client.prepare(spec)?;
+        let token = snapshot.token_provider.bearer_token().await?;
+        let authorization = token
+            .authorization_header_value()
+            .to_str()
+            .map_err(|_| metadata_protocol_failure())?
+            .to_owned();
+        Ok(ProgressivePreparedRequest {
+            endpoint: client.endpoint(EVIDENCE_PATH)?.to_string(),
+            accept: request.response_format.media_type().to_owned(),
+            authorization,
+            request_json: prepared.request_json()?,
+            retained_verification: serde_json::to_vec(&client.retain_verification(&prepared))
+                .map_err(|_| {
+                    EvidenceClientError::configuration(
+                        "the retained verification context could not be serialized",
+                    )
+                })?,
+        })
+    }
+
+    fn progressive_state(&self) -> Result<&ProgressiveClientState, EvidenceClientError> {
+        self.progressive.as_deref().ok_or_else(|| {
+            EvidenceClientError::configuration("this operation requires a client profile")
+        })
+    }
+
+    async fn progressive_snapshot(
+        &self,
+        state: &ProgressiveClientState,
+    ) -> Result<ProgressiveSnapshot, EvidenceClientError> {
+        let service = self.progressive_service_snapshot(state).await?;
+        let definitions = match &state.profile.contracts {
+            ContractsProfile::Reviewed { file } => state.profile.load_reviewed_contracts(file)?,
+            ContractsProfile::Published => self.discover_published_definitions(&service).await?,
+        };
+        definitions.validate_for_progressive_request()?;
+        validate_profile_expectations(&state.profile, &definitions)?;
+        Ok(ProgressiveSnapshot {
+            definitions,
+            jwks: service.jwks,
+            token_provider: service.token_provider,
+        })
+    }
+
+    async fn discover_published_definitions(
+        &self,
+        service: &ProgressiveServiceSnapshot,
+    ) -> Result<EvidenceDefinitionsDocument, EvidenceClientError> {
+        let temporary = EvidenceClient::new(EvidenceClientConfig::new(
+            self.config.base_url.clone(),
+            Arc::clone(&service.token_provider),
+            service.jwks.clone(),
+            Vec::new(),
+        ))?;
+        temporary.discover().await
+    }
+
+    async fn progressive_service_snapshot(
+        &self,
+        state: &ProgressiveClientState,
+    ) -> Result<ProgressiveServiceSnapshot, EvidenceClientError> {
+        let mut cache = state.cache.lock().await;
+        if let Some(cached) = cache
+            .as_ref()
+            .filter(|cached| cached.expires_at > Instant::now())
+        {
+            return Ok(cached.value.clone());
+        }
+        let snapshot = match self
+            .acquire_service_snapshot(state, cache.as_ref().map(|value| &value.value))
+            .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                if let Some(cached) = cache
+                    .as_ref()
+                    .filter(|cached| cached.stale_until > Instant::now())
+                {
+                    return Ok(cached.value.clone());
+                }
+                return Err(error);
+            }
+        };
+        let now = Instant::now();
+        let (expires_at, stale_until) = cache_deadlines(
+            now,
+            snapshot.cache_seconds,
+            state.profile.maximum_metadata_cache_seconds,
+        );
+        *cache = Some(CachedServiceSnapshot {
+            value: snapshot.clone(),
+            expires_at,
+            stale_until,
+        });
+        Ok(snapshot)
+    }
+
+    async fn acquire_service_snapshot(
+        &self,
+        state: &ProgressiveClientState,
+        previous: Option<&ProgressiveServiceSnapshot>,
+    ) -> Result<ProgressiveServiceSnapshot, EvidenceClientError> {
+        let fetch_policy = metadata_fetch_policy(&state.profile.trust);
+        let resource_url = self.endpoint(".well-known/oauth-protected-resource")?;
+        let protected = self
+            .public_json(
+                resource_url,
+                JSON_MEDIA_TYPE,
+                previous.map(|value| {
+                    (
+                        &value.protected,
+                        value.protected_etag.as_ref(),
+                        value.protected_cache_seconds,
+                    )
+                }),
+                state.profile.maximum_metadata_cache_seconds,
+                &fetch_policy,
+            )
+            .await?;
+        if protected.value.resource != state.profile.base_url
+            || protected.value.authorization_servers.len() != 1
+            || protected.value.bearer_methods_supported != ["header"]
+        {
+            return Err(metadata_protocol_failure());
+        }
+        let announced_issuer = &protected.value.authorization_servers[0];
+        let issuer = Url::parse(announced_issuer).map_err(|_| metadata_protocol_failure())?;
+        validate_metadata_url(&issuer, &state.profile.trust)?;
+        let metadata_url = metadata_endpoint(&issuer)?;
+        let previous_authorization = previous.filter(|value| {
+            authorization_metadata_source_matches(&value.authorization.issuer, announced_issuer)
+        });
+        let authorization = self
+            .public_json(
+                metadata_url,
+                JSON_MEDIA_TYPE,
+                previous_authorization.map(|value| {
+                    (
+                        &value.authorization,
+                        value.authorization_etag.as_ref(),
+                        value.authorization_cache_seconds,
+                    )
+                }),
+                state.profile.maximum_metadata_cache_seconds,
+                &fetch_policy,
+            )
+            .await?;
+        if !authorization_server_metadata_is_compatible(&authorization.value, announced_issuer) {
+            return Err(metadata_protocol_failure());
+        }
+        let token_endpoint = Url::parse(&authorization.value.token_endpoint)
+            .map_err(|_| metadata_protocol_failure())?;
+        validate_metadata_url(&token_endpoint, &state.profile.trust)?;
+        let expected_jwks = self.endpoint(JWKS_PATH)?;
+        let jwks_url =
+            Url::parse(&protected.value.jwks_uri).map_err(|_| metadata_protocol_failure())?;
+        if jwks_url != expected_jwks {
+            return Err(metadata_protocol_failure());
+        }
+        let jwks = match &state.profile.trust {
+            TrustProfile::PinnedJwks { file } => PublicDocument {
+                value: state.profile.load_pinned_jwks(file)?,
+                etag: None,
+                cache_seconds: state.profile.maximum_metadata_cache_seconds,
+            },
+            TrustProfile::HttpsDiscovery | TrustProfile::LocalLoopbackDiscovery => {
+                self.public_json(
+                    jwks_url,
+                    JWKS_MEDIA_TYPE,
+                    previous.map(|value| {
+                        (
+                            &value.jwks,
+                            value.jwks_etag.as_ref(),
+                            value.jwks_cache_seconds,
+                        )
+                    }),
+                    state.profile.maximum_metadata_cache_seconds,
+                    &fetch_policy,
+                )
+                .await?
+            }
+        };
+        // Authorization-server metadata can legitimately require immediate
+        // revalidation. That must not throw away a still-valid access token
+        // when the revalidated token endpoint is byte-for-byte unchanged.
+        // A changed endpoint gets a new provider before any credential is sent.
+        let token_provider = if let Some(snapshot) = previous.filter(|snapshot| {
+            snapshot.authorization.issuer == authorization.value.issuer
+                && snapshot.authorization.token_endpoint == authorization.value.token_endpoint
+        }) {
+            Arc::clone(&snapshot.token_provider)
+        } else {
+            Arc::new(PrivateKeyJwt::new(
+                PrivateKeyJwtConfig::new(
+                    token_endpoint,
+                    state.profile.client_id.clone(),
+                    state.private_key.clone(),
+                )
+                .with_fetch_url_policy(fetch_policy),
+            )?) as Arc<dyn TokenProvider>
+        };
+        let cache_seconds = protected
+            .cache_seconds
+            .min(authorization.cache_seconds)
+            .min(jwks.cache_seconds);
+        Ok(ProgressiveServiceSnapshot {
+            protected: protected.value,
+            authorization: authorization.value,
+            jwks: jwks.value,
+            token_provider,
+            protected_etag: protected.etag,
+            authorization_etag: authorization.etag,
+            jwks_etag: jwks.etag,
+            protected_cache_seconds: protected.cache_seconds,
+            authorization_cache_seconds: authorization.cache_seconds,
+            jwks_cache_seconds: jwks.cache_seconds,
+            cache_seconds,
+        })
+    }
+
+    async fn public_json<T: serde::de::DeserializeOwned + Clone>(
+        &self,
+        url: Url,
+        media_type: &str,
+        previous: Option<(&T, Option<&HeaderValue>, u64)>,
+        maximum_cache_seconds: u64,
+        fetch_policy: &FetchUrlPolicy,
+    ) -> Result<PublicDocument<T>, EvidenceClientError> {
+        let validated = fetch_policy
+            .validate_dns_pinned_for_immediate_fetch_with_timeout(&url, self.config.connect_timeout)
+            .await
+            .map_err(|_| metadata_protocol_failure())?;
+        let mut request = validated
+            .immediate_get_with_timeout(self.config.request_timeout)
+            .map_err(|_| metadata_protocol_failure())?
+            .header(ACCEPT, media_type);
+        if let Some(etag) = previous.and_then(|(_, etag, _)| etag) {
+            request = request.header(IF_NONE_MATCH, etag);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|error| EvidenceClientError::transport(outbound::send_failure_kind(&error)))?;
+        let response_status = response.status();
+        if validate_response_headers(response.headers()).is_err() {
+            return Err(metadata_protocol_failure_with_status(response_status));
+        }
+        let response_etag = metadata_etag(response.headers())
+            .map_err(|_| metadata_protocol_failure_with_status(response_status))?;
+        if response_status == StatusCode::NOT_MODIFIED {
+            let (value, requested_etag, previous_cache_seconds) =
+                previous.ok_or_else(|| metadata_protocol_failure_with_status(response_status))?;
+            let requested_etag = requested_etag
+                .ok_or_else(|| metadata_protocol_failure_with_status(response_status))?;
+            if response_etag
+                .as_ref()
+                .is_some_and(|etag| etag != requested_etag)
+            {
+                return Err(metadata_protocol_failure_with_status(response_status));
+            }
+            let cache_seconds = metadata_cache_seconds(
+                response.headers(),
+                maximum_cache_seconds,
+                Some(previous_cache_seconds),
+            )
+            .map_err(|_| metadata_protocol_failure_with_status(response_status))?;
+            return Ok(PublicDocument {
+                value: value.clone(),
+                etag: response_etag.or_else(|| Some(requested_etag.clone())),
+                cache_seconds,
+            });
+        }
+        if !response_status.is_success()
+            || response
+                .headers()
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_none_or(|value| !essence(value).eq_ignore_ascii_case(media_type))
+        {
+            return Err(metadata_protocol_failure_with_status(response_status));
+        }
+        let cache_seconds =
+            metadata_cache_seconds(response.headers(), maximum_cache_seconds, None)?;
+        let body = read_bounded(response, self.config.max_metadata_bytes)
+            .await
+            .map_err(|error| EvidenceClientError::transport(outbound::read_failure_kind(&error)))?;
+        let value = serde_json::from_slice(&body).map_err(|_| metadata_protocol_failure())?;
+        Ok(PublicDocument {
+            value,
+            etag: response_etag,
+            cache_seconds,
+        })
+    }
+
     /// Validate and connect, without deciding the verification stance.
     fn build(config: EvidenceClientConfig) -> Result<Self, EvidenceClientError> {
         config.validate()?;
         let http = build_client(&config)?;
-        Ok(Self { config, http })
+        Ok(Self {
+            config,
+            http,
+            progressive: None,
+        })
     }
 
     #[must_use]
@@ -812,6 +1336,188 @@ fn batch_protocol_failure(trace_id: Option<String>) -> EvidenceClientError {
     }
 }
 
+fn metadata_protocol_failure() -> EvidenceClientError {
+    metadata_protocol_failure_with_status(StatusCode::OK)
+}
+
+fn metadata_protocol_failure_with_status(status: StatusCode) -> EvidenceClientError {
+    EvidenceClientError::Protocol {
+        status: status.as_u16(),
+        code: None,
+        trace_id: None,
+        retry_after_seconds: None,
+    }
+}
+
+fn validate_progressive_response_format(
+    format: EvidenceResponseFormat,
+) -> Result<(), EvidenceClientError> {
+    if !format.is_verifiable_alone() {
+        return Err(EvidenceClientError::configuration(
+            "an audience-scoped progressive request requires one verifiable response; use the holder-bound batch API for issuance packaging",
+        ));
+    }
+    Ok(())
+}
+
+fn authorization_metadata_source_matches(cached_issuer: &str, announced_issuer: &str) -> bool {
+    cached_issuer == announced_issuer
+}
+
+fn cache_deadlines(
+    now: Instant,
+    cache_seconds: u64,
+    maximum_cache_seconds: u64,
+) -> (Instant, Instant) {
+    let expires_at = now + Duration::from_secs(cache_seconds.min(maximum_cache_seconds));
+    let stale_until = if cache_seconds == 0 {
+        now
+    } else {
+        now + Duration::from_secs(maximum_cache_seconds)
+    };
+    (expires_at, stale_until)
+}
+
+fn metadata_etag(headers: &HeaderMap) -> Result<Option<HeaderValue>, EvidenceClientError> {
+    let Some(value) = headers.get(ETAG) else {
+        return Ok(None);
+    };
+    let encoded = value.to_str().map_err(|_| metadata_protocol_failure())?;
+    if encoded.len() < 2
+        || encoded.len() > 256
+        || encoded.starts_with("W/")
+        || !encoded.starts_with('"')
+        || !encoded.ends_with('"')
+        || encoded[1..encoded.len() - 1]
+            .bytes()
+            .any(|byte| byte <= 0x20 || byte == 0x7f || byte == b'"')
+    {
+        return Err(metadata_protocol_failure());
+    }
+    Ok(Some(value.clone()))
+}
+
+fn metadata_cache_seconds(
+    headers: &HeaderMap,
+    maximum_cache_seconds: u64,
+    retained_on_absence: Option<u64>,
+) -> Result<u64, EvidenceClientError> {
+    let mut values = headers.get_all(CACHE_CONTROL).iter().peekable();
+    if values.peek().is_none() {
+        return Ok(retained_on_absence
+            .unwrap_or(maximum_cache_seconds)
+            .min(maximum_cache_seconds));
+    }
+    let mut maximum_age = None;
+    for value in values {
+        let value = value.to_str().map_err(|_| metadata_protocol_failure())?;
+        for directive in value.split(',').map(str::trim) {
+            if directive.eq_ignore_ascii_case("no-store")
+                || directive.eq_ignore_ascii_case("no-cache")
+                || directive.eq_ignore_ascii_case("private")
+            {
+                return Ok(0);
+            }
+            if let Some((name, seconds)) = directive.split_once('=') {
+                if name.eq_ignore_ascii_case("max-age") {
+                    let seconds = seconds
+                        .parse::<u64>()
+                        .map_err(|_| metadata_protocol_failure())?;
+                    maximum_age =
+                        Some(maximum_age.map_or(seconds, |current: u64| current.min(seconds)));
+                }
+            }
+        }
+    }
+    Ok(maximum_age
+        .unwrap_or(maximum_cache_seconds)
+        .min(maximum_cache_seconds))
+}
+
+fn metadata_fetch_policy(trust: &TrustProfile) -> FetchUrlPolicy {
+    match trust {
+        TrustProfile::LocalLoopbackDiscovery => FetchUrlPolicy::dev(),
+        TrustProfile::HttpsDiscovery | TrustProfile::PinnedJwks { .. } => FetchUrlPolicy::strict(),
+    }
+}
+
+fn authorization_server_metadata_is_compatible(
+    metadata: &AuthorizationServerMetadata,
+    announced_issuer: &str,
+) -> bool {
+    metadata.issuer == announced_issuer
+        && metadata
+            .grant_types_supported
+            .iter()
+            .any(|value| value == "client_credentials")
+        && metadata
+            .token_endpoint_auth_methods_supported
+            .iter()
+            .any(|value| value == "private_key_jwt")
+}
+
+fn validate_metadata_url(url: &Url, trust: &TrustProfile) -> Result<(), EvidenceClientError> {
+    let exact_local_loopback = url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port().is_some_and(|port| port != 0);
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+        return Err(metadata_protocol_failure());
+    }
+    let accepted = match trust {
+        TrustProfile::LocalLoopbackDiscovery => exact_local_loopback,
+        TrustProfile::HttpsDiscovery | TrustProfile::PinnedJwks { .. } => url.scheme() == "https",
+    };
+    if accepted {
+        Ok(())
+    } else {
+        Err(metadata_protocol_failure())
+    }
+}
+
+fn metadata_endpoint(issuer: &Url) -> Result<Url, EvidenceClientError> {
+    if issuer.query().is_some() || issuer.fragment().is_some() {
+        return Err(metadata_protocol_failure());
+    }
+    let issuer_path = issuer.path().trim_matches('/');
+    let metadata_path = if issuer_path.is_empty() {
+        "/.well-known/oauth-authorization-server".to_owned()
+    } else {
+        format!("/.well-known/oauth-authorization-server/{issuer_path}")
+    };
+    let mut metadata = issuer.clone();
+    metadata.set_path(&metadata_path);
+    metadata.set_query(None);
+    metadata.set_fragment(None);
+    Ok(metadata)
+}
+
+fn validate_profile_expectations(
+    profile: &EvidenceClientProfile,
+    definitions: &EvidenceDefinitionsDocument,
+) -> Result<(), EvidenceClientError> {
+    if profile
+        .expected
+        .audience
+        .as_ref()
+        .is_some_and(|value| value != &definitions.audience)
+        || profile
+            .expected
+            .issuer
+            .as_ref()
+            .is_some_and(|value| value != &definitions.issued_by)
+        || profile
+            .expected
+            .provider
+            .as_ref()
+            .is_some_and(|value| value != &definitions.provided_by)
+    {
+        return Err(EvidenceClientError::configuration(
+            "the discovered service does not match the profile's expected identity",
+        ));
+    }
+    Ok(())
+}
+
 /// Read exactly one strict response trace context. Multiple field lines are an
 /// ambiguous provenance claim, so they are rejected rather than first-wins.
 fn response_trace_id(headers: &HeaderMap) -> Option<String> {
@@ -920,7 +1626,9 @@ mod tests {
             }],
             holder_keys: Vec::new(),
             expected_outputs: vec![ExpectedOutputDocument {
+                handle: "status-holds".to_owned(),
                 concept: CONCEPT.to_owned(),
+                required: true,
                 form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
             }],
             maximum_assertion_lifetime_seconds: MAXIMUM_LIFETIME_SECONDS,
@@ -1081,6 +1789,31 @@ mod tests {
                 .verify_as_of(&prepared, &response, fixture.now)
                 .expect_err("the response is refused"),
             EvidenceClientError::Verification(VerificationError::Policy)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_response_key_never_triggers_metadata_refresh() {
+        let server = MockServer::start().await;
+        let trusted = signed_evidence();
+        let untrusted = signed_evidence();
+        let client = client_for(&server.uri(), &trusted);
+        let prepared = client
+            .prepare(spec(SubjectExpectations::AcceptFirstUse))
+            .expect("the request policy closes");
+        let response = raw(untrusted.sign(prepared.request_nonce()));
+
+        assert!(matches!(
+            client.verify_as_of(&prepared, &response, untrusted.now),
+            Err(EvidenceClientError::Verification(VerificationError::Key))
+        ));
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("the server records requests")
+                .is_empty(),
+            "an unknown response key must not fetch or refresh metadata"
         );
     }
 
@@ -1825,7 +2558,7 @@ mod tests {
     /// definitions contract permits.
     fn definitions_json(schema: &str) -> String {
         format!(
-            r#"{{"schema":"{schema}","assuranceProfile":"local","issuedBy":"urn:example:client:issuer","providedBy":"urn:example:client:provider","definitions":[]}}"#
+            r#"{{"schema":"{schema}","assuranceProfile":"local","audience":"urn:example:client:audience:relying-party","issuedBy":"urn:example:client:issuer","providedBy":"urn:example:client:provider","definitions":[]}}"#
         )
     }
 
@@ -2440,6 +3173,70 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn progressive_batch_format_refuses_before_metadata_or_token_exchange() {
+        const PRIVATE_KEY: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
+
+        let server = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let profile = EvidenceClientProfile::from_slice(
+            serde_json::json!({
+                "schema": crate::EVIDENCE_CLIENT_PROFILE_SCHEMA_V1,
+                "baseUrl": server.uri(),
+                "clientId": "progressive-test-client",
+                "privateKey": {
+                    "source": "environment",
+                    "variable": "UNUSED_PROGRESSIVE_TEST_KEY"
+                },
+                "trust": {"type": "local-loopback-discovery"}
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .expect("the local progressive profile parses");
+        let client = EvidenceClient::from_profile_with_key(
+            profile,
+            PrivateJwk::parse(PRIVATE_KEY).expect("the test key parses"),
+        )
+        .expect("the progressive client builds");
+        let request = || {
+            AudienceScopedRequest::new("status-check", std::collections::BTreeMap::new())
+                .with_response_format(EvidenceResponseFormat::SdJwtVcBatch)
+        };
+
+        let request_failure = match client.request(request()).await {
+            Ok(_) => panic!("request accepted batch issuance"),
+            Err(failure) => failure,
+        };
+        let prepare_failure = match client.prepare_progressive(request()).await {
+            Ok(_) => panic!("prepare accepted batch issuance"),
+            Err(failure) => failure,
+        };
+        for failure in [request_failure, prepare_failure] {
+            assert!(
+                matches!(
+                    failure,
+                    EvidenceClientError::Configuration {
+                        reason: "an audience-scoped progressive request requires one verifiable response; use the holder-bound batch API for issuance packaging"
+                    }
+                ),
+                "{failure:?}"
+            );
+        }
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("the server records requests")
+                .is_empty(),
+            "unsupported local input must not trigger discovery or token exchange"
+        );
+    }
+
     /// The two constructors decide the two stances, and neither accepts the
     /// other's configuration. A client that verifies always has the key set its
     /// verification methods read, and a client that does not verify never
@@ -2487,5 +3284,332 @@ mod tests {
         assert!(!client.config().verifies());
         assert!(client.config().trusted_jwks().keys.is_empty());
         assert!(client.config().revoked_key_ids().is_empty());
+    }
+
+    #[test]
+    fn metadata_cache_policy_honors_no_store_and_the_profile_ceiling() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            metadata_cache_seconds(&headers, 600, None).expect("default"),
+            600
+        );
+        assert_eq!(
+            metadata_cache_seconds(&headers, 600, Some(17)).expect("retained default"),
+            17
+        );
+
+        headers.insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=90"),
+        );
+        assert_eq!(
+            metadata_cache_seconds(&headers, 600, None).expect("lower max"),
+            90
+        );
+
+        headers.insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=900"),
+        );
+        assert_eq!(
+            metadata_cache_seconds(&headers, 600, None).expect("bounded max"),
+            600
+        );
+
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        assert_eq!(
+            metadata_cache_seconds(&headers, 600, None).expect("no store"),
+            0
+        );
+
+        headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        assert_eq!(
+            metadata_cache_seconds(&headers, 600, Some(90)).expect("no cache"),
+            0
+        );
+    }
+
+    #[test]
+    fn stale_metadata_never_outlives_the_profile_cache_ceiling() {
+        let now = Instant::now();
+        let (expires_at, stale_until) = cache_deadlines(now, 60, 600);
+        assert_eq!(expires_at.duration_since(now), Duration::from_secs(60));
+        assert_eq!(stale_until.duration_since(now), Duration::from_secs(600));
+
+        let (expires_at, stale_until) = cache_deadlines(now, 900, 600);
+        assert_eq!(expires_at.duration_since(now), Duration::from_secs(600));
+        assert_eq!(stale_until.duration_since(now), Duration::from_secs(600));
+
+        let (expires_at, stale_until) = cache_deadlines(now, 0, 600);
+        assert_eq!(expires_at, now);
+        assert_eq!(stale_until, now);
+    }
+
+    #[test]
+    fn metadata_etags_are_strong_bounded_and_unambiguous() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ETAG, HeaderValue::from_static("\"revision-1\""));
+        assert_eq!(
+            metadata_etag(&headers)
+                .expect("strong ETag")
+                .expect("present ETag"),
+            HeaderValue::from_static("\"revision-1\"")
+        );
+        for invalid in ["W/\"weak\"", "unquoted"] {
+            headers.insert(ETAG, HeaderValue::from_str(invalid).expect("header value"));
+            assert!(metadata_etag(&headers).is_err(), "{invalid} was accepted");
+        }
+    }
+
+    #[test]
+    fn strict_discovery_refuses_metadata_hosts_that_resolve_locally() {
+        let policy = FetchUrlPolicy::strict();
+        for target in [
+            "https://127.0.0.1/token",
+            "https://10.0.0.1/token",
+            "https://[::1]/token",
+            "https://localhost/token",
+        ] {
+            assert!(
+                policy
+                    .validate_dns_pinned_for_immediate_fetch(&Url::parse(target).expect("test URL"))
+                    .is_err(),
+                "{target} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn local_discovery_accepts_only_exact_numeric_http_loopback_authorization_urls() {
+        for target in ["http://127.0.0.1:8081", "http://127.0.0.1:8081/token"] {
+            let url = Url::parse(target).expect("numeric loopback URL");
+            assert!(
+                validate_metadata_url(&url, &TrustProfile::LocalLoopbackDiscovery).is_ok(),
+                "{target} was rejected"
+            );
+            assert!(FetchUrlPolicy::dev()
+                .validate_dns_pinned_for_immediate_fetch(&url)
+                .is_ok());
+        }
+
+        // These values come from protected-resource and authorization-server
+        // metadata before a token provider exists. Refusing them here prevents
+        // an unauthenticated tutorial endpoint from obtaining a real remote
+        // access token and receiving it as the Evidence bearer credential.
+        for target in [
+            "https://issuer.example.org",
+            "https://tokens.example.net/oauth/token",
+            "https://127.0.0.1:8081/token",
+            "http://localhost:8081/token",
+            "http://[::1]:8081/token",
+            "http://10.0.0.1:8081/token",
+            "http://127.0.0.1/token",
+            "http://127.0.0.1:0/token",
+        ] {
+            assert!(
+                validate_metadata_url(
+                    &Url::parse(target).expect("rejected authorization URL parses"),
+                    &TrustProfile::LocalLoopbackDiscovery,
+                )
+                .is_err(),
+                "{target} was accepted before token acquisition"
+            );
+        }
+    }
+
+    #[test]
+    fn authorization_server_issuer_must_match_the_announced_string_exactly() {
+        let metadata = AuthorizationServerMetadata {
+            issuer: "https://issuer.example.org/tenant".to_owned(),
+            token_endpoint: "https://tokens.example.net/oauth/token".to_owned(),
+            grant_types_supported: vec!["client_credentials".to_owned()],
+            token_endpoint_auth_methods_supported: vec!["private_key_jwt".to_owned()],
+        };
+        assert!(authorization_server_metadata_is_compatible(
+            &metadata,
+            "https://issuer.example.org/tenant"
+        ));
+        for mismatch in [
+            "https://issuer.example.org/tenant/",
+            "https://ISSUER.example.org/tenant",
+            "https://issuer.example.org:443/tenant",
+        ] {
+            assert!(
+                !authorization_server_metadata_is_compatible(&metadata, mismatch),
+                "{mismatch} was treated as the exact issuer"
+            );
+        }
+    }
+
+    #[test]
+    fn authorization_metadata_etags_are_scoped_to_the_exact_announced_issuer() {
+        assert!(authorization_metadata_source_matches(
+            "https://issuer.example.org/tenant",
+            "https://issuer.example.org/tenant"
+        ));
+        for changed in [
+            "https://issuer.example.org/tenant/",
+            "https://other.example.org/tenant",
+        ] {
+            assert!(!authorization_metadata_source_matches(
+                "https://issuer.example.org/tenant",
+                changed
+            ));
+        }
+    }
+
+    #[test]
+    fn authorization_server_metadata_uses_the_rfc_8414_path_construction() {
+        assert_eq!(
+            metadata_endpoint(&Url::parse("https://issuer.example.org").expect("root issuer URL"))
+                .expect("root metadata URL")
+                .as_str(),
+            "https://issuer.example.org/.well-known/oauth-authorization-server"
+        );
+        assert_eq!(
+            metadata_endpoint(
+                &Url::parse("https://issuer.example.org/tenant/one").expect("path issuer URL")
+            )
+            .expect("path metadata URL")
+            .as_str(),
+            "https://issuer.example.org/.well-known/oauth-authorization-server/tenant/one"
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_public_metadata_revalidates_with_the_exact_strong_etag() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/metadata"))
+            .and(header("if-none-match", "\"revision-1\""))
+            .respond_with(ResponseTemplate::new(304).insert_header("etag", "\"revision-1\""))
+            .with_priority(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/metadata"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "Application/JSON; Charset=UTF-8")
+                    .insert_header("cache-control", "public, max-age=60")
+                    .insert_header("etag", "\"revision-1\"")
+                    .set_body_json(serde_json::json!({"value": "retained"})),
+            )
+            .with_priority(10)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let fixture = signed_evidence();
+        let client = client_for(&server.uri(), &fixture);
+        let url = Url::parse(&format!("{}/metadata", server.uri())).expect("metadata URL");
+        let first: PublicDocument<serde_json::Value> = client
+            .public_json(
+                url.clone(),
+                JSON_MEDIA_TYPE,
+                None,
+                600,
+                &FetchUrlPolicy::dev(),
+            )
+            .await
+            .expect("first metadata response");
+        let second = client
+            .public_json(
+                url,
+                JSON_MEDIA_TYPE,
+                Some((&first.value, first.etag.as_ref(), first.cache_seconds)),
+                600,
+                &FetchUrlPolicy::dev(),
+            )
+            .await
+            .expect("conditional metadata response");
+        assert_eq!(first.value, second.value);
+        assert_eq!(second.cache_seconds, 60);
+    }
+
+    #[tokio::test]
+    async fn public_metadata_refusals_preserve_the_http_status_without_values() {
+        for status in [404_u16, 429, 503] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/metadata"))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let fixture = signed_evidence();
+            let client = client_for(&server.uri(), &fixture);
+            let url = Url::parse(&format!("{}/metadata", server.uri())).expect("metadata URL");
+
+            let result = client
+                .public_json::<serde_json::Value>(
+                    url,
+                    JSON_MEDIA_TYPE,
+                    None,
+                    600,
+                    &FetchUrlPolicy::dev(),
+                )
+                .await;
+            let Err(error) = result else {
+                panic!("a metadata refusal was accepted as a document");
+            };
+
+            assert!(
+                matches!(
+                    error,
+                    EvidenceClientError::Protocol {
+                        status: observed,
+                        code: None,
+                        trace_id: None,
+                        retry_after_seconds: None,
+                    } if observed == status
+                ),
+                "metadata status {status} was not preserved value-free"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn public_metadata_redirects_are_not_followed() {
+        let elsewhere = MockServer::start().await;
+        Mock::given(any())
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", JSON_MEDIA_TYPE)
+                    .set_body_json(serde_json::json!({"value": "attacker-selected"})),
+            )
+            .mount(&elsewhere)
+            .await;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/metadata"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("{}/metadata", elsewhere.uri()).as_str()),
+            )
+            .mount(&server)
+            .await;
+        let fixture = signed_evidence();
+        let client = client_for(&server.uri(), &fixture);
+        let url = Url::parse(&format!("{}/metadata", server.uri())).expect("metadata URL");
+
+        assert!(client
+            .public_json::<serde_json::Value>(
+                url,
+                JSON_MEDIA_TYPE,
+                None,
+                600,
+                &FetchUrlPolicy::dev(),
+            )
+            .await
+            .is_err());
+        assert!(
+            elsewhere
+                .received_requests()
+                .await
+                .expect("the redirect target records requests")
+                .is_empty(),
+            "metadata fetch must not follow a redirect"
+        );
     }
 }

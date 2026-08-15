@@ -23,13 +23,17 @@ The normative source set is:
   and its echo in the Evidence payload, response-format negotiation, payload,
   ES256 service signing, RFC 7638 key identifiers, publication, revocation,
   rotation, and strict verifier rules;
+- `client-profile.schema.yaml` and `client-contracts.schema.yaml`: the closed
+  application-owned progressive client profile and the reviewed,
+  requester-scoped client-safe contract snapshot;
 - `sd-jwt-vc-profile.yaml`: the audience-scoped SD-JWT VC response format, its
   exact claim and disclosure mapping, the optional `cnf` holder key, the
   issuer-metadata path, RFC 9901 and SD-JWT VC draft v18 pins, and its explicit profile non-goals. It adds a
   serialization of the same assertion and no credential lifecycle;
-- `verification-policy.schema.yaml`: the closed all-required relying-procedure
-  policy document consumed by the offline `evidence verify` command, its frozen
-  command surface, exit codes, and no-network rule;
+- `verification-policy.schema.yaml`: the closed relying-procedure policy
+  document consumed by the offline `evidence verify` command, including
+  required and optional output rules, its frozen command surface, exit codes,
+  and no-network rule;
 - `problem-contract.yaml`: safe public failures, the `format.unsupported`
   negotiation failure, W3C trace correlation, and existence-collapse rules;
 - `authority-context.schema.yaml` and `selector-contract.yaml`: normalized
@@ -75,18 +79,21 @@ normative Version 1 inputs, not future-profile examples.
 ## Pre-1.0 definitions discovery migration
 
 Registry Stack deliberately retains the `registry.evidence-definitions/v1`
-identity while making `holderBoundBatchMaxSize` a required member of the
-closed definitions response after v0.18. This is a pre-1.0 breaking product
-improvement. A strict client or validator built against the v0.18 schema
-rejects the added member because that schema has `additionalProperties: false`.
+identity while evolving the closed response before v1.0. The current shape adds
+the effective audience, a stable complete-definition handle, effective response
+formats, stable concept handles, required-output status, and bounded-list form
+metadata. It also makes `holderBoundBatchMaxSize` explicit. This is a pre-1.0
+breaking product improvement. A strict client or validator built against the
+older schema rejects the added members because that schema has
+`additionalProperties: false`.
 
 Upgrade Evidence Gateway and every Evidence client or protocol adapter that
 reads its definitions response together. The current Evidence client treats a
 missing `holderBoundBatchMaxSize` as `1`, which supports a staged rollback or a
 short interoperation window in which the client is upgraded before Evidence
 Gateway. That default does not make an older strict client able to read the new
-response. Do not upgrade Evidence Gateway first while an older client or
-adapter remains in service.
+response or understand its new verification fields. Do not upgrade Evidence
+Gateway first while an older client or adapter remains in service.
 
 All schemas use source-neutral identifiers. Names of compatibility targets may
 appear only below `../fixtures/source-shapes/`. Acceptance-case vocabulary is

@@ -73,6 +73,10 @@ PLAIN_CLASS_NAMES = {
     "SdJwtVcBatchResponse",
     "VerifiedEvidence",
     "VerifiedEvidenceRequestBatch",
+    "SubjectBindingReceipt",
+    "SubjectContinuity",
+    "VerifiedAssertion",
+    "VerifiedAudienceScopedCredential",
 }
 
 # The only class whose stub declares a constructor; PyO3 exposes it as

@@ -216,6 +216,7 @@ Discovery uses five separately trusted surfaces:
 
 | Artifact | Purpose | What it does not do |
 |---|---|---|
+| RFC 9728 protected-resource metadata | Binds the exact configured public Evidence origin to one authorization-server issuer, the Evidence JWKS location, and header-only bearer transport. | It contains no requester-scoped definition or entitlement data and does not replace HTTPS or an out-of-band trust pin. |
 | Generated Evidence OpenAPI | Describes `GET /v1/evidence-definitions`, `POST /v1/evidence`, `POST /v1/evidence/batch`, operational routes, envelopes, media types, and safe problems. | It contains no deployment definitions or entitlements. |
 | Public provider advertisement | Serves the exact packaged `catalog.jsonld` bytes at `GET /catalog.jsonld`, with public service identity and one distinct binding for each exact Evidence Type and compatible response profile. | It contains no requester-specific request shape, entitlement, source configuration, credential, or trust decision. |
 | Authenticated definition response | Lists the exact complete request shapes available to this verified token at this bundle revision, each with the configuration revision an assertion for that one requirement carries. | It performs no provider access, does not grant authority, and is not a global catalog. |
@@ -225,11 +226,13 @@ Discovery uses five separately trusted surfaces:
 Each item in `definitions` is one complete invocable combination, not a
 cartesian product for the client to assemble. It contains:
 
-- the requirement's own configuration revision plus legal issuer and technical
-  provider;
-- requirement and Evidence Type identifiers;
+- one stable complete-definition handle, the requirement's own configuration
+  revision, and its effective response formats;
+- requirement and Evidence Type identifiers, under the document's effective
+  audience, legal issuer, and technical provider;
 - one allowed purpose;
-- output concept identifiers and value forms;
+- stable output handles, concept identifiers, required or optional status,
+  value forms, and any list cardinality and uniqueness constraints;
 - complete subject roles, cardinality, selector profile, and value origin; and
 - safe selector field types and bounds. A controlled-code field exposes its
   governed scheme identifier and version, never the bundle file path or code
@@ -465,15 +468,22 @@ Planned rotation is an overlap, switch, drain sequence:
 2. Commit that exact JWK under `public-keys/<thumbprint>.jwk.json` and add its
    path to `publishedPublicJwkFiles`.
 3. Deploy and restart every replica so all of them publish both keys.
-4. Keep the named Transit key's minimum signing version low enough for both
+4. Wait at least the relying clients' maximum metadata-cache interval before
+   activating the next key. The progressive client caps that interval at 600
+   seconds. This ensures a client that refreshed immediately before publication
+   can learn the next key before Evidence signs with it.
+5. Keep the named Transit key's minimum signing version low enough for both
    pinned application versions. The ordinary Vault/OpenBao ACL grants the
    named key path, not a request-body key version.
-5. Move the next path to `activePublicJwkFile`, keep the predecessor in
+6. Move the next path to `activePublicJwkFile`, keep the predecessor in
    `publishedPublicJwkFiles`, pin `signer.keyVersion` to the next version, and
    deploy and restart.
-6. After `maximumAssertionValiditySeconds + verifierClockSkewSeconds`, remove
+7. After `maximumAssertionValiditySeconds + verifierClockSkewSeconds`, remove
    the predecessor public key and raise the Transit key's minimum signing
    version, or otherwise disable the predecessor provider-side.
+
+The full overlap therefore accounts for both metadata-cache propagation before
+the switch and the maximum assertion lifetime plus clock skew after the switch.
 
 Emergency rotation has no overlap guarantee. First disable provider signing
 authority for the compromised version. Then remove its public JWK, add its
@@ -1184,6 +1194,7 @@ The native operations are:
 GET /v1/evidence-definitions
 POST /v1/evidence
 POST /v1/evidence/batch
+GET /.well-known/oauth-protected-resource
 GET /health
 GET /openapi.json
 GET /ready
@@ -1195,6 +1206,14 @@ GET /.well-known/jwt-vc-issuer
 `application/json`. It carries no credential requirement because the
 served bytes are the released generated artifact: the same document shipped in
 `products/evidence/generated/`, independent of the deployed bundle.
+
+`GET /.well-known/oauth-protected-resource` publishes the closed RFC 9728
+resource document for `service.publicOrigin`. It names that exact origin, one
+authorization-server issuer, the Evidence JWKS URI, and header-only Bearer
+transport. It is cacheable for at most ten minutes with a strong ETag and
+supports exact `If-None-Match` revalidation. Protected-route `401` responses
+link it through `WWW-Authenticate`. The document is public routing metadata,
+not an entitlement catalog or a trust decision by itself.
 
 A successful `GET /v1/evidence-definitions` response uses `application/json`
 and the closed requester-scoped definition schema. It requires the same strict

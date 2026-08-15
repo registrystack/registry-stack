@@ -3,10 +3,11 @@ $id: https://registrystack.org/schemas/evidence/definitions-v1.json
 title: Requester-scoped Evidence definitions Version 1
 type: object
 additionalProperties: false
-required: [schema, assuranceProfile, issuedBy, providedBy, holderBoundBatchMaxSize, definitions]
+required: [schema, assuranceProfile, audience, issuedBy, providedBy, holderBoundBatchMaxSize, definitions]
 properties:
   schema: {const: registry.evidence-definitions/v1}
   assuranceProfile: {enum: [local, production, evidence-grade]}
+  audience: {type: string, format: uri, maxLength: 512}
   issuedBy: {type: string, format: uri, maxLength: 512}
   providedBy: {type: string, format: uri, maxLength: 512}
   holderBoundBatchMaxSize:
@@ -26,15 +27,18 @@ $defs:
     type: object
     additionalProperties: false
     required:
+      - handle
       - requirement
       - configurationRevision
       - kind
       - evidenceType
       - purpose
+      - responseFormats
       - referenceFrameworks
       - subjects
       - concepts
     properties:
+      handle: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
       requirement: {type: string, format: uri, maxLength: 512}
       configurationRevision:
         description: >-
@@ -56,6 +60,12 @@ $defs:
         enum: [audience-scoped, holder-bound]
       evidenceType: {type: string, format: uri, maxLength: 512}
       purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
+      responseFormats:
+        type: array
+        minItems: 1
+        maxItems: 4
+        uniqueItems: true
+        items: {enum: [signed-jws, unsigned-json, sd-jwt-vc, sd-jwt-vc-batch]}
       referenceFrameworks:
         type: array
         minItems: 1
@@ -140,25 +150,31 @@ $defs:
   concept:
     type: object
     additionalProperties: false
-    required: [id, form]
+    required: [handle, concept, required, form]
     properties:
-      id: {type: string, format: uri, maxLength: 512}
+      handle: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
+      concept: {type: string, format: uri, maxLength: 512}
+      required: {type: boolean}
       form:
-        enum:
-          - boolean
-          - controlled-code
-          - controlled-category
-          - bounded-integer
-          - bounded-decimal
-          - date-bucket
-          - time-bucket
-          - audience-scoped-entity-reference
-          - controlled-code-list
-          - entity-reference-list
-          - reviewed-structured-value
+        oneOf:
+          - enum: [boolean, integer, string, date-bucket, time-bucket, entity-reference, structured]
+          - type: object
+            additionalProperties: false
+            required: [list]
+            properties:
+              list:
+                type: object
+                additionalProperties: false
+                required: [items, minimumItems, maximumItems, unique]
+                properties:
+                  items: {enum: [string, entity-reference]}
+                  minimumItems: {type: integer, minimum: 1, maximum: 64}
+                  maximumItems: {type: integer, minimum: 1, maximum: 64}
+                  unique: {const: true}
 $comment: >-
   The authenticated response contains only complete request shapes that match
   exactly one configured authority path. It never exposes source plans,
   scripts, credentials, requester tags, authority-profile identifiers,
-  selector values, codelist values, or unrelated definitions. Discovery
+  selector values, codelist values, codelist paths, internal constraints, or
+  unrelated definitions. Discovery
   performs no provider request and grants no authority.

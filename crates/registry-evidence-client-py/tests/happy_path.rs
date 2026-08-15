@@ -81,7 +81,7 @@ fn request_spec_json() -> serde_json::Value {
             { "role": "subject", "selector_profile": "national-id" }
         ],
         "expected_outputs": [
-            { "concept": "urn:example:concept:status-holds", "form": "boolean" }
+            { "handle": "status-holds", "concept": "urn:example:concept:status-holds", "required": true, "form": "boolean" }
         ],
         "maximum_assertion_lifetime_seconds": 300,
         "clock_skew_seconds": 60,
@@ -646,7 +646,7 @@ fn a_stale_fixture_response_fails_verification_against_a_live_prepared_request()
             { "role": "subject", "selector_profile": "national-id" }
         ],
         "expected_outputs": [
-            { "concept": "urn:example:concept:status-holds", "form": "boolean" }
+            { "handle": "status-holds", "concept": "urn:example:concept:status-holds", "required": true, "form": "boolean" }
         ],
         "maximum_assertion_lifetime_seconds": 30 * 24 * 60 * 60_i64,
         "clock_skew_seconds": 30,

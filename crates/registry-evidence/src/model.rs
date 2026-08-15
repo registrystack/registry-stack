@@ -7,7 +7,7 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::config::AssuranceProfile;
+use crate::config::{AssuranceProfile, ResponseFormat};
 
 /// The response-side wire types are owned by the portable
 /// `registry-evidence-verifier` crate and served here at the runtime's own
@@ -155,6 +155,8 @@ pub enum SdJwtVcBatchEnvelopeType {
 pub struct EvidenceDefinitions {
     pub schema: String,
     pub assurance_profile: AssuranceProfile,
+    /// Effective relying-party audience taken from the authenticated request.
+    pub audience: String,
     pub issued_by: String,
     pub provided_by: String,
     /// Effective deployment ceiling for one holder-bound batch. Discovery
@@ -167,6 +169,8 @@ pub struct EvidenceDefinitions {
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceDefinition {
+    /// Stable application-facing handle for this complete request shape.
+    pub handle: String,
     pub requirement: String,
     /// The revision an assertion for this requirement carries. It covers this
     /// requirement's own configuration and artifact closure, so a relying party
@@ -181,6 +185,9 @@ pub struct EvidenceDefinition {
     pub subject_binding_mode: Option<SubjectBindingMode>,
     pub evidence_type: String,
     pub purpose: String,
+    /// Exact intersection permitted by the bundle, matched grant, and subject
+    /// binding mode. API content negotiation creates no permission.
+    pub response_formats: Vec<ResponseFormat>,
     pub reference_frameworks: Vec<String>,
     pub subjects: Vec<EvidenceDefinitionSubject>,
     pub concepts: Vec<EvidenceDefinitionConcept>,
@@ -205,8 +212,53 @@ pub struct EvidenceDefinitionSelector {
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvidenceDefinitionConcept {
-    pub id: String,
-    pub form: String,
+    pub handle: String,
+    pub concept: String,
+    pub required: bool,
+    pub form: EvidenceDefinitionForm,
+}
+
+/// Verification-ready output form. Scalar forms serialize as a string; list
+/// forms carry the item kind and exact cardinality policy.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(untagged)]
+pub enum EvidenceDefinitionForm {
+    Scalar(EvidenceDefinitionScalarForm),
+    List(EvidenceDefinitionListForm),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvidenceDefinitionScalarForm {
+    Boolean,
+    Integer,
+    String,
+    DateBucket,
+    TimeBucket,
+    EntityReference,
+    Structured,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceDefinitionListForm {
+    pub list: EvidenceDefinitionList,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceDefinitionList {
+    pub items: EvidenceDefinitionListItemForm,
+    pub minimum_items: u64,
+    pub maximum_items: u64,
+    pub unique: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema, ToSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum EvidenceDefinitionListItemForm {
+    String,
+    EntityReference,
 }
 
 /// Public validation metadata for a selector field. Controlled-code
@@ -508,16 +560,19 @@ mod tests {
         let definitions = EvidenceDefinitions {
             schema: "protected-discovery-schema-canary".to_owned(),
             assurance_profile: AssuranceProfile::EvidenceGrade,
+            audience: "protected-discovery-audience-canary".to_owned(),
             issued_by: "protected-discovery-issuer-canary".to_owned(),
             provided_by: "protected-discovery-provider-canary".to_owned(),
             holder_bound_batch_max_size: 4,
             definitions: vec![EvidenceDefinition {
+                handle: "protected-discovery-handle-canary".to_owned(),
                 requirement: "protected-discovery-requirement-canary".to_owned(),
                 configuration_revision: "protected-discovery-revision-canary".to_owned(),
                 kind: "protected-discovery-kind-canary".to_owned(),
                 subject_binding_mode: None,
                 evidence_type: "protected-discovery-type-canary".to_owned(),
                 purpose: "protected-discovery-purpose-canary".to_owned(),
+                response_formats: vec![ResponseFormat::SignedJws],
                 reference_frameworks: vec!["protected-discovery-framework-canary".to_owned()],
                 subjects: Vec::new(),
                 concepts: Vec::new(),

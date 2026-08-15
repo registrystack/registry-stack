@@ -83,16 +83,19 @@ const SUPPORT_TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-012345678
 const DEFINITIONS: &str = r#"{
   "schema": "registry.evidence-definitions/v1",
   "assuranceProfile": "local",
+  "audience": "https://wallet.example.org",
   "issuedBy": "https://registry.example.org",
   "providedBy": "https://provider.example.org",
   "holderBoundBatchMaxSize": 4,
   "definitions": [{
+    "handle": "holder-bound",
     "requirement": "urn:example:requirement:holder-bound",
     "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "kind": "criterion",
     "subjectBindingMode": "holder-bound",
     "evidenceType": "urn:example:evidence-type:holder-bound",
     "purpose": "urn:example:purpose:demonstration",
+    "responseFormats": ["sd-jwt-vc", "sd-jwt-vc-batch"],
     "referenceFrameworks": [],
     "subjects": [{
       "role": "primary",
@@ -108,7 +111,7 @@ const DEFINITIONS: &str = r#"{
         }]
       }
     }],
-    "concepts": [{"id": "urn:example:concept:outcome", "form": "boolean"}]
+    "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": "boolean"}]
   }]
 }"#;
 
@@ -508,7 +511,9 @@ fn relying_policy(holder: &FixtureKey) -> HolderBoundPresentationPolicy {
             })
             .collect(),
         expected_outputs: vec![ExpectedOutputDocument {
+            handle: "interoperability-result".to_owned(),
             concept: CONCEPT.to_owned(),
+            required: true,
             form: ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean),
         }],
         revoked_key_ids: Vec::new(),

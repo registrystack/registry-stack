@@ -67,16 +67,19 @@ store:
 const DEFINITIONS: &str = r#"{
   "schema": "registry.evidence-definitions/v1",
   "assuranceProfile": "local",
+  "audience": "https://wallet.example.org",
   "issuedBy": "https://registry.example.org",
   "providedBy": "https://provider.example.org",
   "holderBoundBatchMaxSize": 4,
   "definitions": [{
+    "handle": "holder-bound",
     "requirement": "urn:example:requirement:holder-bound",
     "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "kind": "criterion",
     "subjectBindingMode": "holder-bound",
     "evidenceType": "urn:example:evidence-type:holder-bound",
     "purpose": "urn:example:purpose:demonstration",
+    "responseFormats": ["sd-jwt-vc", "sd-jwt-vc-batch"],
     "referenceFrameworks": [],
     "subjects": [{
       "role": "primary",
@@ -92,7 +95,7 @@ const DEFINITIONS: &str = r#"{
         }]
       }
     }],
-    "concepts": [{"id": "urn:example:concept:outcome", "form": "boolean"}]
+    "concepts": [{"handle": "outcome", "concept": "urn:example:concept:outcome", "required": true, "form": "boolean"}]
   }]
 }"#;
 

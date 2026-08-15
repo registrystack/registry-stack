@@ -159,6 +159,7 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | Section or key | Required | Meaning |
 |---|---|---|
 | `service.providerId` | yes | Technical Evidence provider URI placed in evidence. |
+| `service.publicOrigin` | yes | Exact canonical public Evidence origin used by RFC 9728 metadata. HTTPS is required outside the numeric-loopback local profile. |
 | `service.trustDomain` | yes | One operator-controlled trust-domain URI for the process. |
 | `issuer.id` | yes | Legal issuer URI placed in evidence. Governance must authorize the provider to act for it. |
 | `authentication.kind` | yes | Exactly `oidc-access-token`. |
@@ -1451,6 +1452,7 @@ requirements[].concepts[].constraints.schema
 requirements[].concepts[].constraints.schemeVersion
 requirements[].concepts[].constraints.unique
 requirements[].concepts[].form
+requirements[].concepts[].handle
 requirements[].concepts[].id
 requirements[].concepts[].required
 requirements[].concepts[].sdJwtVc
@@ -1484,6 +1486,7 @@ requirements[].disclosureGuard.families[]
 requirements[].evidenceType
 requirements[].existenceDisclosure
 requirements[].fixtures
+requirements[].handle
 requirements[].id
 requirements[].kind
 requirements[].observationTimezone
@@ -1515,6 +1518,7 @@ selectorProfiles.*.fields.*.type
 selectorProfiles.*.maximumAggregateBytes
 service
 service.providerId
+service.publicOrigin
 service.trustDomain
 signing
 signing.activePublicJwkFile

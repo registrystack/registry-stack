@@ -7,15 +7,15 @@
 //! module for every conversion and reports failures through
 //! [`map_client_error`], [`map_conversion_error`], and [`map_config_error`].
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use registry_evidence_client::{
-    AssuranceProfile, Evidence, EvidenceClientConfig, EvidenceClientError,
+    AssuranceProfile, AudienceScopedRequest, Evidence, EvidenceClientConfig, EvidenceClientError,
     EvidenceRequestBatchItemSpec, EvidenceRequestBatchSpec, EvidenceRequestSpec,
     EvidenceResponseFormat, ExpectedOutputDocument, ExpectedSubjectDocument, HolderPublicKey,
     JwksDocument, PrivateKeyJwt, PrivateKeyJwtConfig, SelectorValue, StaticToken,
-    SubjectExpectations, SubjectRequest, TokenError, TokenProvider,
+    SubjectBindingReceipt, SubjectExpectations, SubjectRequest, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
 use serde_json::{Map, Value};
@@ -190,6 +190,100 @@ fn selector_value_from_json(value: &Value) -> Result<SelectorValue, ConversionEr
             "a selector value must be a string, an integer, or a boolean",
         )),
     }
+}
+
+fn selector_values_from_json(
+    value: &Value,
+    what: &str,
+) -> Result<BTreeMap<String, SelectorValue>, ConversionError> {
+    let object = value.as_object().ok_or_else(|| {
+        ConversionError::new(format!(
+            "{what} must be an object mapping names to selector values"
+        ))
+    })?;
+    object
+        .iter()
+        .map(|(name, value)| selector_value_from_json(value).map(|value| (name.clone(), value)))
+        .collect()
+}
+
+/// Convert the intentionally small progressive request surface. The core
+/// client resolves requirement handles, subject selector profiles, trust, and
+/// continuity; this binding only preserves the JSON shape at the FFI edge.
+pub fn audience_scoped_request_from_json(
+    value: &Value,
+) -> Result<AudienceScopedRequest, ConversionError> {
+    let object = as_object(value, "an audience-scoped request")?;
+    require_exact_fields(
+        object,
+        &[
+            "requirement",
+            "responseFormat",
+            "selectors",
+            "subjects",
+            "bindingReceipt",
+        ],
+        "an audience-scoped request",
+    )?;
+
+    let selectors = object.get("selectors").filter(|value| !value.is_null());
+    let subjects = object.get("subjects").filter(|value| !value.is_null());
+    if selectors.is_some() == subjects.is_some() {
+        return Err(ConversionError::new(
+            "an audience-scoped request must carry exactly one of `selectors` or `subjects`",
+        ));
+    }
+
+    let mut request = AudienceScopedRequest::new(
+        required_string(object, "requirement")?,
+        selectors
+            .map(|value| selector_values_from_json(value, "`selectors`"))
+            .transpose()?
+            .unwrap_or_default(),
+    );
+
+    if let Some(subjects) = subjects {
+        let subject_object = subjects.as_object().ok_or_else(|| {
+            ConversionError::new("`subjects` must be an object mapping roles to selector maps")
+        })?;
+        let subjects = subject_object
+            .iter()
+            .map(|(role, values)| {
+                selector_values_from_json(values, "a `subjects` entry")
+                    .map(|values| (role.clone(), values))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        request = request.with_subjects(subjects);
+    }
+
+    if let Some(format) = object
+        .get("responseFormat")
+        .filter(|value| !value.is_null())
+    {
+        let response_format = response_format_from_json(format)?;
+        if !matches!(
+            response_format,
+            EvidenceResponseFormat::SignedJws | EvidenceResponseFormat::SdJwtVc
+        ) {
+            return Err(ConversionError::new(
+                "`responseFormat` must be `signed-jws` or `sd-jwt-vc`",
+            ));
+        }
+        request = request.with_response_format(response_format);
+    }
+
+    if let Some(receipt) = object
+        .get("bindingReceipt")
+        .filter(|value| !value.is_null())
+    {
+        let receipt: SubjectBindingReceipt =
+            serde_json::from_value(receipt.clone()).map_err(|_| {
+                ConversionError::new("`bindingReceipt` must be a valid subject-binding receipt")
+            })?;
+        request = request.with_binding_receipt(receipt);
+    }
+
+    Ok(request)
 }
 
 fn subject_request_from_json(value: &Value) -> Result<SubjectRequest, ConversionError> {
@@ -790,6 +884,47 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn audience_scoped_request_requires_exactly_one_subject_input_shape() {
+        let neither = serde_json::json!({ "requirement": "adult-status" });
+        assert!(audience_scoped_request_from_json(&neither)
+            .expect_err("a request cannot omit both selector forms")
+            .to_string()
+            .contains("exactly one"));
+
+        let both = serde_json::json!({
+            "requirement": "adult-status",
+            "selectors": { "person_id": "person-123" },
+            "subjects": { "subject": { "person_id": "person-123" } },
+        });
+        assert!(audience_scoped_request_from_json(&both)
+            .expect_err("a request cannot mix selector forms")
+            .to_string()
+            .contains("exactly one"));
+    }
+
+    #[test]
+    fn audience_scoped_request_accepts_explicit_selectors_and_a_serialized_receipt() {
+        let request = serde_json::json!({
+            "requirement": "adult-status",
+            "selectors": { "person_id": "person-123" },
+            "responseFormat": "signed-jws",
+            "bindingReceipt": {
+                "schema": "registry.evidence-subject-binding-receipt/v1",
+                "audience": "urn:example:audience",
+                "issuedBy": "urn:example:issuer",
+                "providedBy": "urn:example:provider",
+                "requirement": "adult-status",
+                "evidenceType": "urn:example:evidence-type:adult-status",
+                "purpose": "age-check",
+                "configurationRevision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "selectorProfiles": { "subject": "person-id" },
+                "subjects": [{ "role": "subject", "binding": "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }],
+            },
+        });
+        assert!(audience_scoped_request_from_json(&request).is_ok());
+    }
 
     // --- datetime_from_unix_millis ---
 

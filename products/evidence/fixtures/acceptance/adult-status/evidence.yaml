@@ -1,6 +1,6 @@
 version: 1
 assuranceProfile: evidence-grade
-service: {providerId: urn:example:fixture:provider:evidence, trustDomain: urn:example:fixture:trust-domain:acceptance}
+service: {providerId: urn:example:fixture:provider:evidence, publicOrigin: https://evidence.invalid, trustDomain: urn:example:fixture:trust-domain:acceptance}
 issuer: {id: urn:example:fixture:issuer:authority}
 publication: {serviceId: urn:example:fixture:service:evidence, title: Synthetic Evidence service, description: Synthetic minimum-disclosure assertions for acceptance testing, endpointUrl: https://evidence.example.invalid, jurisdictions: [urn:example:jurisdiction:acceptance]}
 authentication:
@@ -75,7 +75,8 @@ authorityProfiles:
         responseFormats: [signed-jws]
         subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]
 requirements:
-  - id: urn:example:fixture:requirement:adult-status:v1
+  - handle: adult-status
+    id: urn:example:fixture:requirement:adult-status:v1
     kind: criterion
     acquisition:
       kind: single
@@ -87,7 +88,7 @@ requirements:
     observationTimezone: Asia/Bangkok
     validitySeconds: 300
     derivation: {script: derivations/adult-status.rhai, parameters: {minimum_age_years: 18}}
-    concepts: [{id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]
+    concepts: [{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]
     fixtures: fixtures/cases.yaml
     disclosureGuard: {families: [urn:example:fixture:disclosure-family:adult-status]}
     existenceDisclosure: collapse-unresolved

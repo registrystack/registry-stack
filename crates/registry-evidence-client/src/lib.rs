@@ -156,6 +156,8 @@ pub mod error;
 pub mod nonce;
 pub mod prepare;
 pub mod private_key_jwt;
+pub mod profile;
+pub mod progressive;
 pub mod request;
 pub mod request_batch;
 pub mod response_format;
@@ -186,9 +188,10 @@ pub use config::{
     DEFAULT_REQUEST_TIMEOUT,
 };
 pub use definitions::{
-    ConceptForm, DefinitionCardinality, DefinitionConcept, DefinitionKind, DefinitionSelector,
-    DefinitionSubject, EvidenceDefinition, EvidenceDefinitionsDocument, SelectorField,
-    SelectorValueOrigin, EVIDENCE_DEFINITIONS_SCHEMA_V1,
+    ConceptForm, DefinitionCardinality, DefinitionConcept, DefinitionKind,
+    DefinitionResponseFormat, DefinitionSelector, DefinitionSubject, EvidenceDefinition,
+    EvidenceDefinitionsDocument, SelectorField, SelectorValueOrigin,
+    EVIDENCE_DEFINITIONS_SCHEMA_V1,
 };
 pub use error::{EvidenceClientError, TransportKind};
 pub use nonce::{presentation_nonce, NonceError, RequestNonce};
@@ -203,6 +206,18 @@ pub use private_key_jwt::{
     PrivateKeyJwt, PrivateKeyJwtConfig, DEFAULT_ASSERTION_LIFETIME_SECONDS,
     DEFAULT_REFRESH_MARGIN_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
     MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
+};
+pub use profile::{
+    ContractsProfile, EvidenceClientProfile, ExpectedServiceProfile, PrivateKeyReference,
+    ReviewedContracts, TrustProfile, VerificationProfile, DEFAULT_METADATA_CACHE_SECONDS,
+    EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1, EVIDENCE_CLIENT_PROFILE_SCHEMA_V1,
+    MAXIMUM_METADATA_CACHE_SECONDS,
+};
+pub use progressive::{
+    AudienceScopedRequest, AudienceScopedResult, EvidenceClientContracts,
+    ProgressivePreparedRequest, SubjectBindingReceipt, SubjectContinuity, VerifiedAssertion,
+    VerifiedAudienceScopedCredential, VerifiedAudienceScopedEvidence,
+    SUBJECT_BINDING_RECEIPT_SCHEMA_V1,
 };
 pub use request::SelectorValue;
 pub use request_batch::{
@@ -225,8 +240,8 @@ pub use registry_evidence_verifier::{
     },
     verifier::{
         EvidenceVerificationPolicyDocument, ExpectedFormDocument, ExpectedListDocument,
-        ExpectedListFormDocument, ExpectedOutputDocument, ExpectedScalarFormDocument,
-        ExpectedSubjectDocument, VerificationError,
+        ExpectedListFormDocument, ExpectedListItemFormDocument, ExpectedOutputDocument,
+        ExpectedScalarFormDocument, ExpectedSubjectDocument, VerificationError,
     },
     AssuranceProfile,
 };

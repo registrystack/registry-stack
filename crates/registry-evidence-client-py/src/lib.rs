@@ -6,9 +6,13 @@
 //! current-thread tokio runtime and blocks on it for every network call,
 //! releasing the GIL for the duration so other Python threads keep running.
 
+use std::collections::BTreeMap;
+
 use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+#[cfg(test)]
+use pyo3::types::PyMapping;
+use pyo3::types::{PyDict, PyList, PyTuple};
 
 // The wrapped SDK crate is `registry-evidence-client`, but this crate's own
 // `[lib] name` (the Python module name the spec requires) is also
@@ -17,12 +21,17 @@ use pyo3::types::{PyDict, PyList};
 // alias's own comment in `Cargo.toml` for why: it is not just tidiness here,
 // since an unaliased dependency also breaks every integration test under
 // `tests/` (a hard `error[E0464]`, not a `use`-path ambiguity `::` could fix).
+use evidence_client_sdk::AudienceScopedRequest as RealAudienceScopedRequest;
 use evidence_client_sdk::EvidenceClient as RealEvidenceClient;
+use evidence_client_sdk::EvidenceClientProfile as RealEvidenceClientProfile;
 use evidence_client_sdk::PreparedEvidenceRequest as RealPreparedEvidenceRequest;
 use evidence_client_sdk::PreparedEvidenceRequestBatch as RealPreparedEvidenceRequestBatch;
 use evidence_client_sdk::RawEvidenceRequestBatchResponse as RealRawEvidenceRequestBatchResponse;
 use evidence_client_sdk::RawEvidenceResponse as RealRawEvidenceResponse;
 use evidence_client_sdk::SdJwtVcBatchResponse as RealSdJwtVcBatchResponse;
+use evidence_client_sdk::SubjectBindingReceipt as RealSubjectBindingReceipt;
+use evidence_client_sdk::SubjectContinuity as RealSubjectContinuity;
+use evidence_client_sdk::VerifiedAudienceScopedEvidence as RealVerifiedAudienceScopedEvidence;
 use evidence_client_sdk::VerifiedEvidence as RealVerifiedEvidence;
 use evidence_client_sdk::VerifiedEvidenceRequestBatch as RealVerifiedEvidenceRequestBatch;
 use evidence_client_sdk::VerifiedEvidenceRequestBatchItem as RealVerifiedEvidenceRequestBatchItem;
@@ -31,9 +40,11 @@ mod convert;
 
 use convert::{
     batch_spec_from_json, config_from_parts, datetime_from_unix_seconds, evidence_to_json,
-    json_to_python, map_client_error, map_config_error, map_conversion_error, python_to_json,
-    spec_from_json, subject_expectations_to_json, MappedError,
+    json_to_python, map_client_error, map_config_error, map_conversion_error,
+    progressive_subjects_from_json, python_to_json, selector_values_from_json, spec_from_json,
+    subject_expectations_to_json, MappedError,
 };
+use registry_platform_crypto::PrivateJwk;
 
 // Every instance also carries a `kind` attribute, one of the eight stable
 // strings `EvidenceClientError::kind` reports: "configuration", "nonce",
@@ -482,6 +493,308 @@ fn verified_request_batch_to_python(
     })
 }
 
+/// An opaque, application-owned record of a verified subject relationship.
+///
+/// The client never persists this value. Applications that need continuity
+/// retain it next to their own account or case record and decide atomically
+/// whether a first-use receipt may become the stored receipt. Its JSON has no
+/// selector values or disclosed evidence.
+#[pyclass(name = "SubjectBindingReceipt", module = "registry_evidence_client")]
+struct SubjectBindingReceipt {
+    inner: RealSubjectBindingReceipt,
+}
+
+#[pymethods]
+impl SubjectBindingReceipt {
+    /// Serialize this versioned opaque receipt for application-owned storage.
+    fn to_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.inner)
+            .map_err(|error| serialization_error("the subject binding receipt", error))
+    }
+
+    /// Read a receipt retained by the application. The strict Rust type owns
+    /// schema and scope validation, not this binding.
+    #[staticmethod]
+    fn from_json(py: Python<'_>, document: &str) -> PyResult<Self> {
+        let inner = serde_json::from_str(document).map_err(|_| {
+            to_py_err(
+                py,
+                &map_conversion_error(&convert::ConversionError::new(
+                    "a subject binding receipt is invalid",
+                )),
+            )
+        })?;
+        Ok(Self { inner })
+    }
+}
+
+/// Whether this verified response was accepted without a prior application
+/// receipt, or matched one the application supplied. `receipt` is intentionally
+/// returned in both cases so the application may retain the opaque current
+/// scope without asking the client to store it.
+#[pyclass(name = "SubjectContinuity", module = "registry_evidence_client")]
+struct SubjectContinuity {
+    #[pyo3(get)]
+    status: String,
+    #[pyo3(get)]
+    receipt: Py<SubjectBindingReceipt>,
+}
+
+fn subject_continuity_to_python(
+    py: Python<'_>,
+    continuity: &RealSubjectContinuity,
+) -> PyResult<SubjectContinuity> {
+    let (status, receipt) = match continuity {
+        RealSubjectContinuity::FirstUse { receipt } => ("first_use", receipt),
+        RealSubjectContinuity::Matched { receipt } => ("matched", receipt),
+    };
+    Ok(SubjectContinuity {
+        status: status.to_owned(),
+        receipt: Py::new(
+            py,
+            SubjectBindingReceipt {
+                inner: receipt.clone(),
+            },
+        )?,
+    })
+}
+
+/// A verified signed JWS assertion returned by the progressive API.
+#[pyclass(name = "VerifiedAssertion", module = "registry_evidence_client")]
+struct VerifiedAssertion {
+    #[pyo3(get)]
+    evidence: Py<PyAny>,
+    #[pyo3(get)]
+    trace_id: Option<String>,
+    values: BTreeMap<String, evidence_client_sdk::PublicValue>,
+    #[pyo3(get)]
+    subject_continuity: Py<SubjectContinuity>,
+    #[pyo3(get)]
+    assertion: Vec<u8>,
+}
+
+#[pymethods]
+impl VerifiedAssertion {
+    /// An immutable mapping of published concept handles to verified values.
+    /// A fresh mapping proxy is created from retained Rust data for every
+    /// reading, so neither mapping assignment nor a mutated nested Python
+    /// value can affect a future convenience `value` reading.
+    #[getter]
+    fn values(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        immutable_verified_values(py, &self.values)
+    }
+
+    /// The sole output value. Multi-output and zero-output results stay valid;
+    /// use `values` for those rather than discarding an otherwise verified
+    /// result because this convenience property is ambiguous.
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        sole_verified_value(py, &self.values)
+    }
+}
+
+/// A verified SD-JWT VC response returned by the progressive API.
+#[pyclass(
+    name = "VerifiedAudienceScopedCredential",
+    module = "registry_evidence_client"
+)]
+struct VerifiedAudienceScopedCredential {
+    #[pyo3(get)]
+    evidence: Py<PyAny>,
+    #[pyo3(get)]
+    trace_id: Option<String>,
+    values: BTreeMap<String, evidence_client_sdk::PublicValue>,
+    #[pyo3(get)]
+    subject_continuity: Py<SubjectContinuity>,
+    #[pyo3(get)]
+    credential: String,
+}
+
+#[pymethods]
+impl VerifiedAudienceScopedCredential {
+    /// An immutable mapping of published concept handles to verified values.
+    #[getter]
+    fn values(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        immutable_verified_values(py, &self.values)
+    }
+
+    /// The sole output value. See [`VerifiedAssertion::value`] for the
+    /// deliberate ambiguity rule shared by both response encodings.
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        sole_verified_value(py, &self.values)
+    }
+}
+
+fn immutable_verified_values(
+    py: Python<'_>,
+    values: &BTreeMap<String, evidence_client_sdk::PublicValue>,
+) -> PyResult<Py<PyAny>> {
+    let value = serde_json::to_value(values)
+        .map_err(|error| serialization_error("the verified values", error))?;
+    immutable_json_to_python(py, &value)
+}
+
+/// Turn JSON-shaped verified output into a deeply immutable Python snapshot.
+///
+/// The Python binding deliberately does not expose the mutable dictionaries
+/// and lists the JSON bridge creates. A caller receives mapping proxies and
+/// tuples at every nesting level, while the authoritative source for each
+/// later property read remains the Rust-owned verified value.
+fn immutable_json_to_python(py: Python<'_>, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
+    let value = json_to_python(py, value)?;
+    let types = PyModule::import(py, "types")?;
+    freeze_python_snapshot(py, &value, &types.getattr("MappingProxyType")?)
+}
+
+fn freeze_python_snapshot(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    mapping_proxy_type: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    if let Ok(mapping) = value.cast::<PyDict>() {
+        let frozen_mapping = PyDict::new(py);
+        for (key, child) in mapping.iter() {
+            frozen_mapping
+                .set_item(key, freeze_python_snapshot(py, &child, mapping_proxy_type)?)?;
+        }
+        return mapping_proxy_type
+            .call1((frozen_mapping,))
+            .map(Bound::unbind);
+    }
+    if let Ok(list) = value.cast::<PyList>() {
+        let values = list
+            .iter()
+            .map(|child| freeze_python_snapshot(py, &child, mapping_proxy_type))
+            .collect::<PyResult<Vec<_>>>()?;
+        return PyTuple::new(py, values).map(|tuple| tuple.into_any().unbind());
+    }
+    Ok(value.clone().unbind())
+}
+
+fn sole_verified_value(
+    py: Python<'_>,
+    values: &BTreeMap<String, evidence_client_sdk::PublicValue>,
+) -> PyResult<Py<PyAny>> {
+    if values.len() != 1 {
+        return Err(to_py_err(
+            py,
+            &map_conversion_error(&convert::ConversionError::new(
+                "the verified result does not have exactly one output; use `values` instead",
+            )),
+        ));
+    }
+    let value = values
+        .values()
+        .next()
+        .expect("the map has exactly one value after its length was checked");
+    let value = serde_json::to_value(value)
+        .map_err(|error| serialization_error("the verified value", error))?;
+    immutable_json_to_python(py, &value)
+}
+
+type ProgressiveResultParts = (
+    Py<PyAny>,
+    Option<String>,
+    BTreeMap<String, evidence_client_sdk::PublicValue>,
+    Py<SubjectContinuity>,
+);
+
+fn progressive_result_parts<T>(py: Python<'_>, result: &T) -> PyResult<ProgressiveResultParts>
+where
+    T: ProgressiveResult,
+{
+    let evidence = evidence_to_json(result.evidence())
+        .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+    Ok((
+        json_to_python(py, &evidence)?.unbind(),
+        result.trace_id().map(str::to_owned),
+        result.values().clone(),
+        Py::new(
+            py,
+            subject_continuity_to_python(py, result.subject_continuity())?,
+        )?,
+    ))
+}
+
+/// Shared accessors the two progressive result representations expose in the
+/// Rust SDK. It exists only to keep their Python conversion byte-for-byte
+/// parallel; every semantic decision has already happened in Rust.
+trait ProgressiveResult {
+    fn evidence(&self) -> &evidence_client_sdk::Evidence;
+    fn trace_id(&self) -> Option<&str>;
+    fn values(&self) -> &std::collections::BTreeMap<String, evidence_client_sdk::PublicValue>;
+    fn subject_continuity(&self) -> &RealSubjectContinuity;
+}
+
+impl ProgressiveResult for evidence_client_sdk::VerifiedAssertion {
+    fn evidence(&self) -> &evidence_client_sdk::Evidence {
+        self.evidence()
+    }
+    fn trace_id(&self) -> Option<&str> {
+        self.trace_id()
+    }
+    fn values(&self) -> &std::collections::BTreeMap<String, evidence_client_sdk::PublicValue> {
+        self.values()
+    }
+    fn subject_continuity(&self) -> &RealSubjectContinuity {
+        self.subject_continuity()
+    }
+}
+
+impl ProgressiveResult for evidence_client_sdk::VerifiedAudienceScopedCredential {
+    fn evidence(&self) -> &evidence_client_sdk::Evidence {
+        self.evidence()
+    }
+    fn trace_id(&self) -> Option<&str> {
+        self.trace_id()
+    }
+    fn values(&self) -> &std::collections::BTreeMap<String, evidence_client_sdk::PublicValue> {
+        self.values()
+    }
+    fn subject_continuity(&self) -> &RealSubjectContinuity {
+        self.subject_continuity()
+    }
+}
+
+fn progressive_result_to_python(
+    py: Python<'_>,
+    result: RealVerifiedAudienceScopedEvidence,
+) -> PyResult<Py<PyAny>> {
+    match result {
+        RealVerifiedAudienceScopedEvidence::Assertion(result) => {
+            let (evidence, trace_id, values, subject_continuity) =
+                progressive_result_parts(py, &result)?;
+            Py::new(
+                py,
+                VerifiedAssertion {
+                    evidence,
+                    trace_id,
+                    values,
+                    subject_continuity,
+                    assertion: result.assertion_bytes().to_vec(),
+                },
+            )
+            .map(|result| result.into_any())
+        }
+        RealVerifiedAudienceScopedEvidence::Credential(result) => {
+            let (evidence, trace_id, values, subject_continuity) =
+                progressive_result_parts(py, &result)?;
+            Py::new(
+                py,
+                VerifiedAudienceScopedCredential {
+                    evidence,
+                    trace_id,
+                    values,
+                    subject_continuity,
+                    credential: result.credential().to_owned(),
+                },
+            )
+            .map(|result| result.into_any())
+        }
+    }
+}
+
 /// A relying party's connection to one Evidence deployment.
 ///
 /// The client owns a private, current-thread tokio runtime and blocks on it
@@ -566,6 +879,145 @@ impl EvidenceClient {
                 ))
             })?;
         Ok(Self { inner, runtime })
+    }
+
+    /// Load a versioned application-owned client profile.
+    ///
+    /// The profile gives the SDK an HTTPS origin and client identity only. It
+    /// does not copy server metadata, signing keys, selector profiles, or any
+    /// subject relationship into Python. When `private_key_jwk` is supplied,
+    /// it replaces the profile's file or environment key reference, which is
+    /// the intended integration point for a deployment secret manager.
+    #[staticmethod]
+    #[pyo3(signature = (profile_path, private_key_jwk=None))]
+    fn from_profile(
+        py: Python<'_>,
+        profile_path: &str,
+        private_key_jwk: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let profile = RealEvidenceClientProfile::from_file(profile_path).map_err(|error| {
+            // A profile path and the private-key reference are deployment
+            // details. Do not turn either into part of a Python exception.
+            let mapped = MappedError {
+                kind: error.kind(),
+                message: "the client profile could not be loaded".to_owned(),
+                status: None,
+                code: None,
+                trace_id: None,
+                retry_after_seconds: None,
+                transport_kind: None,
+                token_kind: None,
+            };
+            to_py_err(py, &mapped)
+        })?;
+        let inner = match private_key_jwk {
+            None => RealEvidenceClient::from_profile(profile),
+            Some(value) => {
+                let value = python_to_json(value)
+                    .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+                let serialized = serde_json::to_string(&value)
+                    .map_err(|error| serialization_error("the supplied private key", error))?;
+                let key = PrivateJwk::parse(&serialized).map_err(|_| {
+                    to_py_err(
+                        py,
+                        &map_conversion_error(&convert::ConversionError::new(
+                            "the supplied private key is invalid",
+                        )),
+                    )
+                })?;
+                RealEvidenceClient::from_profile_with_key(profile, key)
+            }
+        }
+        .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                PyRuntimeError::new_err(format!(
+                    "the client's internal runtime could not start: {error}"
+                ))
+            })?;
+        Ok(Self { inner, runtime })
+    }
+
+    /// Discover fresh public metadata and signing keys before the next
+    /// request. This never reacts to an unknown key from a response: each
+    /// request verifies with the snapshots it closed before sending.
+    fn refresh_metadata(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.runtime.block_on(self.inner.refresh_metadata()))
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))
+    }
+
+    /// Discover, prepare, send once, and locally verify one audience-scoped
+    /// assertion or credential.
+    ///
+    /// The keyword selectors name fields for the sole request-origin subject.
+    /// Multi-role requests, or a selector whose field name collides with one
+    /// of this method's parameters, use `subjects={role: {field: value}}`.
+    /// Passing both shapes is refused locally rather than guessing how to
+    /// merge subjects. The receipt remains application-owned and is never
+    /// remembered by this client.
+    #[pyo3(signature = (
+        requirement,
+        response_format="signed-jws",
+        binding_receipt=None,
+        subjects=None,
+        **selectors
+    ))]
+    fn request(
+        &self,
+        py: Python<'_>,
+        requirement: &str,
+        response_format: &str,
+        binding_receipt: Option<PyRef<'_, SubjectBindingReceipt>>,
+        subjects: Option<&Bound<'_, PyAny>>,
+        selectors: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        let selector_json = selectors
+            .map(|value| python_to_json(value.as_any()))
+            .transpose()
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?
+            .unwrap_or_else(|| serde_json::json!({}));
+        let selector_values = selector_values_from_json(&selector_json, "selector keywords")
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        let subject_values = subjects
+            .map(python_to_json)
+            .transpose()
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?
+            .map(|value| progressive_subjects_from_json(&value))
+            .transpose()
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        if subject_values.is_some() && !selector_values.is_empty() {
+            return Err(to_py_err(
+                py,
+                &map_conversion_error(&convert::ConversionError::new(
+                    "use either selector keywords or `subjects`, not both",
+                )),
+            ));
+        }
+        let response_format = serde_json::from_value(serde_json::Value::String(
+            response_format.to_owned(),
+        ))
+        .map_err(|_| {
+            to_py_err(
+                py,
+                &map_conversion_error(&convert::ConversionError::new(
+                    "`response_format` must be \"signed-jws\" or \"sd-jwt-vc\"",
+                )),
+            )
+        })?;
+        let mut request = RealAudienceScopedRequest::new(requirement.to_owned(), selector_values)
+            .with_response_format(response_format);
+        if let Some(subjects) = subject_values {
+            request = request.with_subjects(subjects);
+        }
+        if let Some(receipt) = binding_receipt {
+            request = request.with_binding_receipt(receipt.inner.clone());
+        }
+        let result = py
+            .detach(|| self.runtime.block_on(self.inner.request(request)))
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        progressive_result_to_python(py, result)
     }
 
     /// Close the expectations for one request and generate its nonce.
@@ -803,6 +1255,10 @@ pub fn registry_evidence_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<SdJwtVcBatchResponse>()?;
     module.add_class::<VerifiedEvidence>()?;
     module.add_class::<VerifiedEvidenceRequestBatch>()?;
+    module.add_class::<SubjectBindingReceipt>()?;
+    module.add_class::<SubjectContinuity>()?;
+    module.add_class::<VerifiedAssertion>()?;
+    module.add_class::<VerifiedAudienceScopedCredential>()?;
 
     let py = module.py();
     module.add("EvidenceClientError", py.get_type::<EvidenceClientError>())?;
@@ -918,6 +1374,182 @@ except BaseException as error:
                 .is_instance_of::<ProtocolError>(py));
             assert!(exception_for_kind("verification", "message".to_owned())
                 .is_instance_of::<VerificationError>(py));
+        });
+    }
+
+    #[test]
+    fn progressive_values_are_immutable_and_value_reads_retained_verified_data() {
+        Python::attach(|py| {
+            let values = BTreeMap::from([(
+                "structured".to_owned(),
+                evidence_client_sdk::PublicValue::Structured(
+                    evidence_client_sdk::StructuredValue {
+                        form: evidence_client_sdk::StructuredValueForm::ReviewedStructuredValue,
+                        schema: "urn:example:structured:v1".to_owned(),
+                        fields: BTreeMap::from([
+                            ("answer".to_owned(), serde_json::Value::Bool(true)),
+                            (
+                                "answers".to_owned(),
+                                serde_json::json!(["yes", {"nested": true}]),
+                            ),
+                        ]),
+                    },
+                ),
+            )]);
+            let exposed = immutable_verified_values(py, &values).expect("values are serializable");
+            let types = PyModule::import(py, "types").expect("types module imports");
+            assert!(exposed
+                .bind(py)
+                .is_instance(&types.getattr("MappingProxyType").expect("type exists"))
+                .expect("type check succeeds"));
+
+            let locals = PyDict::new(py);
+            locals
+                .set_item("values", exposed.bind(py))
+                .expect("locals accept values");
+            py.run(
+                c"try:
+    values['other'] = False
+except TypeError:
+    outer_mutation_refused = True
+else:
+    outer_mutation_refused = False
+nested_mapping_mutation_refused = False
+try:
+    values['structured']['fields']['answer'] = False
+except TypeError:
+    nested_mapping_mutation_refused = True
+nested_list_mutation_refused = False
+try:
+    values['structured']['fields']['answers'].append('no')
+except AttributeError:
+    nested_list_mutation_refused = True
+nested_list_mapping_mutation_refused = False
+try:
+    values['structured']['fields']['answers'][1]['nested'] = False
+except TypeError:
+    nested_list_mapping_mutation_refused = True",
+                None,
+                Some(&locals),
+            )
+            .expect("immutable snapshots refuse nested mutation");
+            let outer_mutation_refused: bool = locals
+                .get_item("outer_mutation_refused")
+                .expect("locals lookup succeeds")
+                .expect("script assigned outcome")
+                .extract()
+                .expect("outcome is boolean");
+            assert!(outer_mutation_refused);
+            for name in [
+                "nested_mapping_mutation_refused",
+                "nested_list_mutation_refused",
+                "nested_list_mapping_mutation_refused",
+            ] {
+                let refused: bool = locals
+                    .get_item(name)
+                    .expect("locals lookup succeeds")
+                    .expect("script assigned outcome")
+                    .extract()
+                    .expect("outcome is boolean");
+                assert!(refused, "{name} must be refused");
+            }
+
+            let verified = sole_verified_value(py, &values).expect("one value is available");
+            let verified_fields = verified
+                .bind(py)
+                .cast::<PyMapping>()
+                .expect("verified structured value is a mapping")
+                .get_item("fields")
+                .expect("fields lookup succeeds")
+                .cast_into::<PyMapping>()
+                .expect("fields are a mapping");
+            assert!(verified_fields
+                .get_item("answer")
+                .expect("answer lookup succeeds")
+                .extract::<bool>()
+                .expect("answer is boolean"));
+            let answers = verified_fields
+                .get_item("answers")
+                .expect("answers lookup succeeds")
+                .cast_into::<PyTuple>()
+                .expect("answers are a tuple");
+            assert_eq!(answers.len(), 2);
+            assert_eq!(
+                answers
+                    .get_item(0)
+                    .expect("first answer exists")
+                    .extract::<String>()
+                    .expect("first answer is text"),
+                "yes"
+            );
+            let nested = answers
+                .get_item(1)
+                .expect("nested answer exists")
+                .cast_into::<PyMapping>()
+                .expect("nested answer is a mapping");
+            assert!(nested
+                .get_item("nested")
+                .expect("nested lookup succeeds")
+                .extract::<bool>()
+                .expect("nested flag is boolean"));
+
+            let immutable_value = sole_verified_value(py, &values).expect("one value is available");
+            let locals = PyDict::new(py);
+            locals
+                .set_item("value", immutable_value.bind(py))
+                .expect("locals accept value");
+            py.run(
+                c"try:
+    value['fields']['answers'][0] = 'no'
+except TypeError:
+    value_mutation_refused = True
+else:
+    value_mutation_refused = False",
+                None,
+                Some(&locals),
+            )
+            .expect("immutable value test executes");
+            let value_mutation_refused: bool = locals
+                .get_item("value_mutation_refused")
+                .expect("locals lookup succeeds")
+                .expect("script assigned outcome")
+                .extract()
+                .expect("outcome is boolean");
+            assert!(value_mutation_refused);
+
+            let no_values = BTreeMap::new();
+            let error = sole_verified_value(py, &no_values)
+                .expect_err("zero values are ambiguous")
+                .value(py)
+                .str()
+                .expect("exception renders")
+                .to_string();
+            assert!(error.contains("exactly one output"));
+
+            let several_values = BTreeMap::from([
+                (
+                    "first".to_owned(),
+                    evidence_client_sdk::PublicValue::Boolean(true),
+                ),
+                (
+                    "second".to_owned(),
+                    evidence_client_sdk::PublicValue::Boolean(false),
+                ),
+            ]);
+            let error = sole_verified_value(py, &several_values)
+                .expect_err("two values are ambiguous")
+                .value(py)
+                .str()
+                .expect("exception renders")
+                .to_string();
+            assert!(error.contains("exactly one output"));
+
+            let single_value = BTreeMap::from([(
+                "sole".to_owned(),
+                evidence_client_sdk::PublicValue::Boolean(true),
+            )]);
+            let value = sole_verified_value(py, &single_value).expect("one value is available");
+            assert!(value.bind(py).is_truthy().expect("boolean reads"));
         });
     }
 }
