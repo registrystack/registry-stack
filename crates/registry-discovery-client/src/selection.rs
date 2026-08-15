@@ -5,6 +5,7 @@ use registry_discovery::{
     valid_digest, valid_uri_identifier, validate_service, EvidenceTypeResolveResponse, ServiceKind,
     ServiceRecord, ServiceSearchResponse, MAXIMUM_EVIDENCE_TYPES_PER_ALTERNATIVE,
 };
+use registry_discovery_profile::derive_binding_id;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -573,7 +574,18 @@ pub fn validate_service_selection(
         origin_fetched_at: selection.origin_fetched_at.clone(),
     };
     validate_service(&record).map_err(|_| DiscoveryClientError::Protocol)?;
-    if !capability_matches(&record, &selection.matched_capability)
+    let expected_binding_id = derive_binding_id(
+        &selection.service_id,
+        selection.service_kind,
+        &selection.endpoint_url,
+        &selection.conforms_to,
+        &selection.evidence_type_ids,
+        &selection.semantic_class_ids,
+        &selection.operation_family_ids,
+    )
+    .map_err(|_| DiscoveryClientError::Protocol)?;
+    if selection.binding_id != expected_binding_id
+        || !capability_matches(&record, &selection.matched_capability)
         || !valid_digest(&selection.catalog_revision)
         || selection
             .mapping_revision
@@ -645,9 +657,9 @@ mod tests {
     use super::*;
 
     fn service() -> ServiceRecord {
-        ServiceRecord {
+        let mut service = ServiceRecord {
             record_id: "record-a".into(),
-            binding_id: "urn:binding:a".into(),
+            binding_id: String::new(),
             service_id: "urn:service".into(),
             service_kind: ServiceKind::Evidence,
             title: "Evidence".into(),
@@ -667,7 +679,22 @@ mod tests {
             origin_url: "https://provider.example/catalog.jsonld".into(),
             origin_content_digest: format!("sha256:{}", "1".repeat(64)),
             origin_fetched_at: "2026-08-14T00:00:00Z".into(),
-        }
+        };
+        refresh_binding_id(&mut service);
+        service
+    }
+
+    fn refresh_binding_id(service: &mut ServiceRecord) {
+        service.binding_id = derive_binding_id(
+            &service.service_id,
+            service.service_kind,
+            &service.endpoint_url,
+            &service.conforms_to,
+            &service.evidence_type_ids,
+            &service.semantic_class_ids,
+            &service.operation_family_ids,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -684,7 +711,7 @@ mod tests {
         };
         let selected = response.select_exact(request.clone()).unwrap();
         assert_eq!(selected.service_id, "urn:service");
-        assert_eq!(selected.binding_id, "urn:binding:a");
+        assert_eq!(selected.binding_id, record.binding_id);
         assert_eq!(selected.evidence_type_ids, ["urn:evidence"]);
         assert!(selected.semantic_class_ids.is_empty());
         assert!(selected.operation_family_ids.is_empty());
@@ -757,6 +784,7 @@ mod tests {
 
         let mut record = service();
         record.evidence_type_ids = vec!["urn:evidence:b".into()];
+        refresh_binding_id(&mut record);
         let search = ServiceSearchResponse {
             catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
             items: vec![record],
@@ -863,6 +891,8 @@ mod tests {
         record.semantic_class_ids =
             vec!["urn:semantic:business".into(), "urn:semantic:person".into()];
         record.operation_family_ids = vec!["urn:operation:list".into()];
+        refresh_binding_id(&mut record);
+        let expected_binding_id = record.binding_id.clone();
         let response = ServiceSearchResponse {
             catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
             items: vec![record],
@@ -878,7 +908,7 @@ mod tests {
             })
             .expect("exact Relay binding selection");
 
-        assert_eq!(selection.selection().binding_id, "urn:binding:a");
+        assert_eq!(selection.selection().binding_id, expected_binding_id);
         assert_eq!(
             selection.selection().semantic_class_ids,
             ["urn:semantic:business", "urn:semantic:person"]
@@ -904,6 +934,44 @@ mod tests {
             validate_service_selection(&persisted),
             Err(DiscoveryClientError::Protocol)
         );
+    }
+
+    #[test]
+    fn persisted_selection_refuses_binding_identity_drift() {
+        let record = service();
+        let response = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
+            items: vec![record],
+        };
+        let selection = response
+            .select_evidence(EvidenceSelectionRequest::new("record-a", "urn:evidence"))
+            .expect("valid exact selection")
+            .into_selection();
+
+        let mutations: [fn(&mut ServiceSelection); 4] = [
+            |selection: &mut ServiceSelection| {
+                selection.service_id = "urn:service:other".into();
+            },
+            |selection: &mut ServiceSelection| {
+                selection.endpoint_url = "https://other.example/evidence".into();
+            },
+            |selection: &mut ServiceSelection| {
+                selection.conforms_to = vec!["urn:profile:other".into()];
+            },
+            |selection: &mut ServiceSelection| {
+                selection.evidence_type_ids = vec!["urn:evidence:other".into()];
+                selection.matched_capability =
+                    MatchedCapability::EvidenceType("urn:evidence:other".into());
+            },
+        ];
+        for mutate in mutations {
+            let mut drifted = selection.clone();
+            mutate(&mut drifted);
+            assert_eq!(
+                validate_service_selection(&drifted),
+                Err(DiscoveryClientError::Protocol)
+            );
+        }
     }
 
     #[test]

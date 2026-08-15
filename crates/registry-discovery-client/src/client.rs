@@ -474,26 +474,24 @@ fn problem_from_response(
     bytes: &[u8],
 ) -> Result<DiscoveryClientError, DiscoveryClientError> {
     let body: ProblemBody = strict_decode(bytes)?;
-    if body.status != status.as_u16() || body.title.is_empty() || body.title.len() > 128 {
+    if body.status != status.as_u16() {
         return Err(DiscoveryClientError::Protocol);
     }
-    let problem = match body.type_uri.as_str() {
-        "https://id.registrystack.org/problems/registry-discovery/invalid-request"
-            if status == StatusCode::BAD_REQUEST =>
-        {
-            DiscoveryProblem::InvalidRequest
-        }
-        "https://id.registrystack.org/problems/registry-discovery/not-found"
+    let problem = match (body.type_uri.as_str(), body.title.as_str()) {
+        (
+            "https://id.registrystack.org/problems/registry-discovery/invalid-request",
+            "Invalid request",
+        ) if status == StatusCode::BAD_REQUEST => DiscoveryProblem::InvalidRequest,
+        ("https://id.registrystack.org/problems/registry-discovery/not-found", "Not found")
             if status == StatusCode::NOT_FOUND =>
         {
             DiscoveryProblem::NotFound
         }
-        "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded"
-            if status == StatusCode::UNPROCESSABLE_ENTITY =>
-        {
-            DiscoveryProblem::ResultBoundExceeded
-        }
-        "https://id.registrystack.org/problems/registry-discovery/unavailable"
+        (
+            "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded",
+            "Result bound exceeded",
+        ) if status == StatusCode::UNPROCESSABLE_ENTITY => DiscoveryProblem::ResultBoundExceeded,
+        ("https://id.registrystack.org/problems/registry-discovery/unavailable", "Unavailable")
             if status == StatusCode::SERVICE_UNAVAILABLE =>
         {
             DiscoveryProblem::Unavailable
@@ -555,6 +553,14 @@ fn validate_resolve_response(
         .any(|pair| pair[0].evidence_type_list_id >= pair[1].evidence_type_list_id)
     {
         return Err(DiscoveryClientError::Protocol);
+    }
+    if let Some(first) = response.alternatives.first() {
+        if response.alternatives.iter().any(|alternative| {
+            alternative.mapping_id != first.mapping_id
+                || alternative.mapping_authority_id != first.mapping_authority_id
+        }) {
+            return Err(DiscoveryClientError::Protocol);
+        }
     }
     Ok(())
 }
@@ -644,6 +650,7 @@ mod tests {
         UppercaseSuccessMediaType,
         UppercaseProblemMediaType,
         UnexpectedSuccessStatus,
+        WrongProblemTitle,
         WrongMediaType,
         DuplicateMediaType,
     }
@@ -743,6 +750,11 @@ mod tests {
                 *response.status_mut() = StatusCode::CREATED;
                 response
             }
+            Mode::WrongProblemTitle => response_with_media_type(
+                StatusCode::BAD_REQUEST,
+                PROBLEM_JSON,
+                br#"{"type":"https://id.registrystack.org/problems/registry-discovery/invalid-request","title":"Another title","status":400}"#.to_vec(),
+            ),
             Mode::WrongMediaType => search_response("text/plain"),
             Mode::DuplicateMediaType => {
                 let mut response = search_response(JSON);
@@ -868,6 +880,38 @@ mod tests {
     }
 
     #[test]
+    fn resolve_response_refuses_mixed_mapping_provenance() {
+        let request = EvidenceTypeResolveRequest {
+            requirement_id: "urn:example:requirement".into(),
+            jurisdiction: None,
+        };
+        let response = EvidenceTypeResolveResponse {
+            requirement_id: request.requirement_id.clone(),
+            jurisdiction: None,
+            mapping_revision: format!("sha256:{}", "2".repeat(64)),
+            alternatives: vec![
+                registry_discovery::ResolvedAlternative {
+                    evidence_type_list_id: "urn:example:list:a".into(),
+                    evidence_type_ids: vec!["urn:example:evidence:a".into()],
+                    mapping_id: "urn:example:mapping:a".into(),
+                    mapping_authority_id: "urn:example:authority".into(),
+                },
+                registry_discovery::ResolvedAlternative {
+                    evidence_type_list_id: "urn:example:list:b".into(),
+                    evidence_type_ids: vec!["urn:example:evidence:b".into()],
+                    mapping_id: "urn:example:mapping:b".into(),
+                    mapping_authority_id: "urn:example:authority".into(),
+                },
+            ],
+        };
+
+        assert_eq!(
+            validate_resolve_response(&request, &response),
+            Err(DiscoveryClientError::Protocol)
+        );
+    }
+
+    #[test]
     fn query_serialization_preserves_fragment_iris_as_values() {
         let fragment = "https://example.org/vocabulary#RegisteredBusiness";
         let mut filters = ServiceFilters::default();
@@ -934,6 +978,15 @@ mod tests {
                 status: 400,
                 problem: DiscoveryProblem::InvalidRequest,
             })
+        );
+    }
+
+    #[tokio::test]
+    async fn problem_title_must_match_the_closed_problem_contract() {
+        let (client, _) = client(Mode::WrongProblemTitle, 1024 * 1024).await;
+        assert_eq!(
+            client.search_services(ServiceFilters::default()).await,
+            Err(DiscoveryClientError::Protocol)
         );
     }
 

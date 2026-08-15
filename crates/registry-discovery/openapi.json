@@ -97,31 +97,104 @@
         "type": "object"
       },
       "Problem": {
-        "additionalProperties": false,
-        "properties": {
-          "status": {
-            "type": "integer"
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": 400,
+                "type": "integer"
+              },
+              "title": {
+                "const": "Invalid request",
+                "type": "string"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-discovery/invalid-request",
+                "format": "uri",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status"
+            ],
+            "type": "object"
           },
-          "title": {
-            "maxLength": 16384,
-            "minLength": 1,
-            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$",
-            "type": "string"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": 404,
+                "type": "integer"
+              },
+              "title": {
+                "const": "Not found",
+                "type": "string"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-discovery/not-found",
+                "format": "uri",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status"
+            ],
+            "type": "object"
           },
-          "type": {
-            "format": "uri",
-            "maxLength": 4096,
-            "minLength": 1,
-            "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:",
-            "type": "string"
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": 422,
+                "type": "integer"
+              },
+              "title": {
+                "const": "Result bound exceeded",
+                "type": "string"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-discovery/result-bound-exceeded",
+                "format": "uri",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": 503,
+                "type": "integer"
+              },
+              "title": {
+                "const": "Unavailable",
+                "type": "string"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-discovery/unavailable",
+                "format": "uri",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status"
+            ],
+            "type": "object"
           }
-        },
-        "required": [
-          "type",
-          "title",
-          "status"
-        ],
-        "type": "object"
+        ]
       },
       "ResolvedAlternative": {
         "additionalProperties": false,
@@ -202,7 +275,7 @@
             "format": "uri",
             "maxLength": 4096,
             "minLength": 1,
-            "pattern": "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$",
+            "pattern": "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?!.*//)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$",
             "type": "string"
           },
           "evidenceTypeIds": {
@@ -279,7 +352,7 @@
             "format": "uri",
             "maxLength": 4096,
             "minLength": 1,
-            "pattern": "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$",
+            "pattern": "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?!.*//)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$",
             "type": "string"
           },
           "publisherId": {

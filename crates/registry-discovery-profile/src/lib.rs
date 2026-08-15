@@ -429,7 +429,12 @@ pub fn render_description(description: &DiscoveryDescription) -> Result<Vec<u8>,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn derive_binding_id(
+/// Derive the stable identity for one exact provider capability binding.
+///
+/// Consumers that persist public Discovery metadata can use this function to
+/// verify that the advertised identity still covers the service, endpoint,
+/// profile, and complete capability tuple.
+pub fn derive_binding_id(
     service_id: &str,
     service_kind: ServiceKind,
     endpoint_url: &str,

@@ -12,6 +12,7 @@ use crate::model::{
     MAXIMUM_RESULT_ALTERNATIVES, MAXIMUM_RESULT_RECORDS, MAXIMUM_TEXT_CHARACTERS,
     MAXIMUM_VALUES_PER_FIELD, MINIMUM_HTTP_RESPONSE_BYTES,
 };
+use crate::problem::ProblemCode;
 
 pub const HEALTH_ROUTE: &str = "/health";
 pub const READY_ROUTE: &str = "/ready";
@@ -28,7 +29,7 @@ const DIGEST_PATTERN: &str = "^sha256:[0-9a-f]{64}$";
 const IDENTIFIER_PATTERN: &str =
     "^[^\\s\\u0000-\\u001f\\u007f](?:[^\\u0000-\\u001f\\u007f]*[^\\s\\u0000-\\u001f\\u007f])?$";
 const PUBLIC_URL_PATTERN: &str =
-    "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$";
+    "^(?:https://[^\\s\\u0000-\\u001f\\u007f-\\u009f/?#@]+|http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?)(?!.*//)(?:/[^\\s\\u0000-\\u001f\\u007f-\\u009f?#]*)?$";
 const TEXT_PATTERN: &str = "^[^\\u0000-\\u001f\\u007f-\\u009f]+$";
 const URI_IDENTIFIER_PATTERN: &str = "^[A-Za-z][A-Za-z0-9+.-]*:";
 
@@ -466,14 +467,26 @@ fn bounded_array_schema(
 }
 
 fn problem_schema() -> Value {
-    object_schema(
-        &["type", "title", "status"],
-        &[
-            ("type", uri_identifier_schema()),
-            ("title", text_schema()),
-            ("status", json!({"type": "integer"})),
-        ],
-    )
+    let variants = ProblemCode::ALL
+        .into_iter()
+        .map(|problem| {
+            object_schema(
+                &["type", "title", "status"],
+                &[
+                    (
+                        "type",
+                        json!({"type": "string", "format": "uri", "const": problem.type_uri()}),
+                    ),
+                    ("title", json!({"type": "string", "const": problem.title()})),
+                    (
+                        "status",
+                        json!({"type": "integer", "const": problem.status().as_u16()}),
+                    ),
+                ],
+            )
+        })
+        .collect::<Vec<_>>();
+    json!({"oneOf": variants})
 }
 
 #[cfg(test)]
@@ -614,6 +627,7 @@ mod tests {
             schemas[ServiceRecord::NAME]["properties"]["endpointUrl"]["pattern"],
             PUBLIC_URL_PATTERN
         );
+        assert!(PUBLIC_URL_PATTERN.contains("(?!.*//)"));
         assert_eq!(
             schemas[ServiceRecord::NAME]["properties"]["originContentDigest"]["maxLength"],
             DIGEST_LENGTH
@@ -626,6 +640,16 @@ mod tests {
             schemas[EvidenceTypeResolveRequest::NAME]["properties"]["requirementId"]["maxLength"],
             MAXIMUM_IDENTIFIER_CHARACTERS
         );
+        let problems = schemas["Problem"]["oneOf"].as_array().unwrap();
+        assert_eq!(problems.len(), ProblemCode::ALL.len());
+        for (schema, problem) in problems.iter().zip(ProblemCode::ALL) {
+            assert_eq!(schema["properties"]["type"]["const"], problem.type_uri());
+            assert_eq!(schema["properties"]["title"]["const"], problem.title());
+            assert_eq!(
+                schema["properties"]["status"]["const"],
+                problem.status().as_u16()
+            );
+        }
     }
 
     fn assert_wire_properties<T: Serialize + WireSchema>(value: &T) {
