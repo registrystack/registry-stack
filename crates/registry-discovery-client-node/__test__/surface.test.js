@@ -167,3 +167,11 @@ test('binding failures expose a stable value-free kind', () => {
     (error) => error instanceof DiscoveryClientError && error.kind === 'query',
   );
 });
+
+test('object keys count against the bounded JSON bridge', () => {
+  const oversizedKey = 'x'.repeat((16 * 1024 * 1024) + 1);
+  assert.throws(
+    () => validateSelection({ [oversizedKey]: null }),
+    (error) => error instanceof DiscoveryClientError && error.kind === 'query',
+  );
+});

@@ -4,7 +4,7 @@ status: enforced
 invariants:
   - id: sec-provider-public-projection
     threat: Public discovery publication leaks protected capabilities, governed source internals, access policy, credentials, or runtime-only deployment state.
-    enforcementPoint: Production compilation generates one closed Registry Discovery profile artifact with one distinct binding identity per exact public semantic-class and operation-family pair plus one deduplicated operation-only statistical-dataflow binding when at least one statistical dataset is public, and package verification regenerates its exact bytes before activation; the existing public artifact route serves only those captured bytes.
+    enforcementPoint: Production compilation validates every projected public field against the shared Registry Discovery profile, generates one closed profile artifact with one distinct binding identity per exact public semantic-class and operation-family pair plus one deduplicated operation-only statistical-dataflow binding when at least one statistical dataset is public, and package verification regenerates its exact bytes before activation; the existing public artifact route serves only those captured bytes.
     expected: Every maintained Registry publishes its public identity and explicitly authored jurisdiction, public capability pairs remain correlated under JSON-LD, RDF, and multi-filter search, statistical discovery invents no semantic class, protected and operator-only capabilities remain absent, and no source, selector, column, access-profile, scope, token, signing, audit, or runtime field can enter the description.
     evidence: deterministic-generation-closed-projection-and-real-router-exact-byte-tests
     negativeTest: provider_discovery_description_excludes_protected_and_internal_contract_fields
@@ -14,6 +14,7 @@ invariants:
       - {path: crates/registry-relay-v2/src/artifacts.rs, name: provider_discovery_description_preserves_semantic_class_operation_family_correlation}
       - {path: crates/registry-relay-v2/src/artifacts.rs, name: provider_discovery_description_deduplicates_public_statistical_dataflow_without_semantic_class}
       - {path: crates/registry-relay-v2/src/artifacts.rs, name: provider_discovery_description_excludes_protected_and_operator_only_statistical_dataflows}
+      - {path: crates/registry-relay-v2/src/compiler.rs, name: publication_projection_fields_fail_during_compilation}
       - {path: crates/registry-relay-v2/tests/acceptance_http.rs, name: provider_discovery_description_route_serves_compiled_exact_bytes_without_authentication}
   - id: sec-contract-runtime-separation
     threat: Deployment configuration weakens governed disclosure or authorization.

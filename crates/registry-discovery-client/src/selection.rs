@@ -3,7 +3,7 @@
 
 use registry_discovery::{
     valid_digest, valid_uri_identifier, validate_service, EvidenceTypeResolveResponse, ServiceKind,
-    ServiceRecord, ServiceSearchResponse,
+    ServiceRecord, ServiceSearchResponse, MAXIMUM_EVIDENCE_TYPES_PER_ALTERNATIVE,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -514,6 +514,7 @@ fn validate_resolution(resolution: &EvidenceResolutionContext) -> Result<(), Dis
         || !valid_digest(&resolution.mapping_revision)
         || !valid_uri_identifier(&resolution.evidence_type_list_id)
         || resolution.evidence_type_ids.is_empty()
+        || resolution.evidence_type_ids.len() > MAXIMUM_EVIDENCE_TYPES_PER_ALTERNATIVE
         || resolution
             .evidence_type_ids
             .iter()
@@ -788,6 +789,63 @@ mod tests {
             .as_mut()
             .expect("the selection retains its resolution")
             .jurisdiction = Some("urn:jurisdiction:other".into());
+        assert_eq!(
+            validate_service_selection(&persisted),
+            Err(DiscoveryClientError::Protocol)
+        );
+    }
+
+    #[test]
+    fn evidence_resolution_refuses_an_over_bound_and_list() {
+        let evidence_type_ids = (0..=MAXIMUM_EVIDENCE_TYPES_PER_ALTERNATIVE)
+            .map(|index| format!("urn:evidence:{index:03}"))
+            .collect::<Vec<_>>();
+        let oversized = EvidenceResolutionContext {
+            requirement_id: "urn:requirement".into(),
+            jurisdiction: None,
+            mapping_revision: format!("sha256:{}", "2".repeat(64)),
+            evidence_type_list_id: "urn:list".into(),
+            evidence_type_ids: evidence_type_ids.clone(),
+            mapping_id: "urn:mapping".into(),
+            mapping_authority_id: "urn:mapping-authority".into(),
+        };
+        assert_eq!(
+            validate_resolution(&oversized),
+            Err(DiscoveryClientError::Query)
+        );
+
+        let response = EvidenceTypeResolveResponse {
+            requirement_id: oversized.requirement_id.clone(),
+            jurisdiction: None,
+            mapping_revision: oversized.mapping_revision.clone(),
+            alternatives: vec![ResolvedAlternative {
+                evidence_type_list_id: oversized.evidence_type_list_id.clone(),
+                evidence_type_ids,
+                mapping_id: oversized.mapping_id.clone(),
+                mapping_authority_id: oversized.mapping_authority_id.clone(),
+            }],
+        };
+        assert_eq!(
+            response.select_only_alternative(),
+            Err(DiscoveryClientError::Query)
+        );
+
+        let record = service();
+        let search = ServiceSearchResponse {
+            catalog_revision: catalog_revision(std::slice::from_ref(&record)).unwrap(),
+            items: vec![record],
+        };
+        let valid = EvidenceResolutionContext {
+            evidence_type_ids: vec!["urn:evidence".into()],
+            ..oversized.clone()
+        };
+        let mut persisted = search
+            .select_evidence(
+                EvidenceSelectionRequest::new("record-a", "urn:evidence").with_resolution(valid),
+            )
+            .expect("valid selection")
+            .into_selection();
+        persisted.evidence_resolution = Some(oversized);
         assert_eq!(
             validate_service_selection(&persisted),
             Err(DiscoveryClientError::Protocol)

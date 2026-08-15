@@ -94,6 +94,9 @@ function cloneJson(value, budget, depth) {
           throw inputError('query');
         }
         elementCount += 1;
+      } else {
+        budget.stringBytes += Buffer.byteLength(key, 'utf8');
+        if (budget.stringBytes > MAX_JSON_STRING_BYTES) throw inputError('query');
       }
       clone[key] = cloneJson(descriptor.value, budget, depth + 1);
     }

@@ -32,6 +32,12 @@
       "value": " https://provider.example/catalog.jsonld"
     },
     {
+      "name": "origins-refuses-empty-catalog-path-segments",
+      "contract": "origins",
+      "pointer": "/origins/0/catalogUrl",
+      "value": "https://provider.example/a//catalog.jsonld"
+    },
+    {
       "name": "mapping-refuses-unknown-root-member",
       "contract": "evidence-mapping",
       "pointer": "/unexpected",

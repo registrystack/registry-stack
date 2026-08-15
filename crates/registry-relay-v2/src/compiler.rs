@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path};
 
 use chrono::DateTime;
+use registry_discovery_profile::{is_valid_endpoint_url, is_valid_public_text};
 use registry_platform_canonical_json::canonicalize_json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -645,7 +646,7 @@ impl<'a> Compiler<'a> {
                 || publication
                     .jurisdictions
                     .iter()
-                    .any(|value| !valid_global_identifier(value))
+                    .any(|value| !is_valid_public_text(value) || !valid_global_identifier(value))
                 || publication
                     .jurisdictions
                     .windows(2)
@@ -655,6 +656,37 @@ impl<'a> Compiler<'a> {
                     "publication.jurisdictions_invalid",
                     "publication.jurisdictions",
                     "published jurisdictions must contain between 1 and 128 sorted, duplicate-free globally scoped URIs",
+                );
+            }
+            for (value, code, location, message) in [
+                (
+                    self.contract.registry.registry_identifier.as_str(),
+                    "publication.service_identifier_invalid",
+                    "registry.registryIdentifier",
+                    "the published service identifier must satisfy the shared Registry Discovery profile",
+                ),
+                (
+                    self.contract.registry.name.as_str(),
+                    "publication.title_invalid",
+                    "registry.name",
+                    "the published title must satisfy the shared Registry Discovery profile",
+                ),
+                (
+                    self.contract.registry.authoritative_scope.as_str(),
+                    "publication.description_invalid",
+                    "registry.authoritativeScope",
+                    "the published description must satisfy the shared Registry Discovery profile",
+                ),
+            ] {
+                if !is_valid_public_text(value) {
+                    self.error(code, location, message);
+                }
+            }
+            if !is_valid_endpoint_url(&self.contract.registry.base_uri, true) {
+                self.error(
+                    "publication.endpoint_invalid",
+                    "registry.baseUri",
+                    "the published endpoint must satisfy the shared Registry Discovery profile",
                 );
             }
             for (value, location) in [
@@ -667,7 +699,7 @@ impl<'a> Compiler<'a> {
                     "governance.publisher",
                 ),
             ] {
-                if !valid_global_identifier(value) {
+                if !is_valid_public_text(value) || !valid_global_identifier(value) {
                     self.error(
                         "publication.role_identifier_invalid",
                         location,
@@ -676,7 +708,9 @@ impl<'a> Compiler<'a> {
                 }
             }
             if let Some(operator) = &self.contract.registry.operator {
-                if !valid_global_identifier(&operator.identifier) {
+                if !is_valid_public_text(&operator.identifier)
+                    || !valid_global_identifier(&operator.identifier)
+                {
                     self.error(
                         "publication.role_identifier_invalid",
                         "registry.operator.identifier",
@@ -5127,6 +5161,48 @@ pub(crate) mod tests {
             diagnostic.code == "publication.jurisdictions_invalid"
                 && diagnostic.location == "publication.jurisdictions"
         }));
+    }
+
+    #[test]
+    fn publication_projection_fields_fail_during_compilation() {
+        let invalid_fields = [
+            (
+                "publication.endpoint_invalid",
+                "registry.baseUri",
+                "public-http-endpoint",
+            ),
+            ("publication.title_invalid", "registry.name", "padded-title"),
+            (
+                "publication.description_invalid",
+                "registry.authoritativeScope",
+                "controlled-description",
+            ),
+        ];
+
+        for (expected_code, expected_location, case) in invalid_fields {
+            let mut contract =
+                RegistryContract::parse_yaml(valid_contract()).expect("strict contract");
+            contract.publication = Some(crate::contract::Publication {
+                jurisdictions: vec!["urn:example:jurisdiction".into()],
+            });
+            match case {
+                "public-http-endpoint" => {
+                    contract.registry.base_uri = "http://relay.example/registry/".into();
+                }
+                "padded-title" => contract.registry.name = " padded ".into(),
+                "controlled-description" => {
+                    contract.registry.authoritative_scope = "line\nbreak".into();
+                }
+                _ => unreachable!("closed test cases"),
+            }
+
+            let report =
+                compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+                    .expect_err("invalid Discovery publication fields fail compilation");
+            assert!(report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == expected_code && diagnostic.location == expected_location
+            }));
+        }
     }
 
     #[test]

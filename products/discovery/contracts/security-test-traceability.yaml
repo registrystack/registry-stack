@@ -11,7 +11,8 @@
         {"path": "crates/registry-evidence/src/discovery.rs", "name": "provider_discovery_description_excludes_private_configuration_fields"},
         {"path": "crates/registry-evidence/src/discovery.rs", "name": "provider_discovery_description_preserves_evidence_type_profile_correlation"},
         {"path": "crates/registry-relay-v2/src/artifacts.rs", "name": "provider_discovery_description_excludes_protected_and_internal_contract_fields"},
-        {"path": "crates/registry-relay-v2/src/artifacts.rs", "name": "provider_discovery_description_preserves_semantic_class_operation_family_correlation"}
+        {"path": "crates/registry-relay-v2/src/artifacts.rs", "name": "provider_discovery_description_preserves_semantic_class_operation_family_correlation"},
+        {"path": "crates/registry-relay-v2/src/compiler.rs", "name": "publication_projection_fields_fail_during_compilation"}
       ]
     },
     {
