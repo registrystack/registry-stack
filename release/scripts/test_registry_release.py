@@ -271,7 +271,337 @@ class RegistryReleaseTest(TestCase):
             "registrystack/registry-stack",
             77,
             "protected-main CI",
+            verbose=False,
         )
+
+    def test_compact_wait_finds_approval_while_run_is_in_progress(self) -> None:
+        registry_release = load_registry_release()
+        url = "https://github.com/registrystack/registry-stack/actions/runs/77"
+        queued = {"id": 77, "html_url": url, "status": "queued", "conclusion": None}
+        in_progress = {**queued, "status": "in_progress"}
+        passed = {**queued, "status": "completed", "conclusion": "success"}
+        with (
+            mock.patch.object(
+                registry_release,
+                "workflow_run",
+                side_effect=[queued, queued, in_progress, passed],
+            ),
+            mock.patch.object(
+                registry_release,
+                "pending_deployments",
+                side_effect=[[], [], [{"environment": {"name": "npm"}}]],
+            ),
+            mock.patch.object(registry_release.time, "sleep"),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            registry_release.watch_workflow_run(
+                "registrystack/registry-stack",
+                77,
+                "release",
+            )
+
+        text = output.getvalue()
+        self.assertEqual(1, text.count("release run 77: queued"))
+        self.assertEqual(1, text.count(url))
+        self.assertIn("release run 77: in_progress", text)
+        self.assertIn("pending protected-environment approval for npm", text)
+        self.assertIn("authorized reviewer", text)
+        self.assertIn("pending_deployments", text)
+        self.assertIn("release run 77: completed/success", text)
+
+    def test_verbose_wait_uses_raw_gh_watcher(self) -> None:
+        registry_release = load_registry_release()
+        with (
+            mock.patch.object(
+                registry_release.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ) as run,
+            mock.patch.object(registry_release, "workflow_run") as compact,
+        ):
+            registry_release.watch_workflow_run(
+                "registrystack/registry-stack",
+                77,
+                "release",
+                verbose=True,
+            )
+
+        compact.assert_not_called()
+        self.assertEqual(
+            [
+                "gh",
+                "run",
+                "watch",
+                "77",
+                "--repo",
+                "registrystack/registry-stack",
+                "--exit-status",
+            ],
+            run.call_args.args[0],
+        )
+
+    def test_recovery_draft_must_keep_the_candidate_binding(self) -> None:
+        registry_release = load_registry_release()
+        manifest_sha = "b" * 64
+        marker = f"registry-stack-release-candidate-v2 manifest_sha256:{manifest_sha}"
+        release = {
+            "tag_name": "v1.2.3",
+            "name": "RegistryStack v1.2.3",
+            "prerelease": False,
+            "draft": True,
+            "published_at": None,
+            "body": marker,
+        }
+        self.assertEqual(
+            "draft",
+            registry_release.validate_recovery_release(
+                release,
+                tag="v1.2.3",
+                manifest_sha256=manifest_sha,
+            ),
+        )
+
+        release["body"] = "different candidate"
+        with self.assertRaisesRegex(
+            registry_release.ReleasePlanError,
+            "not bound to this candidate",
+        ):
+            registry_release.validate_recovery_release(
+                release,
+                tag="v1.2.3",
+                manifest_sha256=manifest_sha,
+            )
+
+    def test_recovery_requires_the_local_tag_to_match_origin(self) -> None:
+        registry_release = load_registry_release()
+        reference = "refs/tags/v1.2.3"
+        local_object = "a" * 40
+        remote_object = "b" * 40
+        source = "c" * 40
+
+        def checked(command, **_kwargs):
+            if command == ["git", "cat-file", "-t", reference]:
+                return "tag\n"
+            if command == ["git", "rev-parse", reference]:
+                return f"{local_object}\n"
+            if command[:3] == ["git", "ls-remote", "--tags"]:
+                return (
+                    f"{remote_object}\t{reference}\n"
+                    f"{source}\t{reference}^{{}}\n"
+                )
+            raise AssertionError(command)
+
+        with self.assertRaisesRegex(
+            registry_release.ReleasePlanError,
+            "does not exactly match origin",
+        ):
+            with (
+                mock.patch.object(registry_release, "run_checked", side_effect=checked),
+                mock.patch.object(
+                    registry_release,
+                    "resolve_commit",
+                    return_value=source,
+                ),
+            ):
+                registry_release.tagged_candidate_binding(ROOT, "v1.2.3")
+
+    def test_recovery_verification_emits_exact_retry_command(self) -> None:
+        registry_release = load_registry_release()
+        manifest_sha = "b" * 64
+        source_sha = "a" * 40
+        workflow_revision = "c" * 40
+        protected_main = "d" * 40
+        binding = registry_release.release_candidate.render_tag_binding(
+            77,
+            1,
+            manifest_sha,
+        )
+        with (
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "tagged_candidate_binding",
+                return_value=(
+                    source_sha,
+                    registry_release.release_candidate.parse_tag_binding(binding),
+                ),
+            ),
+            mock.patch.object(registry_release, "release_for_tag", return_value=None),
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_run",
+                return_value=(
+                    {
+                        "release": {"version": "0.22.0"},
+                        "workflow": {"revision": workflow_revision},
+                    },
+                    binding,
+                ),
+            ),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=protected_main,
+            ),
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                return_value=workflow_revision,
+            ),
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_ancestry",
+            ) as validate_ancestry,
+            redirect_stdout(io.StringIO()) as output,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.verify_release_recovery(
+                ROOT,
+                tag="v0.22.0",
+                repository="registrystack/registry-stack",
+            )
+
+        self.assertEqual(0, result)
+        expected = (
+            "gh workflow run release.yml --repo registrystack/registry-stack "
+            "--ref main -f tag=v0.22.0"
+        )
+        self.assertIn(expected, output.getvalue())
+        self.assertIn(expected, errors.getvalue())
+        validate_ancestry.assert_called_once_with(
+            ROOT,
+            source_sha=source_sha,
+            workflow_revision=workflow_revision,
+            protected_main_sha=protected_main,
+        )
+
+    def test_recovery_verification_rejects_unreachable_candidate_source(self) -> None:
+        registry_release = load_registry_release()
+        source_sha = "a" * 40
+        workflow_revision = "c" * 40
+        protected_main = "d" * 40
+        manifest_sha = "b" * 64
+        binding = registry_release.release_candidate.render_tag_binding(
+            77,
+            1,
+            manifest_sha,
+        )
+        with (
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(registry_release, "release_for_tag", return_value=None),
+            mock.patch.object(
+                registry_release,
+                "tagged_candidate_binding",
+                return_value=(
+                    source_sha,
+                    registry_release.release_candidate.parse_tag_binding(binding),
+                ),
+            ),
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_run",
+                return_value=(
+                    {
+                        "release": {"version": "0.22.0"},
+                        "workflow": {"revision": workflow_revision},
+                    },
+                    binding,
+                ),
+            ),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=protected_main,
+            ),
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                return_value=workflow_revision,
+            ),
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_ancestry",
+                side_effect=registry_release.ReleasePlanError(
+                    f"candidate source {source_sha} is not reachable from protected main"
+                ),
+            ),
+            redirect_stdout(io.StringIO()) as output,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.verify_release_recovery(
+                ROOT,
+                tag="v0.22.0",
+                repository="registrystack/registry-stack",
+            )
+
+        self.assertEqual(1, result)
+        self.assertNotIn("workflow run", output.getvalue())
+        self.assertIn("not reachable from protected main", errors.getvalue())
+
+    def test_recovery_verification_rejects_tags_publication_cannot_dispatch(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        for tag, expected_error in (
+            ("v1.2.3", "Beta publication accepts only v0.x.y release tags"),
+            ("v0.18.0", "pre-v0.19 releases are immutable historical evidence"),
+        ):
+            with self.subTest(tag=tag):
+                with (
+                    mock.patch.object(registry_release, "verify_origin_repository"),
+                    mock.patch.object(
+                        registry_release,
+                        "release_for_tag",
+                        return_value=None,
+                    ),
+                    mock.patch.object(
+                        registry_release,
+                        "tagged_candidate_binding",
+                    ) as candidate,
+                    redirect_stdout(io.StringIO()),
+                    redirect_stderr(io.StringIO()) as errors,
+                ):
+                    result = registry_release.verify_release_recovery(
+                        ROOT,
+                        tag=tag,
+                        repository="registrystack/registry-stack",
+                    )
+
+                self.assertEqual(1, result)
+                candidate.assert_not_called()
+                self.assertIn(expected_error, errors.getvalue())
+
+    def test_published_recovery_routes_to_public_verification_without_retry(self) -> None:
+        registry_release = load_registry_release()
+        public = {"tag": "v1.2.3", "status": "verified"}
+        with (
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "release_for_tag",
+                return_value={"draft": False},
+            ),
+            mock.patch.object(
+                registry_release.verify_public_release,
+                "verify",
+                return_value=public,
+            ) as verify_public,
+            mock.patch.object(registry_release, "verify_candidate_run") as candidate,
+            redirect_stdout(io.StringIO()) as output,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.verify_release_recovery(
+                ROOT,
+                tag="v1.2.3",
+                repository="registrystack/registry-stack",
+            )
+
+        self.assertEqual(0, result)
+        verify_public.assert_called_once()
+        candidate.assert_not_called()
+        self.assertIn('"status": "complete"', output.getvalue())
+        self.assertNotIn("workflow run", output.getvalue())
+        self.assertIn("do not retry", errors.getvalue())
 
     def test_candidate_ancestry_accepts_main_advancement_and_rejects_unreachable_source(
         self,

@@ -2024,7 +2024,12 @@ def workflow_run_identity(run: dict[str, Any], label: str) -> tuple[int, str]:
     return run_id, url
 
 
-def wait_for_exact_protected_ci(repository: str, source_sha: str) -> dict[str, Any]:
+def wait_for_exact_protected_ci(
+    repository: str,
+    source_sha: str,
+    *,
+    verbose_wait: bool = False,
+) -> dict[str, Any]:
     deadline = time.monotonic() + 120
     while True:
         runs = workflow_runs(
@@ -2044,7 +2049,12 @@ def wait_for_exact_protected_ci(repository: str, source_sha: str) -> dict[str, A
         if active:
             run = max(active, key=lambda item: int(item.get("id", 0)))
             run_id, _ = workflow_run_identity(run, "protected-main CI")
-            watch_workflow_run(repository, run_id, "protected-main CI")
+            watch_workflow_run(
+                repository,
+                run_id,
+                "protected-main CI",
+                verbose=verbose_wait,
+            )
             repeated = workflow_runs(
                 repository,
                 "ci.yml",
@@ -2107,7 +2117,97 @@ def wait_for_dispatched_run(
         time.sleep(1)
 
 
-def watch_workflow_run(repository: str, run_id: int, label: str) -> None:
+def workflow_run(repository: str, run_id: int, label: str) -> dict[str, Any]:
+    document = json.loads(
+        run_checked(["gh", "api", f"repos/{repository}/actions/runs/{run_id}"])
+    )
+    if not isinstance(document, dict):
+        raise ReleasePlanError(f"GitHub returned malformed state for {label} run {run_id}")
+    observed_id, _ = workflow_run_identity(document, label)
+    if observed_id != run_id:
+        raise ReleasePlanError(f"GitHub returned the wrong run for {label} run {run_id}")
+    return document
+
+
+def pending_deployments(repository: str, run_id: int) -> list[dict[str, Any]]:
+    document = json.loads(
+        run_checked(
+            [
+                "gh",
+                "api",
+                f"repos/{repository}/actions/runs/{run_id}/pending_deployments",
+            ]
+        )
+    )
+    if not isinstance(document, list) or any(
+        not isinstance(deployment, dict) for deployment in document
+    ):
+        raise ReleasePlanError(
+            f"GitHub returned malformed pending deployments for run {run_id}"
+        )
+    return document
+
+
+def pending_environment_names(deployments: list[dict[str, Any]]) -> tuple[str, ...]:
+    names = []
+    for deployment in deployments:
+        environment = deployment.get("environment")
+        name = environment.get("name") if isinstance(environment, dict) else None
+        if not isinstance(name, str) or not name:
+            raise ReleasePlanError("GitHub returned a pending deployment without an environment")
+        names.append(name)
+    return tuple(sorted(set(names)))
+
+
+def watch_workflow_run(
+    repository: str,
+    run_id: int,
+    label: str,
+    *,
+    verbose: bool = False,
+) -> None:
+    if not verbose:
+        previous: tuple[str, str | None, tuple[str, ...]] | None = None
+        while True:
+            run = workflow_run(repository, run_id, label)
+            status = run.get("status")
+            conclusion = run.get("conclusion")
+            if not isinstance(status, str) or (
+                conclusion is not None and not isinstance(conclusion, str)
+            ):
+                raise ReleasePlanError(f"{label} run {run_id} has malformed state")
+            environments: tuple[str, ...] = ()
+            if status in {"queued", "in_progress", "pending", "waiting"}:
+                environments = pending_environment_names(
+                    pending_deployments(repository, run_id)
+                )
+            state = (status, conclusion, environments)
+            if state != previous:
+                detail = status if conclusion is None else f"{status}/{conclusion}"
+                if previous is None:
+                    print(f"{label} run {run_id}: {detail} ({run['html_url']})")
+                else:
+                    print(f"{label} run {run_id}: {detail}")
+                if environments:
+                    names = ", ".join(environments)
+                    print(
+                        "pending protected-environment approval for "
+                        f"{names}; an authorized reviewer must open the run URL above "
+                        "and use Review deployments. Inspect the pending request with:"
+                    )
+                    print(
+                        "gh api "
+                        f"repos/{repository}/actions/runs/{run_id}/pending_deployments"
+                    )
+                previous = state
+            if status == "completed":
+                if conclusion != "success":
+                    raise ReleasePlanError(
+                        f"{label} run {run_id} concluded {conclusion!r}"
+                    )
+                return
+            time.sleep(5)
+
     try:
         result = subprocess.run(
             [
@@ -2162,6 +2262,7 @@ def request_release_candidate(
     print_request: bool,
     wait_for_ci: bool = False,
     wait_for_candidate: bool = False,
+    verbose_wait: bool = False,
 ) -> int:
     try:
         context = prepare_release_context(repo, version, release_id)
@@ -2190,7 +2291,11 @@ def request_release_candidate(
                 "and stack.status"
             )
         if wait_for_ci:
-            ci_run = wait_for_exact_protected_ci(repository, resolved_source)
+            ci_run = wait_for_exact_protected_ci(
+                repository,
+                resolved_source,
+                verbose_wait=verbose_wait,
+            )
             ci_run_id, ci_url = workflow_run_identity(ci_run, "protected-main CI")
             print(
                 f"protected-main CI passed for {resolved_source}: "
@@ -2255,6 +2360,7 @@ def request_release_candidate(
                     repository,
                     candidate_run_id,
                     "release candidate",
+                    verbose=verbose_wait,
                 )
                 print(f"release candidate run {candidate_run_id} passed")
     except (OSError, UnicodeError, ReleasePlanError) as exc:
@@ -2375,7 +2481,7 @@ def verify_candidate_run(
     repository: str,
     candidate_run: int,
     version: str,
-    release_id: str,
+    release_id: str | None,
     source_sha: str | None,
 ) -> tuple[dict[str, Any], str]:
     with tempfile.TemporaryDirectory(prefix="registry-candidate-") as directory:
@@ -2476,6 +2582,183 @@ def verify_candidate_run(
             candidate_run, run_attempt, manifest_sha
         )
         return manifest, binding
+
+
+def tagged_candidate_binding(
+    repo: Path,
+    tag: str,
+) -> tuple[str, dict[str, Any]]:
+    reference = f"refs/tags/{tag}"
+    if run_checked(["git", "cat-file", "-t", reference], cwd=repo).strip() != "tag":
+        raise ReleasePlanError(f"{tag} is not one immutable annotated source tag")
+    local_object = run_checked(["git", "rev-parse", reference], cwd=repo).strip()
+    source_sha = resolve_commit(repo, reference, f"annotated tag {tag} target")
+    peeled = f"{reference}^{{}}"
+    remote_lines = run_checked(
+        ["git", "ls-remote", "--tags", "origin", reference, peeled],
+        cwd=repo,
+    ).splitlines()
+    remote: dict[str, str] = {}
+    for line in remote_lines:
+        parts = line.split("\t", 1)
+        if (
+            len(parts) != 2
+            or HEX40.fullmatch(parts[0]) is None
+            or parts[1] in remote
+        ):
+            raise ReleasePlanError(f"origin returned malformed state for tag {tag}")
+        remote[parts[1]] = parts[0]
+    if remote != {reference: local_object, peeled: source_sha}:
+        raise ReleasePlanError(
+            f"local annotated tag {tag} does not exactly match origin; fetch and "
+            "inspect the immutable remote tag before recovery"
+        )
+    message = run_checked(
+        ["git", "for-each-ref", "--format=%(contents)", reference],
+        cwd=repo,
+    )
+    return source_sha, release_candidate.parse_tag_binding(message)
+
+
+def release_for_tag(repository: str, tag: str) -> dict[str, Any] | None:
+    pages = json.loads(
+        run_checked(
+            [
+                "gh",
+                "api",
+                f"repos/{repository}/releases?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+    )
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ReleasePlanError("GitHub Releases response is malformed")
+    matches = [
+        release
+        for page in pages
+        for release in page
+        if isinstance(release, dict) and release.get("tag_name") == tag
+    ]
+    if len(matches) > 1:
+        raise ReleasePlanError(f"GitHub Release destination {tag} is ambiguous")
+    return matches[0] if matches else None
+
+
+def validate_recovery_release(
+    release: dict[str, Any] | None,
+    *,
+    tag: str,
+    manifest_sha256: str,
+) -> str:
+    if release is None:
+        return "absent"
+    marker = f"registry-stack-release-candidate-v2 manifest_sha256:{manifest_sha256}"
+    if (
+        release.get("tag_name") != tag
+        or release.get("name") != f"RegistryStack {tag}"
+        or release.get("prerelease") is not False
+        or marker not in str(release.get("body", ""))
+    ):
+        raise ReleasePlanError(f"GitHub Release {tag} is not bound to this candidate")
+    if release.get("draft") is not True or release.get("published_at") is not None:
+        raise ReleasePlanError(f"GitHub Release {tag} has malformed draft state")
+    return "draft"
+
+
+def verify_release_recovery(
+    repo: Path,
+    *,
+    tag: str,
+    repository: str,
+) -> int:
+    try:
+        if not tag.startswith("v"):
+            raise ReleasePlanError("tag must be canonical v<major>.<minor>.<patch> text")
+        tag_version = strict_semver(tag.removeprefix("v"))
+        verify_origin_repository(repo, repository)
+        release = release_for_tag(repository, tag)
+        if release is not None and release.get("draft") is False:
+            result = verify_public_release.verify(
+                repo=repo,
+                repository=repository,
+                tag=tag,
+            )
+            result["operation"] = "verify-recovery"
+            result["release_state"] = "published"
+            result["status"] = "complete"
+            print(json.dumps(result, indent=2, sort_keys=True))
+            print(
+                f"Release {tag} is already published and verified; do not retry it.",
+                file=sys.stderr,
+            )
+            return 0
+        if tag_version[0] != 0:
+            raise ReleasePlanError("Beta publication accepts only v0.x.y release tags")
+        if tag_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
+            raise ReleasePlanError(
+                "pre-v0.19 releases are immutable historical evidence; use the "
+                f"corresponding {tag} Git tag and archived assets"
+            )
+        source_sha, tag_binding = tagged_candidate_binding(repo, tag)
+        manifest, rendered_binding = verify_candidate_run(
+            repo,
+            repository=repository,
+            candidate_run=tag_binding["run_id"],
+            version=tag.removeprefix("v"),
+            release_id=None,
+            source_sha=source_sha,
+        )
+        if release_candidate.parse_tag_binding(rendered_binding) != tag_binding:
+            raise ReleasePlanError("annotated tag binding differs from the candidate attempt")
+        protected_main = refresh_protected_main(repo, repository)
+        workflow_revision = resolve_commit(
+            repo,
+            manifest["workflow"]["revision"],
+            "candidate workflow revision",
+        )
+        validate_candidate_ancestry(
+            repo,
+            source_sha=source_sha,
+            workflow_revision=workflow_revision,
+            protected_main_sha=protected_main,
+        )
+        release_state = validate_recovery_release(
+            release,
+            tag=tag,
+            manifest_sha256=tag_binding["manifest_sha256"],
+        )
+        retry_command = (
+            "gh workflow run release.yml "
+            f"--repo {shlex.quote(repository)} --ref main -f {shlex.quote(f'tag={tag}')}"
+        )
+        result = {
+            "operation": "verify-recovery",
+            "status": "verified",
+            "tag": tag,
+            "source_sha": source_sha,
+            "candidate_run": tag_binding["run_id"],
+            "release_state": release_state,
+            "retry_command": retry_command,
+        }
+        print(json.dumps(result, indent=2, sort_keys=True))
+        print(
+            "The exact tag and candidate are valid for a fail-closed release "
+            "workflow retry:\n"
+            f"{retry_command}",
+            file=sys.stderr,
+        )
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ReleasePlanError,
+        release_candidate.CandidateError,
+        verify_public_release.PublicReleaseError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def verify_candidate_for_tag(
@@ -2644,6 +2927,11 @@ def main() -> int:
         action="store_true",
         help="wait for the exact dispatched candidate run to complete",
     )
+    candidate_parser.add_argument(
+        "--verbose-wait",
+        action="store_true",
+        help="show raw gh run watch output instead of compact state changes",
+    )
     verify_candidate_parser = subparsers.add_parser("verify-candidate")
     verify_candidate_parser.add_argument("--version", required=True)
     verify_candidate_parser.add_argument("--release-id", required=True)
@@ -2658,6 +2946,12 @@ def main() -> int:
     verify_public_parser.add_argument("--tag", required=True)
     verify_public_parser.add_argument("--repo", type=Path, default=ROOT)
     verify_public_parser.add_argument(
+        "--repository", default="registrystack/registry-stack"
+    )
+    recovery_parser = subparsers.add_parser("verify-recovery")
+    recovery_parser.add_argument("--tag", required=True)
+    recovery_parser.add_argument("--repo", type=Path, default=ROOT)
+    recovery_parser.add_argument(
         "--repository", default="registrystack/registry-stack"
     )
     args = parser.parse_args()
@@ -2694,6 +2988,7 @@ def main() -> int:
             print_request=args.print_request,
             wait_for_ci=args.wait_for_ci,
             wait_for_candidate=args.wait,
+            verbose_wait=args.verbose_wait,
         )
     if args.command == "verify-candidate":
         return verify_candidate_for_tag(
@@ -2724,6 +3019,12 @@ def main() -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         return 0
+    if args.command == "verify-recovery":
+        return verify_release_recovery(
+            args.repo.resolve(),
+            tag=args.tag,
+            repository=args.repository,
+        )
     raise AssertionError(args.command)
 
 
