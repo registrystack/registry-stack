@@ -149,6 +149,7 @@ This applies to `tutorial` and `how-to` pages, and to any page that asks the rea
 - Link text describes the target page. Do not write `click [here](...)` or `see [this page](...)`.
 - Do not capitalize the target page's title inside link text unless it is a proper noun.
 - A link earns its place when the reader would otherwise have to search for the target. A paragraph so dense with links that it cannot be read aloud is a list that has not admitted it yet.
+- Link into another page's section when the reader wants that section and not the page: a procedure they were sent to perform, a definition they were sent to check. Link to the page itself when they need its context to make sense of the part. `check-built-links` resolves every fragment against the built page, so a renamed heading fails the build rather than dropping the reader silently at the top.
 - Link to upstream standards bodies first, then to mirrors or summaries.
 - Pin links to code to a release tag (`v0.8.3`) or a commit SHA, never a branch, when the claim depends on the code state.
 
@@ -226,7 +227,6 @@ This applies to every page that touches a standard or a contract.
 - No real user data, real production hostnames, or real tokens, even in `example` blocks.
 - No relative links into source repos. Use full URLs pinned to a release tag or commit SHA.
 - No nested admonitions. No admonition immediately under H1.
-- No anchor links into other pages; link to the page and use the sidebar's on-this-page index.
 - No `should` as a promise. Either it does or it does not.
 
 ## Rules from GitLab we adopt verbatim
