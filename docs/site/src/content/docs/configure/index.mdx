@@ -25,6 +25,14 @@ Relay reads read-only SQLite and nothing else.
 The institution decides in SQL what leaves the system of record, and the
 contract then decides what leaves the API.
 Only views can be bound as sources, so a raw table never becomes a route.
+Naming any other engine as a source's kind is a compile-time refusal, not a
+runtime warning.
+
+A project can bind more than one named source, and each resource picks
+exactly one source and one view. Every source declares an expected schema
+fingerprint, a SHA-256 digest of its reviewed schema, so a source whose
+structure has drifted from what was reviewed refuses to compile rather than
+silently serving a changed shape.
 
 `relayctl inspect` reports the structure you are allowed to reason about:
 objects, columns, declared types, nullability, key membership, and a schema
@@ -38,6 +46,21 @@ Choose the source profile the institution can actually operate:
 | Publisher updates while Relay runs | No | Yes, through a separate trusted publisher |
 | Source revision | Captured content digest | Explicitly unversioned |
 | Available operations | Every declared operation | Identifier read and named exact lookup |
+
+A live read-only source compiles only identifier read and named exact lookup
+operations. A list or a collection search against a live source is a
+compile-time refusal, so bounded bbox search and any other collection search
+need a reviewed snapshot source instead. A published property is typed as one
+of `String`, `Boolean`, `Integer`, `Date`, `DateTime`, `Year`, `YearMonth`, or
+`ControlledCode`, chosen independently of the SQLite column's own storage
+type.
+
+This path assumes a source that is, or can be exposed as, read-only SQLite
+views. Evidence Gateway answers a different kind of question over a different
+source shape: named fixed HTTP JSON requests or a reviewed SQLite extract,
+returned as one signed assertion rather than a published API. See
+[Configure Evidence Gateway](./evidence/) if a bounded, minimum-disclosure
+assertion is what the reader needs instead of a published Registry Relay API.
 
 ## Author the contract, not the database
 

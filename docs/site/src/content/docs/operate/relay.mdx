@@ -34,7 +34,8 @@ administrative trust boundary.
 Prepare a dedicated Unix service identity, a private listener behind Transport Layer Security
 (TLS) termination, a sealed package, the matching snapshot or live read-only source, an audit
 location, independent audit-integrity and cursor-encryption keys, and a token issuer for protected
-access profiles.
+access profiles. [Configure Registry Mint](../../configure/mint/) when the deployment has no other
+identity provider to serve as that issuer.
 Do not place the package, source, secret, or audit path in a shared writable directory.
 For snapshot mode, make the SQLite file immutable outside Relay, preferably with a read-only mount.
 Relay verifies its captured digest before and after every statement, but a process cannot exclude a
@@ -186,3 +187,13 @@ Rollback activates a complete prior package only with its compatible source and 
 | A protected access profile returns `404 resource.not_found` | The issuer or token does not satisfy that profile's exact scope | Correct the issuer or caller authority. Do not expose a weaker profile as fallback. |
 | A spatial request returns `406 format.unsupported` | The selected access profile does not disclose a primary geometry or the format request is unsupported | Select an entitled geometry-bearing profile or request JSON or JSON-LD. |
 | A response is withheld | The terminal audit write failed | Restore the audit sink and verify its integrity before accepting traffic. |
+
+## Next
+
+- [Rotate credentials, keys, certificates, and trust](../advanced/rotate-credentials-and-trust/)
+  to rotate the audit-integrity, cursor-encryption, or token issuer credentials this deployment
+  used.
+- [Retention and persistent state](../retention-and-persistent-state/) to plan audit segment
+  retention beyond what this guide covers.
+- [Inspect and diagnose a running deployment](../advanced/inspect-and-diagnose/) to diagnose a
+  failing readiness or authorization check after deployment.
