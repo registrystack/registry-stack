@@ -59,7 +59,7 @@ async function requireRoute(read, pathname) {
 export async function smokeDocsDeployment({
   read,
   releasedTag,
-  deepRoute = '/start/quickstart/',
+  deepRoute = '/start/when-to-use/',
 } = {}) {
   if (!releaseTagPattern.test(releasedTag ?? '')) {
     throw new Error('released tag must be canonical v<major>.<minor>.<patch> text');
@@ -120,7 +120,7 @@ export async function smokeDocsDeployment({
 }
 
 export function parseSmokeArgs(args) {
-  const parsed = { attempts: 1, deepRoute: '/start/quickstart/' };
+  const parsed = { attempts: 1, deepRoute: '/start/when-to-use/' };
   while (args.length > 0) {
     const option = args.shift();
     if (option === '--root' && args[0]) parsed.root = resolve(args.shift());

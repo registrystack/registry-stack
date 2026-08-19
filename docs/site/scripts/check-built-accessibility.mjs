@@ -16,7 +16,7 @@ const criticalPaths = [
   'generated-artifacts/index.html',
   'operate/index.html',
 ];
-const optionalCriticalPaths = ['start/quickstart/index.html'];
+const optionalCriticalPaths = [];
 
 async function exists(path) {
   try {

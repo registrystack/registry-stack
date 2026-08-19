@@ -131,7 +131,10 @@ export default defineConfig({
     ...buildNotaryRetirementRedirects(currentDocsetRedirect),
     ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
     '/start/': internalRedirect('/'),
-    '/start/see-it-live/': internalRedirect('/start/quickstart/'),
+    '/start/see-it-live/': internalRedirect('/start/when-to-use/'),
+    // Retired: a second product chooser beside /start/when-to-use/, which
+    // absorbed its job.
+    '/start/quickstart/': internalRedirect('/start/when-to-use/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
@@ -146,11 +149,11 @@ export default defineConfig({
     '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
     // Retired first-call and source-review routes enter the supported local path.
     '/start/your-first-call/': internalRedirect('/tutorials/publish-governed-sqlite-registry/'),
-    '/start/test-current-source-revision/': internalRedirect('/start/quickstart/'),
+    '/start/test-current-source-revision/': internalRedirect('/start/when-to-use/'),
     // Retired lab tutorials land on the current chooser or Evidence Gateway
     // overview. The historical Solmara workflow used an obsolete Relay source
     // path and is no longer published as current guidance.
-    '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/quickstart/'),
+    '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/when-to-use/'),
     '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/evidence-quickstart/'),
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
@@ -193,7 +196,7 @@ export default defineConfig({
     '/projects/registry-relay/reference/': internalRedirect('/configure/relay/'),
     // Retired project routes redirect only when a current replacement exists.
     // Solmara Lab is an external adopter, not a Registry Stack product.
-    '/projects/registry-lab/demo-flow/': internalRedirect('/start/quickstart/'),
+    '/projects/registry-lab/demo-flow/': internalRedirect('/start/when-to-use/'),
   },
   integrations: [
     // Mermaid must come BEFORE starlight: its rehype plugin rewrites
@@ -286,6 +289,14 @@ export default defineConfig({
           items: [
             { label: 'Overview', link: '/' },
             { label: 'Which product fits your problem', slug: 'start/when-to-use' },
+            // There is no 'Evaluate Registry Relay' beside this, and the
+            // asymmetry is deliberate. Relay answers its own evaluation
+            // question by running: the SQLite tutorial reaches a protected API
+            // in one sitting, so a reader deciding about Relay is better served
+            // by doing it than by reading about it. Evidence Gateway asks an
+            // adopter to commit to signing keys and a question model before
+            // anything runs, so its case has to be made before the first
+            // command rather than after it.
             { label: 'Evaluate Evidence Gateway', slug: 'start/evaluate-evidence' },
             // A reader on their first page meets the vocabulary before they
             // meet a command, so the glossary sits here rather than in
@@ -330,6 +341,7 @@ export default defineConfig({
                     { label: 'OpenCRVS: registered parent', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
                     { label: 'OpenCRVS: birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
                     { label: 'DHIS2: immunization summary', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
+                    { label: 'FHIR R4: patient coverage SD-JWT VC', slug: 'tutorials/issue-fhir-evidence-as-vcs' },
                   ],
                 },
               ],
@@ -395,11 +407,13 @@ export default defineConfig({
             },
             {
               // The caller's half of Relay, which the authoring and operating
-              // pages never address. It carries one page today and stays open
-              // because of that; the tutorial that would join it is not
-              // written yet.
+              // pages never address. Open rather than collapsed, because a
+              // consumer arrives without knowing Relay has a client at all, so
+              // the tutorial that shows one has to be visible from the section
+              // rather than behind a disclosure.
               label: 'Call a Relay API',
               items: [
+                { label: 'Query a Relay with Python', slug: 'tutorials/query-relay-client' },
                 { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
               ],
             },

@@ -1,12 +1,11 @@
 ---
 title: Query Registry Relay with Python
 description: Install the thin Python client, read a synthetic business record, handle an optional continuation, revalidate a document, and handle a Relay refusal.
-status: draft
-draft: true
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-08-19"
 doc_type: tutorial
 persona:
   - consumer or verifier
@@ -14,8 +13,6 @@ locale: en
 standards_referenced:
   - openapi
 ---
-
-{/* This tutorial is not registered with an executable docs runner. Run reader-mode verification before changing status to current. */}
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
@@ -37,23 +34,30 @@ Complete [Publish a governed SQLite registry](../publish-governed-sqlite-registr
 the **Serve it** step. Leave Relay running and open a second shell. The resulting deployment is
 anonymous, contains synthetic records only, and listens at `http://127.0.0.1:8080`.
 
+That second shell also needs the `relay` binary on its path. The install below reads the exact
+release version from it rather than asking you to type one.
+
 Prebuilt Relay client packages start with Registry Stack v0.20.0. The running Relay must therefore
 be v0.20.0 or later. Install the client from that exact Relay release, using the wheel that matches
 this machine.
 
 ## Install the client and read a record
 
-### Do
-
-Create an isolated directory and virtual environment. The shell reads the exact release version
-from the running Relay and selects the wheel for the current machine.
+Work in a directory of its own, so the wheel and the virtual environment stay out of the registry
+project you built in the prerequisite:
 
 ```sh
 mkdir relay-python-query
 cd relay-python-query
 python3 -m venv .venv
 . .venv/bin/activate
+```
 
+Now read the release version from the running Relay, select the wheel for this machine, and
+install it. The release workflow attaches Python wheels to the matching GitHub Release, so the
+download comes from that release rather than from PyPI:
+
+```sh
 VERSION="$(relay --version | awk '{print $2}' | sed 's/^v//')"
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) WHEEL_PLATFORM="linux_x86_64" ;;
@@ -66,7 +70,12 @@ curl -fLO "https://github.com/registrystack/registry-stack/releases/download/v${
 python -m pip install "./${WHEEL}"
 ```
 
-Create `query_relay.py`:
+The wheel uses the Python 3.10 stable ABI, so supported newer Python versions import the same
+file. The three platform names in that `case` are the whole set: the release provides no Windows
+or Intel macOS wheel.
+
+Create `query_relay.py`. It constructs a client against the running deployment and reads one
+record:
 
 ```python
 import json
@@ -88,36 +97,28 @@ Run it:
 python query_relay.py
 ```
 
-### See
-
 ```text
 complete
 BIZ-0001
 {"legalForm": "COOPERATIVE", "legalName": "Aurora Freight Cooperative"}
 ```
 
-### Understand
+`complete` distinguishes a returned representation from a cache revalidation response. The record
+envelope stays a plain Python mapping, so reading it is ordinary dictionary access and the client
+carries no schema for your records. `domainData` holds only the two fields the synthetic Relay
+contract discloses, not the registered address and registrar note stored beside them in the same
+row.
 
-The release workflow attaches Python wheels to the matching GitHub Release. It does not publish
-this package to PyPI. The wheel uses the Python 3.10 stable ABI and can be imported by supported
-newer Python versions.
-
-`complete` distinguishes a returned representation from a cache revalidation response. The
-record envelope remains a plain Python mapping. Its `domainData` contains only the two fields
-disclosed by the synthetic Relay contract.
-
-### Adapt
-
-The release does not provide a Windows or Intel macOS wheel. Pass `fields=["legalName"]` to
-`read_record` to narrow the response. A caller cannot use fields to widen the contract's
-disclosure profile. Use the [Relay client API reference](../../reference/relay-client-api/)
-before adding authentication or private certificate roots.
+Pass `fields=["legalName"]` to `read_record` to narrow that response further. Narrowing is the only
+direction available: a caller cannot use fields to widen the contract's disclosure profile. Read
+the [Relay client API reference](../../reference/relay-client-api/) before adding authentication or
+private certificate roots.
 
 ## Handle an optional continuation exactly
 
-### Do
-
-Append this discovery loop to `query_relay.py`, then run the file again:
+Relay returns a continuation only when a further page exists, so a caller has to branch on its
+presence instead of assuming it. Append this discovery loop to `query_relay.py`, then run the file
+again:
 
 ```python
 page = client.resources(page_size=1)
@@ -133,36 +134,29 @@ while True:
     page = client.continue_resources(continuation)
 ```
 
-### See
-
-The new final line is:
+The run ends with one new line:
 
 ```text
 registered-business
 ```
 
-### Understand
-
-This deployment has one resource, so its first page has no continuation. On a deployment with
-more resources, `continuation` is exactly `{"cursor": "<opaque-cursor>"}`. Pass that returned
-mapping unchanged to `continue_resources`. Do not extract its cursor, rebuild the mapping, or add
-first-page options.
+This deployment has one resource, so its first page has no continuation and the loop breaks on the
+first pass. On a deployment with more resources, `continuation` is exactly
+`{"cursor": "<opaque-cursor>"}`. Pass that returned mapping unchanged to `continue_resources`. Do
+not extract its cursor, rebuild the mapping, or add first-page options.
 
 Record-list and search pages use route-bound continuation mappings. Hand those unchanged to
 `continue_list_records` or `continue_search`, respectively. The client never advances a page on
 its own.
 
-### Adapt
-
-Persist a continuation only as the complete returned mapping. The matching continuation method
-validates it again, so a resource, record-list, or search continuation cannot be substituted for
-another route.
+If you persist a continuation between runs, persist the complete returned mapping. The matching
+continuation method validates it again, so a resource, record-list, or search continuation cannot
+be substituted for another route.
 
 ## Revalidate OpenAPI with a strong entity tag
 
-### Do
-
-Append this conditional request and run the file:
+The OpenAPI document is cacheable, which lets a second request ask Relay whether the copy you
+already hold is still current. Append this conditional request and run the file:
 
 ```python
 first = client.openapi()
@@ -174,9 +168,7 @@ print(second["kind"])
 print(second["etag"] == first["etag"])
 ```
 
-### See
-
-The four new lines are:
+The run ends with four new lines:
 
 ```text
 complete
@@ -185,23 +177,20 @@ not_modified
 True
 ```
 
-### Understand
-
 The first response carries raw OpenAPI bytes and a validated strong ETag. The second call sends
 that tag as `If-None-Match`. Relay answers `304 Not Modified`, and the binding returns a
-`not_modified` outcome with the echoed tag and trace identifier instead of a body.
+`not_modified` outcome with the echoed tag and trace identifier instead of a body. Nothing in that
+second outcome carries the document, so a caller that discarded the first body has nothing left to
+serve.
 
-### Adapt
-
-Store the complete response body and ETag together. Reuse the stored body only when the next
-outcome is `not_modified` and its ETag matches. Conditional requests remain explicit for every
-cacheable method.
+Store the complete response body and ETag together, then reuse the stored body only when the next
+outcome is `not_modified` and its ETag matches. Revalidation stays explicit for every cacheable
+method: the client sends `If-None-Match` only on a call where you passed `etag`.
 
 ## Handle a Relay refusal
 
-### Do
-
-Append this request for a missing synthetic record and run the file:
+A record identifier the register does not hold is a refusal, not an empty result. Append this
+request for a missing synthetic record and run the file:
 
 ```python
 from registry_relay_client import RelayClientError
@@ -215,9 +204,7 @@ except RelayClientError as error:
     print(error.code)
 ```
 
-### See
-
-The three new lines are:
+The run ends with three new lines:
 
 ```text
 problem
@@ -225,17 +212,13 @@ problem
 consultation.unresolved
 ```
 
-### Understand
-
 A valid Relay Problem becomes `RelayClientError` with stable, value-free attributes. The client
 does not include response bodies, request selectors, credentials, URLs, or header values in the
 error. Only a registered `429` Problem can carry `retry_after_seconds`.
 
-### Adapt
-
-Branch on `kind`, then use `status` and `code` when they are present. Treat `trace_id` as the
-correlation value for an operator. Decide at the application boundary whether a request is safe
-to repeat because the client performs no automatic retries.
+Branch on `kind` first, then use `status` and `code` when they are present. Treat `trace_id` as the
+correlation value to give an operator. Decide at your application boundary whether a request is
+safe to repeat, because the client performs no automatic retries.
 
 ## Clean up
 
@@ -259,15 +242,6 @@ registry project remains available for later Relay exercises.
 - A strong-ETag revalidation path that distinguishes complete and `304` outcomes.
 - A refusal path that uses stable error facts without exposing request or credential values.
 
-## Next
-
-- [Read the Relay client API reference](../../reference/relay-client-api/) for every Rust, Python,
-  and Node operation and outcome shape.
-- [Author a Registry Relay project](../../configure/relay/) to add list, lookup, search, artifact,
-  and SDMX operations to a deployment.
-- [Review errors and status codes](../../reference/errors/) before mapping failures into an
-  application-facing API.
-
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -278,3 +252,12 @@ registry project remains available for later Relay exercises.
 | `configuration` at construction | The base URL is not HTTPS or loopback HTTP, or it contains credentials, a query, or a fragment | Use `http://127.0.0.1:8080` for this local deployment. |
 | `protocol` during a response | Relay returned a response outside the fixed media type, trace, ETag, Problem, or body contract | Record `trace_id` when present and inspect the Relay operator logs. Do not parse the rejected body in application code. |
 | A repeated call returns `not_modified` | The supplied strong ETag still identifies the current representation | Reuse the body stored with that same ETag. |
+
+## Next
+
+- [Read the Relay client API reference](../../reference/relay-client-api/) for every Rust, Python,
+  and Node operation and outcome shape.
+- [Author a Registry Relay project](../../configure/relay/) to add list, lookup, search, artifact,
+  and SDMX operations to a deployment.
+- [Review errors and status codes](../../reference/errors/) before mapping failures into an
+  application-facing API.
