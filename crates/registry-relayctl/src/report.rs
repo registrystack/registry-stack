@@ -215,24 +215,60 @@ fn detail_lines(
     Ok(())
 }
 
+/// SQLite places no restriction on what an identifier or a declared type may contain, so a schema
+/// object or column name observed through `read_text` can carry a line break, a terminal escape
+/// sequence, or a Unicode bidirectional override that would forge a report line or redraw the text
+/// around it. This replaces each such character with a visible, all-ASCII escape, so the value stays
+/// on the one line it was given and cannot issue an instruction to the terminal or the reader.
+/// Ordinary printable Unicode, including non-English identifiers, passes through unchanged.
+fn escape_schema_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if is_unsafe_for_a_report_line(character) {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
+/// C0 and C1 control characters (including newline, carriage return, tab, and escape) and DEL are
+/// unsafe for any terminal. The Unicode bidirectional formatting and override characters are unsafe
+/// for the same reason `rustc` denies them in a source literal: one of them can redraw the characters
+/// that follow it, so a name carrying one can read as different text than the bytes it is.
+fn is_unsafe_for_a_report_line(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0000}'..='\u{001f}'
+            | '\u{007f}'..='\u{009f}'
+            | '\u{200e}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
 fn push_object(lines: &mut Vec<String>, object: &InspectedObject) -> Result<(), serde_json::Error> {
     let kind = wire_label(&object.kind)?;
-    let mut header = vec![kind, object.name.clone()];
+    let mut header = vec![kind, escape_schema_text(&object.name)];
     if object.table_name != object.name {
-        header.push(format!("on {}", object.table_name));
+        header.push(format!("on {}", escape_schema_text(&object.table_name)));
     }
     lines.push(format!("{INDENT}{}", header.join(GAP)));
 
-    let name_width = align_width(object.columns.iter().map(|column| column.name.len()));
-    let type_width = align_width(
-        object
-            .columns
-            .iter()
-            .map(|column| column.declared_type.len()),
-    );
-    for column in &object.columns {
-        let name = &column.name;
-        let declared = &column.declared_type;
+    let columns: Vec<(String, String)> = object
+        .columns
+        .iter()
+        .map(|column| {
+            (
+                escape_schema_text(&column.name),
+                escape_schema_text(&column.declared_type),
+            )
+        })
+        .collect();
+    let name_width = align_width(columns.iter().map(|(name, _)| name.len()));
+    let type_width = align_width(columns.iter().map(|(_, declared)| declared.len()));
+    for (column, (name, declared)) in object.columns.iter().zip(&columns) {
         let nullable = if column.nullable {
             "nullable"
         } else {
@@ -984,5 +1020,295 @@ artifacts/long.json\n",
             2
         );
         assert!(output.ends_with("2 errors, 0 warnings.\n"));
+    }
+
+    // SQLite accepts a quoted identifier containing any byte a `TEXT` value can hold, including
+    // newlines, terminal escape sequences, and Unicode bidirectional overrides. Nothing upstream of
+    // this renderer restricts a schema name to a safe character set, so a hostile schema must not be
+    // able to forge a report line, emit a terminal escape sequence, or visually reorder the text
+    // around it. These fixtures use the same JSON shape as `INSPECTION`, with one schema-derived
+    // string replaced by a value a hostile schema could carry.
+
+    const INSPECTION_HOSTILE_COLUMN_NAME: &str = r#"{
+      "status": "success",
+      "diagnostics": [],
+      "details": {
+        "kind": "schema-inspection",
+        "fingerprint": "sha256:aaaa",
+        "objects": [
+          {
+            "kind": "table",
+            "name": "source_records",
+            "tableName": "source_records",
+            "columns": [
+              {
+                "name": "region_code\n\u001b[31mFORGED: 0 errors, 0 warnings.\u001b[0m",
+                "declaredType": "TEXT",
+                "nullable": true,
+                "primaryKey": false
+              }
+            ]
+          }
+        ],
+        "starter_file": null,
+        "statistical_starter_file": null
+      }
+    }"#;
+
+    const INSPECTION_CONTROL_COLUMN_NAME: &str = r#"{
+      "status": "success",
+      "diagnostics": [],
+      "details": {
+        "kind": "schema-inspection",
+        "fingerprint": "sha256:aaaa",
+        "objects": [
+          {
+            "kind": "table",
+            "name": "source_records",
+            "tableName": "source_records",
+            "columns": [
+              {
+                "name": "region_code_safe_control_value",
+                "declaredType": "TEXT",
+                "nullable": true,
+                "primaryKey": false
+              }
+            ]
+          }
+        ],
+        "starter_file": null,
+        "statistical_starter_file": null
+      }
+    }"#;
+
+    #[test]
+    fn a_hostile_column_name_cannot_forge_a_report_line() {
+        let hostile = rendered(INSPECTION_HOSTILE_COLUMN_NAME);
+        let control = rendered(INSPECTION_CONTROL_COLUMN_NAME);
+
+        assert!(
+            !hostile.contains('\u{1b}'),
+            "a raw escape byte reached the rendering: {hostile:?}"
+        );
+        assert_eq!(
+            hostile.lines().count(),
+            control.lines().count(),
+            "the embedded newline changed the number of report lines: {hostile:?}"
+        );
+        assert!(
+            !hostile.lines().any(|line| line.starts_with("FORGED")),
+            "the forged text opened its own report line: {hostile:?}"
+        );
+    }
+
+    const INSPECTION_HOSTILE_OBJECT_NAMES: &str = r#"{
+      "status": "success",
+      "diagnostics": [],
+      "details": {
+        "kind": "schema-inspection",
+        "fingerprint": "sha256:aaaa",
+        "objects": [
+          {
+            "kind": "index",
+            "name": "source_records_key\n\u001b[31mFORGED: 0 errors, 0 warnings.\u001b[0m",
+            "tableName": "source_records\n\u001b[32mFORGED-TABLE\u001b[0m",
+            "columns": []
+          }
+        ],
+        "starter_file": null,
+        "statistical_starter_file": null
+      }
+    }"#;
+
+    const INSPECTION_CONTROL_OBJECT_NAMES: &str = r#"{
+      "status": "success",
+      "diagnostics": [],
+      "details": {
+        "kind": "schema-inspection",
+        "fingerprint": "sha256:aaaa",
+        "objects": [
+          {
+            "kind": "index",
+            "name": "source_records_key_safe_control_value",
+            "tableName": "source_records_safe_control_value",
+            "columns": []
+          }
+        ],
+        "starter_file": null,
+        "statistical_starter_file": null
+      }
+    }"#;
+
+    #[test]
+    fn a_hostile_object_or_table_name_cannot_forge_a_report_line() {
+        let hostile = rendered(INSPECTION_HOSTILE_OBJECT_NAMES);
+        let control = rendered(INSPECTION_CONTROL_OBJECT_NAMES);
+
+        assert!(
+            !hostile.contains('\u{1b}'),
+            "a raw escape byte reached the rendering: {hostile:?}"
+        );
+        assert_eq!(
+            hostile.lines().count(),
+            control.lines().count(),
+            "an embedded newline changed the number of report lines: {hostile:?}"
+        );
+        assert!(
+            !hostile
+                .lines()
+                .any(|line| line.starts_with("FORGED") || line.starts_with("FORGED-TABLE")),
+            "the forged text opened its own report line: {hostile:?}"
+        );
+    }
+
+    const INSPECTION_HOSTILE_DECLARED_TYPE: &str = r#"{
+      "status": "success",
+      "diagnostics": [],
+      "details": {
+        "kind": "schema-inspection",
+        "fingerprint": "sha256:aaaa",
+        "objects": [
+          {
+            "kind": "table",
+            "name": "source_records",
+            "tableName": "source_records",
+            "columns": [
+              {
+                "name": "region_code",
+                "declaredType": "TEXT\n\u001b[31mFORGED: 0 errors, 0 warnings.\u001b[0m",
+                "nullable": true,
+                "primaryKey": false
+              }
+            ]
+          }
+        ],
+        "starter_file": null,
+        "statistical_starter_file": null
+      }
+    }"#;
+
+    const INSPECTION_CONTROL_DECLARED_TYPE: &str = r#"{
+      "status": "success",
+      "diagnostics": [],
+      "details": {
+        "kind": "schema-inspection",
+        "fingerprint": "sha256:aaaa",
+        "objects": [
+          {
+            "kind": "table",
+            "name": "source_records",
+            "tableName": "source_records",
+            "columns": [
+              {
+                "name": "region_code",
+                "declaredType": "TEXT_safe_control_value",
+                "nullable": true,
+                "primaryKey": false
+              }
+            ]
+          }
+        ],
+        "starter_file": null,
+        "statistical_starter_file": null
+      }
+    }"#;
+
+    #[test]
+    fn a_hostile_declared_type_cannot_forge_a_report_line() {
+        let hostile = rendered(INSPECTION_HOSTILE_DECLARED_TYPE);
+        let control = rendered(INSPECTION_CONTROL_DECLARED_TYPE);
+
+        assert!(
+            !hostile.contains('\u{1b}'),
+            "a raw escape byte reached the rendering: {hostile:?}"
+        );
+        assert_eq!(
+            hostile.lines().count(),
+            control.lines().count(),
+            "the embedded newline changed the number of report lines: {hostile:?}"
+        );
+        assert!(
+            !hostile.lines().any(|line| line.starts_with("FORGED")),
+            "the forged text opened its own report line: {hostile:?}"
+        );
+    }
+
+    // A raw string literal cannot hold U+202E directly: rustc denies an invisible
+    // text-direction codepoint appearing literally in source. `\u{202e}` keeps the
+    // codepoint out of the source text while still producing it in the parsed JSON.
+    const INSPECTION_BIDI_OVERRIDE_COLUMN_NAME: &str = "{
+      \"status\": \"success\",
+      \"diagnostics\": [],
+      \"details\": {
+        \"kind\": \"schema-inspection\",
+        \"fingerprint\": \"sha256:aaaa\",
+        \"objects\": [
+          {
+            \"kind\": \"table\",
+            \"name\": \"source_records\",
+            \"tableName\": \"source_records\",
+            \"columns\": [
+              {
+                \"name\": \"region\u{202e}code_public\",
+                \"declaredType\": \"TEXT\",
+                \"nullable\": true,
+                \"primaryKey\": false
+              }
+            ]
+          }
+        ],
+        \"starter_file\": null,
+        \"statistical_starter_file\": null
+      }
+    }";
+
+    /// U+202E (RIGHT-TO-LEFT OVERRIDE) tells a terminal or editor to draw the characters after it in
+    /// reverse, so a column named `region\u{202e}code_public` can draw as something else entirely.
+    /// Left in the rendering, it would keep reordering everything printed after it on the same line.
+    #[test]
+    fn a_bidi_override_in_a_column_name_is_neutralized() {
+        let output = rendered(INSPECTION_BIDI_OVERRIDE_COLUMN_NAME);
+        assert!(
+            !output.contains('\u{202e}'),
+            "a raw bidirectional override character reached the rendering: {output:?}"
+        );
+    }
+
+    const INSPECTION_NON_ASCII_COLUMN_NAMES: &str = r#"{
+      "status": "success",
+      "diagnostics": [],
+      "details": {
+        "kind": "schema-inspection",
+        "fingerprint": "sha256:aaaa",
+        "objects": [
+          {
+            "kind": "table",
+            "name": "source_records",
+            "tableName": "source_records",
+            "columns": [
+              {"name": "région_code", "declaredType": "TEXT", "nullable": true, "primaryKey": false},
+              {"name": "注册", "declaredType": "TEXT", "nullable": true, "primaryKey": false}
+            ]
+          }
+        ],
+        "starter_file": null,
+        "statistical_starter_file": null
+      }
+    }"#;
+
+    /// Legitimate schemas use non-English identifiers. Escaping is for bytes that are dangerous to a
+    /// terminal or a reader, not for ordinary printable Unicode outside ASCII, so a name like these
+    /// must reach the rendering unchanged and still readable.
+    #[test]
+    fn non_ascii_column_names_render_intact() {
+        let output = rendered(INSPECTION_NON_ASCII_COLUMN_NAMES);
+        assert!(
+            output.contains("région_code"),
+            "a non-ASCII Latin column name was altered: {output:?}"
+        );
+        assert!(
+            output.contains("注册"),
+            "a non-ASCII CJK column name was altered: {output:?}"
+        );
     }
 }
