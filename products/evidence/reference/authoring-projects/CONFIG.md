@@ -24,8 +24,8 @@ compile, and compiling is where the frozen contract applies.
 
 Every authored document is closed. Each type in `model.rs` and `marker.rs`
 carries `#[serde(deny_unknown_fields)]`, so a key the form does not know is a
-rejection rather than something carried along. All names below are exact and
-case-sensitive.
+rejection rather than something carried along. All names in this reference are
+exact and case-sensitive.
 
 ## What an authoring project holds
 
@@ -377,7 +377,7 @@ does not state. `compile_concept` writes them into a generated codelist as its
 codes, and `validate_code` in `crates/registry-evidence/src/bundle.rs` requires
 each code to begin with an ASCII alphanumeric and to continue with ASCII
 alphanumerics, `.`, `_`, `:`, or `-`. A value such as `New York` satisfies
-every rule in the table above and is then refused as an invalid codelist code.
+every rule in the Answers table and is then refused as an invalid codelist code.
 The other three types carry no second grammar: a `boolean` compiles to an empty
 constraint object, a `bounded-integer` states the same bound in both layers,
 and a `reviewed-structured-value`'s named schema is the only authority on its
@@ -581,7 +581,7 @@ model cannot ship without a line here, and a line here cannot outlive its key.
 The blocks are generated. After regenerating the schemas with
 `products/evidence/scripts/check-authoring-schema.sh`, run
 `products/evidence/scripts/check-config-key-paths.sh --write`, review the diff,
-and document the new keys in the prose above.
+and document the new keys in this page's prose.
 
 Parity is the same rule the frozen contracts are held to, and it is not the
 same promise. These schemas are adopter tooling. A key path leaving this

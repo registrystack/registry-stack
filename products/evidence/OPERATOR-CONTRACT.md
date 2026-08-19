@@ -745,8 +745,9 @@ requires; it is what proves sealed history was not tampered with.
 
 ## Audit chain rotation and rollback
 
-Audit-segment rotation below keeps one key and one continuous epoch. Rotating
-the audit master is different and always starts a new epoch:
+Audit-segment rotation, described later in this section, keeps one key and one
+continuous epoch. Rotating the audit master is different and always starts a
+new epoch:
 
 1. Drain traffic and stop the sole writer.
 2. Run `evidence verify-audit`; record the old chain head, bundle revision,
@@ -856,7 +857,7 @@ Run against a running service, the command verifies sealed history only and
 says so in `active-segment`, because reading the active segment while a writer
 may be mid-append would race the write and risk reporting a partially written
 final record as corruption; that is expected and is not itself a finding. To
-prove the active segment too, stop the service first, as under Rollback below.
+prove the active segment too, stop the service first, as under Rollback.
 A gap in the sealed sequence, for example sequence 3 archived and removed while
 1, 2, and 4 remain, is reported as a distinct missing-segment result naming the
 absent sequence and stating that it is not corruption, so an operator can tell
@@ -1012,11 +1013,11 @@ makes the endpoint scrapable by every neighbouring workload. `127.0.0.1` with
 a same-pod or same-host collector is the shape that keeps the operator
 boundary the operator intended; any wider binding must be closed by a network
 policy, and the operator owns that control.
-
-The two request-boundary series above describe the HTTP boundary only. Version
-1 publishes no source-call, signing, or credential-acquisition series. A slow
-or failing upstream source is visible only as evidence-request duration and as
-the problem code the boundary returned; signing, audit-chain, and
+ `evidence_http_requests_total` and `evidence_http_request_duration_seconds`
+describe the HTTP boundary only. Version 1 publishes no source-call, signing,
+or credential-acquisition series. A slow or failing upstream source is visible
+only as evidence-request duration and as the problem code the boundary
+returned; signing, audit-chain, and
 source-credential health are reported by `/ready` rather than by telemetry.
 
 Three unlabeled gauges are published on the same listener. None carries any of
@@ -1105,12 +1106,12 @@ resolved by check; readiness owns them. Fixture evaluation
 covers positive, negative, boundary, missing-data, source-failure,
 existence-disclosure, and anti-reconstruction behavior without a running
 source.
-
-`evidence check --require-runtime-dependencies` is the pre-routing container
-form. In addition to the checks above, it opens and verifies the audit writer,
-requires the signer self-test, resolves source credentials without sending an
-evidence-data request, and requires the configured access-token JWKS endpoint
-to provide a usable key set. This fail-closed preflight does not change normal
+ `evidence check --require-runtime-dependencies` is the pre-routing container
+form. In addition to what `evidence check` verifies, it opens and verifies the
+audit writer, requires the signer self-test, resolves source credentials
+without sending an evidence-data request, and requires the configured
+access-token JWKS endpoint to provide a usable key set. This fail-closed
+preflight does not change normal
 serving readiness, which retains its bounded issuer-outage behavior.
 
 For `assuranceProfile: local`, supervised Mint may use the exact canonical
@@ -1329,9 +1330,9 @@ recommended deployment posture. Keep the shipped defaults and tune from
 observed traffic.
 
 ## Capacity planning
-
-The measured rate above is one host with one constant source. Sizing a real
-deployment is a matter of finding which ceiling binds first, and for most
+ The rate in the Measured throughput section is one host with one constant
+source. Sizing a real deployment is a matter of finding which ceiling binds
+first, and for most
 deployments it is not Evidence.
 
 Outbound source concurrency binds first whenever the provider is slower than
@@ -1377,11 +1378,11 @@ none of those. It appears only as `evidence_http_request_duration_seconds`
 rising while the request count stays flat, because Evidence is waiting on the
 provider and reporting success when the answer arrives; confirming that
 diagnosis needs source latency observed at the provider, which is why the
-`concurrencyLimit` arithmetic above is worth doing before traffic rather than
+`concurrencyLimit` arithmetic is worth doing before traffic rather than
 after. Because the audit sink commits in groups, a deployment held to few
-requests in flight also pays a higher per-record audit cost than the table
-above, which is a consequence of the low concurrency rather than a separate
-problem to tune.
+requests in flight also pays a higher per-record audit cost than the table in
+the Measured throughput section, which is a consequence of the low concurrency
+rather than a separate problem to tune.
 
 ## Verification and release limit
 

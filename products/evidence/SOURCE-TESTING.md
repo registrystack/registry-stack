@@ -208,7 +208,8 @@ The shared cases are:
   expecting only the data-free unavailable result. It carries no lookup label
   because the provider has already hidden whether the upstream state was no
   match or ambiguity; the one neutral case satisfies both fixture coverage
-  categories while the HTTP contract cases above prove exact wire matching;
+  categories while the `unresolvedProblem` tuple and negative cases prove
+  exact wire matching;
 - `401`, `403`, `429`, and `5xx`;
 - timeout, redirect, and response larger than the configured maximum;
 - credentials rejected without any credential value in diagnostics;
@@ -324,7 +325,7 @@ post-checkpoint gap list, see [`FIRST-CURL-TEST.md`](FIRST-CURL-TEST.md). For
 the same deterministic path exercised through the SD-JWT VC response format and
 its offline verifier, see [`SD-JWT-VC-DEMO.md`](SD-JWT-VC-DEMO.md). Both are
 mock-backed and credential-free, so neither is a live test and neither depends
-on the ordering below.
+on the required order for live tests.
 
 Live tests are implemented in a separate ignored integration-test target. The
 required order is:

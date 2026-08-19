@@ -65,7 +65,7 @@ Per-append cost is 3.1 to 3.8 ms.
 On macOS, `File::sync_all` issues `F_FULLFSYNC`, a true device write barrier. On
 Linux the same call is an ordinary `fsync`, which on NVMe is far cheaper. **These
 figures are a macOS floor and must be re-measured on the target Linux host
-before they are quoted as production numbers or used to justify the work below.**
+before they are quoted as production numbers or used to justify the group commit work.**
 
 ## Horizontal scaling works today
 

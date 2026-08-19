@@ -461,12 +461,12 @@ reprojection, spatial joins, or dynamic spatial extension.
 
 ### Bounded statistical-dataflow profile
 
-The statistical routes above exist only for a compiled `bindings.sdmx`. Data
-uses the frozen SDMX media types and supports a keyed route plus the identical
-omitted-key alias. Structure reads expose only the exact generated dataflow and
-DSD artifacts. Schema, availability, history, and structure-maintenance routes
-do not exist. There are no placeholder responses that promise those future
-surfaces.
+The SDMX routes in the HTTP contract section exist only for a compiled
+`bindings.sdmx`. Data uses the frozen SDMX media types and supports a keyed
+route plus the identical omitted-key alias. Structure reads expose only the
+exact generated dataflow and DSD artifacts. Schema, availability, history, and
+structure-maintenance routes do not exist. There are no placeholder responses
+that promise those future surfaces.
 
 The dataflow's one fixed access decision, metadata visibility, snapshot cache
 posture, source revision, query ceiling, and audit gates apply identically to
@@ -535,7 +535,8 @@ Reviewed SQLite views are the source disclosure boundary. They exclude internal
 columns, normalize public values, delink identifiers, implement reviewed
 derivations, and expose only intended source bindings. Relay never accepts
 caller-created projections. A request may only narrow the authorized compiled
-disclosure profile as described above.
+disclosure profile described in the Registry operations and safe requester
+minimization section.
 
 ### Small, explainable access decisions
 

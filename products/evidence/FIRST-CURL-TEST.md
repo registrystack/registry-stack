@@ -93,8 +93,8 @@ claim.
 
 The first-curl bundle and its matched grant both permit `unsigned-json`, so you
 may ask the same route for a visibly unsigned envelope. Run this before the
-signed request below, because the harness shuts down as soon as it verifies the
-signed response:
+signed request in the next section, because the harness shuts down as soon as
+it verifies the signed response:
 
 ```bash
 curl --fail-with-body \
