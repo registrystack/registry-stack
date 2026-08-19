@@ -31,7 +31,7 @@ receive them.
     'The completed role-bound relationship tutorial',
     'The Evidence Gateway toolset',
     'Access to the public OpenCRVS demo',
-    'curl and an editor',
+    'curl, python3, and an editor',
   ]}
 />
 
@@ -622,21 +622,52 @@ Read the mother's national ID without leaving its value in shell history:
 printf 'Mother national ID: ' >&2
 IFS= read -rs OPENCRVS_MOTHER_NID
 printf '\n' >&2
+export OPENCRVS_MOTHER_NID
 ```
 
-Prepare a request using Josh's national ID and that candidate-parent value:
+Write both subjects into an owner-only request file. Josh's national ID is the child, and the
+value you typed is the candidate parent:
+
+```sh
+python3 - <<'PY'
+import json
+import os
+
+selection = {
+    "subjects": [
+        {"role": "child", "field": "national_id", "value": "3617402568"},
+        {
+            "role": "candidate-parent",
+            "field": "national_id",
+            "value": os.environ["OPENCRVS_MOTHER_NID"],
+        },
+    ]
+}
+descriptor = os.open(
+    "../opencrvs-parent-subjects.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+)
+with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
+    json.dump(selection, destination, separators=(",", ":"))
+    destination.write("\n")
+
+print("Subject file: ready")
+PY
+unset OPENCRVS_MOTHER_NID
+```
+
+Prepare a request from that file:
 
 ```sh
 evidencectl request prepare registered-parent \
   --purpose relationship-check \
-  --subject child:national_id=3617402568 \
-  --subject "candidate-parent:national_id=$OPENCRVS_MOTHER_NID" \
+  --subjects-file ../opencrvs-parent-subjects.json \
   --name opencrvs-parent
-unset OPENCRVS_MOTHER_NID
 ```
 
-Use this only with the public synthetic record. In a real deployment, selectors need an input
-path that does not expose identifiers in shell history or process arguments.
+Use this only with the public synthetic record.
+`evidencectl` takes either `--subject` or `--subjects-file` and refuses both, so the value you
+typed never reaches a command line. It reads the file only when the file is a regular file you own
+with exactly one link and mode 0600.
 
 Preparation obtains short-lived local authorization and records verification expectations before
 a response exists. It does not contact OpenCRVS.
@@ -765,21 +796,58 @@ boolean question instead.
 
 ## Inspect the audit and clean up
 
-Stop the services, verify the audit chain, and remove the sealed local generation:
+Stop the services:
 
 ```sh
 evidencectl dev stop
-evidencectl audit show --last-operation
-evidencectl dev clean
 ```
 
-The audit identifies each authorized question, purpose, requester pseudonym, decision, and
-disclosed concept. It does not record selectors, the OpenCRVS token, source response, boolean, or
-returned national IDs.
+Inspect the last operation:
+
+```sh
+evidencectl audit show --last-operation
+```
+
+```text
+ACCESS AUTHORIZED registered-parent-identifiers family-case-record requester=<pseudonym>
+DISCLOSURE RELEASED registered_parent_national_ids
+```
+
+The requester value changes on each fresh project. This view covers the last operation only, so it
+shows the identifier question rather than the boolean one you asked first.
+
+Read those two lines for what they leave out. They name the requester pseudonym, the question, the
+purpose it was authorized under, and the one concept released. That concept is a list of parent
+identifiers, and the audit still carries no national ID: not the child's, not the mother's, and not
+the candidate value you typed at the prompt. Neither line carries the OpenCRVS token, the search
+response, the tracking ID, or the registration number. That gap is the point of the trail. An
+operator can establish that a caller was authorized to receive registered parent identifiers under
+a stated purpose, and cannot read those identifiers out of the audit.
+
+Remove the sealed local generation and the request file holding the two national IDs:
+
+```sh
+evidencectl dev clean
+rm -f ../opencrvs-parent-subjects.json
+```
 
 Keep the project, Record Search client, and two local credential files if you are continuing to the
 birth-certificate tutorial. Otherwise, delete the client in OpenCRVS and remove the credential
 files when you finish.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| The OpenCRVS token request fails with 401 | The Record Search client was deleted, its secret was rotated, or the demo reset its integrations. | Create a new Record Search client and rewrite `secrets/opencrvs-client-id` and `secrets/opencrvs-client-secret`. Keep both values out of shell history and tracked files. |
+| Signing in to the demo fails | The demo rotated its published logins, or the environment was rebuilt. | Take the current logins from the OpenCRVS Farajaland integration demo documentation. Do not use a real OpenCRVS account to complete this tutorial. |
+| Writing the subject file fails with `FileExistsError` | `os.open` refuses `O_EXCL` when the file is already there, so a second run cannot overwrite it. | Remove `../opencrvs-parent-subjects.json` and run the step again. |
+| The request returns no assertion | The demo was reset and the synthetic registration no longer exists under that national ID, so the fixed search matched nothing. | Confirm the record is still in the demo. Leave the extractor's `no_match` path alone; a missing registration is an answer. |
+| Evidence Gateway reports a source protocol error | A parent identifier appears in the declaration without the record marking it authenticated, or the result set contradicts `total`. | Read the record in the demo. Leave the authentication check in place: an unverified parent entry is not a registered parent. |
+| The relationship question answers `false` for a parent you believe is recorded | The candidate national ID does not match the identifier the registration records for that role. | Compare it with the record in the demo. `false` is the source's current answer, not a defect to tune away. |
+| Requests start failing after several runs | OpenCRVS audits its searches and applies a daily request limit on the integration demo. | Wait for the limit to reset before running the tutorial again. Do not add retries around the source. |
+| Evidence Gateway reports a source dependency failure | The demo host was unreachable or slow, or the response exceeded `timeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
+| The token request or the search fails with a certificate error | An intercepting proxy or an out-of-date trust store on your machine. | Repair the trust store, or exempt the demo hosts from interception. Do not reach for `--insecure`: the source denies redirects and reaches OpenCRVS over HTTPS only. |
 
 ## Next
 

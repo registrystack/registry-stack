@@ -31,7 +31,7 @@ Credential (SD-JWT VC). The credential exposes `givenName`, `familyName`, `dateO
     'The completed OpenCRVS registered-parent tutorial project',
     'A Record Search client for the public OpenCRVS demo',
     'The Evidence Gateway toolset',
-    'curl and an editor',
+    'curl, python3, awk, and an editor',
   ]}
 />
 
@@ -477,7 +477,8 @@ The supported value retains the governed evidence form:
 ```
 
 The signed credential carries an always-visible `birthCertificate` container and four nested
-disclosures. Count the disclosure segments in the verified credential:
+disclosures, one for each top-level field in `schemas/birth-certificate.yaml`. Count the
+disclosure segments in the credential:
 
 ```sh
 awk -F '~' '{print "disclosures:", NF - 2}' opencrvs-birth-certificate.sd-jwt
@@ -487,25 +488,61 @@ awk -F '~' '{print "disclosures:", NF - 2}' opencrvs-birth-certificate.sd-jwt
 disclosures: 4
 ```
 
+An SD-JWT VC serializes as the issuer JWT, one segment per disclosure, and a trailing tilde, which
+is why the count is the number of tilde-separated fields minus two.
+
 Evidence Gateway's V1 verifier checks the complete stored SD-JWT VC response. Wallet presentation, omission of
 selected disclosures, and key-binding JWT validation remain outside this profile.
 
 ## Inspect the audit and clean up
 
-Stop the services, verify the last operation, and remove the sealed local generation:
+Stop the services:
 
 ```sh
 evidencectl dev stop
+```
+
+Inspect the last operation:
+
+```sh
 evidencectl audit show --last-operation
+```
+
+```text
+ACCESS AUTHORIZED birth-certificate civil-registration-extract requester=<pseudonym>
+DISCLOSURE RELEASED birth_certificate
+```
+
+The requester value changes on each fresh project.
+
+Read those two lines for what they leave out.
+They name the requester pseudonym, the question, the purpose it was authorized under, and the one
+concept released.
+Neither line carries a given name, a family name, a date of birth, or a location identifier, so
+the trail records that a birth certificate was released without becoming a second copy of it.
+Neither line carries the child's national ID, the OpenCRVS token, or the search response.
+An operator reviewing this trail can establish who asked, why, and what was released, and cannot
+reconstruct the certificate from it.
+
+Remove the sealed local generation:
+
+```sh
 evidencectl dev clean
 ```
 
-The audit records the authorized requirement, purpose, requester pseudonym, decision, response
-format, and disclosed concept. It does not record the child selector, OpenCRVS token, source
-response, or certificate fields.
-
 Delete the Record Search client in OpenCRVS when you finish. Remove its two credential files when
 you no longer need the project.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| The request returns no assertion for a subject that worked earlier | The demo was reset and the synthetic registration no longer exists under that national ID, so the fixed search matched nothing. | Sign in to the demo as the prerequisite tutorial describes and confirm the record is still there. Leave the extractor's `no_match` path alone; a missing registration is an answer. |
+| Evidence Gateway reports an ambiguous source result | More than one registered birth now carries that national ID in the demo data. | Keep `resultLimit: 2` and the `ambiguous` outcome. An ambiguous civil-registration match is a fact about the record set. |
+| The OpenCRVS token request fails with 401 | The Record Search client was deleted, its secret was rotated, or the demo reset its integrations. | Create a new Record Search client and rewrite `secrets/opencrvs-client-id` and `secrets/opencrvs-client-secret`. Keep both values out of shell history and tracked files. |
+| Requests start failing after several runs | OpenCRVS audits its searches and applies a daily request limit on the integration demo. | Wait for the limit to reset before running the tutorial again. Do not add retries around the source. |
+| Evidence Gateway reports a source dependency failure | The demo host was unreachable or slow, or the response exceeded `timeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
+| The token request or the search fails with a certificate error | An intercepting proxy or an out-of-date trust store on your machine. | Repair the trust store, or exempt the demo hosts from interception. Do not reach for `--insecure`: the source denies redirects and reaches OpenCRVS over HTTPS only. |
 
 ## Next
 
