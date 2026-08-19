@@ -11,7 +11,24 @@ async function page(path) {
   return readFile(resolve(siteRoot, path), 'utf8');
 }
 
-test('production Evidence tutorials keep the build, Transit, optional Mint, and Compose boundaries explicit', async () => {
+// These tutorials describe deployments this repository cannot replay: they need
+// a real Vault or OpenBao, a deployment repository, and a target host. This file
+// is therefore a drift check on the pages themselves, and it is deliberately a
+// small one.
+//
+// One test decides whether an assertion belongs here: if a page lost this, would
+// an adopter be left less safe, with nothing else noticing? A token that reaches
+// a command line or stays on disk, a private key that becomes exportable, a
+// service that starts holding a provider token, a retired signing version that
+// can still sign, a boundary between two services that quietly disappears.
+// Those stay.
+//
+// Command spelling, directory layouts, placeholder names, page structure, and
+// component usage do not. They are what a page says rather than what the
+// deployment must be, and pinning them here only makes these pages harder to
+// write. If you are adding an assertion because a page happens to contain a
+// string, stop.
+test('production Evidence tutorials keep their secret handling, signing, and Mint boundaries explicit', async () => {
   const [build, transit, rotation, mint, compose] = await Promise.all([
     page('src/content/docs/tutorials/build-and-deploy-evidence-project.mdx'),
     page('src/content/docs/tutorials/move-evidence-to-production-signing.mdx'),
@@ -20,37 +37,34 @@ test('production Evidence tutorials keep the build, Transit, optional Mint, and 
     page('src/content/docs/tutorials/integrate-evidence-candidate-with-docker-compose.mdx'),
   ]);
 
-  assert.match(build, /evidencectl build/u);
-  assert.match(build, /\.evidence\/dev/u);
-  assert.match(build, /evidence --runtime "<candidate>\/runtime\.yaml" verify-audit/u);
+  // The access token goes into an owner-only file, never onto a command line or
+  // into shell history.
   assert.match(build, /install -m 600 \/dev\/null "<owner-only-curl-config>"/u);
-  assert.match(build, /Authorization: Bearer <access-token>/u);
-  assert.match(build, /environments\/production\/evidence/u);
-  assert.match(build, /<new-candidate-directory>\/[\s\S]*public-keys\//u);
-  assert.match(build, /<QuickstartMeta/u);
-  assert.match(transit, /type=ecdsa-p256/u);
+  // The deployment procedure still verifies the audit chain it just moved.
+  assert.match(build, /verify-audit/u);
+  // The provider keeps the private key: it cannot be exported, and it cannot be
+  // backed up in the clear.
+  assert.match(transit, /exportable=false/u);
   assert.match(transit, /allow_plaintext_backup=false/u);
-  assert.match(transit, /use_auto_auth_token/u);
+  // The proxy attaches the provider credential, so the service process never
+  // holds one. The value carries the control: under "true" a client-supplied
+  // token wins, and only "force" makes the proxy always override.
+  assert.match(transit, /use_auto_auth_token\s*=\s*"force"/u);
   assert.match(transit, / receives no Vault or OpenBao token/u);
+  // Rotation and revocation both depend on the floor that stops a retired
+  // version from signing again.
   assert.match(rotation, /min_encryption_version/u);
-  assert.doesNotMatch(rotation, /Permit both Transit versions/u);
-  assert.doesNotMatch(rotation, /Remove the old Transit permission/u);
+  // Mint is optional, signs through Transit rather than a local private key,
+  // and states the replay-protection limit an operator must not overclaim.
   assert.match(mint, /Evidence Gateway does not require Mint/u);
-  assert.match(mint, /--mint-config "<deployment-repository>\/environments\/production\/mint\/mint\.yaml"/u);
   assert.match(mint, /signer\.kind: transit/u);
   assert.match(mint, /memory-only/u);
-  assert.match(mint, /umask 077\nmint token/u);
+  // The issued token is created owner-only and removed after use.
+  assert.match(mint, /umask 077/u);
   assert.match(mint, /rm -f "<owner-only-token-file>"/u);
-  assert.match(mint, /<QuickstartMeta/u);
-  assert.match(compose, /candidate\/bundle/u);
-  assert.match(compose, /runtime\.docker\.yaml/u);
-  assert.match(compose, /configurationRevision/u);
-  assert.match(compose, /not output from `evidencectl build`/u);
-  assert.match(compose, /user: "65532:65532"/u);
-  assert.match(compose, /<transit-socket-directory>:\/run\/registry-evidence/u);
+  // Two services, two signing paths: sharing one would let either sign as the
+  // other.
   assert.match(compose, /Do not share the Evidence Gateway proxy or socket with Mint/u);
-  assert.match(compose, /docker compose down/u);
-  assert.match(compose, /<QuickstartMeta/u);
 });
 
 test('the maintained Compose adapter keeps Evidence independent from Mint scaffolding', async () => {

@@ -36,28 +36,37 @@ async function runShell(script) {
   }
 }
 
-test('the dry-run gate registers the shared Evidence start tutorials', async () => {
+// Counts are reported, never required: a writer who adds or removes a command
+// block under an existing heading changes these numbers and neither the gate
+// nor this test may object. Only the registration is asserted.
+test('the dry-run gate resolves every registered Evidence tutorial', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  assert.match(output, /first-evidence-assertion: 21 sh fences, 19 executed/u);
-  assert.match(output, /request-evidence-as-sd-jwt-vc: 16 sh fences, 16 executed/u);
-  assert.match(
-    output,
-    /run-oid4vci-interoperability-checks: 4 sh fences, 3 executed/u,
-  );
-  // Two of its sixteen are the documented clone and build of the client, which
-  // the replay substitutes with a build of this checkout.
-  assert.match(
-    output,
-    /request-evidence-from-an-application: 16 sh fences, 14 executed/u,
-  );
-  assert.match(output, /return-a-governed-value: 10 sh fences, 10 executed/u);
-  assert.match(output, /assert-a-role-bound-relationship: 9 sh fences, 9 executed/u);
-  assert.match(output, /refuse-unsafe-evidence-requests: 11 sh fences, 11 executed/u);
-  assert.match(output, /verify-an-assertion-as-a-consumer: 3 sh fences, 3 executed/u);
-  assert.match(output, /control-who-can-request-evidence: 20 sh fences, 20 executed/u);
-  assert.match(output, /issue-fhir-evidence-as-vcs: 10 sh fences, 10 executed/u);
+  for (const slug of [
+    'first-evidence-assertion',
+    'request-evidence-as-sd-jwt-vc',
+    'run-oid4vci-interoperability-checks',
+    'request-evidence-from-an-application',
+    'return-a-governed-value',
+    'assert-a-role-bound-relationship',
+    'refuse-unsafe-evidence-requests',
+    'verify-an-assertion-as-a-consumer',
+    'control-who-can-request-evidence',
+    'issue-fhir-evidence-as-vcs',
+  ]) {
+    assert.match(output, new RegExp(`${slug}: \\d+ sh fences, \\d+ executed`, 'u'));
+  }
   assert.match(output, /Checked 10 tutorials\./u);
+});
+
+// The unexecuted surface is information a reviewer needs, not a rule: the
+// install one-liner and the port-conflict recovery block are documented and
+// never replayed, so the gate says so rather than pinning their text.
+test('the gate names the sh fences it did not execute', async () => {
+  const { code, output } = await runGate({}, ['--dry-run', '--only', 'first-evidence-assertion']);
+  assert.equal(code, 0, output);
+  assert.match(output, /not executed: fence 01 under "Install Evidence Gateway"/u);
+  assert.match(output, /not executed: fence 21 under "If local ports are already in use"/u);
 });
 
 test('--only accepts the current first Evidence tutorial', async () => {
@@ -72,8 +81,8 @@ test('--only accepts the current first Evidence tutorial', async () => {
   const branch = source.match(/\n\tfirst-evidence-assertion\)[\s\S]*?\n\t\t;;/u)?.[0];
   assert.ok(branch, 'the first Evidence replay spec must exist');
   assert.match(branch, /stop-background/u);
-  assert.match(branch, /run:5-6/u);
-  assert.match(branch, /source mock check --config mocks\/source\.yaml/u);
+  assert.match(branch, /run:Preview a synthetic source\|3/u);
+  assert.match(branch, /run:Try the SD-JWT VC serialization/u);
 });
 
 test('--only accepts the role-bound relationship follow-up', async () => {
@@ -141,7 +150,10 @@ test('the FHIR replay tracks the read-through adapter for cleanup', async () => 
     /\n\tissue-fhir-evidence-as-vcs\)[\s\S]*?\n\t\t;;/u,
   )?.[0];
   assert.ok(branch, 'the FHIR replay spec must exist');
-  assert.match(branch, /"run:3"\s+"track-pid:fhir-read-through\.pid"/u);
+  assert.match(
+    branch,
+    /"run:Run a live FHIR read-through adapter"\s+"track-pid:fhir-read-through\.pid"/u,
+  );
   assert.match(source, /track-pid:\*\) emit_track_pid_step/u);
   assert.match(source, /BACKGROUND_PIDS\+=\("\$tracked_pid"\)/u);
 });
@@ -181,8 +193,8 @@ test('the application tutorial replays the Python client from this checkout', as
   )?.[0];
   assert.ok(branch, 'the application replay spec must exist');
   assert.match(branch, /"python-client"/u);
-  assert.match(branch, /"private_key_jwt"/u);
   assert.match(branch, /person-123 is_adult=True/u);
+  assert.match(branch, /person-456 is_adult=False/u);
 });
 
 test('the caller-access replay expects the privacy-safe refusal audit line', async () => {
@@ -228,6 +240,183 @@ test('the tutorial coverage check fails on an unregistered page', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Heading addressing
+// ---------------------------------------------------------------------------
+
+// Build a tutorials directory the gate will accept: every excluded page must
+// exist, and the one registered page under test is the real one, edited.
+async function tutorialFixtureRoot(edit) {
+  const source = await readFile(gate, 'utf8');
+  const excluded = extractBashArray(source, 'EXCLUDED_EVIDENCE_TUTORIALS');
+  const root = await mkdtemp(join(tmpdir(), 'evidence-tutorial-heading-test-'));
+  for (const slug of excluded) {
+    await writeFile(join(root, `${slug}.mdx`), '---\ntitle: stub\n---\n');
+  }
+  const page = await readFile(
+    resolve(scriptDir, '../src/content/docs/tutorials/first-evidence-assertion.mdx'),
+    'utf8',
+  );
+  await writeFile(join(root, 'first-evidence-assertion.mdx'), edit(page));
+  return root;
+}
+
+// The point of heading addressing. A writer who adds a command block under a
+// heading the journey already runs must not have to touch the gate, and the
+// added block must be replayed rather than silently skipped.
+test('a command block added under a replayed heading needs no gate change', async () => {
+  const root = await tutorialFixtureRoot((page) =>
+    page.replace(
+      '\n## Verify before reading\n',
+      '\n```sh\nevidencectl request list\n```\n\n## Verify before reading\n',
+    ),
+  );
+  try {
+    const before = await runGate({}, ['--dry-run', '--only', 'first-evidence-assertion']);
+    assert.equal(before.code, 0, before.output);
+    const baseline = before.output.match(
+      /first-evidence-assertion: (\d+) sh fences, (\d+) executed/u,
+    );
+    assert.ok(baseline, before.output);
+
+    const { code, output } = await runGate(
+      { EVIDENCE_TUTORIAL_DOCS_ROOT: root },
+      ['--dry-run', '--only', 'first-evidence-assertion'],
+    );
+    assert.equal(code, 0, output);
+    const added = output.match(/first-evidence-assertion: (\d+) sh fences, (\d+) executed/u);
+    assert.ok(added, output);
+    assert.equal(Number(added[1]), Number(baseline[1]) + 1);
+    assert.equal(Number(added[2]), Number(baseline[2]) + 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// The trade heading addressing makes: a renamed heading is a structural edit
+// to the journey, so it fails, by name, before any command runs.
+test('a renamed heading fails the gate by name', async () => {
+  const root = await tutorialFixtureRoot((page) =>
+    page.replace('\n## Request an assertion\n', '\n## Ask for an assertion\n'),
+  );
+  try {
+    const { code, output } = await runGate(
+      { EVIDENCE_TUTORIAL_DOCS_ROOT: root },
+      ['--dry-run', '--only', 'first-evidence-assertion'],
+    );
+    assert.notEqual(code, 0, 'a renamed heading must fail the gate');
+    assert.match(output, /no sh fence answers to "Request an assertion"/u);
+    // The message has to be actionable: it names the headings the page does
+    // carry, so the fix is reading the list rather than the script.
+    assert.match(output, /Ask for an assertion/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// A heading holding more than one sh fence cannot answer a step that runs
+// exactly one command, so the gate says which suffix is missing.
+test('a one-fence step under a multi-fence heading names the missing occurrence', async () => {
+  const source = await readFile(gate, 'utf8');
+  const root = await mkdtemp(join(tmpdir(), 'evidence-occurrence-test-'));
+  try {
+    await writeFile(join(root, 'index.tsv'), '01\t1\tRun it\n02\t2\tRun it\n');
+    const harness = join(root, 'resolve.sh');
+    await writeFile(
+      harness,
+      [
+        '#!/usr/bin/env bash',
+        'set -euo pipefail',
+        await liftFunction(source, 'resolve_fences'),
+        await liftFunction(source, 'resolve_one_fence'),
+        'resolve_one_fence tutorial "Run it" "$1" background',
+        '',
+      ].join('\n'),
+    );
+    const { code, output } = await runShell(`bash ${harness} ${root}`);
+    assert.notEqual(code, 0, 'an ambiguous one-fence step must fail');
+    assert.match(output, /names 2/u);
+    assert.match(output, /\|<occurrence>/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Behaviour assertions
+// ---------------------------------------------------------------------------
+
+async function runAssertTranscript(asserts, transcript) {
+  const source = await readFile(gate, 'utf8');
+  const root = await mkdtemp(join(tmpdir(), 'evidence-asserts-test-'));
+  const log = join(root, 'run.log');
+  await writeFile(log, transcript);
+  const harness = join(root, 'assert.sh');
+  await writeFile(
+    harness,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      await liftFunction(source, 'assert_transcript'),
+      `SPEC_ASSERTS=(${asserts.map((entry) => `'${entry}'`).join(' ')})`,
+      `assert_transcript tutorial '${log}'`,
+      '',
+    ].join('\n'),
+  );
+  try {
+    return await runShell(`bash ${harness}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+test('a retained behaviour assertion missing from the transcript fails', async () => {
+  const { code, output } = await runAssertTranscript(
+    ['VERIFIED', 'DISCLOSURE RELEASED is_adult'],
+    '==> fence 12\nVERIFIED\n==> fence 19\nACCESS AUTHORIZED adult-status age-check requester=x\n',
+  );
+  assert.notEqual(code, 0, 'a missing behaviour must fail the gate');
+  assert.match(output, /DISCLOSURE RELEASED is_adult/u);
+});
+
+test('a transcript showing every retained behaviour passes', async () => {
+  const { code, output } = await runAssertTranscript(
+    ['VERIFIED', 'DISCLOSURE RELEASED is_adult'],
+    'VERIFIED\nDISCLOSURE RELEASED is_adult\n',
+  );
+  assert.equal(code, 0, output);
+});
+
+// Every retained assertion has to earn its place by regressing silently. The
+// two the gate must never lose are the refusal that actually refused and the
+// tamper that was actually caught: both are printed by fences that a reader
+// runs and a regression would leave the transcript quietly clean.
+test('the refusal tutorial still asserts the refusal and the tamper', async () => {
+  const source = await readFile(gate, 'utf8');
+  const branch = source.match(
+    /\n\trefuse-unsafe-evidence-requests\)[\s\S]*?\n\t\t;;/u,
+  )?.[0];
+  assert.ok(branch, 'the refusal replay spec must exist');
+  assert.match(branch, /"HTTP 403"/u);
+  assert.match(branch, /"TAMPER REFUSED"/u);
+  // Startup chatter a successful exit already proves does not belong here.
+  assert.doesNotMatch(branch, /Evidence ready at/u);
+  assert.doesNotMatch(branch, /Prepared request:/u);
+  assert.doesNotMatch(branch, /Local Evidence stopped/u);
+});
+
+// This gate proves the documented commands still run. It does not police what
+// a page says, and the two arrays below are how it used to: one pinned how
+// many command blocks a page held, the other pinned strings the page had to
+// keep. Both made ordinary prose edits fail CI, and neither verified anything
+// replay does not already verify. Reintroducing either is the regression this
+// test exists to catch.
+test('the gate pins neither fence counts nor page strings', async () => {
+  const source = await readFile(gate, 'utf8');
+  assert.doesNotMatch(source, /SPEC_FENCES/u);
+  assert.doesNotMatch(source, /SPEC_LITERALS/u);
 });
 
 test('--only refuses a slug that is not registered', async () => {
@@ -360,19 +549,39 @@ async function fenceScratch() {
   return root;
 }
 
-// Run the gate's own run-fails emitter over one fence, and return the journey
-// lines it emits. The function is lifted out of the gate rather than restated
-// here, so this exercises the shipped code: sourcing the gate would run it.
+// Lift one named function out of the gate. Sourcing the gate would run it, so
+// the tests below exercise the shipped text of the function instead of
+// restating it.
+async function liftFunction(source, name) {
+  const lifted = source.match(
+    new RegExp(`\\n${name}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'u'),
+  )?.[0];
+  assert.ok(lifted, `${name} must exist in the gate`);
+  return lifted;
+}
+
+// Run the gate's own run-fails emitter over one fence addressed by heading,
+// and return the journey lines it emits.
 async function emitRunFailsStep(fenceBody) {
   const source = await readFile(gate, 'utf8');
-  const emitter = source.match(/\nemit_run_fails_step\(\) \{\n[\s\S]*?\n\}\n/u)?.[0];
-  assert.ok(emitter, 'the run-fails emitter must exist');
+  const emitter = [
+    await liftFunction(source, 'resolve_fences'),
+    await liftFunction(source, 'resolve_one_fence'),
+    await liftFunction(source, 'emit_run_fails_step'),
+  ].join('\n');
   const root = await mkdtemp(join(tmpdir(), 'evidence-refusal-test-'));
   await writeFile(join(root, 'fence-09.sh'), fenceBody);
+  await writeFile(join(root, 'index.tsv'), '09\t1\tRefuse before reading\n');
   const harness = join(root, 'emit.sh');
   await writeFile(
     harness,
-    ['#!/usr/bin/env bash', 'set -euo pipefail', emitter, 'emit_run_fails_step tutorial 9 "$1"', ''].join('\n'),
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      emitter,
+      'emit_run_fails_step tutorial "Refuse before reading" "$1"',
+      '',
+    ].join('\n'),
   );
   const { stdout } = await execFileAsync('bash', [harness, root]);
   return { root, journey: `set -euo pipefail\n${stdout}` };

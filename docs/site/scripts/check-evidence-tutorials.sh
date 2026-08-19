@@ -2,6 +2,20 @@
 #
 # Execute the current Evidence tutorials from a fresh reader directory.
 #
+# What this gate is for: proving that the commands the tutorials document still
+# run, and that a short list of behaviours a successful exit does not already
+# prove still holds. A refusal that still refuses, tampering that is still
+# caught, an audit entry that still records the disclosure it should.
+#
+# What this gate is NOT for: policing what a page says. It pins no fence count,
+# no command string and no documented output. Prose, the text around a
+# heading, output blocks and command wording are free to change without touching
+# this file, and a writer may add or remove a command block under a heading the
+# journey already runs with no change here at all. If you find yourself adding
+# an array of strings a page must contain, stop: that is the pinning this file
+# deliberately does not do, and it is what made these tutorials unreadable for
+# a human reader once already.
+#
 # This gate builds the Evidence toolset from the checked-out source unless
 # EVIDENCE_BIN, EVIDENCECTL_BIN, EVIDENCE_OID4VCI_BIN and MINT_BIN select exact
 # candidate or released bytes, then replays each registered tutorial's own
@@ -10,37 +24,61 @@
 #
 # Usage:
 #   scripts/check-evidence-tutorials.sh                 replay every tutorial
-#   scripts/check-evidence-tutorials.sh --dry-run       drift-check only
+#   scripts/check-evidence-tutorials.sh --dry-run       resolve the journeys only
 #   scripts/check-evidence-tutorials.sh --only <slug>   one tutorial and its prerequisites
 #
 # Registering a tutorial means adding its slug to EVIDENCE_TUTORIALS and a
-# branch to load_spec. Each spec pins:
-#   SPEC_FENCES     how many sh fences the tutorial holds; bump it when you
-#                   intentionally add or remove a documented command block
-#   SPEC_STEPS      the reader journey, in order, which need not follow fence
-#                   order: a tutorial that leaves one terminal in an earlier
-#                   directory is replayed by running its fence first
-#                     run:N or run:N-M   execute those sh fences
-#                     run-fails:N        execute one sh fence the tutorial
-#                                        documents as refused, and require it
-#                                        to exit non-zero
-#                     edit:H|lang|occ|H2|lang2|occ2|target
-#                                        apply a documented before/after fence
-#                                        pair to an existing file
-#                     save:H|lang|occ|target
-#                                        write a documented non-shell fence to
-#                                        the file the reader is told to create
-#                     background:N       run a one-line sh fence the tutorial
-#                                        leaves running in a second terminal
-#                     stop-background    stop the most recently started
-#                                        background fence where the page says
-#                                        to press Ctrl+C
-#                     wait-http:URL      block until that URL answers
-#                     python-client      install the Python client from this
-#                                        checkout, standing in for the
-#                                        documented clone and build
-#   SPEC_LITERALS   commands and outputs the tutorial must keep documenting
-#   SPEC_OUTPUTS    lines the replay transcript must contain
+# branch to load_spec. Each spec holds two things:
+#
+#   SPEC_STEPS    the reader journey, in order. It need not follow document
+#                 order: a tutorial that leaves one terminal in an earlier
+#                 directory is replayed by running its later fence first.
+#                 Fences are addressed by the heading they sit under, never by
+#                 position, so inserting a command block cannot silently move a
+#                 step onto the wrong command.
+#                   run:<Heading>              execute every sh fence under
+#                                              that heading, in document order
+#                   run:<Heading>|<n>          execute the nth sh fence under
+#                                              that heading
+#                   run-fails:<Heading>|<n>    execute one sh fence the page
+#                                              documents as refused, and
+#                                              require a non-zero exit
+#                   background:<Heading>|<n>   run a one-line sh fence the page
+#                                              leaves running in a second
+#                                              terminal
+#                   stop-background            stop the most recently started
+#                                              background fence, where the page
+#                                              says to press Ctrl+C
+#                   save:H|lang|occ|target     write a documented non-shell
+#                                              fence to the file the reader is
+#                                              told to create
+#                   edit:H|lang|occ|H2|lang2|occ2|target
+#                                              apply a documented before/after
+#                                              fence pair to an existing file
+#                   wait-http:URL              block until that URL answers
+#                   python-client              install the Python client from
+#                                              this checkout, standing in for
+#                                              the documented clone and build
+#                   fhir-mock                  start the sanitized local FHIR
+#                                              mock this gate carries
+#                   track-pid:PATH             adopt a PID a fence wrote, so
+#                                              cleanup reaches it
+#                 The |<n> suffix is optional wherever a heading holds a single
+#                 sh fence. Skipping is implicit: a fence under no listed
+#                 heading is simply not run, and the summary names it so a
+#                 reviewer can see the unverified surface.
+#
+#   SPEC_ASSERTS  behaviours the replay transcript must still show. One test
+#                 decides membership: would this regress silently, without any
+#                 command exiting non-zero? Startup chatter, "created", "ready"
+#                 and "prepared" lines fail that test, because the next command
+#                 would have failed without them. Do not grow this back into a
+#                 transcript pin.
+#
+# Renaming a heading breaks the steps that name it, by name, in --dry-run.
+# That is the trade, and it is a good one: a renamed heading is a structural
+# edit to the journey, it fails loudly rather than replaying the wrong command,
+# and it is exactly when the journey is worth walking again.
 #
 # Configuration:
 #   EVIDENCE_BIN / EVIDENCECTL_BIN /      run these exact binaries instead of
@@ -153,367 +191,252 @@ check_tutorial_coverage() {
 check_tutorial_coverage
 
 load_spec() {
-	SPEC_FENCES=0
 	SPEC_STEPS=()
-	SPEC_LITERALS=()
-	SPEC_OUTPUTS=()
+	SPEC_ASSERTS=()
 
 	case "$1" in
 	first-evidence-assertion)
-		SPEC_FENCES=21
 		SPEC_STEPS=(
-			"run:2"
+			"run:Preview a synthetic source|1"
 			"save:Preview a synthetic source|yaml|1|tutorial-source.openapi.yaml"
-			"background:3"
+			"background:Preview a synthetic source|2"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:4"
+			"run:Preview a synthetic source|3"
 			"stop-background"
-			"run:5-6"
+			"run:Create the Evidence Gateway project"
+			"run:Keep exact cases for the tutorial|1"
 			"save:Create the Evidence Gateway project|yaml|1|questions/adult-status.yaml"
 			"save:Create the Evidence Gateway project|rhai|1|derivations/adult-status.rhai"
 			"save:Keep exact cases for the tutorial|yaml|1|mocks/source.yaml"
 			"save:Keep exact cases for the tutorial|json|1|mocks/cases/person-123.json"
 			"save:Keep exact cases for the tutorial|json|2|mocks/cases/person-456.json"
 			"save:Keep exact cases for the tutorial|json|3|mocks/cases/person-789.json"
-			"run:7"
-			"background:8"
+			"run:Keep exact cases for the tutorial|2"
+			"background:Keep exact cases for the tutorial|3"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:9-20"
+			"run:Keep exact cases for the tutorial|4"
+			"run:Request an assertion"
+			"run:Verify before reading"
+			"run:Try the SD-JWT VC serialization"
+			"run:Stop the local services"
+			"run:Inspect the audit entry"
+			"run:Clean up"
 		)
-		SPEC_LITERALS=(
-			"releases/latest/download/evidencectl-install.sh | bash"
-			"evidencectl source mock serve --openapi tutorial-source.openapi.yaml"
-			"evidencectl source mock check --config mocks/source.yaml"
-			"evidencectl source mock serve --config mocks/source.yaml"
-			"evidencectl new adult-status"
-			"evidencectl request prepare adult-status"
-			"--config .evidence/requests/first-assertion/authorization.curl"
-			"evidencectl verify assertion.jws.json"
-			"--format sd-jwt-vc"
-			"--config .evidence/requests/first-vc/authorization.curl"
-			"evidencectl verify assertion.sd-jwt"
-			"evidencectl audit show --last-operation"
-			"evidencectl dev clean"
-		)
-		SPEC_OUTPUTS=(
-			"Source mock ready: mode=ephemeral origin=http://127.0.0.1:4010"
-			"Mock plan valid: operations=1 cases=3"
-			"Source mock ready: mode=materialized origin=http://127.0.0.1:4010"
-			"Created an editable OpenAPI authoring project in adult-status"
-			"Evidence ready at http://127.0.0.1:8080"
-			"Prepared request: .evidence/requests/first-assertion/request.json"
-			"Prepared request: .evidence/requests/first-vc/request.json"
+		# The assertion was verified, the audit recorded who asked and why, and
+		# exactly one field was released. Nothing else here regresses in
+		# silence: a mock that did not start or a project that was not created
+		# ends the journey at the next command.
+		SPEC_ASSERTS=(
 			"VERIFIED"
-			"Local Evidence stopped"
 			"ACCESS AUTHORIZED adult-status age-check requester="
 			"DISCLOSURE RELEASED is_adult"
-			"Removed stopped local Evidence state"
 		)
 		;;
 	request-evidence-as-sd-jwt-vc)
-		SPEC_FENCES=16
 		SPEC_STEPS=(
-			"background:1"
+			"background:Restart the source mock|1"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:2-10"
+			"run:Restart the source mock|2"
+			"run:Request a scalar credential"
+			"run:Inspect the compact structure after verification"
+			"run:Inspect issuer discovery"
+			"run:Prove tampering is refused"
 			"save:Model independently disclosed fields|yaml|1|schemas/adult-assessment.yaml"
 			"save:Model independently disclosed fields|yaml|2|questions/adult-assessment.yaml"
 			"save:Model independently disclosed fields|rhai|1|derivations/adult-assessment.rhai"
-			"run:11-16"
+			"run:Model independently disclosed fields"
+			"run:Clean up"
 		)
-		SPEC_LITERALS=(
-			"responseFormats: [signed-jws, sd-jwt-vc]"
-			"--format sd-jwt-vc"
-			"--header 'Accept: application/dc+sd-jwt'"
-			"/.well-known/jwt-vc-issuer"
-			"scalar-tampered.sd-jwt"
-			"type: reviewed-structured-value"
-			"sdJwtVc:"
-			"evidencectl verify structured.sd-jwt"
-		)
-		SPEC_OUTPUTS=(
-			"Evidence ready at http://127.0.0.1:8080"
-			"Prepared request: .evidence/requests/scalar-vc/request.json"
+		# The disclosure names are what a holder actually hands over, and the
+		# fences that print them exit zero whatever the credential carries, so a
+		# credential that started disclosing more would pass unnoticed.
+		SPEC_ASSERTS=(
 			"disclosure: urn:registrystack:evidence:local:concept:adult-status:is_adult"
 			"Tampered credential refused"
-			"Prepared request: .evidence/requests/structured-vc/request.json"
 			"disclosure: criterion"
 			"disclosure: isAdult"
 			"ACCESS AUTHORIZED adult-assessment age-assessment-review requester="
 			"DISCLOSURE RELEASED adult_assessment"
-			"Removed stopped local Evidence state"
 		)
 		;;
 	run-oid4vci-interoperability-checks)
-		SPEC_FENCES=4
 		SPEC_STEPS=(
-			"run:1"
+			"run:Copy the complete configuration"
 			"save:Copy the complete configuration|yaml|1|.tutorial/oid4vci-adopter/oid4vci.yaml"
-			"run:2"
-			"run:4"
+			"run:Replay the sanitized profile"
+			"run:Clean up"
 		)
-		SPEC_LITERALS=(
-			'actual `evidence-oid4vci` binary'
-			'against the copied file, runs `inspect`'
-			'probes `/health` and `/ready`'
-			"EVIDENCE_OID4VCI_ADOPTER_ROOT=\"\$PWD/.tutorial/oid4vci-adopter\""
-			"products/evidence/fixtures/interoperability/inji-oid4vci/profile.json"
-			"products/evidence/scripts/compat/inji-oid4vci.sh"
-			"PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests"
-			"EVIDENCE_INJI_OID4VCI=1 products/evidence/scripts/compat/inji-oid4vci-upstream.sh"
-			"PASS: pinned Inji OID4VCI source and client tests"
-			"combined upstream runner is macOS-only"
-			"Pinned Inji OID4VCI checking needs Java 17; the installed runtime is not Java 17."
-			"Pinned Inji OID4VCI checking needs ANDROID_HOME or ANDROID_SDK_ROOT to name an installed Android SDK."
-			"Pinned Inji OID4VCI checking needs Android SDK platform 34 and Build Tools 33.0.1."
-			"Pinned Inji OID4VCI checking needs full Xcode, not Command Line Tools alone."
-			"Pinned Inji OID4VCI checking could not inspect installed iOS simulators."
-			"Pinned Inji OID4VCI checking needs an available iPhone 15 simulator."
-			"2fa12c3285b6523db340c3dd2333454b750b40a4"
-			"f1d7ee2b14e996e18bfc7c40fbf89ec31b768951"
-			"dbe60eef9a8c7b71ba58ee81cc7d0e5a92af7c7c"
-		)
-		SPEC_OUTPUTS=(
-			"CONFIG COPIED: complete configuration has no untracked inputs"
-			"CONFIG CHECKED: complete delivery configuration is valid"
-			"METADATA INSPECTED: derived holder-bound batch ceiling is 4"
-			"SERVICE READY: health and readiness are available on the delivery listener"
-			"METRICS PRIVATE: metrics exist only on the separate loopback listener"
+		# The sanitized runner prints one line per phase and exits non-zero on
+		# any of them, so the phases hold themselves up. What they cannot hold
+		# up is having run at all: a filter that selects no test leaves the
+		# runner exiting zero with nothing done. One end-to-end line proves the
+		# wallet flow ran; the rest would be a transcript pin.
+		SPEC_ASSERTS=(
 			"PRESENTATION VERIFIED: public wallet flow returned holder-bound Evidence"
-			"CLEANUP COMPLETE: generated private material was removed"
-			"PASS: sanitized Inji OID4VCI profile and Registry-side interoperability tests"
 		)
 		;;
 	return-a-governed-value)
-		SPEC_FENCES=10
 		SPEC_STEPS=(
-			"background:1"
+			"background:Restart the source mock"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:2"
+			"run:Add the age-bracket question"
 			"save:Add the age-bracket question|yaml|1|questions/age-bracket.yaml"
 			"save:Add the age-bracket question|rhai|1|derivations/age-bracket.rhai"
-			"run:3-10"
+			"run:Start the updated project"
+			"run:Request and verify the bracket"
+			"run:Inspect the audit and clean up"
 		)
-		SPEC_LITERALS=(
-			"type: controlled-category"
-			"values: [under-18, 18-to-24, 25-to-64, 65-or-older]"
-			"evidencectl request prepare age-bracket"
-			"--config .evidence/requests/age-bracket/authorization.curl"
-			"evidencectl verify age-bracket.jws.json"
-			"evidencectl audit show --last-operation"
-			"evidencectl dev clean"
-		)
-		SPEC_OUTPUTS=(
-			"Evidence ready at http://127.0.0.1:8080"
-			"Prepared request: .evidence/requests/age-bracket/request.json"
+		SPEC_ASSERTS=(
 			"VERIFIED"
-			"Local Evidence stopped"
 			"ACCESS AUTHORIZED age-bracket service-path-selection requester="
 			"DISCLOSURE RELEASED age_bracket"
-			"Removed stopped local Evidence state"
 		)
 		;;
 	control-who-can-request-evidence)
-		SPEC_FENCES=20
 		SPEC_STEPS=(
-			"background:1"
+			"background:Restart the source mock|1"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:2-20"
+			"run:Restart the source mock|2"
+			"run:Define two access policies"
+			"run:Register the first local application"
+			"run:Start the protected service"
+			"run:Make an allowed request"
+			"run:Add an application without restarting"
+			"run:Use the application assigned the policy"
+			"run:Try a question the application was not granted"
+			"run:Revoke an application"
+			"run:Inspect the final audit operation"
+			"run:Clean up"
 		)
-		SPEC_LITERALS=(
-			"evidencectl access policy add age-checks --question adult-status"
-			"evidencectl access client add service-router"
-			"--config .evidence/requests/age-checker-refused/authorization.curl"
-			"--data-binary @.evidence/requests/age-checker-refused/request.json"
-			"evidencectl access client revoke age-checker"
-			"unexpected request preparation success"
-			"ACCESS REFUSED requester=<pseudonym> reason=not_authorized"
-		)
-		SPEC_OUTPUTS=(
-			"Evidence ready at http://127.0.0.1:8080"
-			"Added access policy age-checks for adult-status."
-			"Added client service-router with policy service-routing."
-			"Prepared request: .evidence/requests/age-checker-refused/request.json"
-			"Prepared request: .evidence/requests/service-router-allowed/request.json"
+		# This tutorial teaches refusal, so the refusals are what must hold.
+		# The unauthorized request's curl carries no --fail-with-body, so it
+		# exits zero on a 403 and a boundary that started answering 200 would
+		# leave the journey green. The revocation fence already requires a
+		# non-zero exit; the message is what proves it was refused because the
+		# client was revoked rather than for some unrelated reason.
+		SPEC_ASSERTS=(
+			"VERIFIED"
 			"HTTP 403"
 			'"code": "evidence.denied"'
-			"HTTP 200"
-			"VERIFIED"
 			"evidencectl: unknown or revoked active client age-checker"
-			"Local Evidence stopped"
 			"ACCESS REFUSED requester="
 			"reason=not_authorized"
-			"Removed stopped local Evidence state"
 		)
 		;;
 	assert-a-role-bound-relationship)
-		SPEC_FENCES=9
 		SPEC_STEPS=(
-			"run:1"
+			"run:Start a relationship registry|1"
 			"save:Start a relationship registry|python|1|registry.py"
-			"background:2"
+			"background:Start a relationship registry|2"
 			"wait-http:http://127.0.0.1:8002/openapi.json"
-			"run:3"
+			"run:Create the Evidence Gateway project"
 			"save:Create the Evidence Gateway project|yaml|1|questions/parent-relationship.yaml"
 			"save:Create the Evidence Gateway project|rhai|1|derivations/parent-relationship.rhai"
-			"run:4-9"
+			"run:Start the project"
+			"run:Bind both subjects to the request"
+			"run:Inspect the audit and clean up"
 		)
-		SPEC_LITERALS=(
-			"subjects:"
-			"--subject child:child_id=child-123"
-			"--subject candidate-parent:candidate_id=parent-456"
-			"--config .evidence/requests/parent-relationship/authorization.curl"
-			"evidencectl verify parent-relationship.jws.json"
-			"evidencectl dev clean"
-		)
-		SPEC_OUTPUTS=(
-			"Created an editable OpenAPI authoring project in parent-relationship"
-			"Evidence ready at http://127.0.0.1:8080"
-			"Prepared request: .evidence/requests/parent-relationship/request.json"
+		SPEC_ASSERTS=(
 			"VERIFIED"
-			"Local Evidence stopped"
 			"ACCESS AUTHORIZED parent-relationship relationship-check requester="
 			"DISCLOSURE RELEASED relationship_confirmed"
-			"Removed stopped local Evidence state"
 		)
 		;;
 	refuse-unsafe-evidence-requests)
-		SPEC_FENCES=11
 		SPEC_STEPS=(
-			"background:1"
+			"background:Restart the local boundary|1"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:2-11"
+			"run:Restart the local boundary|2"
+			"run:Prepare one authorized request"
+			"run:Change the purpose after preparation"
+			"run:Obtain and verify the authorized response"
+			"run:Change the signed response"
+			"run:Clean up"
 		)
-		SPEC_LITERALS=(
-			'request["purpose"] = "age-check"'
-			"--data-binary @unauthorized-request.json"
-			"--write-out 'HTTP %{http_code}\\n'"
-			"--data-binary @.evidence/requests/refusal-check/request.json"
-			"evidencectl verify tampered-response.jws.json"
-			"test ! -e tampered-response.verified.json"
-		)
-		SPEC_OUTPUTS=(
-			"Evidence ready at http://127.0.0.1:8080"
-			"Prepared request: .evidence/requests/refusal-check/request.json"
+		# The whole page is these three outcomes: the altered request was
+		# refused, the untouched one verified, and the altered response was
+		# caught. The refusal curl exits zero on a 403, so only the printed
+		# status separates a boundary that refused from one that answered.
+		SPEC_ASSERTS=(
 			"HTTP 403"
 			"VERIFIED"
 			"TAMPER REFUSED"
-			"Local Evidence stopped"
 		)
 		;;
 	verify-an-assertion-as-a-consumer)
-		SPEC_FENCES=3
-		SPEC_STEPS=("run:1-3")
-		SPEC_LITERALS=(
-			'context["trustedJwks"]'
-			'context["verificationPolicy"]'
-			".evidence/requests/first-assertion/verification.json"
-			"--jws assertion.jws.json"
-			"--jwks trusted-issuer-keys.json"
-			"--policy verification-policy.json"
-			'--at "$verified_at"'
+		SPEC_STEPS=(
+			"run:Start with three separate inputs"
+			"run:Re-verify the recorded decision"
 		)
-		SPEC_OUTPUTS=(
-			"authentic: yes"
-			"currently-valid: yes"
+		# `evidence verify` exits non-zero on both `authentic: no` and
+		# `currently-valid: no`, so the verdict holds itself up. The disclosed
+		# value does not: verification succeeds whatever the assertion says, and
+		# a consumer reading the wrong answer is the failure that matters.
+		SPEC_ASSERTS=(
 			'"value": true'
 		)
 		;;
 	request-evidence-from-an-application)
-		SPEC_FENCES=16
 		SPEC_STEPS=(
 			# The registry runs in the terminal the reader never moved out of
-			# the first tutorial's directory, so it starts before fence 1's
-			# `cd` rather than where the page prints it.
-			"background:7"
+			# the first tutorial's directory, so it starts before the `cd` the
+			# page opens with rather than where the page prints it.
+			"background:Start the local services|1"
 			"wait-http:http://127.0.0.1:4010/people/person-123"
-			"run:1-4"
-			# Stands in for fences 5 and 6, the documented clone and build.
+			"run:Give the application its own identity"
+			"run:Pin the keys your application trusts"
+			# Stands in for the two fences under "Build the Python client", the
+			# documented clone and build of the released client.
 			"python-client"
-			"run:8"
-			"run-fails:9"
-			"run:10-11"
+			"run:Start the local services|2"
+			"run-fails:Start the local services|3"
+			"run:Read the definitions once"
+			"run:Pin the procedure"
 			"save:Write the relying procedure|python|1|age_check.py"
-			"run:12-14"
-			"run-fails:15"
-			"run:16"
+			"run:Run it"
+			"run-fails:Refuse before reading"
+			"run:Stop the local services"
 		)
-		SPEC_LITERALS=(
-			"evidencectl access policy add app-age-checks --question adult-status"
-			"evidencectl access client add age-check-app"
-			"--generate-local-key"
-			"evidencectl jwks --out trusted-issuer-keys.json secrets/signing-p256-public.jwk.json"
-			'git clone --depth 1 --branch "v$installed"'
-			"-p registry-evidence-client-py --lib"
-			"--features registry-evidence-client-py/extension-module"
-			'cp "../registry-stack/target/debug/$built" python-module/registry_evidence_client.so'
-			'"private_key_jwt"'
-			'Path(".evidence/clients/age-check-app/private.jwk").read_text()'
-			"client.request_and_verify(client.prepare(spec))"
-			"subject_expectations=expectations_for(person_id)"
-		)
-		SPEC_OUTPUTS=(
-			"Source mock ready: mode=materialized origin=http://127.0.0.1:4010"
-			"Added access policy app-age-checks for adult-status."
-			"Added client age-check-app with policy app-age-checks."
-			"evidenceAudience: urn:registrystack:evidence:local:client:age-check-app"
-			"wrote trusted-issuer-keys.json"
-			"Evidence ready at http://127.0.0.1:8080"
-			"Mint ready at http://127.0.0.1:8081"
+		# What the relying application actually did. Both refusals already
+		# exit non-zero, so what is held here is the reason: an unnamed caller
+		# refused for want of a registered client, and an unverifiable response
+		# refused before anything was read. The two answers prove the right
+		# subject was resolved rather than a constant returned, the pinning line
+		# proves the subject binding is still recorded, and the assurance
+		# profile is the trust level a relying party reads off the deployment.
+		SPEC_ASSERTS=(
 			"evidencectl: the active project requires a registered client selected with --client"
 			'"assuranceProfile": "local"'
-			'"response_format": "signed-jws"'
 			"person-123 is_adult=True"
 			"person-456 is_adult=False"
 			"pinned binding recorded in subject-bindings.json"
 			"unverifiable response, nothing read (policy)"
-			"Local Evidence stopped"
-			"Removed stopped local Evidence state"
 		)
 		;;
 	issue-fhir-evidence-as-vcs)
-		SPEC_FENCES=10
 		SPEC_STEPS=(
-			"run:1"
+			"run:Select live synthetic records|1"
 			"save:Select live synthetic records|python|1|discover-fhir-records.py"
 			"fhir-mock"
-			"run:2"
+			"run:Select live synthetic records|2"
 			"save:Run a live FHIR read-through adapter|python|1|fhir-read-through.py"
-			"run:3"
+			"run:Run a live FHIR read-through adapter"
 			"track-pid:fhir-read-through.pid"
 			"save:Describe the exact FHIR reads|yaml|1|fhir-smart-r4.openapi.yaml"
-			"run:4"
+			"run:Describe the exact FHIR reads"
 			"save:Author the patient coverage question|yaml|1|questions/fhir-coverage-status.yaml"
 			"save:Author the patient coverage question|rhai|1|derivations/fhir-coverage-status.rhai"
 			"save:Author the healthcare-establishment question|yaml|1|questions/fhir-healthcare-establishment.yaml"
 			"save:Author the healthcare-establishment question|rhai|1|derivations/fhir-healthcare-establishment.rhai"
-			"run:5-10"
+			"run:Start the project"
+			"run:Request the patient coverage credential"
+			"run:Request the healthcare-establishment credential"
+			"run:Inspect the audit and clean up"
 		)
-		SPEC_LITERALS=(
-			'FHIR_TUTORIAL_TEST_BASE_URL'
-			'build_opener(ProxyHandler({}), NoRedirect)'
-			'headers={"Accept": "application/fhir+json"}'
-			'source: true'
-			'--subjects-file ../fhir-coverage-subjects.json'
-			'--subjects-file ../fhir-organization-subjects.json'
-			"--header 'Accept: application/dc+sd-jwt'"
-			'evidencectl audit show --last-operation'
-			'evidencectl dev clean'
-		)
-		SPEC_OUTPUTS=(
-			"Coverage selector file: ready"
-			"Organization selector file: ready"
-			"Created an editable OpenAPI authoring project in fhir-record-evidence"
-			"Evidence ready at http://127.0.0.1:8080"
-			"Mint ready at http://127.0.0.1:8081"
-			"Prepared request: .evidence/requests/fhir-coverage-vc/request.json"
-			"Prepared request: .evidence/requests/fhir-healthcare-establishment-vc/request.json"
-			"HTTP 200"
+		SPEC_ASSERTS=(
 			"VERIFIED"
-			"Local Evidence stopped"
 			"ACCESS AUTHORIZED fhir-healthcare-establishment healthcare-establishment-verification requester="
 			"DISCLOSURE RELEASED healthcare_provider_record_active"
-			"Removed stopped local Evidence state"
 		)
 		;;
 	*)
@@ -644,8 +567,9 @@ prepare_toolset() {
 # gate: it needs the network, and it would prove a released client rather than
 # the one in this checkout. Building the same crate from here instead is what
 # makes a client regression fail this gate on the commit that introduces it.
-# The documented commands stay pinned as SPEC_LITERALS, so an edit to them
-# still has to be deliberate.
+# The two documented fences it stands in for are reported as unexecuted, so
+# their release tag and build flags stay a reviewer's call rather than this
+# gate's.
 # The module is built for the stable ABI, so one built outside this script
 # imports under any CPython the replay userland carries, exactly as
 # EVIDENCE_CLIENT_PY_LIB's siblings let CI mount prebuilt binaries.
@@ -686,21 +610,72 @@ prepare_python_client() {
 # Journey assembly
 # ---------------------------------------------------------------------------
 
-# Emit the sh fences named by a run: step, in order.
-emit_run_step() {
-	local slug="$1" range="$2" fence_dir="$3"
-	local first="${range%%-*}"
-	local last="${range##*-}"
-	local i fence
-	for ((i = first; i <= last; i++)); do
-		fence="$(printf '%s/fence-%02d.sh' "$fence_dir" "$i")"
-		if [[ ! -f "$fence" ]]; then
-			printf 'tutorial spec error in %s: run step names sh fence %d, which does not exist\n' \
-				"$slug" "$i" >&2
+# Resolve a heading address to the sh fence numbers it names, in document
+# order, space separated.
+#
+# An address is a heading, optionally followed by |<occurrence> to name one
+# fence under it. Addressing by heading rather than by position is what lets a
+# writer add or remove a command block without touching a spec, and it is what
+# stops an inserted block from silently moving a later step onto the wrong
+# command.
+resolve_fences() {
+	local slug="$1" address="$2" fence_dir="$3"
+	local heading="$address" occurrence=""
+	if [[ "$address" == *'|'* ]]; then
+		heading="${address%%|*}"
+		occurrence="${address##*|}"
+		if [[ ! "$occurrence" =~ ^[1-9][0-9]*$ ]]; then
+			printf 'tutorial spec error in %s: fence occurrence must be a positive integer: %s\n' \
+				"$slug" "$address" >&2
 			exit 2
 		fi
-		printf '\nprintf "==> %s fence %02d\\n"\n' "$slug" "$i"
-		cat "$fence"
+	fi
+	local matched
+	matched="$(awk -F '\t' -v want="$heading" -v want_occurrence="$occurrence" '
+		$3 != want { next }
+		want_occurrence != "" && $2 != want_occurrence + 0 { next }
+		{ printf "%s ", $1 }
+	' "$fence_dir/index.tsv")"
+	matched="${matched% }"
+	if [[ -z "$matched" ]]; then
+		printf 'tutorial drift in %s: no sh fence answers to "%s"\n' "$slug" "$address" >&2
+		printf 'A step names a heading the page no longer carries, or an occurrence under it that no longer exists.\n' >&2
+		printf 'Renaming a heading is a structural edit to the journey; walk it again, then name the new heading in %s.\n' \
+			"${BASH_SOURCE[0]}" >&2
+		printf 'The page currently holds these sh fences:\n' >&2
+		awk -F '\t' '{ printf "  fence %s, occurrence %s under \"%s\"\n", $1, $2, $3 }' \
+			"$fence_dir/index.tsv" >&2
+		exit 1
+	fi
+	printf '%s\n' "$matched"
+}
+
+# Resolve a heading address that must name exactly one sh fence.
+resolve_one_fence() {
+	local slug="$1" address="$2" fence_dir="$3" step_kind="$4"
+	local matched
+	matched="$(resolve_fences "$slug" "$address" "$fence_dir")" || exit $?
+	local -a numbers
+	read -r -a numbers <<<"$matched"
+	if ((${#numbers[@]} != 1)); then
+		printf 'tutorial spec error in %s: a %s step runs one fence, but "%s" names %d; add |<occurrence>\n' \
+			"$slug" "$step_kind" "$address" "${#numbers[@]}" >&2
+		exit 2
+	fi
+	printf '%s\n' "${numbers[0]}"
+}
+
+# Emit the sh fences named by a run: step, in document order.
+emit_run_step() {
+	local slug="$1" address="$2" fence_dir="$3"
+	local matched
+	matched="$(resolve_fences "$slug" "$address" "$fence_dir")" || exit $?
+	local -a numbers
+	read -r -a numbers <<<"$matched"
+	local number
+	for number in "${numbers[@]}"; do
+		printf '\nprintf "==> %s fence %s\\n"\n' "$slug" "$number"
+		cat "$fence_dir/fence-$number.sh"
 	done
 }
 
@@ -717,21 +692,16 @@ emit_run_step() {
 # sees nor what the page documents. `set +e` around the run keeps the failure
 # from ending the journey, and reinstates errexit for the steps after it.
 emit_run_fails_step() {
-	local slug="$1" number="$2" fence_dir="$3"
-	local fence
-	fence="$(printf '%s/fence-%02d.sh' "$fence_dir" "$number")"
-	if [[ ! -f "$fence" ]]; then
-		printf 'tutorial spec error in %s: run-fails step names sh fence %s, which does not exist\n' \
-			"$slug" "$number" >&2
-		exit 2
-	fi
-	printf '\nprintf "==> %s fence %02d (documented refusal)\\n"\n' "$slug" "$number"
+	local slug="$1" address="$2" fence_dir="$3"
+	local number
+	number="$(resolve_one_fence "$slug" "$address" "$fence_dir" run-fails)" || exit $?
+	printf '\nprintf "==> %s fence %s (documented refusal)\\n"\n' "$slug" "$number"
 	printf 'set +e\n'
 	printf '( set -e\n'
-	cat "$fence"
+	cat "$fence_dir/fence-$number.sh"
 	printf ')\nrefusal_status=$?\nset -e\n'
 	printf 'if ((refusal_status == 0))\nthen\n'
-	printf '  printf "tutorial drift in %s: fence %02d succeeded, but the page documents a refusal\\n" >&2\n' \
+	printf '  printf "tutorial drift in %s: fence %s succeeded, but the page documents a refusal\\n" >&2\n' \
 		"$slug" "$number"
 	printf '  exit 1\n'
 	printf 'fi\n'
@@ -800,17 +770,18 @@ emit_save_step() {
 # second terminal. CI runs that exact one-line command in the background and
 # retains its PID for cleanup.
 emit_background_step() {
-	local slug="$1" number="$2" fence_dir="$3"
-	local fence
-	fence="$(printf '%s/fence-%02d.sh' "$fence_dir" "$number")"
-	if [[ ! -f "$fence" ]] || [[ "$(wc -l <"$fence")" -ne 1 ]]; then
-		printf 'tutorial spec error in %s: background step needs one sh line at fence %s\n' \
-			"$slug" "$number" >&2
+	local slug="$1" address="$2" fence_dir="$3"
+	local number
+	number="$(resolve_one_fence "$slug" "$address" "$fence_dir" background)" || exit $?
+	local fence="$fence_dir/fence-$number.sh"
+	if [[ "$(wc -l <"$fence")" -ne 1 ]]; then
+		printf 'tutorial spec error in %s: a background step needs one sh line, but fence %s under "%s" holds more\n' \
+			"$slug" "$number" "$address" >&2
 		exit 2
 	fi
 	local command
 	IFS= read -r command <"$fence"
-	printf '\nprintf "==> %s fence %02d (background)\\n"\n' "$slug" "$number"
+	printf '\nprintf "==> %s fence %s (background)\\n"\n' "$slug" "$number"
 	printf '%s &\n' "$command"
 	printf 'BACKGROUND_PIDS+=("$!")\n'
 }
@@ -894,21 +865,70 @@ emit_journey() {
 	done
 }
 
-# How many sh fences a spec executes, for the summary line.
-executed_fence_count() {
-	local step range first last total=0
+# Resolve every fence-addressing step into EXECUTED_FENCES, in step order.
+#
+# This runs before the replay and in --dry-run, so a heading a spec names but
+# the page no longer carries fails by name in seconds, without a toolchain.
+resolve_journey_fences() {
+	local slug="$1" fence_dir="$2"
+	EXECUTED_FENCES=()
+	local step matched number
+	local -a numbers
 	for step in ${SPEC_STEPS[@]+"${SPEC_STEPS[@]}"}; do
 		case "$step" in
-		run:*)
-			range="${step#run:}"
-			first="${range%%-*}"
-			last="${range##*-}"
-			total=$((total + last - first + 1))
+		run:*) matched="$(resolve_fences "$slug" "${step#run:}" "$fence_dir")" || exit $? ;;
+		run-fails:*)
+			matched="$(resolve_one_fence "$slug" "${step#run-fails:}" "$fence_dir" run-fails)" || exit $?
 			;;
-		run-fails:* | background:*) total=$((total + 1)) ;;
+		background:*)
+			matched="$(resolve_one_fence "$slug" "${step#background:}" "$fence_dir" background)" || exit $?
+			;;
+		*) continue ;;
 		esac
+		read -r -a numbers <<<"$matched"
+		for number in "${numbers[@]}"; do
+			if ! in_list "$number" ${EXECUTED_FENCES[@]+"${EXECUTED_FENCES[@]}"}; then
+				EXECUTED_FENCES+=("$number")
+			fi
+		done
 	done
-	printf '%d' "$total"
+}
+
+# Name the sh fences the journey never runs.
+#
+# This is information for a reviewer, not a rule: an install one-liner or a
+# recovery block a reader only reaches on a bad day is documented and
+# unverified, and saying so is more use than pinning its text would be.
+report_unexecuted_fences() {
+	local slug="$1" fence_dir="$2"
+	local number occurrence heading first_line
+	while IFS=$'\t' read -r number occurrence heading; do
+		if in_list "$number" ${EXECUTED_FENCES[@]+"${EXECUTED_FENCES[@]}"}; then
+			continue
+		fi
+		first_line=""
+		IFS= read -r first_line <"$fence_dir/fence-$number.sh" || true
+		printf '  not executed: fence %s under "%s": %s\n' "$number" "$heading" "$first_line"
+	done <"$fence_dir/index.tsv"
+}
+
+# Hold the behaviours a successful exit does not already prove.
+#
+# Read the SPEC_ASSERTS note in the header before adding an entry here. This
+# holds outcomes, never the transcript: a page is free to reword everything
+# around the line, and the line itself is only here because losing it would
+# leave the journey green.
+assert_transcript() {
+	local slug="$1" run_log="$2"
+	local expected
+	for expected in ${SPEC_ASSERTS[@]+"${SPEC_ASSERTS[@]}"}; do
+		if ! grep -F -q -- "$expected" "$run_log"; then
+			printf 'tutorial behaviour drift in %s: the replay ran, but its transcript never showed "%s"\n' \
+				"$slug" "$expected" >&2
+			printf 'Every command exited zero, so this is the kind of regression only this assertion catches.\n' >&2
+			exit 1
+		fi
+	done
 }
 
 # The sanitized OID4VCI runner may fall back to Cargo when CI has not supplied
@@ -951,34 +971,41 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 		exit 1
 	fi
 
-	# Extract every sh fence, in order, into numbered files.
+	# Extract every sh fence, in order, into numbered files, and index each one
+	# by the heading it sits under and its occurrence there. Heading
+	# attribution matches the fence helper the save and edit steps use, so one
+	# address means the same thing everywhere in a spec: a level-2 heading opens
+	# a section, and occurrences are counted per heading.
 	fence_dir="$WORK_ROOT/fences/$slug"
 	mkdir -p "$fence_dir"
-	fence_count="$(awk -v outdir="$fence_dir" '
-		/^```sh$/ { infence = 1; count += 1; next }
-		infence && /^```$/ { infence = 0; next }
-		infence { print > (outdir "/fence-" sprintf("%02d", count) ".sh") }
+	: >"$fence_dir/index.tsv"
+	fence_count="$(awk -v outdir="$fence_dir" -v index_file="$fence_dir/index.tsv" '
+		in_fence == 0 && /^##[ \t]+/ {
+			heading = $0
+			sub(/^##[ \t]+/, "", heading)
+			sub(/[ \t]+$/, "", heading)
+			next
+		}
+		in_fence == 0 && /^```[A-Za-z0-9_-]+$/ {
+			in_fence = 1
+			capture = ($0 == "```sh")
+			if (capture) {
+				count += 1
+				occurrence[heading] += 1
+				printf "%02d\t%d\t%s\n", count, occurrence[heading], heading > index_file
+			}
+			next
+		}
+		in_fence && /^```$/ { in_fence = 0; capture = 0; next }
+		in_fence && capture { print > (outdir "/fence-" sprintf("%02d", count) ".sh") }
 		END { print count + 0 }
 	' "$tutorial_file")"
 
-	if [[ "$fence_count" -ne "$SPEC_FENCES" ]]; then
-		printf 'tutorial drift in %s: %s sh fences found, expected %s\n' \
-			"$slug" "$fence_count" "$SPEC_FENCES" >&2
-		printf 'Update SPEC_FENCES and SPEC_STEPS in %s when the change is intentional.\n' \
-			"${BASH_SOURCE[0]}" >&2
-		exit 1
-	fi
+	resolve_journey_fences "$slug" "$fence_dir"
 
-	for literal in ${SPEC_LITERALS[@]+"${SPEC_LITERALS[@]}"}; do
-		if ! grep -F -q -- "$literal" "$tutorial_file"; then
-			printf 'tutorial drift in %s: required literal missing: %s\n' \
-				"$slug" "$literal" >&2
-			exit 1
-		fi
-	done
-
-	printf '%s: %s sh fences, %s executed, %s required literals present\n' \
-		"$slug" "$fence_count" "$(executed_fence_count)" "${#SPEC_LITERALS[@]}"
+	printf '%s: %s sh fences, %s executed\n' \
+		"$slug" "$fence_count" "${#EXECUTED_FENCES[@]}"
+	report_unexecuted_fences "$slug" "$fence_dir"
 
 	if ((DRY_RUN)); then
 		continue
@@ -1049,13 +1076,7 @@ for slug in "${EVIDENCE_TUTORIALS[@]}"; do
 		exit 1
 	fi
 
-	for expected in ${SPEC_OUTPUTS[@]+"${SPEC_OUTPUTS[@]}"}; do
-		if ! grep -F -q -- "$expected" "$run_log"; then
-			printf 'tutorial output drift in %s: expected "%s" in the transcript\n' \
-				"$slug" "$expected" >&2
-			exit 1
-		fi
-	done
+	assert_transcript "$slug" "$run_log"
 done
 
 if ((${#EVIDENCE_TUTORIALS[@]} == 1)); then
