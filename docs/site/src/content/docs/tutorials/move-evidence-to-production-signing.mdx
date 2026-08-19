@@ -35,8 +35,26 @@ uses another name.
 ## Create one key per service
 
 Run the provider administration commands through an authenticated operator session, not from the
-Evidence Gateway or Mint container. Create non-derived, non-exportable P-256 keys with plaintext
-backup disabled:
+Evidence Gateway or Mint container.
+
+Settle three things before you create the key. Decide which provider instance and mount hold this
+signing identity for as long as the key is in service. Confirm that the provider's own backup and
+restore covers that mount, because there is no key-level export or plaintext backup to fall back on.
+Record the mount, the key name, the service and environment the key serves, and the operator
+identity authorized to rotate it, in the deployment record rather than in application configuration.
+
+:::caution
+A key created with `exportable=false` and `allow_plaintext_backup=false` never releases its private
+material, and the pair is one-way in the permissive direction only: a provider administrator can set
+either field to `true` on this key later, and Vault and OpenBao then refuse to set it back to
+`false`. Evidence Gateway and Mint accept a Transit key only while both fields read `false`, so
+exporting the key retires that key name from both services permanently, for every version under it.
+There is no supported way to move this private key to another key manager or to sign with it outside
+the provider. The recovery path is a new key and
+[rotating the signing key](../rotate-evidence-signing-keys/), not export.
+:::
+
+Create non-derived, non-exportable P-256 keys with plaintext backup disabled:
 
 ```sh
 vault write transit/keys/evidence-signing \
@@ -197,6 +215,12 @@ listener "unix" {
   require_request_header = true
 }
 ```
+
+Keep `use_auto_auth_token` at `"force"`. Under `"force"` the proxy replaces any token on the
+incoming request with its own auto-auth token, so the proxy identity is the only identity that
+reaches the provider through this socket. Under the weaker `true`, the proxy attaches its auto-auth
+token only when the request carries none, and a token supplied by whatever reached the socket is
+used instead.
 
 Add the deployment's reviewed `auto_auth` method and provider trust settings. Use a separate socket,
 identity, and configuration for Mint.
