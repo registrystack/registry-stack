@@ -163,24 +163,18 @@ PY
 Try to verify the changed response:
 
 ```sh
-if evidencectl verify tampered-response.jws.json \
+evidencectl verify tampered-response.jws.json \
   --context .evidence/requests/refusal-check/verification.json \
   --output tampered-response.verified.json
-then
-  echo 'unexpected verification success' >&2
-  exit 1
-fi
-test ! -e tampered-response.verified.json
-echo 'TAMPER REFUSED'
 ```
 
 ```text
-evidencectl: Evidence Gateway response verification failed
-TAMPER REFUSED
+evidencectl: Evidence response verification failed
 ```
 
-Verification fails without publishing a trusted payload. Your application must make decisions
-only from the verifier output, never from an unverified response body.
+Verification fails without publishing a trusted payload: no `tampered-response.verified.json`
+appears. Your application must make decisions only from the verifier output, never from an
+unverified response body.
 
 ## Clean up
 

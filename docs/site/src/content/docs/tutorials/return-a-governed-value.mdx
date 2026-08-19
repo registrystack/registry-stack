@@ -225,6 +225,21 @@ evidencectl dev clean
 
 Return to the registry terminal and press `Ctrl+C`.
 
+## If the local services refuse to start
+
+`evidencectl dev --detach` refuses a project that still holds a local session, reporting
+`local development state already exists and is not a completed stopped session`. That happens when
+the first tutorial's services were left running. Stop and remove that session, then start the new
+generation:
+
+```sh
+evidencectl dev stop
+evidencectl dev clean
+```
+
+If ports `8080` or `8081` belong to something else, pass `--evidence-port` and `--mint-port` with
+two unused ports, as [your first assertion](../first-evidence-assertion/) describes.
+
 ## Next
 
 - [Control which applications can request Evidence Gateway](../control-who-can-request-evidence/)
