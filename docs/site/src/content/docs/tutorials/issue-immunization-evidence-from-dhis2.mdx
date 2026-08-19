@@ -28,7 +28,7 @@ boundary.
     'The completed governed-value tutorial',
     'The Evidence Gateway toolset',
     'Access to the public DHIS2 demo',
-    'curl and an editor',
+    'curl, python3, and an editor',
   ]}
 />
 
@@ -80,48 +80,133 @@ In either case, Evidence Gateway returns no assertion.
 
 ## Choose a synthetic child
 
-Open the [public DHIS2 demo](https://play.im.dhis2.org/stable-2-43-1/) and sign in with its
-provider-published shared credentials:
-
-```text
-Username: admin
-Password: district
-```
-
-In Tracker Capture, select the `Child Programme` and the `Ngelehun CHC` organisation unit.
-Choose a synthetic child whose `Birth` and `Baby Postnatal` events carry a value in all five
-immunization fields.
-Those events may be `ACTIVE` or `COMPLETED`.
-
-Note its tracked entity identifier and keep it out of tracked files.
-The identifier selects the source record.
-It will be used for the DHIS2 read and the Evidence Gateway request, but it will not appear in the
-signed assertion.
-
-## See the DHIS2 boundary
-
-Create an owner-only curl configuration at `.local/dhis2.curl`:
+Create a working directory and an owner-only curl configuration at `.local/dhis2.curl`:
 
 ```sh
+mkdir dhis2-immunization-tutorial
+cd dhis2-immunization-tutorial
 umask 077
 mkdir -p .local
 touch .local/dhis2.curl
 chmod 600 .local/dhis2.curl
 ```
 
-Open the file and add the public demo credential:
+Open the file and add the provider-published shared credential for the
+[public DHIS2 demo](https://play.im.dhis2.org/stable-2-43-1/):
 
 ```text
 user = "admin:district"
 ```
 
-Set the source and subject values in your terminal:
+The same account signs in to the demo's web interface, where Tracker Capture shows the
+`Child Programme` records this tutorial reads.
+
+Set the source values in your terminal:
 
 ```sh
 export DHIS2_BASE_URL='https://play.im.dhis2.org/stable-2-43-1'
 export DHIS2_PROGRAM_ID='IpHINAT79UW'
-export DHIS2_TRACKED_ENTITY_ID='<synthetic-tracked-entity-id>'
 ```
+
+Not every synthetic child carries a value in all five immunization fields, so list a page of
+`Child Programme` records with the field selection the source will use:
+
+```sh
+curl --silent --show-error --fail \
+  --config .local/dhis2.curl \
+  --get \
+  --url "$DHIS2_BASE_URL/api/tracker/trackedEntities" \
+  --data-urlencode "program=$DHIS2_PROGRAM_ID" \
+  --data-urlencode 'orgUnitMode=ACCESSIBLE' \
+  --data-urlencode 'fields=trackedEntity,enrollments[program,events[programStage,status,dataValues[dataElement,value]]]' \
+  --data-urlencode 'pageSize=200' \
+  --output .local/dhis2-candidates.json
+```
+
+The [DHIS2 Tracker API](https://docs.dhis2.org/en/develop/using-the-api/dhis-core-version-243/tracker.html)
+applies `orgUnitMode=ACCESSIBLE` when a request sends no `orgUnits`, so this page spans every
+organisation unit the demo account can read.
+The response wraps the records in a `trackedEntities` array beside a `pager` object.
+
+Create `choose-dhis2-subject.py`. The script picks the first record that carries all five
+readings without contradicting itself, applying the same programme, stage, status, and
+data-element rule the source extractor applies later. It writes only that record's identifier to
+an owner-only local file and prints no identifier:
+
+```python
+import json
+import os
+import pathlib
+
+STAGES = {"A03MvHHogjR", "ZzYYXq4fJie"}
+STATUSES = {"ACTIVE", "COMPLETED"}
+ELEMENTS = {
+    "bx6fsa0t90x": "bcg",
+    "ebaJjqltK5N": "opv",
+    "vTUhAUZFoys": "penta",
+    "FqlgKAG8HOu": "measles",
+    "rxBfISxXS2U": "yellow_fever",
+}
+
+page = json.loads(pathlib.Path(".local/dhis2-candidates.json").read_text())
+records = page.get("trackedEntities", [])
+chosen = None
+for record in records:
+    readings = {}
+    consistent = True
+    for enrollment in record.get("enrollments", []):
+        if enrollment.get("program") != "IpHINAT79UW":
+            continue
+        for event in enrollment.get("events", []):
+            if event.get("programStage") not in STAGES:
+                continue
+            if event.get("status") not in STATUSES:
+                continue
+            for reading in event.get("dataValues", []):
+                name = ELEMENTS.get(reading.get("dataElement"))
+                if name is None:
+                    continue
+                value = reading.get("value")
+                if readings.setdefault(name, value) != value:
+                    consistent = False
+    if consistent and len(readings) == len(ELEMENTS):
+        chosen = record["trackedEntity"]
+        break
+
+if chosen is None:
+    raise SystemExit(
+        f"none of the {len(records)} records on this page carries all five readings"
+    )
+
+subject = pathlib.Path(".local/dhis2-subject.txt")
+descriptor = os.open(subject, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
+    destination.write(chosen)
+print(f"chose 1 subject from {len(records)} records")
+```
+
+Run it:
+
+```sh
+python3 choose-dhis2-subject.py
+```
+
+It prints only a count of the records it examined, so no synthetic identifier reaches your
+screen, your shell history, or a tracked file.
+When it reports that no record on the page qualifies, add `--data-urlencode 'page=2'` to the list
+request and run both commands again.
+
+Read the chosen subject into your terminal:
+
+```sh
+export DHIS2_TRACKED_ENTITY_ID="$(cat .local/dhis2-subject.txt)"
+```
+
+The identifier selects the source record.
+It is used for the DHIS2 read and the Evidence Gateway request, and it does not appear in the
+signed assertion.
+
+## See the DHIS2 boundary
 
 Read the same bounded fields that Evidence Gateway will use:
 
@@ -584,17 +669,41 @@ Local assurance keeps the project editable and does not require production fixtu
 
 ## Request the real assertion
 
-Prepare a closed request and its independent verification expectations for the chosen subject:
+Write the subject into an owner-only request file. The identifier is read from the file the
+discovery script already wrote, so it is never typed and never expanded onto a command line:
+
+```sh
+python3 - <<'PY'
+import json
+import os
+import pathlib
+
+value = pathlib.Path("../.local/dhis2-subject.txt").read_text().strip()
+selection = {"subjects": [{"role": "child", "field": "tracked_entity_id", "value": value}]}
+descriptor = os.open(
+    "../.local/dhis2-subjects.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+)
+with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
+    json.dump(selection, destination, separators=(",", ":"))
+    destination.write("\n")
+
+print("Subject file: ready")
+PY
+```
+
+Prepare a closed request and its independent verification expectations for that subject:
 
 ```sh
 evidencectl request prepare immunization-summary \
   --purpose care-continuity \
-  --subject "child:tracked_entity_id=$DHIS2_TRACKED_ENTITY_ID" \
+  --subjects-file ../.local/dhis2-subjects.json \
   --name immunization-summary
 ```
 
-Use this only with the public synthetic record. In a real deployment, selectors need an input
-path that does not expose identifiers in shell history or process arguments.
+Use this only with the public synthetic record.
+`evidencectl` takes either `--subject` or `--subjects-file` and refuses both, so this request
+carries no identifier on its command line. It reads the file only when the file is a regular file
+you own with exactly one link and mode 0600.
 
 Send that request across the Evidence Gateway HTTP boundary:
 
@@ -679,15 +788,33 @@ Inspect the last operation:
 evidencectl audit show --last-operation
 ```
 
-The audit records the authorized access and the five disclosed concept identifiers.
-It does not record their values or the DHIS2 response.
+```text
+ACCESS AUTHORIZED immunization-summary care-continuity requester=<pseudonym>
+DISCLOSURE RELEASED bcg_recorded_as_administered, opv_dose_count_recorded, penta_dose_count_recorded, measles_recorded_as_administered, yellow_fever_recorded_as_administered
+```
+
+The requester value changes on each fresh project.
+
+Read those two lines for what they leave out.
+They name the requester pseudonym, the question, the purpose it was authorized under, and the five
+concepts released.
+Neither line carries a `true`, a `false`, or a dose count, so the audit trail cannot answer the
+question it recorded.
+Neither line carries the tracked entity identifier, an event identifier, a data element, or any
+part of the DHIS2 response.
+An operator reviewing this trail can establish who asked, why, and which readings were released,
+and cannot learn the child's immunization record from it.
 
 Remove the stopped local generation and the local DHIS2 artifacts:
 
 ```sh
 evidencectl dev clean
 cd ..
-rm -f .local/dhis2-response.json \
+rm -f choose-dhis2-subject.py \
+  .local/dhis2-candidates.json \
+  .local/dhis2-subject.txt \
+  .local/dhis2-subjects.json \
+  .local/dhis2-response.json \
   .local/dhis2.curl \
   .local/dhis2.openapi.yaml
 ```
@@ -695,6 +822,18 @@ rm -f .local/dhis2-response.json \
 Keep the project editable while evaluating the source.
 Before deployment, add project-specific fixtures, replace the demo account with a least-privilege
 service account, review the source acquisition posture, and build a reviewed production candidate.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| `curl` fails with 404 against `$DHIS2_BASE_URL` | The demo publishes each DHIS2 release under its own version path, and this tutorial pins `stable-2-43-1`. | Take the current version path from the demo landing page, then update `DHIS2_BASE_URL` and the `pathTemplate` prefix in `sources/child-tracker.yaml`. Re-read the Tracker API reference for that version before trusting the field names. |
+| `curl` fails with 401 | The shared demo account was rotated or disabled. | Take the credential the demo publishes now and update `.local/dhis2.curl`, `secrets/dhis2-username`, and `secrets/dhis2-password`. Do not put a real DHIS2 account in these files. |
+| `choose-dhis2-subject.py` reports that no record on the page carries all five readings | The demo data was reset, or this page of records holds no complete Child Programme case. | Request a later page with `page=2`, or raise `pageSize`. Do not drop a concept from the question so a partial record qualifies. |
+| Writing the subject file fails with `FileExistsError` | `os.open` refuses `O_EXCL` when the file is already there, so a second run cannot overwrite it. | Remove `../.local/dhis2-subjects.json` and run the step again. |
+| Evidence Gateway returns no assertion for a subject that worked earlier | The record changed: a reading was removed, or an `ACTIVE` and a `COMPLETED` event now disagree. | Run the discovery step again and pick a current subject. Leave `merge_reading` refusing conflicts. A disagreement between two events is a fact about the record. |
+| Evidence Gateway reports a source dependency failure | The shared demo was slow or unreachable, or the response exceeded `timeoutMilliseconds` or `maximumResponseBytes`. | Retry later. Treat the bounds as reviewed source policy, and raise one only after deciding it is right for the deployment. |
+| `curl` fails with a certificate error | An intercepting proxy or an out-of-date trust store on your machine. | Repair the trust store, or exempt the demo host from interception. Do not reach for `--insecure`: the source denies redirects and reaches the demo over HTTPS only. |
 
 ## Next
 
