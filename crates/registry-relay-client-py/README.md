@@ -6,7 +6,7 @@ a configured private-key-JWT provider may perform a separate token acquisition
 or refresh exchange. The binding does not implement HTTP routing,
 authentication, retries, pagination, or Relay Problem Details itself.
 
-Starting with Registry Stack v0.23.0, install the exact client version that
+Starting with Registry Stack v0.22.0, install the exact client version that
 matches the Relay deployment:
 
 ```sh

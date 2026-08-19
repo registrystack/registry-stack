@@ -8,7 +8,7 @@ re-implements none of it.
 
 The package is named `registry-evidence-client` and imported as
 `registry_evidence_client` (matching the crate's own `[lib]` name). Starting
-with Registry Stack v0.23.0, install the exact client version that matches the
+with Registry Stack v0.22.0, install the exact client version that matches the
 Evidence deployment:
 
 ```sh
