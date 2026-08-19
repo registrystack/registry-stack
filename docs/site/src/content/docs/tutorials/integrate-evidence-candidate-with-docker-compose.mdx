@@ -62,11 +62,11 @@ bind with a dedicated named volume shared only by the proxy and Evidence Gateway
 The Evidence Gateway service mounts five independently owned paths:
 
 ```text
-candidate/bundle       -> /etc/registry-evidence/bundle       read-only
-runtime.docker.yaml    -> /etc/registry-evidence/runtime.yaml read-only
-Evidence Gateway secret root   -> /run/secrets/registry-evidence      read-only
-Evidence Gateway audit volume  -> /var/lib/registry-evidence          writable
-Transit socket directory       -> /run/registry-evidence              socket access
+candidate/bundle          -> /etc/registry-evidence/bundle       read-only
+runtime.docker.yaml       -> /etc/registry-evidence/runtime.yaml read-only
+Evidence secret root      -> /run/secrets/registry-evidence      read-only
+Evidence audit volume     -> /var/lib/registry-evidence          writable
+Transit socket directory  -> /run/registry-evidence              socket access
 ```
 
 Keep the bundle and runtime read-only. A read-only mount establishes their immutability, but does
@@ -91,6 +91,12 @@ services:
       - <transit-socket-directory>:/run/registry-evidence:ro
 ```
 
+That snippet shows the mounts and the service identity only. The maintained adapter at
+`docker/compose/docker-compose.yaml` in the Registry Stack repository carries the rest of the
+service posture, including dropped capabilities, `no-new-privileges`, and a read-only `/dev/shm`
+that replaces the writable one Docker adds by default. Start from that file rather than from the
+mounts alone.
+
 Bind Evidence Gateway to a private Compose-network address. Put TLS termination and public routing in an
 operator-controlled service ahead of that listener.
 
@@ -101,16 +107,54 @@ ownership, paths, and trust files are in place:
 
 ```sh
 docker compose run --rm evidence \
-  --runtime /etc/registry-evidence/runtime.yaml check
+  --runtime /etc/registry-evidence/runtime.yaml check --require-runtime-dependencies
 ```
+
+It prints one line and exits zero:
+
+```text
+Evidence deployment <bundle-revision> / <runtime-revision> passed check (<count> requirements)
+```
+
+Both revisions are your own candidate's, and the count is the number of requirements in your
+bundle, so the line will not match anyone else's.
+
+`--require-runtime-dependencies` is what turns this into a check of the container rather than of
+the files. Without it, the command compiles the bundle, compiles the source plans, refuses a
+mounted extract already older than its source allows, and validates the mounted secret material.
+With it, the command also opens the configured audit path, signs a self-test
+message through the Transit proxy and verifies it against the governed public JWK, and resolves
+every configured source credential. It appends no audit event in either form, so a check that fails
+leaves the chain exactly as it found it.
 
 Changing only the container runtime does not change the governed bundle, so it does not require the
 fixture suite to run again. Run fixtures again when the bundle changes.
 
-The check exits successfully only when the container can read its immutable inputs, resolve the
-secret root, validate the configured audit path, reach the Transit proxy, match the pinned provider
-version to the governed public JWK, and validate the runtime and bundle together. It does not append
-an audit event.
+## Start the service
+
+```sh
+docker compose up -d
+docker compose ps
+```
+
+The service reads its runtime from `REGISTRY_EVIDENCE_RUNTIME`, which the maintained image already
+points at `/etc/registry-evidence/runtime.yaml`, and its default command is `serve`. No further
+arguments are needed.
+
+Evidence Gateway writes line-delimited JSON to stdout. It announces the listener only after every
+listener is bound, so the announcement means the port is this deployment's and not something else's:
+
+```sh
+docker compose logs evidence | grep 'evidence service listening'
+```
+
+That record carries the bundle revision, the runtime revision, the bind host, and the port. If no
+such line appears, read the whole log: startup failures are reported there, and the container will
+have exited.
+
+The runtime in this guide binds a Compose-network address with no published ports, so `/health` is
+reachable from another service on the same Compose network and not from your host. Publish a port
+only behind the TLS-terminating service you control.
 
 ## Keep revisions distinct
 
@@ -131,12 +175,22 @@ Do not share the Evidence Gateway proxy or socket with Mint.
 
 ## Stop without deleting the audit history
 
-Stop the Compose services without removing the audit volume. Retention and audit-chain verification
-remain operator responsibilities.
+`docker compose down` removes the containers and the network it created. It leaves named volumes
+alone, so the audit chain survives the stop:
 
 ```sh
 docker compose down
+docker volume ls | grep evidence-audit
 ```
+
+The volume is still listed. Starting the service again appends to the same chain rather than
+beginning a new one.
+
+:::danger
+`docker compose down -v` deletes that volume with everything else. The audit chain is
+hash-linked and has no second copy, so the history is gone and cannot be reconstructed. Retention
+and audit-chain verification remain operator responsibilities.
+:::
 
 ## Next
 
