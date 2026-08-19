@@ -44,7 +44,10 @@ printing selector or source values.
 
 ## Read the editable path
 
-The files that make one source work are grouped by responsibility:
+These are the files that make one source work, grouped by responsibility. The project holds more
+than this: a `.gitignore` that keeps `secrets/` out of version control, a project marker file,
+disposable local key material under `secrets/`, and the editor schema mappings your YAML tooling
+reads.
 
 ```text
 registry-status/

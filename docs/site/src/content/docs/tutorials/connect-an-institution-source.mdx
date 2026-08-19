@@ -41,8 +41,10 @@ cd institution-evidence
 ```
 
 The project now contains the retained `source.openapi.yaml` and empty editable directories for
-`selectors`, `sources`, `adapters`, `schemas`, `questions`, and `derivations`. The command does not
-invent a source, question, fixture, or deployment policy.
+`selectors`, `sources`, `adapters`, `schemas`, `questions`, `derivations`, and `fixtures`. It also
+holds a `.gitignore` that keeps `secrets/` out of version control, a project marker file, the
+disposable local keys, and the editor schema mappings your YAML tooling reads. The command does
+not invent a source, question, fixture, or deployment policy.
 
 ## Review the available source fields
 
@@ -73,20 +75,21 @@ evidencectl source suggest \
   --select /date_of_birth
 ```
 
-The command writes new files only:
+It writes six new files, and prints one `wrote` line for each in this order:
 
 ```text
 sources/people.yaml
 adapters/people-prepare.rhai
-adapters/people-extract.rhai
 schemas/people-parameters.schema.yaml
 schemas/people-response.schema.yaml
+adapters/people-extract.rhai
 schemas/people-facts.schema.yaml
 ```
 
 `sources/people.yaml` is an ordinary Version 1 source object, not an intermediate template. The
 schemas and scripts are the same artifacts the generated local bundle will contain. A repeated
-command refuses to overwrite any edited file.
+command refuses to overwrite any edited file: it names the files that already exist and writes
+nothing at all, rather than writing the new ones and stopping partway.
 
 ## Define the authorized selector
 
@@ -226,6 +229,13 @@ evidencectl dev --detach
 creates one private local generation, and runs the real `evidence check` gate before serving. A
 missing artifact, unresolved draft marker, invalid secret reference, unbounded schema, or
 inconsistent selector binding stops the generation.
+
+`--detach` returns once both services answer on loopback, so the pair keeps running after the
+command exits. Stop it when you are finished:
+
+```sh
+evidencectl dev stop
+```
 
 Continue with [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/) after the
 project's source, derivation, and synthetic acceptance cases have been independently reviewed.
