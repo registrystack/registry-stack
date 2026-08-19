@@ -274,20 +274,26 @@ export default defineConfig({
           href: 'https://github.com/registrystack/registry-stack/tree/main/docs/site',
         },
       ],
-      // Keep the first screen focused on adopter outcomes. Detailed product,
-      // generated-file, and contract material remains available under
-      // collapsed reference sections.
+      // Keep the first screen focused on adopter outcomes. Detailed product
+      // and contract material remains available under collapsed reference
+      // sections. Every top level is a task an adopter can name; the product
+      // that serves the task is named inside it.
       sidebar: [
         {
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
+            { label: 'Which product fits your problem', slug: 'start/when-to-use' },
             { label: 'Evaluate Evidence Gateway', slug: 'start/evaluate-evidence' },
+            // A reader on their first page meets the vocabulary before they
+            // meet a command, so the glossary sits here rather than in
+            // Reference, where it was reachable only after the terms had
+            // already gone by.
+            { label: 'Glossary', slug: 'reference/glossary' },
           ],
         },
         {
-          label: 'Answer with Evidence Gateway',
+          label: 'Answer a bounded question',
           items: [
             { label: 'Overview', slug: 'start/evidence-quickstart' },
             // The first hands-on tutorial stays in the open beside the
@@ -306,14 +312,24 @@ export default defineConfig({
               ],
             },
             {
-              label: 'Connect a source',
-              collapsed: true,
+              // Open, because this is where an adopter leaves the mock source
+              // behind and points the deployment at their own institution. The
+              // source-product examples stay collapsed inside it: they show one
+              // way to do what the two pages above them describe generally.
+              label: 'Connect your own source',
               items: [
                 { label: 'Create a source from OpenAPI', slug: 'tutorials/connect-an-institution-source' },
                 { label: 'Connect a SQLite extract', slug: 'tutorials/connect-a-sqlite-extract' },
-                { label: 'OpenCRVS: registered parent', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
-                { label: 'OpenCRVS: birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
-                { label: 'DHIS2: immunization summary (under review)', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
+                { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
+                {
+                  label: 'Worked examples',
+                  collapsed: true,
+                  items: [
+                    { label: 'OpenCRVS: registered parent', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
+                    { label: 'OpenCRVS: birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
+                    { label: 'DHIS2: immunization summary (under review)', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
+                  ],
+                },
               ],
             },
             {
@@ -328,28 +344,6 @@ export default defineConfig({
               ],
             },
             {
-              label: 'Authenticate callers',
-              collapsed: true,
-              items: [
-                { label: 'Add Mint to Evidence Gateway', slug: 'tutorials/issue-evidence-access-tokens-with-registry-mint' },
-                { label: 'Configure Registry Mint', slug: 'configure/mint' },
-                { label: 'Use Mint with QGIS', slug: 'configure/use-mint-with-qgis-and-standard-oauth-clients' },
-                { label: 'Call Mint from application code', slug: 'configure/request-an-access-token' },
-              ],
-            },
-            // Two audiences that used to share one group: a relying party
-            // calling the HTTP contract, and a deployment delivering the same
-            // assertion to a wallet. Each reads only its own half.
-            {
-              label: 'Verify as a relying party',
-              collapsed: true,
-              items: [
-                { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
-                { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
-                { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
-              ],
-            },
-            {
               label: 'Deliver to wallets',
               collapsed: true,
               items: [
@@ -358,16 +352,22 @@ export default defineConfig({
                 { label: 'Run OID4VCI interoperability checks', slug: 'tutorials/run-oid4vci-interoperability-checks' },
               ],
             },
+            // Reference material a reader needs while the deployment is in
+            // front of them, so it stays in this section rather than in
+            // Reference, where it answered questions nobody was asking yet.
+            { label: 'Configuration reference', slug: 'reference/evidence-configuration' },
+            { label: 'Problems and error codes', slug: 'reference/evidence-problems' },
             {
-              label: 'Operate Evidence Gateway',
+              label: 'HTTP API',
               collapsed: true,
               items: [
-                { label: 'Rotate signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
-                { label: 'Verify the audit chain', slug: 'operate/evidence-audit' },
+                { label: 'Evidence Gateway (narrative)', slug: 'reference/apis/registry-evidence' },
+                // Generated operation pages for each schema (theme-aware, searchable).
+                ...openAPISidebarGroups,
               ],
             },
             // Product-scoped, so it sits with the product rather than in the
-            // cross-product Security section.
+            // cross-product security group under Operate and secure.
             { label: 'Security model', slug: 'security/evidence' },
           ],
         },
@@ -388,42 +388,117 @@ export default defineConfig({
               items: [
                 { label: 'Author a Relay project', slug: 'configure/relay' },
                 { label: 'Semantics and disclosure', slug: 'explanation/relay-semantics-and-disclosure' },
-                { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
+                { label: 'Validate a project', slug: 'verify' },
               ],
             },
             {
-              label: 'Operate Relay',
+              // The caller's half of Relay, which the authoring and operating
+              // pages never address. It carries one page today and stays open
+              // because of that; the tutorial that would join it is not
+              // written yet.
+              label: 'Call a Relay API',
+              items: [
+                { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
+              ],
+            },
+            { label: 'Run a Relay deployment', slug: 'operate/relay' },
+            { label: 'relayctl workflows', slug: 'reference/relayctl' },
+            { label: 'Operational posture (spec)', slug: 'spec/rs-op-posture' },
+          ],
+        },
+        {
+          // Two audiences used to share one Evidence Gateway group: a relying
+          // party calling the HTTP contract, and a deployment delivering the
+          // same assertion to a wallet. A relying party runs neither runtime,
+          // so its path is a section of its own and wallet delivery stays with
+          // the deployment that does the delivering.
+          label: 'Consume and verify assertions',
+          items: [
+            { label: 'Request from an application', slug: 'tutorials/request-evidence-from-an-application' },
+            { label: 'Verify and retain an assertion', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
+            { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
+          ],
+        },
+        {
+          // Registry Mint issues the access tokens a resource server verifies,
+          // so it is a step in both adoption paths and belongs to neither.
+          label: 'Authenticate callers',
+          collapsed: true,
+          items: [
+            { label: 'Configure Registry Mint', slug: 'configure/mint' },
+            { label: 'Add Mint to Evidence Gateway', slug: 'tutorials/issue-evidence-access-tokens-with-registry-mint' },
+            { label: 'Call Mint from application code', slug: 'configure/request-an-access-token' },
+            { label: 'Use Mint with QGIS', slug: 'configure/use-mint-with-qgis-and-standard-oauth-clients' },
+            { label: 'Mint reference', slug: 'reference/mint' },
+          ],
+        },
+        {
+          // One index, one section. The concept, the tutorial, and the build
+          // page had been split across three unrelated parents.
+          label: 'Publish a Discovery index',
+          collapsed: true,
+          items: [
+            { label: 'Registry Discovery is an index', slug: 'explanation/discovery-as-an-index' },
+            { label: 'Publish and consume an index', slug: 'tutorials/publish-and-consume-discovery-index' },
+            { label: 'Build and run an index', slug: 'configure/discovery' },
+          ],
+        },
+        {
+          // What an operator does once a deployment is running, and the
+          // security material that operator is expected to have read. Pages
+          // that name one runtime are allowed here when the reader is the
+          // operator rather than the adopter who authored the project.
+          label: 'Operate and secure',
+          items: [
+            { label: 'Overview', slug: 'operate/advanced' },
+            { label: 'Prepare the operator handoff', slug: 'operate' },
+            { label: 'Verify the Evidence audit chain', slug: 'operate/evidence-audit' },
+            { label: 'Rotate Evidence signing keys', slug: 'tutorials/rotate-evidence-signing-keys' },
+            { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
+            { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
+            { label: 'Retention and persistent state', slug: 'operate/retention-and-persistent-state' },
+            { label: 'Generated files and ownership', slug: 'generated-artifacts' },
+            { label: 'Harden a production deployment', slug: 'security/hardening-checklist' },
+            {
+              label: 'Security and disclosure',
               collapsed: true,
               items: [
-                { label: 'Prepare the operator handoff', slug: 'operate' },
-                { label: 'Run a Relay deployment', slug: 'operate/relay' },
+                { label: 'Overview', slug: 'security' },
+                { label: 'Threat model', slug: 'explanation/threat-model' },
+                { label: 'Known limitations', slug: 'explanation/known-limitations' },
+                { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
+                { label: 'Security support window', slug: 'security/support-window' },
+                { label: 'Security self-assessment', slug: 'security/self-assessment' },
+                { label: 'Release trust', slug: 'security/openssf-evidence' },
               ],
             },
           ],
         },
         {
-          // Only what applies to more than one product. Anything that names a
-          // single product lives in that product's section.
-          label: 'Operate across products',
+          // Promoted out of Reference. A reader who wants the model behind the
+          // products is not looking up a contract, and burying these pages two
+          // levels inside Reference meant the decision records had no seat at
+          // all.
+          label: 'Understand the design',
           collapsed: true,
           items: [
-            { label: 'Overview', slug: 'operate/advanced' },
-            { label: 'Publish and consume a Discovery index', slug: 'tutorials/publish-and-consume-discovery-index' },
-            { label: 'Build and run a Registry Discovery index', slug: 'configure/discovery' },
-            { label: 'Retention and persistent state', slug: 'operate/retention-and-persistent-state' },
-            { label: 'Inspect and diagnose', slug: 'operate/advanced/inspect-and-diagnose' },
-            { label: 'Rotate credentials and trust', slug: 'operate/advanced/rotate-credentials-and-trust' },
-          ],
-        },
-        {
-          label: 'Security',
-          collapsed: true,
-          items: [
-            { label: 'Overview', slug: 'security' },
-            { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
-            { label: 'Security support window', slug: 'security/support-window' },
-            { label: 'Security self-assessment', slug: 'security/self-assessment' },
-            { label: 'Release trust', slug: 'security/openssf-evidence' },
+            { label: 'Architecture', slug: 'explanation/architecture' },
+            { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
+            { label: 'Records stay home', slug: 'explanation/records-stay-home' },
+            { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
+            { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
+            { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
+            { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
+            {
+              // Newest first. The records have no index page of their own, so
+              // this group is the only navigation into them.
+              label: 'Decisions',
+              collapsed: true,
+              items: [
+                { label: 'Relay V1 and registryctl retirement', slug: 'decisions/relay-v1-and-registryctl-retirement-2026-08-11' },
+                { label: 'Registry Notary retirement', slug: 'decisions/notary-retirement-2026-08-03' },
+              ],
+            },
           ],
         },
         {
@@ -431,27 +506,37 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'reference' },
-            { label: 'Validate a project', slug: 'verify' },
-            { label: 'Generated files and ownership', slug: 'generated-artifacts' },
-            { label: 'Evidence Gateway configuration', slug: 'reference/evidence-configuration' },
-            ...cliReferenceSidebar(),
-            { label: 'relayctl workflows', slug: 'reference/relayctl' },
+            { label: 'Errors and status codes', slug: 'reference/errors' },
+            { label: 'Environment variables', slug: 'reference/environment-variables' },
+            { label: 'API overview', slug: 'reference/apis' },
             { label: 'evidencectl workflows', slug: 'reference/evidencectl' },
-            { label: 'Relay client APIs', slug: 'reference/relay-client-api' },
+            ...cliReferenceSidebar(),
             {
-              label: 'API reference',
+              label: 'Compatibility and support',
               collapsed: true,
               items: [
-                { label: 'Overview', slug: 'reference/apis' },
-                { label: 'Evidence Gateway (narrative)', slug: 'reference/apis/registry-evidence' },
-                // Generated operation pages for each schema (theme-aware, searchable).
-                ...openAPISidebarGroups,
+                { label: 'Contracts', slug: 'reference/contracts' },
+                { label: 'API stability and versioning', slug: 'reference/api-stability' },
+                { label: 'Deprecation policy', slug: 'reference/deprecation-policy' },
+                { label: 'Standards', slug: 'reference/standards' },
+                { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
               ],
             },
-            { label: 'Errors and status codes', slug: 'reference/errors' },
-            { label: 'Evidence Gateway problems', slug: 'reference/evidence-problems' },
-            { label: 'Registry Mint', slug: 'reference/mint' },
-            { label: 'Environment variables', slug: 'reference/environment-variables' },
+            {
+              label: 'Specifications',
+              collapsed: true,
+              items: [
+                { label: 'Register', slug: 'spec' },
+                { label: 'RS-DOC · Documentation framework', slug: 'spec/rs-doc' },
+                { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
+                { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
+                { label: 'RS-PR-EVIDENCE · Evidence Gateway protocol', slug: 'spec/rs-pr-evidence' },
+                { label: 'RS-PR-RELAYCTL · relayctl contract', slug: 'spec/rs-pr-relayctl' },
+                { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
+                { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },
+                { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },
+              ],
+            },
             {
               label: 'Product documentation',
               collapsed: true,
@@ -482,43 +567,8 @@ export default defineConfig({
                   : []),
               ],
             },
-            { label: 'Contracts', slug: 'reference/contracts' },
-            { label: 'API stability and versioning', slug: 'reference/api-stability' },
-            { label: 'Deprecation policy', slug: 'reference/deprecation-policy' },
-            { label: 'Standards', slug: 'reference/standards' },
-            { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
-            { label: 'Glossary', slug: 'reference/glossary' },
-            {
-              label: 'Concepts',
-              collapsed: true,
-              items: [
-                { label: 'Architecture', slug: 'explanation/architecture' },
-                { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
-                { label: 'Records stay home', slug: 'explanation/records-stay-home' },
-                { label: 'Registry Discovery is an index', slug: 'explanation/discovery-as-an-index' },
-                { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
-                { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
-                { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
-                { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
-                { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
-              ],
-            },
-            {
-              label: 'Specifications',
-              collapsed: true,
-              items: [
-                { label: 'Register', slug: 'spec' },
-                { label: 'RS-DOC · Documentation framework', slug: 'spec/rs-doc' },
-                { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
-                { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
-                { label: 'RS-PR-EVIDENCE · Evidence Gateway protocol', slug: 'spec/rs-pr-evidence' },
-                { label: 'RS-PR-RELAYCTL · relayctl contract', slug: 'spec/rs-pr-relayctl' },
-                { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
-                { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },
-                { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },
-              ],
-            },
             { label: 'Changelog', slug: 'changelog' },
+            { label: 'Accessibility', slug: 'accessibility' },
           ],
         },
       ],
