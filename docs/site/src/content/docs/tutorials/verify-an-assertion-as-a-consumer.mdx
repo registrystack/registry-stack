@@ -141,6 +141,16 @@ cannot reveal `person-123`.
 The opaque binding is meaningful only inside the audience and purpose for which the provider
 produced it. The same subject produces an unrelated binding for another audience or purpose.
 
+## If the retained inputs are missing
+
+Every step reads files the first tutorial left behind. The Python steps raise `FileNotFoundError`
+when `.evidence/requests/first-assertion/verification.json` or `verified.json` is absent, and
+`evidence verify` reports `evidence: stored response verification failed (malformed)` when
+`assertion.jws.json` is. All three mean the same thing: the earlier request was prepared under a
+different `--name`, or that working directory is gone. Rerun the request and verification steps of
+[Get your first Evidence Gateway assertion](../first-evidence-assertion/), naming the request
+`first-assertion`, then return here. No service needs to be running for this tutorial.
+
 ## Next
 
 - [Manage verifier trust and key rotation](../manage-evidence-verifier-trust/)

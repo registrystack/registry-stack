@@ -247,6 +247,17 @@ It does not record either source identifier or the boolean value.
 
 Return to the registry terminal and press `Ctrl+C`.
 
+## If a local port is already in use
+
+This tutorial needs three loopback ports: `8002` for `registry.py`, and `8080` and `8081` for
+Evidence Gateway and Registry Mint. If another tutorial's services are still running,
+`evidencectl dev --detach` cannot bind. Stop them with `evidencectl dev stop` in that project, or
+start this one on two unused ports with `--evidence-port` and `--mint-port`.
+
+Port `8002` appears twice inside `registry.py`, in the OpenAPI `servers` URL and in the listener,
+and again in the `--openapi` argument. Change all three before running `evidencectl new`, because
+the project retains the server URL it was created from.
+
 ## Next
 
 - [Issue registered-parent evidence from OpenCRVS](../verify-a-registered-parent-with-opencrvs/)

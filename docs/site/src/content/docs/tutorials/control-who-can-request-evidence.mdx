@@ -106,11 +106,8 @@ Review the governed policies before starting Evidence Gateway:
 evidencectl access policy list
 ```
 
-```text
-POLICY           QUESTIONS
-age-checks       adult-status
-service-routing  age-bracket
-```
+The command prints a tab-separated `POLICY` and `QUESTIONS` table, one row per policy: `age-checks`
+holding `adult-status`, and `service-routing` holding `age-bracket`.
 
 The commands write the reviewable policy documents to `access/policies/age-checks.yaml` and
 `access/policies/service-routing.yaml`.
@@ -233,11 +230,8 @@ Review the active client assignments:
 evidencectl access client list
 ```
 
-```text
-CLIENT          STATUS  POLICIES
-age-checker     active  age-checks
-service-router  active  service-routing
-```
+The command prints a tab-separated `CLIENT`, `STATUS`, and `POLICIES` table. Both `age-checker` and
+`service-router` are `active`, each under the single policy it was registered with.
 
 ## Use the application assigned the policy
 
@@ -358,15 +352,11 @@ the application. That token remains valid for up to 300 seconds.
 Try to prepare a fresh request as the revoked client:
 
 ```sh
-if evidencectl request prepare adult-status \
+evidencectl request prepare adult-status \
   --purpose age-check \
   --subject person_id=person-123 \
   --client age-checker \
   --name age-checker-revoked
-then
-  echo 'unexpected request preparation success' >&2
-  exit 1
-fi
 ```
 
 ```text

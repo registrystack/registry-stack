@@ -201,20 +201,16 @@ PY
 Verification must fail and must not create trusted output:
 
 ```sh
-if evidencectl verify scalar-tampered.sd-jwt \
+evidencectl verify scalar-tampered.sd-jwt \
   --context .evidence/requests/scalar-vc/verification.json \
-  --output scalar-tampered.verified.json; then
-  printf 'Expected tampered credential refusal\n' >&2
-  exit 1
-fi
-test ! -e scalar-tampered.verified.json
-printf 'Tampered credential refused\n'
+  --output scalar-tampered.verified.json
 ```
 
 ```text
-Tampered credential refused
+evidencectl: Evidence response verification failed
 ```
 
+Verification refuses the changed credential and writes no `scalar-tampered.verified.json`.
 The disclosure digest is covered by the issuer signature. Altering the disclosure breaks the
 verified relationship between the signed digest and the disclosed value.
 

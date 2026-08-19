@@ -240,7 +240,8 @@ load_spec() {
 			"run:Request a scalar credential"
 			"run:Inspect the compact structure after verification"
 			"run:Inspect issuer discovery"
-			"run:Prove tampering is refused"
+			"run:Prove tampering is refused|1"
+			"run-fails:Prove tampering is refused|2"
 			"save:Model independently disclosed fields|yaml|1|schemas/adult-assessment.yaml"
 			"save:Model independently disclosed fields|yaml|2|questions/adult-assessment.yaml"
 			"save:Model independently disclosed fields|rhai|1|derivations/adult-assessment.rhai"
@@ -252,7 +253,7 @@ load_spec() {
 		# credential that started disclosing more would pass unnoticed.
 		SPEC_ASSERTS=(
 			"disclosure: urn:registrystack:evidence:local:concept:adult-status:is_adult"
-			"Tampered credential refused"
+			"evidencectl: Evidence response verification failed"
 			"disclosure: criterion"
 			"disclosure: isAdult"
 			"ACCESS AUTHORIZED adult-assessment age-assessment-review requester="
@@ -304,15 +305,16 @@ load_spec() {
 			"run:Add an application without restarting"
 			"run:Use the application assigned the policy"
 			"run:Try a question the application was not granted"
-			"run:Revoke an application"
+			"run:Revoke an application|1"
+			"run-fails:Revoke an application|2"
 			"run:Inspect the final audit operation"
 			"run:Clean up"
 		)
 		# This tutorial teaches refusal, so the refusals are what must hold.
 		# The unauthorized request's curl carries no --fail-with-body, so it
 		# exits zero on a 403 and a boundary that started answering 200 would
-		# leave the journey green. The revocation fence already requires a
-		# non-zero exit; the message is what proves it was refused because the
+		# leave the journey green. The revocation step requires a non-zero
+		# exit; the message is what proves it was refused because the
 		# client was revoked rather than for some unrelated reason.
 		SPEC_ASSERTS=(
 			"VERIFIED"
@@ -350,7 +352,8 @@ load_spec() {
 			"run:Prepare one authorized request"
 			"run:Change the purpose after preparation"
 			"run:Obtain and verify the authorized response"
-			"run:Change the signed response"
+			"run:Change the signed response|1"
+			"run-fails:Change the signed response|2"
 			"run:Clean up"
 		)
 		# The whole page is these three outcomes: the altered request was
@@ -360,7 +363,7 @@ load_spec() {
 		SPEC_ASSERTS=(
 			"HTTP 403"
 			"VERIFIED"
-			"TAMPER REFUSED"
+			"evidencectl: Evidence response verification failed"
 		)
 		;;
 	verify-an-assertion-as-a-consumer)
