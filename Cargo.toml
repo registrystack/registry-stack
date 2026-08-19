@@ -45,7 +45,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.22.0"
+version = "0.23.0"
 edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -56,41 +56,41 @@ repository = "https://github.com/registrystack/registry-stack"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
-registry-discovery = { path = "crates/registry-discovery", version = "0.22.0", default-features = false }
-registry-discovery-client = { path = "crates/registry-discovery-client", version = "0.22.0" }
-registry-discovery-client-node = { path = "crates/registry-discovery-client-node", version = "0.22.0" }
-registry-discovery-client-py = { path = "crates/registry-discovery-client-py", version = "0.22.0" }
-registry-discovery-profile = { path = "crates/registry-discovery-profile", version = "0.22.0" }
-registry-discoveryctl = { path = "crates/registry-discoveryctl", version = "0.22.0" }
-registry-evidence = { path = "crates/registry-evidence", version = "0.22.0" }
-registry-evidence-authoring = { path = "crates/registry-evidence-authoring", version = "0.22.0" }
-registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.22.0" }
-registry-evidence-client-node = { path = "crates/registry-evidence-client-node", version = "0.22.0" }
-registry-evidence-client-py = { path = "crates/registry-evidence-client-py", version = "0.22.0" }
-registry-evidence-oid4vci = { path = "crates/registry-evidence-oid4vci", version = "0.22.0" }
-registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.22.0" }
-registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.22.0" }
-registry-language-server = { path = "crates/registry-language-server", version = "0.22.0" }
-registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.22.0" }
-registry-mint = { path = "crates/registry-mint", version = "0.22.0" }
-registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.22.0" }
-registry-relay-client = { path = "crates/registry-relay-client", version = "0.22.0" }
-registry-relay-client-node = { path = "crates/registry-relay-client-node", version = "0.22.0" }
-registry-relay-client-py = { path = "crates/registry-relay-client-py", version = "0.22.0" }
-registry-relay-v2 = { path = "crates/registry-relay-v2", version = "0.22.0" }
-registry-relayctl = { path = "crates/registry-relayctl", version = "0.22.0" }
-registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.22.0" }
-registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.22.0" }
-registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.22.0" }
-registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.22.0" }
-registry-platform-config = { path = "crates/registry-platform-config", version = "0.22.0" }
-registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.22.0" }
-registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.22.0", default-features = false }
-registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.22.0" }
-registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.22.0" }
-registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.22.0" }
-registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.22.0" }
-registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.22.0" }
+registry-discovery = { path = "crates/registry-discovery", version = "0.23.0", default-features = false }
+registry-discovery-client = { path = "crates/registry-discovery-client", version = "0.23.0" }
+registry-discovery-client-node = { path = "crates/registry-discovery-client-node", version = "0.23.0" }
+registry-discovery-client-py = { path = "crates/registry-discovery-client-py", version = "0.23.0" }
+registry-discovery-profile = { path = "crates/registry-discovery-profile", version = "0.23.0" }
+registry-discoveryctl = { path = "crates/registry-discoveryctl", version = "0.23.0" }
+registry-evidence = { path = "crates/registry-evidence", version = "0.23.0" }
+registry-evidence-authoring = { path = "crates/registry-evidence-authoring", version = "0.23.0" }
+registry-evidence-client = { path = "crates/registry-evidence-client", version = "0.23.0" }
+registry-evidence-client-node = { path = "crates/registry-evidence-client-node", version = "0.23.0" }
+registry-evidence-client-py = { path = "crates/registry-evidence-client-py", version = "0.23.0" }
+registry-evidence-oid4vci = { path = "crates/registry-evidence-oid4vci", version = "0.23.0" }
+registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.23.0" }
+registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.23.0" }
+registry-language-server = { path = "crates/registry-language-server", version = "0.23.0" }
+registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.23.0" }
+registry-mint = { path = "crates/registry-mint", version = "0.23.0" }
+registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.23.0" }
+registry-relay-client = { path = "crates/registry-relay-client", version = "0.23.0" }
+registry-relay-client-node = { path = "crates/registry-relay-client-node", version = "0.23.0" }
+registry-relay-client-py = { path = "crates/registry-relay-client-py", version = "0.23.0" }
+registry-relay-v2 = { path = "crates/registry-relay-v2", version = "0.23.0" }
+registry-relayctl = { path = "crates/registry-relayctl", version = "0.23.0" }
+registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.23.0" }
+registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.23.0" }
+registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.23.0" }
+registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.23.0" }
+registry-platform-config = { path = "crates/registry-platform-config", version = "0.23.0" }
+registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.23.0" }
+registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.23.0", default-features = false }
+registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.23.0" }
+registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.23.0" }
+registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.23.0" }
+registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.23.0" }
+registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.23.0" }
 
 anyhow = { version = "1" }
 assert-json-diff = { version = "2" }

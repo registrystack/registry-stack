@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/evidence-client-linux-arm64-gnu",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "cpu": ["arm64"],
   "main": "evidence-client.linux-arm64-gnu.node",
   "files": ["evidence-client.linux-arm64-gnu.node"],

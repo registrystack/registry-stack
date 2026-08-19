@@ -6,7 +6,7 @@ client, via [napi-rs](https://napi.rs). Every Evidence semantic decision
 own; this crate is a thin `#[napi]` surface plus a JSON conversion layer, and
 re-implements none of it.
 
-Starting with Registry Stack v0.22.0, install the exact client version that
+Starting with Registry Stack v0.23.0, install the exact client version that
 matches the Evidence deployment:
 
 ```sh

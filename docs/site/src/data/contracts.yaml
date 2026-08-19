@@ -35,7 +35,7 @@
   surface: Portable `metadata.yaml` documents, compiled metadata model, public services, forms, policies, requirements, evidence type lists, evidence offering metadata, and evaluation profile metadata.
   source_of_truth:
     label: Registry Manifest core
-    url: https://github.com/registrystack/registry-stack/blob/v0.22.0/crates/registry-manifest-core/src/lib.rs
+    url: https://github.com/registrystack/registry-stack/blob/v0.23.0/crates/registry-manifest-core/src/lib.rs
   consumer_note: Runtime source paths, scopes, table or view names, endpoint locations, credentials, and other deployment bindings belong in consuming service configuration, not manifests.
 - id: registry-manifest.cpsv-ap-service-catalogue
   name: CPSV-AP Service Catalogue Render Contract
@@ -44,7 +44,7 @@
   surface: CPSV-AP JSON-LD service catalogue, CCCEV requirements, grouped evidence type lists, local form-definition links, DCAT data services, and form JSON Schemas.
   source_of_truth:
     label: Registry Manifest CPSV-AP fixture
-    url: https://github.com/registrystack/registry-stack/tree/v0.22.0/products/manifest/fixtures/cpsv-ap
+    url: https://github.com/registrystack/registry-stack/tree/v0.23.0/products/manifest/fixtures/cpsv-ap
   consumer_note: Each CCCEV evidence type list is one grouped option; multiple lists on a requirement are alternatives.
 - id: registry-manifest.static-publication
   name: Static Discovery Bundle
@@ -53,5 +53,5 @@
   surface: Static index, catalog JSON, evidence offerings, policies, DCAT, CPSV-AP, BRegDCAT-AP, SHACL, OGC Records item collection, entity JSON Schemas, form JSON Schemas, and embedded SKOS-shaped codelist nodes.
   source_of_truth:
     label: Registry Manifest CLI
-    url: https://github.com/registrystack/registry-stack/tree/v0.22.0/crates/registry-manifest-cli
+    url: https://github.com/registrystack/registry-stack/tree/v0.23.0/crates/registry-manifest-cli
   consumer_note: The bundle can be hosted as static files without running Registry Relay.
