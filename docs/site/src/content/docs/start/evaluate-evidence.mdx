@@ -13,16 +13,15 @@ standards_referenced: []
 
 This page is for someone sizing up Evidence Gateway before committing infrastructure,
 security review, and operational capacity to it. It assumes the fit question
-from [When Registry Stack fits](../when-to-use/) is already settled and asks
+in [Which product fits your problem](../when-to-use/) is already settled and asks
 the next one: what does running it actually cost.
 
 ## Runtime footprint
 
-Evidence Gateway is one crate, `registry-evidence`, and one binary, `evidence`
-(`crates/registry-evidence/Cargo.toml`). There is no separate control plane or worker process: one
+Evidence Gateway is one crate, `registry-evidence`, and one binary, `evidence`. There is no separate control plane or worker process: one
 Evidence Gateway process serves one operator-controlled trust domain. Production and evidence-grade
 signing also requires an operator-managed workload-local Transit proxy
-(`products/evidence/README.md`).
+([Evidence Gateway product overview](../../products/registry-evidence/)).
 
 At startup the process reads two inputs, both mounted read-only: a closed
 operator `runtime.yaml` that binds one listener, bundle directory, secret
@@ -30,14 +29,14 @@ root, audit destination, and local TLS trust files; and an immutable,
 reviewed evidence bundle directory holding the deployment's YAML, Rhai
 scripts, schemas, codelists, and fixtures. Neither input may be writable to
 the service process; startup and readiness fail when either is incomplete,
-inconsistent, or mutable (`products/evidence/OPERATOR-CONTRACT.md`).
+inconsistent, or mutable ([operator contract](../../products/registry-evidence/operator-contract/)).
 
 It needs a governed ES256 P-256 public key whose `kid` is its RFC 7638 thumbprint, plus two
 independently generated raw secrets of at least 32 bytes, one for the audit hash chain and one
 for subject-binding pseudonyms. Production and evidence-grade mode use a workload-local Vault or
 OpenBao Transit proxy over a Unix socket. Local assurance may use an owner-only P-256 private JWK
 under the secret root (mode `0700`, file mode `0600`)
-(`products/evidence/OPERATOR-CONTRACT.md`).
+([operator contract](../../products/registry-evidence/operator-contract/)).
 
 The runtime requires a complete deployment layout like this:
 
@@ -66,7 +65,7 @@ private local runtime layout shown here (`crates/registry-evidencectl/src/scaffo
 
 ## Dependencies
 
-Evidence Gateway does not run against a database. `products/evidence/OPERATOR-CONTRACT.md`
+Evidence Gateway does not run against a database. The [operator contract](../../products/registry-evidence/operator-contract/)
 states it directly: "Evidence Gateway Version 1 has no application database and
 persists no selector, source, evidence, or response data." The one place
 Evidence Gateway writes durable state is the audit trail, and that is a keyed JSONL
@@ -76,8 +75,8 @@ a durable keyed JSONL chain" (`crates/registry-evidence/src/audit.rs`). An
 external durable audit service may own that storage instead, but nothing in
 the runtime requires a database engine to reach it.
 
-The same boundary excludes a message broker and workers; `products/evidence/README.md`
-lists both among what Version 1 does not include. `products/evidence/CONCEPT.md`
+The same boundary excludes a message broker and workers; the [product overview](../../products/registry-evidence/)
+lists both among what Version 1 does not include. The [concept](../../products/registry-evidence/concept/)
 states the infrastructure implication for the native deployment target
 directly: "It does not require Kubernetes, a message broker, a database, OPA,
 or a service mesh."
@@ -103,7 +102,7 @@ Build the toolset from source with
 `cargo build --release --locked -p registry-evidence -p registry-evidencectl -p registry-mint`,
 or, for a tagged release that publishes it, install reproducible bare
 binaries through the pinned installer script
-(`products/evidence/README.md`).
+([Evidence Gateway product overview](../../products/registry-evidence/)).
 
 Starting with `v0.21.0`, Registry Stack publishes official
 `ghcr.io/registrystack/evidence:v0.21.0` and
@@ -146,7 +145,7 @@ Rotation is the operator's job too: a deployment keeps one active signing key
 at a time and must retain every previous public key in the published JWKS for at least the
 maximum assertion validity plus allowed clock skew, or a verifier holding an
 older cached assertion will fail to check it
-(`products/evidence/OPERATOR-CONTRACT.md`).
+([operator contract](../../products/registry-evidence/operator-contract/)).
 
 ### Deployment inputs
 
@@ -155,7 +154,7 @@ Evidence Gateway will start; a read-only mount is preferred. An operator can rem
 write bits with `chmod -R a-w bundle` and `chmod 444 runtime.yaml` before
 running `evidence check`. Editing either input means restoring write access,
 making the change, removing write access again, and rerunning the check
-(`products/evidence/OPERATOR-CONTRACT.md`). There is no hot reload, override
+([operator contract](../../products/registry-evidence/operator-contract/)). There is no hot reload, override
 layer, or runtime mutation API.
 
 ### Audit trail
@@ -171,7 +170,7 @@ sealed segment. `evidence verify-audit` is the out-of-band command for
 proving sealed history was not tampered with, and the operator contract
 documents specific rollback hazards in detail, most notably that renaming or
 replacing the active segment incorrectly can silently fork the chain
-(`products/evidence/OPERATOR-CONTRACT.md`).
+([operator contract](../../products/registry-evidence/operator-contract/)).
 
 ### Readiness and liveness are different questions
 
@@ -181,16 +180,16 @@ while any required secret or source credential is absent"
 signing provider, the pinned audit sink, and every source credential,
 including a bounded OAuth client-credentials bootstrap where that
 authentication kind is configured. Neither check sends a request to a source
-or probes a source data endpoint (`products/evidence/OPERATOR-CONTRACT.md`).
+or probes a source data endpoint ([operator contract](../../products/registry-evidence/operator-contract/)).
 Route traffic on `/ready`, not `/health`.
 
 Telemetry is opt-in: leaving `metricsListener` unset in `runtime.yaml` serves
 none of it, and setting it only opens a second, private-address-only
-listener (`products/evidence/OPERATOR-CONTRACT.md`).
+listener ([operator contract](../../products/registry-evidence/operator-contract/)).
 
 ## Performance posture
 
-`products/evidence/PERFORMANCE.md` states its own scope plainly: nothing in
+The [performance note](../../products/registry-evidence/performance/) states its own scope plainly: nothing in
 it is a Version 1 contract. There is no throughput commitment to evaluate
 against, only kept measurements.
 
@@ -203,7 +202,7 @@ a disk barrier is in flight form the next batch, and one sync covers the
 whole batch, while every append still resolves only after the barrier that
 covers its own bytes (`crates/registry-evidence/src/audit.rs`).
 
-The measurement kept in `products/evidence/OPERATOR-CONTRACT.md` under
+The measurement kept in the [operator contract](../../products/registry-evidence/operator-contract/) under
 "Measured throughput" sustained 7057 requests per second at 128 concurrent
 requests with zero non-2xx responses and a 17.89 ms p50, on an Apple M5 Max
 under macOS, with every request running token verification, rate limiting,
@@ -236,22 +235,22 @@ change" (root `AGENTS.md`). Evidence Gateway does not carry a separate, more
 permissive statement.
 
 Within that, Evidence Gateway's Version 1 assertion contract is treated as
-implemented rather than exploratory. `products/evidence/README.md` gives its
+implemented rather than exploratory. The [product overview](../../products/registry-evidence/) gives its
 status as "implemented Version 1 contracts, runtime, reference deployments,
-and reproducible Evidence Gateway-specific verification gates," and
-`products/evidence/OPERATOR-CONTRACT.md` carries the matching "Implemented
+and reproducible Evidence Gateway-specific verification gates," and the
+[operator contract](../../products/registry-evidence/operator-contract/) carries the matching "Implemented
 Version 1 operator contract" status. Four assertion cases, adult status,
 residence region, professional licence status, and legal-parent
 relationship, are coequal acceptance definitions; the product is not
 considered implemented while only a subset of them passes
-(`products/evidence/AGENTS.md`).
+([concept](../../products/registry-evidence/concept/)).
 
 What stays explicitly out of scope remains so until a separately approved
 profile changes it: document evidence, credential-lifecycle features beyond
 the SD-JWT VC serialization, multi-source fulfillment, the delegated-agent
 grant profile, a public or federated catalog, and OOTS execution are all
-named non-goals rather than roadmap items (`products/evidence/CONCEPT.md`).
-`products/evidence/OPERATOR-CONTRACT.md` closes on the same note: "Future
+named non-goals rather than roadmap items ([concept](../../products/registry-evidence/concept/)).
+The [operator contract](../../products/registry-evidence/operator-contract/) closes on the same note: "Future
 profiles require a separately approved concept and plan."
 
 {/* TODO[evidence]: no published versioning or backward-compatibility policy
@@ -261,6 +260,6 @@ upgrade continuity. */}
 
 ## Next
 
-- [When Registry Stack fits](../when-to-use/)
+- [Which product fits your problem](../when-to-use/)
 - [Configure Evidence Gateway](../../configure/evidence/)
 - [Evidence Gateway API reference](../../reference/apis/registry-evidence/)

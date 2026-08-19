@@ -255,6 +255,8 @@ export default defineConfig({
         },
       },
       customCss: ['./src/styles/custom.css'],
+      // Expressive Code settings live in ec.config.mjs, not here: the
+      // starlight-openapi plugin replaces this key wholesale. See that file.
       components: {
         Banner: './src/components/RegistryBanner.astro',
         Head: './src/components/RegistryHead.astro',
@@ -327,7 +329,7 @@ export default defineConfig({
                   items: [
                     { label: 'OpenCRVS: registered parent', slug: 'tutorials/verify-a-registered-parent-with-opencrvs' },
                     { label: 'OpenCRVS: birth certificate SD-JWT VC', slug: 'tutorials/issue-a-birth-certificate-vc-from-opencrvs' },
-                    { label: 'DHIS2: immunization summary (under review)', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
+                    { label: 'DHIS2: immunization summary', slug: 'tutorials/issue-immunization-evidence-from-dhis2' },
                   ],
                 },
               ],
