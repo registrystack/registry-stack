@@ -1124,7 +1124,7 @@ selectors, secrets, or document digests into this uninterpreted random value.
 A request against a requirement declaring the holder-bound mode of section 8.6
 carries this nonce under exactly the same rules, and the assertion does not echo
 it, because a holder-bound assertion names no relying party to correlate it
-with. Nothing above changes: the runtime still does not store it, and the
+with. None of that changes: the runtime still does not store it, and the
 presenter binding that mode provides is proven to the relying party by a
 key-binding JWT over the relying party's own challenge, never by this value.
 
@@ -1190,7 +1190,7 @@ the unsigned envelope:
 }
 ```
 
-The example above is audience-scoped and abbreviated. Every assertion states its declared `subjectBinding`. An audience-scoped one carries `audience` and the echoed `requestNonce` together, as this example does. A holder-bound one carries neither, and names its holder key in the confirmation claim of the serialization that section 8.6 restricts it to.
+This example is audience-scoped and abbreviated. Every assertion states its declared `subjectBinding`. An audience-scoped one carries `audience` and the echoed `requestNonce` together, as this example does. A holder-bound one carries neither, and names its holder key in the confirmation claim of the serialization that section 8.6 restricts it to.
 
 The JWS object contains `protected`, `payload`, and `signature` members. `payload` is the base64url encoding of the exact UTF-8 JSON evidence bytes. This avoids a separate JSON canonicalization contract and does not duplicate the evidence object beside its signature.
 
@@ -1210,12 +1210,12 @@ The unsigned success is deliberately distinct:
 }
 ```
 
-The nested object is complete on the wire; it is abbreviated above. The fixed
-outer schema and markers ensure stored unsigned output does not claim a JWS
-proof. The JWS verifier rejects this representation. A separate unsigned parser
-may check schema and policy but returns an explicitly unverified result. Version
-one never uses JWS `alg: none`, an empty signature, or a JWS-shaped unsigned
-object.
+The nested object is complete on the wire; it is abbreviated in this example.
+The fixed outer schema and markers ensure stored unsigned output does not claim
+a JWS proof. The JWS verifier rejects this representation. A separate unsigned
+parser may check schema and policy but returns an explicitly unverified result.
+Version one never uses JWS `alg: none`, an empty signature, or a JWS-shaped
+unsigned object.
 
 ### 11.1 Response integrity and verification
 
@@ -1805,7 +1805,7 @@ FactSet as transient `prior_facts`; Rust may bind a declared scalar fact to a
 complete fetch path segment. The response cannot select a source, origin,
 method, credential, or additional call. Section 15.7 adds one further closed
 kind, gated by an operator, that widens the fixed fetch into a declared set;
-the refusal below is what it preserves, and every count it raises stays a
+that section preserves the same refusal, and every count it raises stays a
 property of the bundle rather than of a response.
 
 Script-selected sources, URLs, methods, headers, credentials, retries,
@@ -1926,7 +1926,7 @@ one closed acquisition kind for exactly that shape and adds nothing else.
 Unlike the other profiles in this section, this one is implemented. It was
 originally written with an adopter gate ahead of it, and that gate was waived
 by a deliberate product decision rather than met. Its Version 1 non-goals and
-the refusals below are unaffected by that decision and remain in force.
+this section's refusals are unaffected by that decision and remain in force.
 
 #### What the kind adds
 
