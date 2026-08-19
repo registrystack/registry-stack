@@ -10,10 +10,12 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use serde::Serialize;
 
+mod report;
 mod shared;
 mod tooling_editor;
+
+use crate::shared::ToolingReport;
 
 const DOMAIN_REFUSAL_EXIT: u8 = 1;
 const USAGE_EXIT: u8 = 2;
@@ -212,7 +214,6 @@ where
         command => command,
     };
 
-    let command_name = command.name();
     let report = match shared::execute(command) {
         Ok(report) => report,
         Err(error) => {
@@ -221,7 +222,7 @@ where
         }
     };
 
-    if render_report(command_name, &report, json, stdout).is_err() {
+    if render_report(&report, json, stdout).is_err() {
         let _ = writeln!(stderr, "relayctl: output could not be written");
         return ExitCode::from(OPERATIONAL_FAILURE_EXIT);
     }
@@ -230,21 +231,6 @@ where
         ExitCode::SUCCESS
     } else {
         ExitCode::from(DOMAIN_REFUSAL_EXIT)
-    }
-}
-
-impl Command {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Init(_) => "init",
-            Self::Inspect(_) => "inspect",
-            Self::Check(_) => "check",
-            Self::Generate(_) => "generate",
-            Self::Test(_) => "test",
-            Self::Diff(_) => "diff",
-            Self::Package(_) => "package",
-            Self::Tooling(_) => "tooling",
-        }
     }
 }
 
@@ -297,21 +283,17 @@ fn run_tooling(
     }
 }
 
-fn render_report<T: Serialize>(
-    command: &str,
-    report: &T,
-    json: bool,
-    output: &mut dyn Write,
-) -> io::Result<()> {
+/// Write one shared report: the machine document under `--json`, and the plain
+/// adopter rendering otherwise. The shared report is the sole source of command
+/// details in both. Rendering it does not reinterpret compiler outcomes or
+/// change classes, and the JSON document is the same one either way.
+fn render_report(report: &ToolingReport, json: bool, output: &mut dyn Write) -> io::Result<()> {
     if json {
         serde_json::to_writer_pretty(&mut *output, report).map_err(io::Error::other)?;
         writeln!(output)
     } else {
-        writeln!(output, "relayctl {command}")?;
-        // The shared report is the sole source of command details. Rendering
-        // it here does not reinterpret compiler outcomes or change classes.
-        serde_json::to_writer_pretty(&mut *output, report).map_err(io::Error::other)?;
-        writeln!(output)
+        let rendered = report::render_human(report).map_err(io::Error::other)?;
+        output.write_all(rendered.as_bytes())
     }
 }
 
@@ -545,28 +527,188 @@ mod tests {
                 .starts_with(".relay-v2-editor-transaction-")));
     }
 
+    /// One shared report of every kind the tooling facade can return, as the
+    /// exact JSON document `--json` has always written.
+    const REPORT_DOCUMENTS: [&str; 7] = [
+        concat!(
+            "{\n",
+            "  \"status\": \"success\",\n",
+            "  \"diagnostics\": [],\n",
+            "  \"details\": {\n",
+            "    \"kind\": \"initialized\",\n",
+            "    \"files\": [\n",
+            "      \"registry.yaml\"\n",
+            "    ]\n",
+            "  }\n",
+            "}"
+        ),
+        concat!(
+            "{\n",
+            "  \"status\": \"success\",\n",
+            "  \"diagnostics\": [],\n",
+            "  \"details\": {\n",
+            "    \"kind\": \"schema-inspection\",\n",
+            "    \"fingerprint\": \"sha256:aaaa\",\n",
+            "    \"objects\": [\n",
+            "      {\n",
+            "        \"kind\": \"table\",\n",
+            "        \"name\": \"source_records\",\n",
+            "        \"tableName\": \"source_records\",\n",
+            "        \"columns\": [\n",
+            "          {\n",
+            "            \"name\": \"record_identifier\",\n",
+            "            \"declaredType\": \"TEXT\",\n",
+            "            \"nullable\": false,\n",
+            "            \"primaryKey\": true\n",
+            "          }\n",
+            "        ]\n",
+            "      }\n",
+            "    ],\n",
+            "    \"starter_file\": null\n",
+            "  }\n",
+            "}"
+        ),
+        concat!(
+            "{\n",
+            "  \"status\": \"refused\",\n",
+            "  \"diagnostics\": [\n",
+            "    {\n",
+            "      \"severity\": \"error\",\n",
+            "      \"code\": \"runtime.issuer_missing\",\n",
+            "      \"location\": \"runtime.yaml.authentication.issuer\",\n",
+            "      \"message\": \"a Registry with protected operations requires one configured issuer\"\n",
+            "    }\n",
+            "  ],\n",
+            "  \"details\": {\n",
+            "    \"kind\": \"check\",\n",
+            "    \"contract_revision\": null,\n",
+            "    \"production\": true,\n",
+            "    \"configuration_key_paths\": null\n",
+            "  }\n",
+            "}"
+        ),
+        concat!(
+            "{\n",
+            "  \"status\": \"success\",\n",
+            "  \"diagnostics\": [],\n",
+            "  \"details\": {\n",
+            "    \"kind\": \"generate\",\n",
+            "    \"contract_revision\": \"sha256:bbbb\",\n",
+            "    \"artifacts\": [\n",
+            "      {\n",
+            "        \"id\": \"capability-inventory\",\n",
+            "        \"path\": \"artifacts/capabilities.json\",\n",
+            "        \"sha256\": \"sha256:cccc\"\n",
+            "      }\n",
+            "    ]\n",
+            "  }\n",
+            "}"
+        ),
+        concat!(
+            "{\n",
+            "  \"status\": \"success\",\n",
+            "  \"diagnostics\": [],\n",
+            "  \"details\": {\n",
+            "    \"kind\": \"test\",\n",
+            "    \"contract_revision\": \"sha256:dddd\",\n",
+            "    \"report\": {\n",
+            "      \"registryIdentifier\": \"urn:example:registry:records\",\n",
+            "      \"selectedFixture\": null,\n",
+            "      \"steps\": [\n",
+            "        {\n",
+            "          \"id\": \"first-page\",\n",
+            "          \"operationIdentifier\": \"record.list\",\n",
+            "          \"expectedStatus\": 200,\n",
+            "          \"actualStatus\": 200,\n",
+            "          \"actualCode\": null,\n",
+            "          \"passed\": true\n",
+            "        }\n",
+            "      ],\n",
+            "      \"diagnostics\": []\n",
+            "    }\n",
+            "  }\n",
+            "}"
+        ),
+        concat!(
+            "{\n",
+            "  \"status\": \"success\",\n",
+            "  \"diagnostics\": [],\n",
+            "  \"details\": {\n",
+            "    \"kind\": \"diff\",\n",
+            "    \"report\": {\n",
+            "      \"previousRevision\": \"sha256:eeee\",\n",
+            "      \"currentRevision\": \"sha256:ffff\",\n",
+            "      \"changes\": [\n",
+            "        {\n",
+            "          \"class\": \"filter-removed\",\n",
+            "          \"impact\": \"breaking\",\n",
+            "          \"location\": \"resources[0].operations.list.filters\",\n",
+            "          \"description\": \"a request filter was removed\"\n",
+            "        }\n",
+            "      ]\n",
+            "    }\n",
+            "  }\n",
+            "}"
+        ),
+        concat!(
+            "{\n",
+            "  \"status\": \"refused\",\n",
+            "  \"diagnostics\": [\n",
+            "    {\n",
+            "      \"severity\": \"error\",\n",
+            "      \"code\": \"classification.unreviewed\",\n",
+            "      \"location\": \"resources[0].sourceColumnClassifications\",\n",
+            "      \"message\": \"production compilation requires reviewed classification\"\n",
+            "    }\n",
+            "  ],\n",
+            "  \"details\": {\n",
+            "    \"kind\": \"package\",\n",
+            "    \"manifest\": null\n",
+            "  }\n",
+            "}"
+        ),
+    ];
+
+    fn parsed_report(document: &str) -> ToolingReport {
+        serde_json::from_str(document).expect("the report document parses")
+    }
+
+    fn written(report: &ToolingReport, json: bool) -> String {
+        let mut output = Vec::new();
+        render_report(report, json, &mut output).expect("report renders");
+        String::from_utf8(output).expect("output is UTF-8")
+    }
+
     #[test]
     fn json_reports_are_one_valid_document() {
-        #[derive(Serialize)]
-        struct Report<'a> {
-            status: &'a str,
-            summary: &'a str,
+        let output = written(&parsed_report(REPORT_DOCUMENTS[1]), true);
+
+        let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(value["status"], "success");
+        assert_eq!(value["details"]["kind"], "schema-inspection");
+    }
+
+    #[test]
+    fn json_output_stays_byte_identical_to_the_shared_report_document() {
+        for document in REPORT_DOCUMENTS {
+            let report = parsed_report(document);
+
+            assert_eq!(written(&report, true), format!("{document}\n"));
         }
+    }
 
-        let mut output = Vec::new();
-        render_report(
-            "inspect",
-            &Report {
-                status: "accepted",
-                summary: "schema structure inspected",
-            },
-            true,
-            &mut output,
-        )
-        .expect("report renders");
+    #[test]
+    fn the_default_output_is_the_plain_rendering_and_never_the_document() {
+        for document in REPORT_DOCUMENTS {
+            let report = parsed_report(document);
 
-        let value: serde_json::Value = serde_json::from_slice(&output).expect("valid JSON");
-        assert_eq!(value["status"], "accepted");
+            let output = written(&report, false);
+
+            assert_eq!(output, report::render_human(&report).expect("renders"));
+            assert!(!output.starts_with('{'), "default output opened a document");
+            assert!(!output.contains("\"status\""), "default output kept JSON");
+            assert!(output.ends_with('\n'));
+        }
     }
 
     #[test]
@@ -581,23 +723,13 @@ mod tests {
 
     #[test]
     fn json_rendering_is_deterministic_and_has_one_trailing_newline() {
-        #[derive(Serialize)]
-        struct Report<'a> {
-            status: &'a str,
-            summary: &'a str,
-        }
+        let report = parsed_report(REPORT_DOCUMENTS[1]);
 
-        let mut first = Vec::new();
-        let mut second = Vec::new();
-        let report = Report {
-            status: "accepted",
-            summary: "schema structure inspected",
-        };
-        render_report("inspect", &report, true, &mut first).expect("report renders");
-        render_report("inspect", &report, true, &mut second).expect("report repeats");
+        let first = written(&report, true);
+        let second = written(&report, true);
 
         assert_eq!(first, second);
-        assert!(first.ends_with(b"\n"));
-        assert!(!first.ends_with(b"\n\n"));
+        assert!(first.ends_with('\n'));
+        assert!(!first.ends_with("\n\n"));
     }
 }

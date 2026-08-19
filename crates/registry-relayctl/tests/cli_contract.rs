@@ -95,10 +95,14 @@ fn package_refuses_an_implicit_destination_without_echoing_project_contents() {
 fn adopter_commands_link_the_shared_library_and_never_spawn_relay() {
     let library = include_str!("../src/lib.rs");
     let shared = include_str!("../src/shared.rs");
+    let rendering = include_str!("../src/report.rs");
     let binary = include_str!("../src/main.rs");
-    let production = format!("{library}\n{shared}\n{binary}");
+    let production = format!("{library}\n{shared}\n{rendering}\n{binary}");
 
     assert!(shared.contains("registry_relay_v2::tooling"));
+    // Report presentation reads the shared report through the one seam, so the
+    // renderer names no Relay module of its own.
+    assert!(!rendering.contains("registry_relay_v2"));
     for forbidden in ["std::process::Command", "Command::new", "rusqlite"] {
         assert!(
             !production.contains(forbidden),

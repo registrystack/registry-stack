@@ -3,7 +3,17 @@
 
 use registry_relay_v2::tooling::{
     self, CheckOptions, DiffOptions, GenerateOptions, InitOptions, InspectOptions,
-    InspectionProfile, PackageOptions, TestOptions, ToolingError, ToolingReport,
+    InspectionProfile, PackageOptions, TestOptions, ToolingError,
+};
+
+/// The report shapes adopter presentation reads. Re-exporting them keeps every
+/// mention of Relay semantics in this module, the rendering one included.
+pub(crate) use registry_relay_v2::{
+    diff::{ChangeImpact, ChangeImpactReport},
+    fixtures::FixturePlanReport,
+    model::{Diagnostic, DiagnosticSeverity},
+    package::PackageManifest,
+    tooling::{InspectedObject, ToolingDetails, ToolingReport, ToolingStatus},
 };
 
 use crate::{Command, InspectionProfileArg};
