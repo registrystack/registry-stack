@@ -29,7 +29,7 @@ chrono.workspace = true
 # multiple candidates for rmeta dependency`, which no `use` path syntax can
 # resolve). One consistent alias, used everywhere this crate reaches the SDK,
 # avoids that rather than special-casing test code against production code.
-evidence-client-sdk = { package = "registry-evidence-client", path = "../registry-evidence-client", version = "0.22.0" }
+evidence-client-sdk = { package = "registry-evidence-client", path = "../registry-evidence-client", version = "0.23.0" }
 pyo3.workspace = true
 registry-platform-crypto.workspace = true
 serde_json.workspace = true

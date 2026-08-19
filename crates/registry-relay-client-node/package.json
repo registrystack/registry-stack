@@ -1,6 +1,6 @@
 {
   "name": "@registrystack/relay-client",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Node.js binding for the Registry Relay V2 client, via napi-rs.",
   "license": "Apache-2.0",
   "publishConfig": { "access": "public", "provenance": true },
@@ -30,8 +30,8 @@
     "typescript": "6.0.3"
   },
   "optionalDependencies": {
-    "@registrystack/relay-client-darwin-arm64": "0.22.0",
-    "@registrystack/relay-client-linux-arm64-gnu": "0.22.0",
-    "@registrystack/relay-client-linux-x64-gnu": "0.22.0"
+    "@registrystack/relay-client-darwin-arm64": "0.23.0",
+    "@registrystack/relay-client-linux-arm64-gnu": "0.23.0",
+    "@registrystack/relay-client-linux-x64-gnu": "0.23.0"
   }
 }

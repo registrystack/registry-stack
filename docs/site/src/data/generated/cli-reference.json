@@ -1,6 +1,6 @@
 {
   "schema_version": "registry.cli-reference/v2",
-  "source_version": "0.22.0",
+  "source_version": "0.23.0",
   "binaries": [
     {
       "name": "evidence",

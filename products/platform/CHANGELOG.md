@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.23.0 - 2026-08-20
+
+- No separately versioned Registry Platform API changes. The shared
+  outbound HTTP utilities gained crate-private DNS-pinned credential
+  clients used by the platform's own OAuth client authentication.
+
 ## v0.22.0 - 2026-08-14
 
 - Shared file-secret validation accepts owner-only mode `0400` for read-only
