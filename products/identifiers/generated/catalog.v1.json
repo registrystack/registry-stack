@@ -909,7 +909,7 @@
       "description": "Ordered Relay V2 technical handling levels: public, internal, confidential, and restricted.",
       "source": {
         "path": "products/relay-v2/CONCEPT.md",
-        "sha256": "9ffd47dc4e72770e924d050aa3e1d47225db3dc78bd762570a85a96f4a416799"
+        "sha256": "6502c4860b3ff48cb85f5833099be607c8d4b2d0d1126fb4b8e3a7790820a7d7"
       }
     },
     {
