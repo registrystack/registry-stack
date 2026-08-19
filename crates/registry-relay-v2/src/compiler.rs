@@ -2760,7 +2760,7 @@ impl<'a> Compiler<'a> {
             if !order.insert(property_name.as_str()) {
                 self.error(
                     "list.order_duplicate",
-                    &format!("{location}.orderBy"),
+                    &format!("{location}.orderBy[{index}]"),
                     "fixed order keys must be unique",
                 );
             }
@@ -2788,21 +2788,21 @@ impl<'a> Compiler<'a> {
                     if !property.source_required {
                         self.error(
                             "list.order_property_optional",
-                            &format!("{location}.orderBy"),
+                            &format!("{location}.orderBy[{index}]"),
                             "fixed order properties must be required in the governed source contract",
                         );
                     }
                     if !cursor_order_type_supported(binding.data_type) {
                         self.error(
                             "list.order_property_type_unsupported",
-                            &format!("{location}.orderBy"),
+                            &format!("{location}.orderBy[{index}]"),
                             "fixed order properties must use a cursor-supported string, integer, or boolean value shape",
                         );
                     }
                     if !order_columns.insert(binding.source_column.as_str()) {
                         self.error(
                             "list.order_column_duplicate",
-                            &format!("{location}.orderBy"),
+                            &format!("{location}.orderBy[{index}]"),
                             "fixed order properties must resolve to distinct source columns",
                         );
                     }
@@ -2810,13 +2810,13 @@ impl<'a> Compiler<'a> {
                         observed_view,
                         &binding.source_column,
                         binding.data_type,
-                        &format!("{location}.orderBy"),
+                        &format!("{location}.orderBy[{index}]"),
                     );
                     operation.query.order_by.push(binding.source_column.clone());
                 }
                 None => self.error(
                     "list.order_property_unknown",
-                    &format!("{location}.orderBy"),
+                    &format!("{location}.orderBy[{index}]"),
                     "a fixed order key must name a published property",
                 ),
             }
@@ -2936,7 +2936,7 @@ impl<'a> Compiler<'a> {
             if !order.insert(property_name.as_str()) {
                 self.error(
                     "search.order_duplicate",
-                    &format!("{location}.orderBy"),
+                    &format!("{location}.orderBy[{index}]"),
                     "fixed search order keys must be unique",
                 );
             }
@@ -2964,21 +2964,21 @@ impl<'a> Compiler<'a> {
                     if !property.source_required {
                         self.error(
                             "search.order_property_optional",
-                            &format!("{location}.orderBy"),
+                            &format!("{location}.orderBy[{index}]"),
                             "fixed search order properties must be required",
                         );
                     }
                     if !cursor_order_type_supported(binding.data_type) {
                         self.error(
                             "search.order_property_type_unsupported",
-                            &format!("{location}.orderBy"),
+                            &format!("{location}.orderBy[{index}]"),
                             "fixed search order properties must use a cursor-supported scalar shape",
                         );
                     }
                     if !order_columns.insert(binding.source_column.as_str()) {
                         self.error(
                             "search.order_column_duplicate",
-                            &format!("{location}.orderBy"),
+                            &format!("{location}.orderBy[{index}]"),
                             "fixed search order properties must resolve to distinct source columns",
                         );
                     }
@@ -2986,13 +2986,13 @@ impl<'a> Compiler<'a> {
                         observed_view,
                         &binding.source_column,
                         binding.data_type,
-                        &format!("{location}.orderBy"),
+                        &format!("{location}.orderBy[{index}]"),
                     );
                     operation.query.order_by.push(binding.source_column.clone());
                 }
                 None => self.error(
                     "search.order_property_unknown",
-                    &format!("{location}.orderBy"),
+                    &format!("{location}.orderBy[{index}]"),
                     "a fixed search order key must name a published property",
                 ),
             }
@@ -3478,7 +3478,7 @@ impl<'a> Compiler<'a> {
             let Some(classification) = classification else {
                 self.error(
                     "classification.column_incomplete",
-                    &format!("{root}.sourceColumnClassifications"),
+                    &format!("{root}.sourceColumnClassifications.{column}"),
                     "an accounted source column has no complete classification",
                 );
                 continue;
@@ -3514,7 +3514,7 @@ impl<'a> Compiler<'a> {
             }
             self.validate_review_status(
                 &classification,
-                &format!("{root}.sourceColumnClassifications"),
+                &format!("{root}.sourceColumnClassifications.{column}"),
             );
             accounts.push(ColumnAccount {
                 column: column.to_owned(),
@@ -5823,6 +5823,83 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn fixed_list_order_diagnostics_name_each_order_position() {
+        let yaml = valid_contract()
+            .replace(
+                "read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "list:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}\n        filters: []\n        allowUnfiltered: true\n        orderBy: [name, name, absent]\n        pagination: {defaultPageSize: 1, maximumPageSize: 10}",
+            )
+            .replace("operationRefs: [read]", "operationRefs: [list]");
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict list contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("repeated and unknown fixed order keys are refused");
+        let located = |code: &str| {
+            report
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .map(|diagnostic| diagnostic.location.clone())
+                .unwrap_or_else(|| panic!("stable {code} diagnostic"))
+        };
+        assert_eq!(
+            located("list.order_duplicate"),
+            "resources[0].operations.list.orderBy[1]"
+        );
+        assert_eq!(
+            located("list.order_column_duplicate"),
+            "resources[0].operations.list.orderBy[1]"
+        );
+        assert_eq!(
+            located("list.order_property_unknown"),
+            "resources[0].operations.list.orderBy[2]"
+        );
+    }
+
+    #[test]
+    fn fixed_search_order_diagnostics_name_each_order_position() {
+        let yaml = point_contract()
+            .replace(
+                "disclosureProfiles: {public: {properties: [name]}}",
+                "disclosureProfiles: {public: {properties: [name, location]}}",
+            )
+            .replace(
+                "      read:\n        defaultAccessProfile: public\n        accessProfiles:\n          public: {access: public, disclosureProfile: public}",
+                "      searches:\n        - id: within-bbox\n          query: {kind: point-bbox, maximumLongitudeSpanDegrees: 2, maximumLatitudeSpanDegrees: 2}\n          defaultAccessProfile: public\n          accessProfiles:\n            public: {access: public, disclosureProfile: public}\n          orderBy: [name, name, absent]\n          pagination: {defaultPageSize: 10, maximumPageSize: 100}",
+            )
+            .replace(
+                "operationRefs: [read]",
+                "operationRefs: [search:within-bbox]",
+            );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict spatial contract");
+        let report = compile_contract(
+            &contract,
+            &[point_observed_schema("INTEGER", "REAL")],
+            CompileProfile::Production,
+        )
+        .expect_err("repeated and unknown fixed search order keys are refused");
+        let located = |code: &str| {
+            report
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == code)
+                .map(|diagnostic| diagnostic.location.clone())
+                .unwrap_or_else(|| panic!("stable {code} diagnostic"))
+        };
+        assert_eq!(
+            located("search.order_duplicate"),
+            "resources[0].operations.searches[0].orderBy[1]"
+        );
+        assert_eq!(
+            located("search.order_column_duplicate"),
+            "resources[0].operations.searches[0].orderBy[1]"
+        );
+        assert_eq!(
+            located("search.order_property_unknown"),
+            "resources[0].operations.searches[0].orderBy[2]"
+        );
+    }
+
+    #[test]
     fn sqlite_view_nullable_metadata_does_not_override_required_order_contract() {
         let yaml = valid_contract()
             .replace(
@@ -6798,6 +6875,67 @@ pub(crate) mod tests {
         assert!(report.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "classification.column_explicit_review_required"
         }));
+    }
+
+    #[test]
+    fn unreviewed_source_columns_name_each_accounted_column() {
+        let suggested = valid_contract().replace(
+            "classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}",
+            "classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: suggested}",
+        );
+        let contract = RegistryContract::parse_yaml(&suggested).expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("unreviewed source columns refuse production compilation");
+        let locations = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "classification.unreviewed"
+                    && diagnostic
+                        .location
+                        .starts_with("resources[0].sourceColumnClassifications")
+            })
+            .map(|diagnostic| diagnostic.location.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            locations,
+            [
+                "resources[0].sourceColumnClassifications.id",
+                "resources[0].sourceColumnClassifications.lifecycle",
+                "resources[0].sourceColumnClassifications.name",
+                "resources[0].sourceColumnClassifications.recorded_at",
+                "resources[0].sourceColumnClassifications.revision",
+            ]
+        );
+    }
+
+    #[test]
+    fn incomplete_source_column_classifications_name_each_accounted_column() {
+        let incomplete = valid_contract().replace(
+            "classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}",
+            "classificationDefaults: {privacy: non-personal, institutional: public, status: reviewed}",
+        );
+        let contract = RegistryContract::parse_yaml(&incomplete).expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("incomplete source columns refuse production compilation");
+        let locations = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "classification.column_incomplete")
+            .map(|diagnostic| diagnostic.location.as_str())
+            .collect::<Vec<_>>();
+        // A published property with an incomplete classification is refused
+        // before column accounting, so the accounted columns left to report
+        // are the four Registry Core carriers.
+        assert_eq!(
+            locations,
+            [
+                "resources[0].sourceColumnClassifications.id",
+                "resources[0].sourceColumnClassifications.lifecycle",
+                "resources[0].sourceColumnClassifications.recorded_at",
+                "resources[0].sourceColumnClassifications.revision",
+            ]
+        );
     }
 
     #[test]
