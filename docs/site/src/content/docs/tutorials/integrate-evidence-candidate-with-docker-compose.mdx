@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-06"
+last_reviewed: "2026-08-19"
 doc_type: how-to
 persona:
   - operator
@@ -78,6 +78,8 @@ Prepare the persistent audit volume for that same identity before startup. Do no
 root to compensate for an audit volume with the wrong owner.
 
 ```yaml
+# Mounts and service identity only. This is not a complete service definition;
+# the note below this block names what it leaves out.
 services:
   evidence:
     image: <reviewed-evidence-image-by-digest>
