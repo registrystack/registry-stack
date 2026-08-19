@@ -1085,7 +1085,8 @@ fn sdmx_json_rows(document: &Value) -> Option<Vec<BTreeMap<String, Value>>> {
             sdmx_decode_values(&mut row, values, &measures, &attributes)?;
             rows.push(row);
         }
-    } else if let Some(series) = data_set.get("series").and_then(Value::as_object) {
+    } else {
+        let series = data_set.get("series").and_then(Value::as_object)?;
         for (series_key, series_document) in series {
             let series_values = sdmx_decode_key(series_key, &series_dimensions)?;
             let observations = series_document.get("observations")?.as_object()?;
@@ -1100,8 +1101,6 @@ fn sdmx_json_rows(document: &Value) -> Option<Vec<BTreeMap<String, Value>>> {
                 rows.push(row);
             }
         }
-    } else {
-        return None;
     }
     Some(rows)
 }
@@ -1702,6 +1701,27 @@ dataflow,EXAMPLE:RATES(1.0.0),R,EX-A,2024-Q1,65.5,PERCENT\n";
             normalized_response_records(&json_headers, Some(&document), b""),
             normalized_response_records(&csv_headers, None, csv)
         );
+    }
+
+    #[test]
+    fn sdmx_json_rows_refuse_a_data_set_without_observations_or_series() {
+        let structures = json!([{
+            "dimensions": {
+                "series": [{"id": "REF_AREA", "values": [{"id": "EX-A"}]}],
+                "observation": [{"id": "TIME_PERIOD", "values": [{"value": "2024-Q1"}]}]
+            },
+            "measures": {"observation": [{"id": "OBS_VALUE"}]},
+            "attributes": {"observation": [{
+                "id": "UNIT_MEASURE", "values": [{"id": "PERCENT"}]
+            }]}
+        }]);
+
+        let neither = json!({"data": {"dataSets": [{}], "structures": structures}});
+        assert_eq!(sdmx_json_rows(&neither), None);
+
+        let unusable_series =
+            json!({"data": {"dataSets": [{"series": []}], "structures": structures}});
+        assert_eq!(sdmx_json_rows(&unusable_series), None);
     }
 
     #[test]
