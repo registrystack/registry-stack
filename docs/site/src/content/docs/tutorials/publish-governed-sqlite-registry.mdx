@@ -81,7 +81,8 @@ relayctl init business-registry
 cd business-registry
 ```
 
-It reports the files it created:
+It reports the files it created. Every `relayctl` command prints its own name on the first
+line and then a JSON report; the blocks in this tutorial show the report:
 
 ```json
 {
@@ -111,7 +112,7 @@ kinds before the end.
 
 The institution's database is an input, not part of the project. Create a small one here.
 
-Open `registry.sql` in your editor and add this:
+Create `registry.sql` and put this in it:
 
 ```sql
 CREATE TABLE businesses (
@@ -163,7 +164,8 @@ Ask `relayctl` what it sees in the database:
 relayctl inspect registry.sqlite
 ```
 
-The report lists every table, view, and column, and opens with a fingerprint of the whole schema:
+The report lists every table, view, index, and column, and opens with a fingerprint of the whole
+schema. `objects` is abridged here; your run prints the full list:
 
 ```json
 {
@@ -171,20 +173,31 @@ The report lists every table, view, and column, and opens with a fingerprint of 
   "diagnostics": [],
   "details": {
     "kind": "schema-inspection",
-    "fingerprint": "sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18",
+    "fingerprint": "sha256:<your-schema-fingerprint>",
     "objects": [ ... ]
   }
 }
 ```
 
-Copy that fingerprint. Writing it into the contract is how you say which schema you reviewed. If
-someone later adds, drops, or retypes a column, the fingerprint changes and Relay refuses to
-serve rather than guessing whether your review still applies.
+The fingerprint covers the schema statements SQLite stored, not the rows. Inserting or editing
+records never changes it. Reformatting a `CREATE TABLE` or `CREATE VIEW` does change it, even
+when the resulting schema is the same, because the stored statement text is part of what is
+hashed. The same stored schema always produces the same fingerprint, on any machine and on every
+run, so a value that differs from one printed in a tutorial means the schema text differs, not
+that your run went wrong.
+
+Copy your own fingerprint out of that report. Writing it into the contract is how you say which
+schema you reviewed. If someone later adds, drops, or retypes a column, the fingerprint changes
+and Relay refuses to serve rather than guessing whether your review still applies.
 
 ## Write the contract
 
-Replace `registry.yaml` with this. It names the register, binds the resource to the view,
-publishes three properties, and then discloses only two of them.
+The contract names the register, binds the resource to the view, publishes three properties, and
+then discloses only two of them. It is shown here one section at a time. Empty `registry.yaml`
+first, then append each block below in the order it appears; together they are the file
+`relayctl check` reads.
+
+Start with what the document is:
 
 ```yaml
 apiVersion: relay.registrystack.org/v2alpha1
@@ -193,7 +206,15 @@ metadata:
   id: business-registry
   version: draft-1
   title: Business register
+```
 
+`metadata.version` is your own label for this revision of the contract. It is not the revision
+Relay computes and reports, which is a digest of the compiled contract and which you cannot set
+by hand.
+
+Next, who the register belongs to and what it claims to be authoritative about:
+
+```yaml
 registry:
   registryIdentifier: urn:example:registry:businesses
   name: Business register
@@ -207,7 +228,16 @@ registry:
     - name: govstack-digital-registries
       version: 3.0.0-alpha.2
       status: directional
+```
 
+`authoritativeScope` is the sentence a caller reads to decide whether this register answers their
+question at all. `alignmentTargets` needs at least one entry, and `status: directional` is the
+honest setting for an alignment you have read but not conformance-tested.
+
+Then the three roles that have to be attributable to someone, and where locally defined terms
+live:
+
+```yaml
 governance:
   controller: urn:example:authority:registrar
   publisher: urn:example:authority:registrar
@@ -215,7 +245,15 @@ governance:
 
 semantics:
   localVocabulary: https://registry.example.invalid/vocabulary/
+```
 
+All three roles are the registrar here because one institution holds all three. They are separate
+keys because in a real deployment they often are not the same body, and the audit chain is only
+meaningful when someone is named as answerable for it.
+
+Next, the vocabularies this contract classifies against:
+
+```yaml
 classifications:
   privacy:
     scheme: https://w3id.org/dpv
@@ -227,13 +265,30 @@ classifications:
     scheme: https://id.registrystack.org/vocab/handling
     version: "1"
   provenanceRef: governance/classification-review.yaml
+```
 
+Every classification later in the file is a term from one of these three schemes, pinned to a
+version. `provenanceRef` points at the review record that says a person agreed with those terms,
+which is the file the production gate will check later in this tutorial.
+
+Now the source, which is where your fingerprint goes:
+
+```yaml
 sources:
   registry:
     kind: sqlite
     profile: snapshot
-    expectedSchemaFingerprint: sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18
+    expectedSchemaFingerprint: sha256:<your-schema-fingerprint>
+```
 
+Replace `sha256:<your-schema-fingerprint>` with the value `relayctl inspect` printed for your
+database. Nothing else in the tutorial substitutes for it: a contract carrying anyone else's
+fingerprint is refused with `source.schema_fingerprint_mismatch`.
+
+The resource is the largest section, so it arrives in five parts. First its identity and the view
+it binds to:
+
+```yaml
 resources:
   - id: registered-business
     title: Registered business
@@ -247,6 +302,15 @@ resources:
       institutional: public
       handling: public
       status: reviewed
+```
+
+`view` names the view you wrote, never a base table. `classificationDefaults` applies to anything
+in this resource that does not classify itself, so the defaults are what you would have to
+override to publish something more sensitive.
+
+Then the four columns that carry record identity rather than content:
+
+```yaml
     recordContext:
       recordIdentifier:
         sourceColumn: registration_number
@@ -258,6 +322,15 @@ resources:
       recordedAt:
         sourceColumn: recorded_at
     sourceColumnClassifications: {}
+```
+
+`recordContext` is why an answer can say which record it is, which revision of it you got, and
+whether that record is still current. The codelist has to list every lifecycle value the view can
+produce, so a value the register invents later is a refusal rather than a surprise in an answer.
+
+Then the properties the contract knows about:
+
+```yaml
     properties:
       legalName:
         label: Legal name
@@ -280,6 +353,14 @@ resources:
         type: string
         sourceRequired: true
         semanticTerm: local:registeredAddress
+```
+
+All three properties are declared, including `registeredAddress`. Declaring a property is not
+publishing it: the next block decides who gets which of them.
+
+Then the disclosure and access decision:
+
+```yaml
     disclosureProfiles:
       public:
         properties:
@@ -292,6 +373,17 @@ resources:
           public:
             access: public
             disclosureProfile: public
+```
+
+`disclosureProfiles.public` lists only `legalName` and `legalForm`. A property that is declared
+and not disclosed is one the register knows about and this audience does not get, and declaring
+it is what lets you disclose it later to a different audience without touching the view.
+`access: public` means anonymous, and that is the whole authorization decision for this
+deployment, which is why it will need no identity provider later.
+
+Then why the register is doing this at all:
+
+```yaml
     processingDescriptions:
       - id: consultation
         operationRefs:
@@ -302,7 +394,15 @@ resources:
         dpvProfileRef: governance/processing.dpv.yaml
         safeguards:
           - property-minimization
+```
 
+A processing description binds an operation to a purpose, an audience, and a legal basis on file.
+Its identifier is what the audit chain records against each released answer, so a released field
+can always be traced back to the stated reason for releasing it.
+
+Finally, what a caller may read about the register itself:
+
+```yaml
 metadataVisibility:
   service: public
   resources: public
@@ -310,18 +410,6 @@ metadataVisibility:
   classifications: public
   processing: public
 ```
-
-Paste your own fingerprint into `expectedSchemaFingerprint` if it differs from the one above.
-
-Three parts of that file are worth reading twice.
-
-`properties` declares `registeredAddress`, but `disclosureProfiles.public` lists only `legalName`
-and `legalForm`. A property that is declared and not disclosed is a property the register knows
-about and this audience does not get. Declaring it is what lets you disclose it later to a
-different audience without touching the view.
-
-`access: public` means anonymous. That is the whole authorization decision for this deployment,
-which is why it will need no identity provider later.
 
 `metadataVisibility` is set to `public` throughout because a public audience has to be able to
 resolve the schema and vocabulary the answer points at. A contract that publishes an answer
@@ -334,7 +422,8 @@ relayctl check .
 ```
 
 The check compiles the contract, opens the database read-only to confirm the view and columns
-exist, and reports the revision of what it compiled:
+exist, and reports the revision of what it compiled. The real report also carries a
+`configuration_key_paths` listing of every key the two documents accept, which is left out here:
 
 ```json
 {
@@ -356,21 +445,23 @@ Nothing is running yet. `check` reads, and writes nothing.
 relayctl generate .
 ```
 
-This writes 22 artifacts under `generated/`: an OpenAPI 3.1 description, JSON Schema and SHACL
-shapes, a JSON-LD context and vocabulary, the capability inventory, the audit event schema, and
-the review reports. Every one of them is derived from the contract, so none of them can describe
-a field the contract does not disclose.
+This writes the published description of the register under `generated/`: an OpenAPI 3.1
+description, JSON Schema and SHACL shapes, a JSON-LD context and vocabulary, the capability
+inventory, the audit event schema, and the review reports. Every one of them is derived from the
+contract, so none of them can describe a field the contract does not disclose. Running `generate`
+again on an unchanged project rewrites the same bytes.
 
 Two of the generated files are review inputs rather than outputs. `generated/reports/classification-inventory.json`
 is the list of source columns and output properties with the handling each one carries.
 `generated/governance/classification-review-starter.yaml` is a pre-filled review record for
-exactly that inventory:
+exactly that inventory. Its `classificationInventoryDigest` is a digest of your own inventory,
+so it changes whenever the contract changes what is classified:
 
 ```yaml
 apiVersion: relay.registrystack.org/classification-review/v1
 kind: ClassificationReview
 registryIdentifier: urn:example:registry:businesses
-classificationInventoryDigest: sha256:b01c845f9aabc500bae3756dd3daa855c182f540d48ccc5a341ccd2ca25e5e1f
+classificationInventoryDigest: sha256:<inventory-digest>
 method: generated
 reviewer: urn:example:authority:registrar
 reviewDate: pending-review
@@ -388,7 +479,8 @@ authority. Only a person supplies the rest.
 relayctl check . --production
 ```
 
-The starter project is refused, and the diagnostics say exactly why:
+The starter project is refused, and the diagnostics say exactly why. Each one also carries a
+`severity`, dropped here for width; all five below are errors:
 
 ```json
 {
@@ -417,14 +509,15 @@ agreed to publish, and `--production` is the difference between the two.
 
 ## Record the review
 
-Replace `governance/classification-review.yaml` with the review a person signs off. The digest
-comes from the starter file `generate` just wrote:
+Replace `governance/classification-review.yaml` with the review a person signs off. Copy
+`classificationInventoryDigest` out of the starter file `generate` wrote, and use the date on
+which you actually read the inventory:
 
 ```yaml
 apiVersion: relay.registrystack.org/classification-review/v1
 kind: ClassificationReview
 registryIdentifier: urn:example:registry:businesses
-classificationInventoryDigest: sha256:b01c845f9aabc500bae3756dd3daa855c182f540d48ccc5a341ccd2ca25e5e1f
+classificationInventoryDigest: sha256:<inventory-digest>
 method: manual
 reviewer: urn:example:authority:registrar
 reviewDate: 2026-08-11
@@ -498,15 +591,16 @@ relayctl package . --output package
       "packageRevision": "sha256:<package-digest>",
       "contractRevision": "sha256:<contract-digest>",
       "sourceSchemaFingerprints": {
-        "registry": "sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18"
+        "registry": "sha256:<your-schema-fingerprint>"
       }
     }
   }
 }
 ```
 
-The package holds the compiled contract, the generated artifacts, and the governed files, with a
-digest for each. It does not hold the database. Packaging recompiles under the production
+That manifest is abridged: the real one also carries the package format version and the full
+observed schema of every source. The package holds the compiled contract, the generated
+artifacts, and the governed files, with a digest for each. It does not hold the database. Packaging recompiles under the production
 profile, so a package cannot be produced from a revision that would fail `check --production`.
 
 ## Serve it
@@ -542,16 +636,30 @@ to start when any group or other bit is set on it. Keep the key for the life of 
 too. The chain is bound to it, so a new key against an existing `var/audit.jsonl` is a startup
 failure rather than a fresh start.
 
+Relay writes line-delimited JSON to standard output. It logs `relay startup began`, and then
+`relay service listening` with the bound address once the port is actually held. If the second
+line does not appear, the service did not start and the log says why.
+
 Leave that running and open a second shell in the same directory.
 
 ## Ask the register a question
 
 ```sh
 curl -s http://127.0.0.1:8080/ready
+```
+
+```json
+{"status":"ready"}
+```
+
+Then ask for a record:
+
+```sh
 curl -s http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001
 ```
 
-The record answer, abridged to the part that matters:
+The answer, abridged to the part this step is about. The real one also carries the URLs a caller
+follows to the generated schema, vocabulary, and JSON-LD context:
 
 ```json
 {
@@ -602,12 +710,16 @@ curl -s 'http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-0001
   "type": "https://id.registrystack.org/problems/registry-relay/request/fields_invalid",
   "title": "Field selection is invalid",
   "status": 400,
-  "code": "request.fields_invalid"
+  "code": "request.fields_invalid",
+  "detail": "field selection is invalid",
+  "traceId": "<trace-id>"
 }
 ```
 
 The refusal is a request error, not a permission error, because from this audience's side the
-field does not exist. An unknown record is a separate refusal:
+field does not exist. `traceId` is the same identifier the service logged for that request, which
+is how an operator ties a caller's complaint to one log line without the caller quoting the
+answer. An unknown record is a separate refusal:
 
 ```sh
 curl -s http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-9999
@@ -615,9 +727,12 @@ curl -s http://127.0.0.1:8080/v2/resources/registered-business/records/BIZ-9999
 
 ```json
 {
+  "type": "https://id.registrystack.org/problems/registry-relay/consultation/unresolved",
   "title": "Requested record was not resolved",
   "status": 404,
-  "code": "consultation.unresolved"
+  "code": "consultation.unresolved",
+  "detail": "the requested record was not resolved",
+  "traceId": "<trace-id>"
 }
 ```
 
@@ -633,9 +748,11 @@ Stop the service with `Ctrl+C` and read the first audit line:
 head -n 1 var/audit.jsonl
 ```
 
+The line is one JSON object. Abridged to the fields this step is about:
+
 ```json
 {
-  "envelope_id": "...",
+  "envelope_id": "<envelope-id>",
   "prev_hash": null,
   "record": {
     "operationIdentifier": "registered-business.read",
@@ -649,9 +766,14 @@ head -n 1 var/audit.jsonl
     "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
     "phase": "attempt"
   },
-  "record_hash": "..."
+  "record_hash": "<record-hash>"
 }
 ```
+
+The envelope also carries `timestamp_unix_ms`. The full `record` carries more than is shown: the
+registry identifier, the revision of the access rules that were applied, the operation surface
+and wire format, the trace identifier shared with the log line, and the handling levels the
+answer was released under. None of them is a field value either.
 
 Read what is not there. The line records that an anonymous caller reached the
 `registered-business.read` operation, and that the contract scoped the answer to the properties
@@ -691,6 +813,8 @@ unset RELAY_AUDIT_KEY
 | `project.destination_not_empty` from `relayctl init` | The target directory already has files | Initialize into a new directory name. |
 | `contract.yaml_invalid` from `relayctl check` | A required key is missing, an unknown key is present, or the YAML does not parse | Every key in the contract above is required. `registry.alignmentTargets` needs at least one entry. |
 | `resource.view_unknown` | `source.view` names something that is not a view in the database | Relay binds to views only. Add a `CREATE VIEW` for the columns you intend to publish. |
+| `source.schema_fingerprint_invalid` | `expectedSchemaFingerprint` still holds the `sha256:<your-schema-fingerprint>` placeholder | Run `relayctl inspect registry.sqlite` and paste the value it prints. |
+| `source.schema_fingerprint_mismatch` | The contract holds a fingerprint from a different schema, usually because the SQL was retyped rather than copied | Run `relayctl inspect registry.sqlite` again and paste the current value. |
 | `metadata.reference_visibility_invalid` | A public audience cannot resolve the schema or vocabulary the answer points at | Set `metadataVisibility.resources` and `.semantics` to `public` when any access profile is public. |
 | `classification.review_inventory_stale` | The contract changed after the review was recorded | Run `relayctl generate .` again and copy the new digest from `generated/governance/classification-review-starter.yaml`. |
 | `the required audit sink is not ready` at startup | `var/` is not owner-only, or `RELAY_AUDIT_KEY` differs from the key that started the existing chain | `chmod 700 var`, and either restore the original key or remove `var/audit.jsonl` to start a new chain. |
