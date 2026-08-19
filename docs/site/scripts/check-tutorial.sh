@@ -33,9 +33,11 @@
 #   2   bad CLI argument
 #
 # Drift detection:
-#   - the script asserts EXPECTED_STEP_COUNT / EXPECTED_VERIFY_COUNT commands
-#     were extracted from the matching sections; bump these constants when you
-#     intentionally add or remove a documented command
+#   - the script reports the commands it extracted from each section rather
+#     than pinning how many there are, so adding or removing a documented
+#     command needs no change here. It fails only when a section yields none,
+#     which means the heading it reads was renamed and the runner would
+#     otherwise pass by doing nothing
 #   - after compose comes up, the script asserts every entry in
 #     EXPECTED_SERVICES is in `running` state and that EXPECTED_RUNNING_TOTAL
 #     services are running in all; bump both when you intentionally add or
@@ -46,9 +48,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TUTORIAL="$REPO_ROOT/src/content/docs/tutorials/first-run-with-solmara-lab.mdx"
-EXPECTED_STEP_COUNT=4
-EXPECTED_VERIFY_COUNT=4
+TUTORIAL="${SOLMARA_TUTORIAL_PAGE:-$REPO_ROOT/src/content/docs/tutorials/first-run-with-solmara-lab.mdx}"
 EXPECTED_DEMO_ARTIFACTS=3
 # Every service the tutorial names or gives a host port. The topology holds far
 # more; EXPECTED_RUNNING_TOTAL below covers the rest as a count, because the
@@ -131,27 +131,23 @@ while IFS= read -r line; do
 	VERIFY+=("$line")
 done < <(extract_section_commands "Verify")
 
-if ((${#STEPS[@]} != EXPECTED_STEP_COUNT)); then
-	printf 'tutorial drift: expected %d shell commands in Steps section, extracted %d:\n' \
-		"$EXPECTED_STEP_COUNT" "${#STEPS[@]}" >&2
-	for cmd in "${STEPS[@]}"; do
-		printf '  %s\n' "$cmd" >&2
-	done
-	printf 'if this change was intentional, update EXPECTED_STEP_COUNT in %s\n' \
-		"${BASH_SOURCE[0]}" >&2
-	exit 1
-fi
+# The counts are reported below, not pinned: a writer may add or remove a
+# documented command without touching this file, and the runner simply runs
+# what the page now says. Empty is the one count that is drift, because it
+# means the heading this reads was renamed and every later step would pass by
+# running nothing at all.
+require_commands() {
+	local section="$1" extracted="$2"
+	if ((extracted == 0)); then
+		printf 'tutorial drift: no shell commands under its "%s" heading\n' "$section" >&2
+		printf 'The section was renamed or removed, so this runner would execute nothing and still pass.\n' >&2
+		printf 'Point %s at the heading the page carries now.\n' "${BASH_SOURCE[0]}" >&2
+		exit 1
+	fi
+}
 
-if ((${#VERIFY[@]} != EXPECTED_VERIFY_COUNT)); then
-	printf 'tutorial drift: expected %d shell commands in Verify section, extracted %d:\n' \
-		"$EXPECTED_VERIFY_COUNT" "${#VERIFY[@]}" >&2
-	for cmd in "${VERIFY[@]}"; do
-		printf '  %s\n' "$cmd" >&2
-	done
-	printf 'if this change was intentional, update EXPECTED_VERIFY_COUNT in %s\n' \
-		"${BASH_SOURCE[0]}" >&2
-	exit 1
-fi
+require_commands Steps "${#STEPS[@]}"
+require_commands Verify "${#VERIFY[@]}"
 
 printf 'extracted %d Steps commands from tutorial:\n' "${#STEPS[@]}"
 for i in "${!STEPS[@]}"; do
