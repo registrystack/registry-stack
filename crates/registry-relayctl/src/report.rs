@@ -41,7 +41,15 @@ pub(crate) fn render_human(report: &ToolingReport) -> Result<String, serde_json:
         lines.push(diagnostic_summary(&report.diagnostics));
     }
     lines.push(String::new());
-    Ok(lines.join("\n"))
+    // Every value a report carries can originate in adopter input: a schema
+    // identifier read from SQLite, a key path, or a diagnostic message that
+    // interpolates an authored name. A report line is built from spaces and
+    // report text only, so escaping each finished line here neutralizes every
+    // such value at one boundary, whatever produced it. Escaped text is plain
+    // ASCII, so a value already escaped for column alignment passes through
+    // unchanged.
+    let escaped: Vec<String> = lines.iter().map(|line| escape_report_text(line)).collect();
+    Ok(escaped.join("\n"))
 }
 
 fn lead(report: &ToolingReport, refused: bool) -> String {
@@ -215,13 +223,15 @@ fn detail_lines(
     Ok(())
 }
 
-/// SQLite places no restriction on what an identifier or a declared type may contain, so a schema
-/// object or column name observed through `read_text` can carry a line break, a terminal escape
-/// sequence, or a Unicode bidirectional override that would forge a report line or redraw the text
-/// around it. This replaces each such character with a visible, all-ASCII escape, so the value stays
-/// on the one line it was given and cannot issue an instruction to the terminal or the reader.
-/// Ordinary printable Unicode, including non-English identifiers, passes through unchanged.
-fn escape_schema_text(value: &str) -> String {
+/// Nothing restricts what an adopter-supplied name may contain. SQLite places no restriction on an
+/// identifier or a declared type, and an authored key path or column name reaches a diagnostic
+/// message unchanged, so any of them can carry a line break, a terminal escape sequence, or a
+/// Unicode bidirectional override that would forge a report line or redraw the text around it. This
+/// replaces each such character with a visible, all-ASCII escape, so the value stays on the one line
+/// it was given and cannot issue an instruction to the terminal or the reader. Ordinary printable
+/// Unicode, including non-English identifiers, passes through unchanged, and text that is already
+/// escaped is unchanged by a second pass.
+fn escape_report_text(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
         if is_unsafe_for_a_report_line(character) {
@@ -250,9 +260,9 @@ fn is_unsafe_for_a_report_line(character: char) -> bool {
 
 fn push_object(lines: &mut Vec<String>, object: &InspectedObject) -> Result<(), serde_json::Error> {
     let kind = wire_label(&object.kind)?;
-    let mut header = vec![kind, escape_schema_text(&object.name)];
+    let mut header = vec![kind, escape_report_text(&object.name)];
     if object.table_name != object.name {
-        header.push(format!("on {}", escape_schema_text(&object.table_name)));
+        header.push(format!("on {}", escape_report_text(&object.table_name)));
     }
     lines.push(format!("{INDENT}{}", header.join(GAP)));
 
@@ -261,8 +271,8 @@ fn push_object(lines: &mut Vec<String>, object: &InspectedObject) -> Result<(), 
         .iter()
         .map(|column| {
             (
-                escape_schema_text(&column.name),
-                escape_schema_text(&column.declared_type),
+                escape_report_text(&column.name),
+                escape_report_text(&column.declared_type),
             )
         })
         .collect();
@@ -1309,6 +1319,110 @@ artifacts/long.json\n",
         assert!(
             output.contains("注册"),
             "a non-ASCII CJK column name was altered: {output:?}"
+        );
+    }
+
+    // A diagnostic carries an authored key path in `location` and an authored source-column name
+    // inside `message`. Neither is restricted to a safe character set, and both are written into a
+    // report line, so the same forging a hostile schema name allows is reachable through an
+    // authoring document. These fixtures pair a hostile diagnostic with an identically shaped safe
+    // one, so each assertion compares against a real control rendering.
+
+    const DIAGNOSTIC_HOSTILE_MESSAGE: &str = r#"{
+      "status": "refused",
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "classification.column_incomplete",
+          "location": "resources[0].classificationDefaults",
+          "message": "an accounted source column has no complete classification for source column 'id\n\u001b[31mFORGED: 0 errors, 0 warnings.\u001b[0m'"
+        }
+      ],
+      "details": {
+        "kind": "check",
+        "contract_revision": null,
+        "production": true,
+        "configuration_key_paths": null
+      }
+    }"#;
+
+    const DIAGNOSTIC_HOSTILE_LOCATION: &str = r#"{
+      "status": "refused",
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "classification.column_incomplete",
+          "location": "resources[0].sourceColumnClassifications.id\n\u001b[31mFORGED: 0 errors, 0 warnings.\u001b[0m",
+          "message": "an accounted source column has no complete classification"
+        }
+      ],
+      "details": {
+        "kind": "check",
+        "contract_revision": null,
+        "production": true,
+        "configuration_key_paths": null
+      }
+    }"#;
+
+    const DIAGNOSTIC_CONTROL: &str = r#"{
+      "status": "refused",
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "classification.column_incomplete",
+          "location": "resources[0].classificationDefaults",
+          "message": "an accounted source column has no complete classification"
+        }
+      ],
+      "details": {
+        "kind": "check",
+        "contract_revision": null,
+        "production": true,
+        "configuration_key_paths": null
+      }
+    }"#;
+
+    #[test]
+    fn a_hostile_diagnostic_message_cannot_forge_a_report_line() {
+        let hostile = rendered(DIAGNOSTIC_HOSTILE_MESSAGE);
+        let control = rendered(DIAGNOSTIC_CONTROL);
+
+        assert!(
+            !hostile.contains('\u{1b}'),
+            "a raw escape byte reached the rendering: {hostile:?}"
+        );
+        assert_eq!(
+            hostile.lines().count(),
+            control.lines().count(),
+            "the embedded newline changed the number of report lines: {hostile:?}"
+        );
+        assert!(
+            !hostile
+                .lines()
+                .any(|line| line.trim_start().starts_with("FORGED")),
+            "the forged text opened its own report line: {hostile:?}"
+        );
+    }
+
+    #[test]
+    fn a_hostile_diagnostic_location_cannot_forge_a_report_line() {
+        let hostile = rendered(DIAGNOSTIC_HOSTILE_LOCATION);
+        let control = rendered(DIAGNOSTIC_CONTROL);
+
+        assert!(
+            !hostile.contains('\u{1b}'),
+            "a raw escape byte reached the rendering: {hostile:?}"
+        );
+        assert_eq!(
+            hostile.lines().count(),
+            control.lines().count(),
+            "the embedded newline changed the number of report lines: {hostile:?}"
+        );
+        assert!(
+            !hostile
+                .lines()
+                .any(|line| line.trim_start().starts_with("FORGED")),
+            "the forged text opened its own report line: {hostile:?}"
         );
     }
 }
