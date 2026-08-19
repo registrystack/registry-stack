@@ -239,6 +239,11 @@ On Linux amd64, the Relay installer downloads, verifies, and installs the matchi
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 ```
 
+The one-line form pipes a script into `bash`; replace `| bash` with `| less` to read it first. The
+installer checks both binaries against the release `SHA256SUMS` and stops on a mismatch, but it does
+not authenticate the release itself; [OpenSSF and release trust](../../security/openssf-evidence/)
+records the signed checksum chain that does.
+
 For Linux arm64 or macOS arm64, take the plain `relayctl` binary asset from the release. You can
 also use a plain asset on Linux amd64 or build from source.
 
@@ -249,7 +254,8 @@ The release publishes three relayctl assets:
 - `relayctl-<tag>-macos-arm64`
 
 Each asset is checked at build time to report `relayctl <version>` for the release version. Verify a
-downloaded asset against the release checksums and signatures documented in `release/VERIFY.md`
+downloaded asset against the release checksums and signatures documented in
+[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md)
 before running it.
 
 To build from source at a pinned tag:

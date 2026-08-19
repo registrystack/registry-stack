@@ -66,6 +66,12 @@ relayctl --version
 
 If either version command is not found, add `~/.local/bin` to your `PATH`.
 
+The installer checks both binaries against the release `SHA256SUMS` before either one reaches
+your `PATH`, which catches a truncated or corrupted download but not a substituted release.
+Replace `| bash` with `| less` to read the installer first, and before you run these binaries
+anywhere but your own machine, verify the signed checksum chain described in
+[OpenSSF and release trust](../../security/openssf-evidence/).
+
 ## Start a project
 
 `relayctl init` writes a starter project into a new directory:

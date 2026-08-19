@@ -44,6 +44,11 @@ evidence --version
 evidencectl --version
 ```
 
+These binaries produce the candidate you hand to an operator, so verify the downloaded assets against the
+signed `SHA256SUMS` for that tag before you install them, following
+[OpenSSF and release trust](../../security/openssf-evidence/). To read the installer before it runs,
+replace `| bash` with `| less`.
+
 Keep all source responses, credentials, tokens, and local `.evidence/` state outside the candidate.
 
 ## Add production metadata and fixtures
