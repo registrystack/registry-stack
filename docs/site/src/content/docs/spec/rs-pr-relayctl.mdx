@@ -31,6 +31,7 @@ Stack `v1.0.0`, not with a pre-1.0 release.
 
 | Version | Date | Status | Change |
 | --- | --- | --- | --- |
+| 1.0.2 | 2026-08-19 | draft | Specified the default command output as a human-readable summary derived from the workflow report, replacing the `relayctl <command>` header and the verbatim report body. `--json` output is unchanged. |
 | 1.0.1 | 2026-08-13 | draft | Distinguished the seven project workflow commands from the bounded `tooling` namespace and specified the editor report and Language Server Protocol output separately from workflow reports. |
 | 1.0.0 | 2026-08-11 | draft | Replaced the retired `registryctl` compatibility contract with the `relayctl` contract. The identifier prefix changed from `REQ-PR-REGISTRYCTL-` to `REQ-PR-RELAYCTL-`, so no retired requirement carries a second meaning. REQ-PR-REGISTRYCTL-001 through REQ-PR-REGISTRYCTL-031 are retired in full and MUST NOT be reused. Requirements without a successor include the ten-root command surface, `registry-stack.yaml` project discovery, environment selection, the `http` and `spreadsheet` templates, the disposable development runtime, the trust and approved-set surfaces, the versioned report schemas, and the operator-owned deployment package. |
 | 0.2.0 | 2026-07-31 | draft | Aligned the retired contract with the 1.0 command and deployment design. |
@@ -242,9 +243,11 @@ tagged by kind.
 
 REQ-PR-RELAYCTL-026: With `--json`, a project workflow command MUST write only its workflow report
 to standard output, and `tooling editor` MUST write only its editor-setup report.
-Without `--json`, a project workflow command MUST write a `relayctl <command>` header followed by
-the same report content, while `tooling editor` MUST write a human-readable summary derived from its
+Without `--json`, a project workflow command MUST write a human-readable summary derived from its
+workflow report, while `tooling editor` MUST write a human-readable summary derived from its
 editor-setup report.
+A human-readable summary MUST carry the report status and every diagnostic, and MUST NOT be the
+report document.
 `--json` MUST be accepted before or after the command.
 For `tooling language-server`, `--json` MUST NOT change the LSP byte stream or introduce command
 output.
@@ -327,8 +330,10 @@ This specification is `verified`: the requirements describe implemented behavior
 tests.
 
 {/* Evidence: crates/registry-relayctl/src/lib.rs defines the seven workflow commands, bounded
-     tooling namespace, global --json flag, required package --output, exit-code constants, workflow
-     and editor report rendering, and language-server LSP dispatch. */}
+     tooling namespace, global --json flag, required package --output, exit-code constants, the
+     choice between report document and human-readable summary, and language-server LSP dispatch. */}
+{/* Evidence: crates/registry-relayctl/src/report.rs renders the human-readable workflow summary and
+     pins that it carries the status and every diagnostic and is never the report document. */}
 {/* Evidence: crates/registry-relayctl/src/shared.rs is the single dependency seam from the command
      line into the shared tooling facade. */}
 {/* Evidence: crates/registry-relayctl/tests/cli_contract.rs pins the one-binary workflow and tooling
