@@ -59,6 +59,9 @@ download comes from that release rather than from PyPI:
 
 ```sh
 VERSION="$(relay --version | awk '{print $2}' | sed 's/^v//')"
+case "$VERSION" in
+  *-dev*) echo "This relay was built from source ($VERSION), not installed from a release" >&2; exit 1 ;;
+esac
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) WHEEL_PLATFORM="linux_x86_64" ;;
   Linux-aarch64|Linux-arm64) WHEEL_PLATFORM="linux_aarch64" ;;
@@ -73,6 +76,9 @@ python -m pip install "./${WHEEL}"
 The wheel uses the Python 3.10 stable ABI, so supported newer Python versions import the same
 file. The three platform names in that `case` are the whole set: the release provides no Windows
 or Intel macOS wheel.
+
+The first `case` stops a build that came from source rather than from a release. Such a build
+reports a `-dev` version, which names no published release and so has no wheel to download.
 
 Create `query_relay.py`. It constructs a client against the running deployment and reads one
 record:
@@ -247,6 +253,7 @@ registry project remains available for later Relay exercises.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | GitHub returns `404` for the wheel | The running Relay is older than v0.20.0, its exact release is not published, or the platform name is wrong | Use a published v0.20.0 or later Relay, then download the wheel from that exact release for one of the three platforms in this tutorial. |
+| `built from source, not installed from a release` | `relay --version` reports a `-dev` version, which every build outside the release workflow does | Install `relay` with the installer in the prerequisite, or download a client wheel from whichever release you want a client for. |
 | `No matching distribution found` | The wheel filename or local path does not match the downloaded asset | Keep the original release filename and install that exact local file. |
 | `Connection refused` | The synthetic Relay is not listening on port 8080 | Return to the publishing tutorial, start Relay, and leave it running in its shell. |
 | `configuration` at construction | The base URL is not HTTPS or loopback HTTP, or it contains credentials, a query, or a fragment | Use `http://127.0.0.1:8080` for this local deployment. |
