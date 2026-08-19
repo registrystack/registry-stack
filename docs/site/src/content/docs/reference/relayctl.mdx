@@ -48,7 +48,7 @@ subcommands.
 
 | Option | Effect |
 | --- | --- |
-| `--json` | The seven shared workflow commands emit `relayctl.report.v1` JSON with no header. `tooling editor` emits `relayctl.editor.v1`. `tooling language-server` continues to speak LSP and does not use this flag for report output. Accepted before or after the subcommand. |
+| `--json` | The seven shared workflow commands emit `relayctl.report.v1` JSON in place of the readable rendering. `tooling editor` emits `relayctl.editor.v1`. `tooling language-server` continues to speak LSP and does not use this flag for report output. Accepted before or after the subcommand. |
 | `--version` | Prints `relayctl <version>`, matching the release version of the asset. |
 | `--help` | Prints usage on standard output and exits with status `0`. |
 
@@ -177,9 +177,13 @@ members:
 - `details`, a tagged object whose `kind` is `initialized`, `schema-inspection`, `check`,
   `generate`, `test`, `diff`, or `package`.
 
-Without `--json`, the first line is `relayctl <command>` and the remaining lines are the
-pretty-printed report. With `--json`, the report is the whole output. Rendering is deterministic and
-ends with exactly one newline, so the same inputs produce the same bytes.
+Without `--json`, the output is a readable rendering of that report: a first line stating the
+outcome, then the detail indented under it. The rendering summarizes, so it leaves out parts of the
+report a person reading a terminal does not need. `check` prints how many configuration key paths
+each document accepts where the report lists them, and `generate` prints each artifact's identifier
+and path where the report also carries its digest. With `--json`, the report is the whole output.
+Both modes are deterministic and end with exactly one newline, so the same inputs produce the same
+bytes.
 
 The JSON shape is best-effort for local automation. It is not a covered compatibility surface, and
 the [compatibility promise](../api-stability/) does not cover adopter tooling.
