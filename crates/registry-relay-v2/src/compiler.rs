@@ -1026,7 +1026,11 @@ impl<'a> Compiler<'a> {
                         "effective privacy and institutional classifications must be non-empty",
                     );
                 }
-                self.validate_review_status(&classification, &format!("{location}.classification"));
+                self.validate_review_status(
+                    &classification,
+                    &format!("{location}.classification"),
+                    None,
+                );
                 let semantic_iri = match expand_local_term(
                     &self.contract.semantics.local_vocabulary,
                     &property.semantic_term,
@@ -2270,7 +2274,7 @@ impl<'a> Compiler<'a> {
         classification: &EffectiveClassification,
         location: &str,
     ) {
-        self.validate_review_status(classification, &format!("{location}.classification"));
+        self.validate_review_status(classification, &format!("{location}.classification"), None);
         if classification.privacy != "non-personal" {
             self.error(
                 "statistics.personal_output_forbidden",
@@ -2348,17 +2352,20 @@ impl<'a> Compiler<'a> {
             if column_uses.len() > 1
                 && !source_override.is_some_and(explicit_reviewed_classification)
             {
-                let location = format!("{root}.sourceColumnClassifications.{column}");
+                let location = column_accounting_location(root, &column, source_override, None);
+                let message = format!(
+                    "a multiply-bound statistical source column requires its own complete reviewed classification for source column '{column}'"
+                );
                 match self.profile {
                     CompileProfile::Authoring => self.warning(
                         "classification.column_explicit_review_required",
                         &location,
-                        "a multiply-bound statistical source column requires its own complete reviewed classification",
+                        &message,
                     ),
                     CompileProfile::Production => self.error(
                         "classification.column_explicit_review_required",
                         &location,
-                        "a multiply-bound statistical source column requires its own complete reviewed classification",
+                        &message,
                     ),
                 }
             }
@@ -2371,8 +2378,10 @@ impl<'a> Compiler<'a> {
             else {
                 self.error(
                     "classification.column_incomplete",
-                    &format!("{root}.sourceColumnClassifications.{column}"),
-                    "an accounted statistical source column has no complete classification",
+                    &column_accounting_location(root, &column, source_override, None),
+                    &format!(
+                        "an accounted statistical source column has no complete classification for source column '{column}'"
+                    ),
                 );
                 continue;
             };
@@ -2380,21 +2389,26 @@ impl<'a> Compiler<'a> {
                 if classification.privacy != component.privacy {
                     self.error(
                         "classification.column_privacy_mismatch",
-                        &format!("{root}.sourceColumnClassifications.{column}.privacy"),
-                        "a statistical component and its source column require exact privacy agreement",
+                        &column_accounting_location(root, &column, source_override, Some("privacy")),
+                        &format!(
+                            "a statistical component and its source column require exact privacy agreement for source column '{column}'"
+                        ),
                     );
                 }
                 if classification.handling < component.handling {
                     self.error(
                         "classification.column_weaker_than_property",
-                        &format!("{root}.sourceColumnClassifications.{column}.handling"),
-                        "a source-column classification cannot weaken component handling",
+                        &column_accounting_location(root, &column, source_override, Some("handling")),
+                        &format!(
+                            "a source-column classification cannot weaken component handling for source column '{column}'"
+                        ),
                     );
                 }
             }
             self.validate_review_status(
                 &classification,
-                &format!("{root}.sourceColumnClassifications.{column}"),
+                &column_accounting_location(root, &column, source_override, None),
+                Some(&column),
             );
             accounts.push(ColumnAccount {
                 column,
@@ -3441,17 +3455,22 @@ impl<'a> Compiler<'a> {
             if requires_explicit_review
                 && !source_override.is_some_and(explicit_reviewed_classification)
             {
+                let location = column_accounting_location(root, column, source_override, None);
                 if self.profile == CompileProfile::Production {
                     self.error(
                         "classification.column_explicit_review_required",
-                        &format!("{root}.sourceColumnClassifications.{column}"),
-                        "a transformed or multiply-bound source column requires its own complete reviewed classification",
+                        &location,
+                        &format!(
+                            "a transformed or multiply-bound source column requires its own complete reviewed classification for source column '{column}'"
+                        ),
                     );
                 } else {
                     self.warning(
                         "classification.column_explicit_review_required",
-                        &format!("{root}.sourceColumnClassifications.{column}"),
-                        "a transformed or multiply-bound source column still requires its own complete reviewed classification",
+                        &location,
+                        &format!(
+                            "a transformed or multiply-bound source column still requires its own complete reviewed classification for source column '{column}'"
+                        ),
                     );
                 }
             }
@@ -3478,8 +3497,10 @@ impl<'a> Compiler<'a> {
             let Some(classification) = classification else {
                 self.error(
                     "classification.column_incomplete",
-                    &format!("{root}.sourceColumnClassifications.{column}"),
-                    "an accounted source column has no complete classification",
+                    &column_accounting_location(root, column, source_override, None),
+                    &format!(
+                        "an accounted source column has no complete classification for source column '{column}'"
+                    ),
                 );
                 continue;
             };
@@ -3493,8 +3514,10 @@ impl<'a> Compiler<'a> {
                 {
                     self.error(
                         "classification.geometry_carrier_privacy_mismatch",
-                        &format!("{root}.sourceColumnClassifications.{column}.privacy"),
-                        "a Point property and each carrier require exact reviewed privacy agreement",
+                        &column_accounting_location(root, column, source_override, Some("privacy")),
+                        &format!(
+                            "a Point property and each carrier require exact reviewed privacy agreement for source column '{column}'"
+                        ),
                     );
                 }
             }
@@ -3507,14 +3530,17 @@ impl<'a> Compiler<'a> {
                 if strongest_direct.is_some_and(|handling| classification.handling < handling) {
                     self.error(
                         "classification.column_weaker_than_property",
-                        &format!("{root}.sourceColumnClassifications.{column}.handling"),
-                        "a source-column classification cannot weaken a direct property handling floor",
+                        &column_accounting_location(root, column, source_override, Some("handling")),
+                        &format!(
+                            "a source-column classification cannot weaken a direct property handling floor for source column '{column}'"
+                        ),
                     );
                 }
             }
             self.validate_review_status(
                 &classification,
-                &format!("{root}.sourceColumnClassifications.{column}"),
+                &column_accounting_location(root, column, source_override, None),
+                Some(column),
             );
             accounts.push(ColumnAccount {
                 column: column.to_owned(),
@@ -3693,18 +3719,26 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn validate_review_status(&mut self, classification: &EffectiveClassification, location: &str) {
+    fn validate_review_status(
+        &mut self,
+        classification: &EffectiveClassification,
+        location: &str,
+        column: Option<&str>,
+    ) {
         if classification.status != ReviewStatus::Reviewed {
+            let detail = column
+                .map(|column| format!(" for source column '{column}'"))
+                .unwrap_or_default();
             match self.profile {
                 CompileProfile::Authoring => self.warning(
                     "classification.unreviewed",
                     location,
-                    "classification suggestions require institutional review",
+                    &format!("classification suggestions require institutional review{detail}"),
                 ),
                 CompileProfile::Production => self.error(
                     "classification.unreviewed",
                     location,
-                    "production compilation requires reviewed classification",
+                    &format!("production compilation requires reviewed classification{detail}"),
                 ),
             }
         }
@@ -4572,6 +4606,28 @@ fn explicit_reviewed_classification(value: &ClassificationPartial) -> bool {
             .is_some_and(|item| !item.trim().is_empty())
         && value.handling.is_some()
         && value.status == Some(ReviewStatus::Reviewed)
+}
+
+/// Locates a column-accounting diagnostic about one accounted column. When the
+/// resource or dataset authored a source-column classification entry for the
+/// column, the location targets that entry, or one of its fields; otherwise
+/// the column's classification came entirely from `classificationDefaults`,
+/// so the location targets that always-authored field instead, since no
+/// `sourceColumnClassifications` entry names the column in the authored
+/// document.
+fn column_accounting_location(
+    root: &str,
+    column: &str,
+    source_override: Option<&ClassificationPartial>,
+    field: Option<&str>,
+) -> String {
+    match source_override {
+        Some(_) => match field {
+            Some(field) => format!("{root}.sourceColumnClassifications.{column}.{field}"),
+            None => format!("{root}.sourceColumnClassifications.{column}"),
+        },
+        None => format!("{root}.classificationDefaults"),
+    }
 }
 
 fn validate_disclosure_access(
@@ -5591,6 +5647,71 @@ pub(crate) mod tests {
             .attributes
             .iter()
             .all(|component| component.source_column != "tenant"));
+    }
+
+    #[test]
+    fn unreviewed_statistical_source_columns_without_override_point_at_classification_defaults() {
+        let suggested = statistical_contract().replace(
+            "classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}",
+            "classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: suggested}",
+        );
+        let contract =
+            RegistryContract::parse_yaml(&suggested).expect("strict statistical contract");
+        let report = compile_contract(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect_err("unreviewed statistical source columns refuse production compilation");
+        let unreviewed = report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code == "classification.unreviewed"
+                    && diagnostic.location == "statisticalDatasets[0].classificationDefaults"
+            })
+            .collect::<Vec<_>>();
+        for column in [
+            "ref_area",
+            "sex",
+            "time_period",
+            "obs_value",
+            "unit_measure",
+        ] {
+            assert!(
+                unreviewed
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(&format!("'{column}'"))),
+                "expected a classification.unreviewed diagnostic naming source column '{column}': {unreviewed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unreviewed_statistical_source_column_with_override_points_at_its_own_entry() {
+        let yaml = statistical_contract().replace(
+            "    sourceColumnClassifications: {}",
+            "    sourceColumnClassifications:\n      ref_area: {privacy: non-personal, institutional: public, handling: public, status: suggested}",
+        );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict statistical contract");
+        let report = compile_contract(
+            &contract,
+            &[statistical_observed_schema()],
+            CompileProfile::Production,
+        )
+        .expect_err(
+            "an unreviewed statistical source-column override refuses production compilation",
+        );
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "classification.unreviewed"
+                    && diagnostic.location
+                        == "statisticalDatasets[0].sourceColumnClassifications.ref_area"
+            })
+            .expect("an authored override still resolves to its own entry");
+        assert!(diagnostic.message.contains("'ref_area'"));
     }
 
     #[test]
@@ -6878,7 +6999,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn unreviewed_source_columns_name_each_accounted_column() {
+    fn unreviewed_source_columns_without_override_name_each_column_in_the_message() {
         let suggested = valid_contract().replace(
             "classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}",
             "classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: suggested}",
@@ -6886,31 +7007,46 @@ pub(crate) mod tests {
         let contract = RegistryContract::parse_yaml(&suggested).expect("strict contract");
         let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
             .expect_err("unreviewed source columns refuse production compilation");
-        let locations = report
+        let unreviewed = report
             .diagnostics
             .iter()
             .filter(|diagnostic| {
                 diagnostic.code == "classification.unreviewed"
-                    && diagnostic
-                        .location
-                        .starts_with("resources[0].sourceColumnClassifications")
+                    && diagnostic.location == "resources[0].classificationDefaults"
             })
-            .map(|diagnostic| diagnostic.location.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(
-            locations,
-            [
-                "resources[0].sourceColumnClassifications.id",
-                "resources[0].sourceColumnClassifications.lifecycle",
-                "resources[0].sourceColumnClassifications.name",
-                "resources[0].sourceColumnClassifications.recorded_at",
-                "resources[0].sourceColumnClassifications.revision",
-            ]
-        );
+        for column in ["id", "lifecycle", "name", "recorded_at", "revision"] {
+            assert!(
+                unreviewed
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(&format!("'{column}'"))),
+                "expected a classification.unreviewed diagnostic naming source column '{column}': {unreviewed:?}"
+            );
+        }
     }
 
     #[test]
-    fn incomplete_source_column_classifications_name_each_accounted_column() {
+    fn unreviewed_source_column_with_override_points_at_its_own_entry() {
+        let yaml = valid_contract().replace(
+            "    sourceColumnClassifications: {}",
+            "    sourceColumnClassifications:\n      name: {privacy: non-personal, institutional: public, handling: public, status: suggested}",
+        );
+        let contract = RegistryContract::parse_yaml(&yaml).expect("strict contract");
+        let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
+            .expect_err("an unreviewed source-column override refuses production compilation");
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code == "classification.unreviewed"
+                    && diagnostic.location == "resources[0].sourceColumnClassifications.name"
+            })
+            .expect("an authored override still resolves to its own entry");
+        assert!(diagnostic.message.contains("'name'"));
+    }
+
+    #[test]
+    fn incomplete_source_column_classifications_name_each_column_in_the_message() {
         let incomplete = valid_contract().replace(
             "classificationDefaults: {privacy: non-personal, institutional: public, handling: public, status: reviewed}",
             "classificationDefaults: {privacy: non-personal, institutional: public, status: reviewed}",
@@ -6918,24 +7054,25 @@ pub(crate) mod tests {
         let contract = RegistryContract::parse_yaml(&incomplete).expect("strict contract");
         let report = compile_contract(&contract, &[observed_schema()], CompileProfile::Production)
             .expect_err("incomplete source columns refuse production compilation");
-        let locations = report
+        let incomplete_diagnostics = report
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.code == "classification.column_incomplete")
-            .map(|diagnostic| diagnostic.location.as_str())
+            .filter(|diagnostic| {
+                diagnostic.code == "classification.column_incomplete"
+                    && diagnostic.location == "resources[0].classificationDefaults"
+            })
             .collect::<Vec<_>>();
         // A published property with an incomplete classification is refused
         // before column accounting, so the accounted columns left to report
         // are the four Registry Core carriers.
-        assert_eq!(
-            locations,
-            [
-                "resources[0].sourceColumnClassifications.id",
-                "resources[0].sourceColumnClassifications.lifecycle",
-                "resources[0].sourceColumnClassifications.recorded_at",
-                "resources[0].sourceColumnClassifications.revision",
-            ]
-        );
+        for column in ["id", "lifecycle", "recorded_at", "revision"] {
+            assert!(
+                incomplete_diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(&format!("'{column}'"))),
+                "expected a classification.column_incomplete diagnostic naming source column '{column}': {incomplete_diagnostics:?}"
+            );
+        }
     }
 
     #[test]
