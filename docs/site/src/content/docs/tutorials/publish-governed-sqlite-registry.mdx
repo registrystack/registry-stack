@@ -81,26 +81,19 @@ relayctl init business-registry
 cd business-registry
 ```
 
-It reports the files it created. Every `relayctl` command prints its own name on the first
-line and then a JSON report; the blocks in this tutorial show the report:
+It reports the files it created. Every `relayctl` command reports in the same shape: one line
+saying what happened, then the detail underneath. Add `--json` to any of them for the full report
+as JSON, which carries more than the summary a person reads.
 
-```json
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "initialized",
-    "files": [
-      "registry.yaml",
-      "runtime.yaml",
-      "governance/identifier-lifecycle.yaml",
-      "governance/classification-review.yaml",
-      "governance/legal-basis.yaml",
-      "governance/processing.dpv.yaml",
-      "codelists/record-lifecycle.yaml"
-    ]
-  }
-}
+```text
+Initialized an authoring project. 7 files written.
+  registry.yaml
+  runtime.yaml
+  governance/identifier-lifecycle.yaml
+  governance/classification-review.yaml
+  governance/legal-basis.yaml
+  governance/processing.dpv.yaml
+  codelists/record-lifecycle.yaml
 ```
 
 `registry.yaml` is the contract: what the register means and what it may release. `runtime.yaml`
@@ -164,26 +157,38 @@ Ask `relayctl` what it sees in the database:
 relayctl inspect registry.sqlite
 ```
 
-The report lists every table, view, index, and column, and opens with a fingerprint of the whole
-schema. `objects` is abridged here; your run prints the full list:
+The report opens with a fingerprint of the whole schema, then lists every table, view, index, and
+column:
 
-```json
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "schema-inspection",
-    "fingerprint": "sha256:<your-schema-fingerprint>",
-    "objects": [ ... ]
-  }
-}
+```text
+Inspected the SQLite structure. 3 objects.
+  fingerprint  sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18
+
+  index  sqlite_autoindex_businesses_1  on businesses
+  table  businesses
+    registration_number  TEXT  not null  primary key
+    record_revision      TEXT  not null
+    lifecycle_state      TEXT  not null
+    recorded_at          TEXT  not null
+    legal_name           TEXT  not null
+    legal_form           TEXT  not null
+    registered_address   TEXT  not null
+    registrar_note       TEXT  not null
+  view  relay_registered_businesses
+    registration_number  TEXT  nullable
+    record_revision      TEXT  nullable
+    lifecycle_state      TEXT  nullable
+    recorded_at          TEXT  nullable
+    legal_name           TEXT  nullable
+    legal_form           TEXT  nullable
+    registered_address   TEXT  nullable
 ```
 
 The fingerprint covers the schema statements SQLite stored, not the rows. Inserting or editing
 records never changes it. Reformatting a `CREATE TABLE` or `CREATE VIEW` does change it, even
 when the resulting schema is the same, because the stored statement text is part of what is
 hashed. The same stored schema always produces the same fingerprint, on any machine and on every
-run, so a value that differs from one printed in a tutorial means the schema text differs, not
+run, so a value that differs from the one this tutorial prints means your schema text differs, not
 that your run went wrong.
 
 Copy your own fingerprint out of that report. Writing it into the contract is how you say which
@@ -422,19 +427,15 @@ relayctl check .
 ```
 
 The check compiles the contract, opens the database read-only to confirm the view and columns
-exist, and reports the revision of what it compiled. The real report also carries a
-`configuration_key_paths` listing of every key the two documents accept, which is left out here:
+exist, and reports the revision of what it compiled. The two counts are the accepted
+configuration key paths: how many keys `registry.yaml` and `runtime.yaml` will each take, not how
+many yours uses:
 
-```json
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "check",
-    "contract_revision": "sha256:<digest>",
-    "production": false
-  }
-}
+```text
+Authoring check passed.
+  contract revision   sha256:00c95e6d12a344b5baba27f47c44d084c541ae7f8e62181b8931a7c8c63fccba
+  registry key paths  121
+  runtime key paths   19
 ```
 
 Nothing is running yet. `check` reads, and writes nothing.
@@ -479,29 +480,24 @@ authority. Only a person supplies the rest.
 relayctl check . --production
 ```
 
-The starter project is refused, and the diagnostics say exactly why. Each one also carries a
-`severity`, dropped here for width; all five below are errors:
+The starter project is refused, and the diagnostics say exactly why. Each one gives its severity,
+its code, the file and key it is about, and the sentence underneath:
 
-```json
-{
-  "status": "refused",
-  "diagnostics": [
-    {"code": "codelist.unreviewed", "location": "codelists/record-lifecycle.yaml",
-     "message": "production codelists must be institutionally reviewed"},
-    {"code": "classification.review_inventory_stale",
-     "location": "governance/classification-review.yaml:classificationInventoryDigest",
-     "message": "the classification review does not bind the current inventory"},
-    {"code": "classification.review_registry_stale",
-     "location": "governance/classification-review.yaml:registryIdentifier",
-     "message": "the classification review is bound to another Registry"},
-    {"code": "classification.review_date_invalid",
-     "location": "governance/classification-review.yaml:reviewDate",
-     "message": "the review date must be a canonical calendar date"},
-    {"code": "classification.review_unreviewed",
-     "location": "governance/classification-review.yaml:status",
-     "message": "production classification requires reviewed institutional evidence"}
-  ]
-}
+```text
+Production check refused.
+
+  error    codelist.unreviewed  codelists/record-lifecycle.yaml
+           production codelists must be institutionally reviewed
+  error    classification.review_inventory_stale  governance/classification-review.yaml:classificationInventoryDigest
+           the classification review does not bind the current inventory
+  error    classification.review_registry_stale  governance/classification-review.yaml:registryIdentifier
+           the classification review is bound to another Registry
+  error    classification.review_date_invalid  governance/classification-review.yaml:reviewDate
+           the review date must be a canonical calendar date
+  error    classification.review_unreviewed  governance/classification-review.yaml:status
+           production classification requires reviewed institutional evidence
+
+5 errors, 0 warnings.
 ```
 
 This is the governed result. A contract that compiles is not a contract an institution has
@@ -564,17 +560,16 @@ Now run the production check again:
 relayctl check . --production
 ```
 
-```json
-{
-  "status": "success",
-  "diagnostics": [],
-  "details": {
-    "kind": "check",
-    "contract_revision": "sha256:<digest>",
-    "production": true
-  }
-}
+```text
+Production check passed.
+  contract revision   sha256:b6d31cf523c849c88dc2a413f75207382ef675c074138a7907ed74307fe0479c
+  registry key paths  121
+  runtime key paths   19
 ```
+
+The contract revision is not the one the first check reported. The revision covers the governed
+files the contract points at, so recording the review changed it, and every answer the service
+gives will carry this value rather than the earlier one.
 
 ## Seal the package
 
@@ -582,26 +577,22 @@ relayctl check . --production
 relayctl package . --output package
 ```
 
-```json
-{
-  "status": "success",
-  "details": {
-    "kind": "package",
-    "manifest": {
-      "packageRevision": "sha256:<package-digest>",
-      "contractRevision": "sha256:<contract-digest>",
-      "sourceSchemaFingerprints": {
-        "registry": "sha256:<your-schema-fingerprint>"
-      }
-    }
-  }
-}
+```text
+Sealed a deployment package. 17 artifacts, 25 files.
+  package version    relay.registrystack.org/package/v1alpha3
+  package revision   sha256:bdf7adaf89e3ce07cda35a76ef9670a3d9de70a70641ce7448bf22d79ce9ae16
+  contract revision  sha256:b6d31cf523c849c88dc2a413f75207382ef675c074138a7907ed74307fe0479c
+  artifact bindings  1
+
+  source schema fingerprints
+    registry  sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18
 ```
 
-That manifest is abridged: the real one also carries the package format version and the full
-observed schema of every source. The package holds the compiled contract, the generated
-artifacts, and the governed files, with a digest for each. It does not hold the database. Packaging recompiles under the production
-profile, so a package cannot be produced from a revision that would fail `check --production`.
+That report summarizes `package/relay-package.json`, which names all 25 files and 17 artifacts
+with a digest for each and records the full observed schema of every source. The package holds
+the compiled contract, the generated artifacts, and the governed files. It does not hold the
+database. Packaging recompiles under the production profile, so a package cannot be produced
+from a revision that would fail `check --production`.
 
 ## Serve it
 
