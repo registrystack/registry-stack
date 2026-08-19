@@ -460,6 +460,10 @@ pre,
 }
 
 .sidebar-content details > summary {
+  /* The mark sits beside the label, not adrift at the pane edge: it belongs to
+     the word it opens. */
+  justify-content: flex-start;
+  gap: 5px;
   padding: 0;
 }
 
@@ -470,8 +474,14 @@ pre,
   padding: 10px 0 0;
 }
 
+/* Collapsing is how this sidebar carries its depth, and four of the top-level
+   groups are collapsed too, so every group keeps its disclosure mark. Sized to
+   the uppercase label rather than to Starlight's default, which dwarfs it. */
 .sidebar-content details > summary .caret {
-  display: none;
+  width: 13px;
+  height: 13px;
+  color: var(--registry-muted);
+  flex: none;
 }
 
 .sidebar-content .large {
