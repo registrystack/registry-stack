@@ -352,3 +352,12 @@ records were corrupted or reordered.
 | Evidence Gateway rejects a token that Registry Mint minted | `accessTokens.claims` on Registry Mint and the resource server's own claim-name configuration name different claims for the same authority field. | Align every claim name (`principal`, `requesterTags`, `evidenceAudience`, `grantId`, `grantAuthority`, and `actor` where used) between the two configurations. |
 | Registry Relay conceals a registered operation as `404 resource.not_found` | The Mint registration does not contain the selected operation or access-profile scope, or the token audience does not equal the Relay runtime audience. | Set `accessTokens.audiences` to the one Relay audience and register the exact compiled scope for this client. Do not copy scope from the request. |
 | `GET /ready` returns `503` | No client is currently registered, the client registry failed to load, the audit writer is poisoned, or the signing provider is unavailable. | Check startup or reload diagnostics and audit storage. Add a valid client, restore and verify audit storage, or restore the Transit proxy and pinned version. Provider readiness recovers after a successful self-test. |
+
+## Next
+
+- [Author a Registry Relay project](../relay/) to declare the `access.scope` values a registered
+  client's `authorization.scopes` must match.
+- [Configure Evidence Gateway](../evidence/) to align `accessTokens.claims` with the resource
+  server's own claim-name configuration.
+- [Rotate credentials, keys, certificates, and trust](../../operate/advanced/rotate-credentials-and-trust/) for ongoing
+  rotation of Registry Mint's signing material and registered client keys.

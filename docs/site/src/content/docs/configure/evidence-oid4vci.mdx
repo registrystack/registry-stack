@@ -386,13 +386,6 @@ ceiling is `maximumOffers / offerLifetimeSeconds` per second. Saturation refuses
 without evicting a live authorized exchange. Short offer and access-token lifetimes and a
 transaction code reduce the usefulness of copied offer material.
 
-## Next
-
-- [Configure Registry Mint](../mint/) to issue the access tokens `evidence-oid4vci` uses to
-  authenticate to Evidence Gateway and to protect its own `POST /offers` endpoint.
-- [Configure Evidence Gateway](../evidence/) for the deployment this service requests credentials
-  from.
-
 ## Troubleshooting
 
 | Symptom | Bounded cause | Corrective action |
@@ -411,3 +404,10 @@ transaction code reduce the usefulness of copied offer material.
 Protocol errors deliberately do not reveal whether a secret value was unknown, expired, consumed,
 or locked out. Operational logs must not add that distinction or print codes, tokens, nonces,
 proofs, holder keys, credentials, selectors, subject identifiers, raw issuers, or raw audiences.
+
+## Next
+
+- [Configure Registry Mint](../mint/) to issue the access tokens `evidence-oid4vci` uses to
+  authenticate to Evidence Gateway and to protect its own `POST /offers` endpoint.
+- [Configure Evidence Gateway](../evidence/) for the deployment this service requests credentials
+  from.

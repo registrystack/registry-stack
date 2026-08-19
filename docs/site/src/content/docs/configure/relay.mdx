@@ -191,7 +191,9 @@ operations:
 
 The named search makes the query shape and its authorization independently reviewable. A client
 with only the list scope cannot search, and a client with only the protected search scope cannot
-list. The request is explicit:
+list. [Configure Registry Mint](../mint/) to issue the access token that carries a scope such as
+`registry:business:premises-search-registrar` when the deployment has no other identity provider.
+The request is explicit:
 
 ```http
 GET /v2/resources/registered-premises/searches/within-bbox?bbox=100,13,101,14
@@ -340,3 +342,11 @@ different interpretation.
 | Production checking reports a review error | The sidecar is missing, not reviewed, stale, or does not match the inventory | Complete the institutional review and regenerate the affected report. |
 | A field is rejected | It is not in the selected access profile's disclosure profile | Review and change the governed access profile, then repeat the full workflow. |
 | Packaging refuses the destination | The output directory exists or its closure is unsafe | Select a new empty revisioned directory. |
+
+## Next
+
+- [Configure Registry Mint](../mint/) to issue tokens for the scopes declared in this project's
+  access profiles.
+- [Operate Registry Relay](../../operate/relay/) to deploy the packaged revision.
+- [Semantics, classification, and disclosure in Relay](../../explanation/relay-semantics-and-disclosure/)
+  for the concepts this authoring model builds on.
