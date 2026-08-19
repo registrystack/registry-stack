@@ -433,10 +433,16 @@ many yours uses:
 
 ```text
 Authoring check passed.
-  contract revision   sha256:00c95e6d12a344b5baba27f47c44d084c541ae7f8e62181b8931a7c8c63fccba
-  registry key paths  121
-  runtime key paths   19
+  contract revision   sha256:<authoring-contract-revision>
+  registry key paths  <n>
+  runtime key paths   <n>
 ```
+
+Your run prints real values where this page shows placeholders. The counts belong to the relayctl
+release you installed rather than to anything you wrote, and the revision changes whenever the
+compiled contract does, so pinning either one here would only tell you what an older release once
+printed. Both are stable for a given release and a given contract, which is what lets a later step
+compare one revision against another.
 
 Nothing is running yet. `check` reads, and writes nothing.
 
@@ -562,12 +568,13 @@ relayctl check . --production
 
 ```text
 Production check passed.
-  contract revision   sha256:b6d31cf523c849c88dc2a413f75207382ef675c074138a7907ed74307fe0479c
-  registry key paths  121
-  runtime key paths   19
+  contract revision   sha256:<contract-revision>
+  registry key paths  <n>
+  runtime key paths   <n>
 ```
 
-The contract revision is not the one the first check reported. The revision covers the governed
+The contract revision is not the one the first check reported: run this yourself and you will see
+a different digest here than the authoring check printed above. The revision covers the governed
 files the contract points at, so recording the review changed it, and every answer the service
 gives will carry this value rather than the earlier one.
 
@@ -578,21 +585,21 @@ relayctl package . --output package
 ```
 
 ```text
-Sealed a deployment package. 17 artifacts, 25 files.
+Sealed a deployment package. <n> artifacts, <n> files.
   package version    relay.registrystack.org/package/v1alpha3
-  package revision   sha256:bdf7adaf89e3ce07cda35a76ef9670a3d9de70a70641ce7448bf22d79ce9ae16
-  contract revision  sha256:b6d31cf523c849c88dc2a413f75207382ef675c074138a7907ed74307fe0479c
-  artifact bindings  1
+  package revision   sha256:<package-revision>
+  contract revision  sha256:<contract-revision>
+  artifact bindings  <n>
 
   source schema fingerprints
     registry  sha256:b3c73e50829bf63f8034bac74ce23c9b387fa4e84ca0afc27bb98d5eccc0fe18
 ```
 
-That report summarizes `package/relay-package.json`, which names all 25 files and 17 artifacts
-with a digest for each and records the full observed schema of every source. The package holds
-the compiled contract, the generated artifacts, and the governed files. It does not hold the
-database. Packaging recompiles under the production profile, so a package cannot be produced
-from a revision that would fail `check --production`.
+That report summarizes `package/relay-package.json`, which names every file and artifact in
+the package with a digest for each and records the full observed schema of every source. The
+package holds the compiled contract, the generated artifacts, and the governed files. It
+does not hold the database. Packaging recompiles under the production profile, so a package
+cannot be produced from a revision that would fail `check --production`.
 
 ## Serve it
 
@@ -670,7 +677,7 @@ follows to the generated schema, vocabulary, and JSON-LD context:
     "accessProfile": "public",
     "disclosureProfile": "public",
     "selectedFields": ["legalName", "legalForm"],
-    "contractRevision": "sha256:b6d31cf523c849c88dc2a413f75207382ef675c074138a7907ed74307fe0479c",
+    "contractRevision": "sha256:<contract-revision>",
     "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"}
   }
 }
@@ -753,7 +760,7 @@ The line is one JSON object. Abridged to the fields this step is about:
     "disclosureProfile": "public",
     "selectedProperties": ["legalName", "legalForm"],
     "processingDescriptionIdentifiers": ["consultation"],
-    "contractRevision": "sha256:b6d31cf523c849c88dc2a413f75207382ef675c074138a7907ed74307fe0479c",
+    "contractRevision": "sha256:<contract-revision>",
     "sourceRevision": {"profile": "snapshot", "status": "versioned", "value": "sha256:<digest>"},
     "phase": "attempt"
   },
