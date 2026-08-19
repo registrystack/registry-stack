@@ -252,7 +252,7 @@ A few boundaries matter when you evaluate this design:
 - An audience-scoped assertion is not a general-purpose credential: its subject binding is scoped
   to the audience named in it, so it is meaningful to that relying party and to no other. A
   holder-bound credential is presentable to several verifiers, and pays for that with the
-  correlation described above.
+  correlation described in [Subjects do not travel, and do not correlate](#subjects-do-not-travel-and-do-not-correlate).
 - Verifying a presentation is not preventing replay: a key-binding JWT proves the presenter held
   the confirmation key's private key when it was signed, over exactly those bytes. Comparing the
   challenge nonce is not consuming it, the same presentation verifies again, and retiring a nonce

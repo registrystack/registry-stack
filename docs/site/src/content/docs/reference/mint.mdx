@@ -305,11 +305,11 @@ before sending this response. If that append fails, the token is not released.
 ### Errors
 
 Token and protocol error responses use `{"error": "<code>"}`, from
-`crates/registry-mint/src/error.rs`. Readiness has the separate response described below.
+`crates/registry-mint/src/error.rs`. Readiness has the separate response described in [Other endpoints](#other-endpoints).
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_request` | `400` | The content type is wrong; the bounded request body is unreadable, oversized, or timed out; a recognized form field is missing or duplicated; authentication methods are mixed; or `client_assertion_type` is not the exact `jwt-bearer` URN. Unknown form members are ignored. A missing `grant_type` lands here, not below. |
+| `invalid_request` | `400` | The content type is wrong; the bounded request body is unreadable, oversized, or timed out; a recognized form field is missing or duplicated; authentication methods are mixed; or `client_assertion_type` is not the exact `jwt-bearer` URN. Unknown form members are ignored. A missing `grant_type` lands here, not under `unsupported_grant_type`. |
 | `unsupported_grant_type` | `400` | `grant_type` is present but is not `client_credentials`. |
 | `invalid_client` | `401` | Every client authentication failure: unknown client id, wrong authentication method, bad signature or secret, replayed `jti`, or expired assertion. Registry Mint collapses these into one code so the endpoint cannot be used to probe which client ids are registered. A failed HTTP Basic attempt carries `WWW-Authenticate: Basic realm="registry-mint"`. |
 | `server_error` | `500` | An internal failure, including failure to durably audit the token decision. |
@@ -362,7 +362,7 @@ dependency. It treats Mint as an ordinary issuer configured with exact issuer, a
 types, algorithms, JWKS URI, authority claim names, maximum token lifetime, and denied key ids. Any
 issuer can be used only when it satisfies that complete token profile.
 
-The exact wire shapes the diagram abbreviates are given in full below:
+The exact wire shapes the diagram abbreviates are given in full:
 [Token endpoint contract](#token-endpoint-contract) for the assertion and token,
 [Other endpoints](#other-endpoints) for the key set path, and
 [How Evidence Gateway verifies these tokens](#how-evidence-gateway-verifies-these-tokens) for the claim names.

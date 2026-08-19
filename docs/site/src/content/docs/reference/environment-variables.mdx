@@ -25,7 +25,7 @@ None of the three binaries expands environment references inside its configurati
 
 ## Relay
 
-The `relay` binary reads the variables below.
+The `relay` binary reads these variables.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
@@ -48,7 +48,7 @@ A reference that matches neither grammar makes the runtime document invalid, so 
 
 ### Relay installer
 
-The install script reads the variables below. They are read by the script, not by the running binary.
+The install script reads these variables. They are read by the script, not by the running binary.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
@@ -119,7 +119,7 @@ matters. The installer reads these variables; the installed binaries do not.
 
 ## Registry Mint
 
-The `mint` binary reads the variables below.
+The `mint` binary reads these variables.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
@@ -136,7 +136,7 @@ values. See the [Registry Mint reference](../mint/) for the full configuration s
 
 ## Source
 
-The fixed names above are transcribed from the CLI definitions, binary entry points, and install
+The fixed environment variable names in this reference are transcribed from the CLI definitions, binary entry points, and install
 scripts. Relay CLI ownership is in `crates/registry-relay-v2/src/cli.rs`, with logging in `main.rs`,
 secret grammar in `contract.rs`, and resolution in `startup.rs`. Evidence CLI ownership is in
 `crates/registry-evidence/src/cli.rs`, logging in `main.rs`, and file-secret resolution in

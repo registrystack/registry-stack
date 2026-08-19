@@ -93,10 +93,10 @@ not an enumeration of every combination; consult the configuration guide for how
 constrains another's.
 
 Bounds under *where a rule elsewhere applies* are a second, independent reading. They do not
-replace the alternatives above them: a rule elsewhere in the contract tightens whichever
+replace the per-alternative constraints: a rule elsewhere in the contract tightens whichever
 alternative you took, once its condition holds. So `sources.*.baseUrl` always matches one of its
 two origin patterns, and a source authenticating with `none` must further match the narrower
-loopback pattern printed below them.
+loopback pattern listed under *where a rule elsewhere applies*.
 
 {/* Generated from src/data/generated/evidence-configuration.json, built from
     products/evidence/contracts/bundle.schema.yaml,

@@ -128,7 +128,7 @@ What these levels mean for integrators:
 - **Standard** links to the official standards body page.
 - **Status** is one of `used`, `referenced`, `evaluated`, `planned`, or `historical`.
 - **Used by** lists the registry stack projects covered by the displayed claim level.
-- **Claim level** uses the six levels defined above.
+- **Claim level** uses the six levels defined in [Claim levels](#claim-levels).
 - **Surface** names the specific output or endpoint that the claim applies to.
 - **Profile and notes** identifies the version or profile in use and any boundary conditions.
 - **Evidence** links to the source code, fixture, or document that supports the claim.
@@ -138,7 +138,7 @@ What these levels mean for integrators:
 - OGC API Features and OGC API EDR were feature-gated routes on the retired Relay V1 runtime, and no
   maintained surface implements them. Both are recorded at `compares_against` with no user, and their
   pinned V1 tests are kept as the record of a surface that no longer ships. Relay's current spatial
-  surface is the CRS84 Point profile above, which makes no OGC API conformance claim. OGC API Records
+  surface is the CRS84 Point profile described in [Relay spatial wire-format profile](#relay-spatial-wire-format-profile), which makes no OGC API conformance claim. OGC API Records
   stays at `emits` because Registry Manifest still publishes static Records item collections; only
   Relay's live Records adapter went with V1. See
   [Relay V1 and registryctl retirement](../../decisions/relay-v1-and-registryctl-retirement-2026-08-11/).

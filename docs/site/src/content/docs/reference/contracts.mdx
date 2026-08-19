@@ -118,7 +118,7 @@ response and its owning source remain authoritative for runtime behavior.
 Relay issues no credential. It signs no response, holds no issuing key, and serves no
 credential-support route.
 [Evidence Gateway](../../products/registry-evidence/) owns signed assertions and the public verification keys it serves at `/.well-known/evidence/jwks.json`.
-Its assertion contract is frozen at Version 1 and is documented with the product rather than listed in the table above.
+Its assertion contract is frozen at Version 1 and is documented with the product rather than listed in this page's contract table.
 
 A client that needs a signed, minimum-disclosure answer calls Evidence Gateway directly. Evidence
 Gateway may read a Relay-protected API as one of its fixed HTTP sources, which is a source
