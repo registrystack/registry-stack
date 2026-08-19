@@ -11,10 +11,6 @@ import { RETIRED_RELAY_ROUTE_TARGETS } from '../src/lib/relay-v2-retirement-redi
 const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
-const quickstartSource = readFileSync(
-  resolve(siteRoot, 'src/content/docs/start/quickstart.mdx'),
-  'utf8',
-);
 const validationSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
   'utf8',
@@ -44,7 +40,7 @@ function hasDocForSlug(slug) {
 }
 
 // Every slug the built site publishes from the hand-authored content
-// collection, in the form the sidebar uses to address it: `start/quickstart`
+// collection, in the form the sidebar uses to address it: `start/when-to-use`
 // for a leaf file, `configure` for a directory index, and the empty string for
 // the homepage. Starlight's `draft: true` is what removes a page from the built
 // site, so a draft page is not published and is not expected to be navigable.
@@ -108,14 +104,7 @@ function seatedSlugs() {
 // only by search or by already knowing its URL, so an entry here is a debt,
 // not a category. Add one only with the decision that keeps the page
 // published, and delete it the moment the page gets a seat.
-const UNSEATED_PUBLISHED_PAGES = new Map([
-  [
-    'start/quickstart',
-    'Lost its seat in 66f4f986d while four redirects still point at it. Pending an '
-      + 'owner decision on whether it is repurposed as the overview for "Consume and '
-      + 'verify assertions" or retired with those redirects repointed.',
-  ],
-]);
+const UNSEATED_PUBLISHED_PAGES = new Map([]);
 
 function assertOrdered(source, expectations, label) {
   let position = -1;
@@ -237,24 +226,15 @@ test('publishes one Relay reader journey without the retired V1 routes', () => {
   ]) {
     assert.doesNotMatch(sidebarSource, new RegExp(retired));
     assert.doesNotMatch(homepageSource, new RegExp(retired));
-    assert.doesNotMatch(quickstartSource, new RegExp(retired));
   }
   assert.match(homepageSource, /\]\(tutorials\/publish-governed-sqlite-registry\/\)/);
-  assert.match(
-    quickstartSource,
-    /\]\(\.\.\/\.\.\/tutorials\/publish-governed-sqlite-registry\/\)/,
-  );
   assert.doesNotMatch(homepageSource, /tutorials\/verify-claim-registry-api/);
-  assert.doesNotMatch(quickstartSource, /tutorials\/verify-claim-registry-api/);
 });
 
 test('gives Evidence Gateway a lane on both front doors without a retired Notary path', () => {
   assert.match(homepageSource, /\]\(start\/evidence-quickstart\/\)/);
-  assert.match(quickstartSource, /\]\(\.\.\/evidence-quickstart\/\)/);
   assert.match(homepageSource, /tutorials\/first-evidence-assertion/);
-  assert.match(quickstartSource, /tutorials\/first-evidence-assertion/);
   assert.doesNotMatch(homepageSource, /Expose Notary|verify-claim-registry-api/);
-  assert.doesNotMatch(quickstartSource, /Expose Notary|verify-claim-registry-api/);
 });
 
 test('organizes Evidence Gateway tasks without publishing the obsolete Relay composition', () => {
@@ -332,7 +312,24 @@ test('does not publish the retired pre-1.0 cutover page', () => {
   );
   assert.doesNotMatch(sidebarSource, /pre-1\.0-cutover/);
   assert.doesNotMatch(homepageSource, /pre-1\.0-cutover/);
-  assert.doesNotMatch(quickstartSource, /pre-1\.0-cutover/);
+});
+
+// `start/quickstart` was a second chooser beside `start/when-to-use`: both told
+// a reader which of the two products answered their problem, and only one of
+// them had a seat. It is retired rather than repurposed, so the four redirects
+// that pointed at it now land on the chooser that stayed, and so does its own
+// route, which was published and so has readers holding links to it.
+test('does not publish the retired second stack chooser', () => {
+  assert.equal(
+    existsSync(resolve(siteRoot, 'src/content/docs/start/quickstart.mdx')),
+    false,
+  );
+  assert.doesNotMatch(sidebarSource, /start\/quickstart/);
+  assert.doesNotMatch(homepageSource, /start\/quickstart/);
+  assert.match(
+    configSource,
+    /'\/start\/quickstart\/': internalRedirect\('\/start\/when-to-use\/'\)/,
+  );
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {
@@ -383,7 +380,7 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
   assert.match(
     configSource,
-    /'\/start\/see-it-live\/': internalRedirect\('\/start\/quickstart\/'\)/,
+    /'\/start\/see-it-live\/': internalRedirect\('\/start\/when-to-use\/'\)/,
   );
   assert.match(
     configSource,
@@ -391,7 +388,7 @@ test('legacy first-run entry points redirect to supported 1.0 paths', () => {
   );
   assert.match(
     configSource,
-    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/start\/quickstart\/'\)/,
+    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/start\/when-to-use\/'\)/,
   );
   // The retired V1 source tutorials still resolve: their redirects moved into
   // the Relay V2 retirement module, so assert that map rather than the config

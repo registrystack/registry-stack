@@ -211,15 +211,6 @@ The checks include no Android or iOS user-interface or device automation, live i
 data, durable state, or multi-replica deployment. They do not cover authorization code, DPoP,
 deferred or encrypted issuance, notification, credential status, or other credential formats.
 
-## Next
-
-- [Configure OID4VCI wallet delivery](../../configure/evidence-oid4vci/) before deploying the
-  frozen profile.
-- [Enable SD-JWT VC in a deployment](../../configure/enable-sd-jwt-vc/) to understand the
-  Evidence credential contract delivered through the adapter.
-- [Read the known limitations](../../explanation/known-limitations/) before writing a public
-  interoperability claim.
-
 ## Troubleshooting
 
 | Symptom | Cause | Resolution |
@@ -232,3 +223,12 @@ deferred or encrypted issuance, notification, credential status, or other creden
 | The runner prints `Pinned Inji OID4VCI checking needs Java 17; the installed runtime is not Java 17.`, `Pinned Inji OID4VCI checking needs ANDROID_HOME or ANDROID_SDK_ROOT to name an installed Android SDK.`, or `Pinned Inji OID4VCI checking needs Android SDK platform 34 and Build Tools 33.0.1.` | The Android client prerequisites are missing or not selected. | Install a Java 17 JDK, set `JAVA_HOME`, install the named Android packages, and set `ANDROID_HOME` or `ANDROID_SDK_ROOT`. |
 | The runner prints `Pinned Inji OID4VCI checking needs full Xcode, not Command Line Tools alone.`, `Pinned Inji OID4VCI checking could not inspect installed iOS simulators.`, or `Pinned Inji OID4VCI checking needs an available iPhone 15 simulator.` | Full Xcode or the iPhone 15 simulator is missing or unavailable. | Install full Xcode, select it with `xcode-select`, accept its licence, and install an iPhone 15 simulator. |
 | A pinned upstream build fails | The checked revision, toolchain, or resolved dependencies did not reproduce in this environment. | Retain the failed result and environment details. Do not replace the pin with a mutable branch or describe the failed run as compatibility evidence. |
+
+## Next
+
+- [Configure OID4VCI wallet delivery](../../configure/evidence-oid4vci/) before deploying the
+  frozen profile.
+- [Enable SD-JWT VC in a deployment](../../configure/enable-sd-jwt-vc/) to understand the
+  Evidence credential contract delivered through the adapter.
+- [Read the known limitations](../../explanation/known-limitations/) before writing a public
+  interoperability claim.

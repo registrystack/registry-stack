@@ -68,7 +68,7 @@ async function createFixture(t, { collision = null } = {}) {
   );
   await write(archiveRoot, '_astro/app.js', 'console.log("version");\n');
   await write(rootOutput, 'index.html', html('/'));
-  await write(rootOutput, 'start/quickstart/index.html', html('/start/quickstart/'));
+  await write(rootOutput, 'start/when-to-use/index.html', html('/start/when-to-use/'));
   await write(rootOutput, 'index.md', '# Released index\n');
   await write(rootOutput, 'llms.txt', '# Released machine docs\n');
   await write(rootOutput, 'sitemap-index.xml', '<sitemapindex/>\n');
@@ -151,10 +151,10 @@ test('promotes unchanged released files to root and the exact version route', as
   );
   assert.match(
     await readFile(
-      resolve(fixture.docsRoot, 'dist/preview/start/quickstart/index.html'),
+      resolve(fixture.docsRoot, 'dist/preview/start/when-to-use/index.html'),
       'utf8',
     ),
-    /url=\/start\/quickstart\//,
+    /url=\/start\/when-to-use\//,
   );
 });
 

@@ -1,12 +1,11 @@
 ---
 title: Issue minimum-disclosure credentials from FHIR
 description: Connect Evidence Gateway to a public FHIR R4 server and verify patient-coverage and healthcare-establishment answers as SD-JWT VC responses.
-status: draft
-draft: true
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-10"
+last_reviewed: "2026-08-19"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -20,9 +19,9 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
 Connect Evidence Gateway to the public SMART Health IT FHIR R4 server through a minimal local
 read-through adapter, then verify two minimum-disclosure answers as Selective Disclosure JSON Web
-Token Verifiable Credential (SD-JWT VC) responses. One answer protects a patient by disclosing a
-coverage result rather than a FHIR resource. The other demonstrates the same pattern for a
-healthcare establishment.
+Token Verifiable Credential (SD-JWT VC) responses. One answer protects a patient: it discloses a
+coverage result instead of the FHIR resource behind it. The other applies the same pattern to a
+healthcare establishment, where the subject is an organization rather than a person.
 
 <QuickstartMeta
   outcome="Two verified SD-JWT VC responses derived from live FHIR R4 Coverage and Organization resources."
@@ -42,11 +41,11 @@ is a public demonstration server containing synthetic data. Its operator can add
 records, so the discovery result and expected `true` answers can change. Do not send real patient
 identifiers or other sensitive data to it.
 
-This tutorial works with this server as written. Its test-only origin override accepts only a
-numeric-loopback HTTP endpoint so Registry Docs can replay the same steps against sanitized local
-records. Another FHIR server may use different resource profiles, data, authorization, search
-behavior, or JSON shapes. Do not replace only the server URL and assume the same evidence claim
-remains valid.
+The steps below work with this server as written. Both scripts carry a test-only origin override
+that accepts only a numeric-loopback HTTP endpoint, so Registry Docs can replay the same steps
+against sanitized local records. Another FHIR server may use different resource profiles, data,
+authorization, search behavior, or JSON shapes. Do not swap the server URL and assume the same
+evidence claim still holds.
 
 The two questions return narrow administrative facts:
 
@@ -69,9 +68,10 @@ mkdir fhir-evidence-credentials
 cd fhir-evidence-credentials
 ```
 
-Create `discover-fhir-records.py`. The script finds one internally coherent active Coverage
-record and one active healthcare-provider Organization. It writes only their selectors to two
-owner-only local files and does not print identifiers or FHIR resources:
+Create `discover-fhir-records.py`. The script searches the demo server for one active Coverage
+record whose beneficiary resolves to a Patient that exists, and one active Organization typed as a
+healthcare provider. It writes only their selectors to two owner-only local files, and prints
+neither identifiers nor FHIR resources:
 
 ```python
 import json
@@ -249,17 +249,18 @@ Coverage selector file: ready
 Organization selector file: ready
 ```
 
-The selector files remain outside the project that you create next. Evidence Gateway reads them
-without placing their values in shell arguments or command output.
+Two ready lines are the whole output: no patient identifier, no coverage identifier, no FHIR
+resource. Those values stay in the selector files, which sit outside the project you create next,
+and Evidence Gateway reads them from there rather than from a shell argument or command output.
 
 ## Run a live FHIR read-through adapter
 
 Evidence Gateway's frozen Version 1 bundle grammar permits credential-free source access only on
-numeric loopback under local assurance. Use this small adapter to preserve that boundary while
-forwarding each governed read to the real SMART FHIR server. It contains no fixtures or seeded
-responses, binds only to loopback, accepts only the two FHIR resource paths used below, denies
-redirects, validates the returned resource identity, bounds the response, and suppresses request
-logging so selectors do not enter logs.
+numeric loopback under local assurance. The adapter below holds that boundary while forwarding
+each governed read to the real SMART FHIR server. It carries no fixtures or seeded responses,
+binds only to loopback, accepts only the two FHIR resource paths used below, denies redirects,
+validates the returned resource identity, bounds the response, and suppresses request logging so
+selectors never reach a log file.
 
 Create `fhir-read-through.py`:
 
@@ -386,18 +387,18 @@ curl --silent --show-error --fail http://127.0.0.1:8000/healthz
 ready
 ```
 
-This is a transport adapter, not a mock FHIR server. In the reader path, every Coverage or
-Organization response used by Evidence Gateway is fetched live from `https://r4.smarthealthit.org`
-at request time. The adapter asks the upstream server for FHIR JSON, validates the resource, and
-exposes the same JSON body as `application/json`, which is inside Evidence Gateway's frozen v1
-source contract. Both scripts ignore ambient proxy variables so selectors cannot be sent through
-an undeclared intermediary.
+This is a transport adapter, not a mock FHIR server. Every Coverage or Organization response
+Evidence Gateway uses is fetched live from `https://r4.smarthealthit.org` at request time. The
+adapter asks the upstream server for FHIR JSON, validates the resource, and exposes the same JSON
+body as `application/json`, which is inside Evidence Gateway's frozen v1 source contract. Both
+scripts ignore ambient proxy variables, so a selector cannot be sent through an undeclared
+intermediary.
 
 ## Describe the exact FHIR reads
 
-A FHIR `CapabilityStatement` describes FHIR capabilities, but it is not an OpenAPI description.
-Evidence Gateway compiles a narrow OpenAPI contract so the origin, paths, response media type,
-projected fields, and bounds are explicit.
+A FHIR server publishes a `CapabilityStatement`, which lists what the server supports but is not
+an OpenAPI description. Evidence Gateway compiles a narrow OpenAPI contract instead, so the
+origin, paths, response media type, projected fields, and bounds are all stated explicitly.
 
 Save this reviewed subset as `fhir-smart-r4.openapi.yaml`:
 
@@ -649,6 +650,10 @@ Prepared verification context: .evidence/requests/fhir-coverage-vc/verification.
 Prepared authorization: .evidence/requests/fhir-coverage-vc/authorization.curl
 ```
 
+Preparation writes three files: the request body, the verification context `evidencectl verify`
+checks the response against, and short-lived authorization for the call. Nothing has been read
+from the FHIR server yet; that happens when you send the request.
+
 Request and verify the credential:
 
 ```sh
@@ -678,7 +683,7 @@ Inspect the verified payload, not the unverified credential:
 python3 -m json.tool fhir-coverage.verified.json
 ```
 
-The relevant supported value is:
+The verified payload carries one supported value:
 
 ```json
 {
@@ -687,8 +692,9 @@ The relevant supported value is:
 }
 ```
 
-The payload carries pseudonymous bindings for `patient` and `coverage-record`. It contains neither
-FHIR identifier, the beneficiary reference, nor the unselected Coverage fields.
+Alongside it the payload carries pseudonymous bindings for `patient` and `coverage-record`. Read
+it for what is missing: neither FHIR identifier is there, nor the beneficiary reference, nor any
+of the Coverage fields the question did not select.
 
 ## Request the healthcare-establishment credential
 
@@ -722,8 +728,9 @@ HTTP 200
 VERIFIED
 ```
 
-The verified value is `healthcare_provider_record_active: true`. The credential does not repeat
-the organization name, source identifier, contact details, address, or FHIR type code.
+The verified payload carries `healthcare_provider_record_active: true`. It does not repeat the
+organization name, source identifier, contact details, address, or FHIR type code. A relying party
+learns that the record describes an active healthcare provider, and not which record it is.
 
 ## Inspect the audit and clean up
 
@@ -744,9 +751,12 @@ rm -f \
   fhir-organization-subjects.json
 ```
 
-The audit identifies the authorized question, purpose, requester pseudonym, and disclosed concept.
-It does not record the selected FHIR identifiers, source resources, or boolean values. Cleanup
-removes the local discovery script and selector files.
+The audit names the authorized question, the purpose it was authorized under, the requester
+pseudonym, and the concept that was released. Read it for what it leaves out: no selected FHIR
+identifier, no source resource, and not even the boolean value itself. An operator
+can establish that a caller was authorized to receive this answer under a stated purpose, and
+cannot read the answer out of the audit. The last commands remove the discovery script and the
+selector files.
 
 ## What you built
 
@@ -754,11 +764,21 @@ removes the local discovery script and selector files.
   read-through adapter, not a mock data service.
 - The patient question checked the Coverage-to-Patient relationship without fetching or disclosing
   the Patient resource.
-- The establishment question demonstrated the same bounded pattern outside patient data.
+- The establishment question applied the same bounded pattern outside patient data.
 - Two verified SD-JWT VC responses carried boolean answers and pseudonymous subject bindings
   instead of FHIR resources or identifiers.
-- The credential-free source remained loopback-only and cannot be promoted as production source
+- The credential-free source stayed loopback-only, and it is not a route to production source
   authentication.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| Record discovery reports that no coherent records are available | The public demo data changed, was reset, or no current resource matches the tutorial's narrow conditions. | Remove any selector files already created, then rerun the discovery step later. Do not weaken the relationship or organization-type checks. |
+| The read-through adapter does not start | Port 8000 is already in use, Python cannot bind loopback, or the process exited. | Stop the process using port 8000, inspect the owner-only `fhir-read-through.log`, and start the adapter again. Do not change the OpenAPI origin without reviewing the local-source boundary. |
+| Evidence Gateway reports a source dependency failure | The record changed shape, no longer matches the narrow schema, timed out, redirected, or returned a non-success status. | Probe the exact read again. Update the OpenAPI subset only after comparing it with the server's current FHIR profile and reviewing the claim semantics. |
+| The verified answer is `false` | The live record no longer reports the governed status or type. | Treat `false` as the server's current administrative answer. Do not edit the derivation merely to recover the tutorial's former output. |
+| A production FHIR server refuses the request | This tutorial uses an explicitly local, anonymous demo posture and a loopback FHIR-to-JSON adapter. | Deploy a reviewed authenticated HTTPS adapter that applies the institution's FHIR trust and authentication, commonly SMART Backend Services, and exposes the bounded response as `application/json`; then build under production or evidence-grade assurance. |
 
 ## Next
 
@@ -771,13 +791,3 @@ removes the local discovery script and selector files.
   not automatically a licence.
 - [Verify an assertion as a consumer](../verify-an-assertion-as-a-consumer/) when another
   application will make the trust decision.
-
-## Troubleshooting
-
-| Symptom | Cause | Resolution |
-| --- | --- | --- |
-| Record discovery reports that no coherent records are available | The public demo data changed, was reset, or no current resource matches the tutorial's narrow conditions. | Remove any selector files already created, then rerun the discovery step later. Do not weaken the relationship or organization-type checks. |
-| The read-through adapter does not start | Port 8000 is already in use, Python cannot bind loopback, or the process exited. | Stop the process using port 8000, inspect the owner-only `fhir-read-through.log`, and start the adapter again. Do not change the OpenAPI origin without reviewing the local-source boundary. |
-| Evidence Gateway reports a source dependency failure | The record changed shape, no longer matches the narrow schema, timed out, redirected, or returned a non-success status. | Probe the exact read again. Update the OpenAPI subset only after comparing it with the server's current FHIR profile and reviewing the claim semantics. |
-| The verified answer is `false` | The live record no longer reports the governed status or type. | Treat `false` as the server's current administrative answer. Do not edit the derivation merely to recover the tutorial's former output. |
-| A production FHIR server refuses the request | This tutorial uses an explicitly local, anonymous demo posture and a loopback FHIR-to-JSON adapter. | Deploy a reviewed authenticated HTTPS adapter that applies the institution's FHIR trust and authentication, commonly SMART Backend Services, and exposes the bounded response as `application/json`; then build under production or evidence-grade assurance. |
