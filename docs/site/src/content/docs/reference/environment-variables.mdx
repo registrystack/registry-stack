@@ -54,7 +54,7 @@ The install script reads the variables below. They are read by the script, not b
 | --- | --- | --- |
 | `RELAY_VERSION` | Relay tag to install. A published installer asset embeds its own tag and refuses an override that does not match it. | Defaults to the installer's pinned tag. |
 | `RELAY_INSTALL_DIR` | Directory the script installs into. | Defaults to `~/.local/bin`. |
-| `RELAY_ASSET_DIR` | Directory of already-downloaded release assets to read instead of downloading. Use it after verifying a release with `release/VERIFY.md`. | Optional. |
+| `RELAY_ASSET_DIR` | Directory of already-downloaded release assets to read instead of downloading. Use it after verifying a release with [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md). | Optional. |
 
 The script verifies the downloaded `relay` and `relayctl` binaries against the release
 `SHA256SUMS` before anything reaches the install directory. It installs both binaries together or
@@ -101,7 +101,7 @@ and the bundle it binds.
 The Evidence Gateway toolset installer stages `evidence`, `evidencectl`, `mint`, and
 `evidence-oid4vci`, then verifies every binary against `SHA256SUMS` before replacement begins. If a
 replacement fails, it attempts to restore the previous four-binary set. Checksum verification does
-not authenticate `SHA256SUMS`; follow the tag-frozen `release/VERIFY.md` procedure when authenticity
+not authenticate `SHA256SUMS`; follow the tag-frozen [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md) procedure when authenticity
 matters. The installer reads these variables; the installed binaries do not.
 
 | Name | Purpose | Default or required |

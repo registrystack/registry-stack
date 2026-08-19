@@ -48,6 +48,10 @@ The installer verifies both downloaded binaries against the release
 `SHA256SUMS` before anything reaches the install directory, installs both or
 neither, and refuses any other platform rather than guessing. It does not
 verify release authenticity.
+The signed checksum chain that does, and the checks behind it, are recorded in
+[OpenSSF and release trust](../security/openssf-evidence/).
+Replace `| bash` with `| less` to read the installer before you run it on a host
+you operate.
 For a higher-assurance installation, follow
 [release verification](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md)
 for the pinned tag, then rerun the installer with `RELAY_ASSET_DIR` pointing at
