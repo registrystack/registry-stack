@@ -391,8 +391,9 @@ test('a transcript showing every retained behaviour passes', async () => {
 
 // Every retained assertion has to earn its place by regressing silently. The
 // two the gate must never lose are the refusal that actually refused and the
-// tamper that was actually caught: both are printed by fences that a reader
-// runs and a regression would leave the transcript quietly clean.
+// tamper that was actually caught, and both must be words a tool printed. A
+// page that echoes its own verdict asserts nothing: the echo survives the
+// regression it was supposed to catch and leaves the transcript quietly clean.
 test('the refusal tutorial still asserts the refusal and the tamper', async () => {
   const source = await readFile(gate, 'utf8');
   const branch = source.match(
@@ -400,7 +401,7 @@ test('the refusal tutorial still asserts the refusal and the tamper', async () =
   )?.[0];
   assert.ok(branch, 'the refusal replay spec must exist');
   assert.match(branch, /"HTTP 403"/u);
-  assert.match(branch, /"TAMPER REFUSED"/u);
+  assert.match(branch, /"evidencectl: Evidence response verification failed"/u);
   // Startup chatter a successful exit already proves does not belong here.
   assert.doesNotMatch(branch, /Evidence ready at/u);
   assert.doesNotMatch(branch, /Prepared request:/u);
