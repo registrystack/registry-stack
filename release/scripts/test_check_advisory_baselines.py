@@ -24,11 +24,11 @@ LIVE_BASELINES = (
     ROOT / "release/security/mint-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:0249df2c016c38bd1fd4ab89f69f819471eab84a733a9ed0b996b354ef00d887",
-    "evidence": "sha256:3ad995a2324d777a0c41c6d65635977514b132653916581b3e3e40f98225add3",
-    "mint": "sha256:cc8f139d7755151dd6876f054d52c684214b128e3ab7978e90180c0b9ea4fb12",
+    "relay": "sha256:bba41cf6d867b319b05282e2e94746cebf6f0bd1dbf7dcc3c1666813f7241847",
+    "evidence": "sha256:8896bc15dd9e16e6c9fff73c1b42f1b953c27f2bc4e3609f6ff567ee60e41979",
+    "mint": "sha256:94dafa4e93a1864efc1c62ca5e593a5b9f12eddfee71d29aaf4ea68b1f4b5cb5",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "0ddd1fa6481ef0154d9f11a13815ba35ab942053"
+LIVE_REFERENCE_SOURCE_REVISION = "5c4e28578cf3c632faca77bf9d81cd18e95c635f"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "official_candidate",
     "evidence": "official_candidate",
@@ -1324,19 +1324,24 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                     runtime_layers + application_layers,
                     live_assertion["reference_image_digest"],
                 )
-                component_layer = baseline["exceptions"][0]["component_layer_id"]
-                artifact = {
-                    "id": "libc6-artifact",
-                    "name": "libc6",
-                    "version": "2.41-12+deb13u3",
-                    "type": "deb",
-                    "locations": [
+                artifacts = {}
+                for exception in baseline["exceptions"]:
+                    package = exception["package"]
+                    artifacts.setdefault(
+                        package,
                         {
-                            "path": "/var/lib/dpkg/status.d/libc6",
-                            "layerID": component_layer,
-                        }
-                    ],
-                }
+                            "id": f"{package}-artifact",
+                            "name": package,
+                            "version": exception["installed_version"],
+                            "type": "deb",
+                            "locations": [
+                                {
+                                    "path": f"/var/lib/dpkg/status.d/{package}",
+                                    "layerID": exception["component_layer_id"],
+                                }
+                            ],
+                        },
+                    )
                 grype = {
                     "descriptor": {"name": "grype", "version": "0.104.0"},
                     "source": {"type": "image", "target": copy.deepcopy(target)},
@@ -1347,7 +1352,7 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                                 "severity": exception["severity"],
                                 "fix": {"versions": [], "state": "not-fixed"},
                             },
-                            "artifact": copy.deepcopy(artifact),
+                            "artifact": copy.deepcopy(artifacts[exception["package"]]),
                         }
                         for exception in baseline["exceptions"]
                     ],
@@ -1356,7 +1361,9 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                     "descriptor": {"name": "syft", "version": "1.45.1"},
                     "schema": {"version": "16.1.3"},
                     "source": {"type": "image", "metadata": copy.deepcopy(target)},
-                    "artifacts": [copy.deepcopy(artifact)],
+                    "artifacts": [
+                        copy.deepcopy(artifact) for artifact in artifacts.values()
+                    ],
                     "files": [self.file_entry(image_path) for image_path in sorted(paths)],
                 }
                 normalized = self.module.normalize_grype(
@@ -1368,7 +1375,13 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                         list(normalized.findings),
                         normalized.image,
                         synthetic_baseline,
-                        self.module.parse_date("2026-08-14", "today"),
+                        self.module.parse_date(
+                            max(
+                                exception["reviewed_at"]
+                                for exception in baseline["exceptions"]
+                            ),
+                            "today",
+                        ),
                         self.rootfs,
                         live_assertion["reference_image_digest"],
                         copy.deepcopy(baseline["runtime"]["config"]),
