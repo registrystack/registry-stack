@@ -368,5 +368,25 @@ class BindOptionalDependenciesTest(unittest.TestCase):
         )
 
 
+class CheckedInClientManifestTest(unittest.TestCase):
+    def test_no_client_manifest_binds_platform_versions(self) -> None:
+        # The regression the binding exists to prevent: a manifest naming its
+        # own unpublished release leaves `npm ci` unsatisfiable on the default
+        # branch from the moment that release publishes. The release binds
+        # these when it packs the root package, so the tree carries none.
+        repo = Path(__file__).resolve().parents[2]
+        for client in ("discovery", "evidence", "relay"):
+            with self.subTest(client=client):
+                root = repo / f"crates/registry-{client}-client-node"
+                manifest = json.loads(
+                    (root / "package.json").read_text(encoding="utf-8")
+                )
+                lock = json.loads(
+                    (root / "package-lock.json").read_text(encoding="utf-8")
+                )
+                self.assertNotIn("optionalDependencies", manifest)
+                self.assertNotIn("optionalDependencies", lock["packages"][""])
+
+
 if __name__ == "__main__":
     unittest.main()
