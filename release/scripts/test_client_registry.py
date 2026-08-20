@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -228,6 +229,143 @@ class ClientRegistryTest(unittest.TestCase):
             self.module.pypi_registry_state(
                 wheels, self.version, metadata, self.client
             )
+
+
+class BindOptionalDependenciesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.module = load_module()
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.directory = Path(self.temporary_directory.name)
+        self.version = "1.2.3"
+        self.client = "relay"
+        self.definition = self.module.client_definition(self.client)
+        self.package_json = self.directory / "package.json"
+        self._write_manifest(
+            name=self.definition.npm_root_package,
+            version=self.version,
+        )
+
+    def _write_manifest(self, **fields: object) -> None:
+        self.package_json.write_text(
+            json.dumps(fields, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def _read_manifest(self) -> dict:
+        return json.loads(self.package_json.read_text(encoding="utf-8"))
+
+    def _expected(self) -> dict[str, str]:
+        return {
+            f"{self.definition.npm_root_package}-{platform}": self.version
+            for platform, _binary in self.module.npm_platforms(self.client)
+        }
+
+    def test_binds_every_platform_at_the_exact_version(self) -> None:
+        self.module.bind_optional_dependencies(
+            self.package_json, self.version, self.client
+        )
+        self.assertEqual(
+            self._read_manifest()["optionalDependencies"], self._expected()
+        )
+
+    def test_binds_what_the_packed_root_package_is_validated_against(self) -> None:
+        # The binding and the gate that proves it must not drift apart. Both
+        # read one platform list, so a platform added to either is required by
+        # the other in the same commit.
+        self.module.bind_optional_dependencies(
+            self.package_json, self.version, self.client
+        )
+        tarballs = self.module.npm_tarballs(
+            self.directory, self.version, self.client
+        )
+        write_npm_package(
+            tarballs[-1],
+            name=self.definition.npm_root_package,
+            version=self.version,
+            optional_dependencies=self._read_manifest()["optionalDependencies"],
+        )
+        for path, (platform, binary) in zip(
+            tarballs[:-1],
+            self.module.npm_platforms(self.client),
+            strict=True,
+        ):
+            write_npm_package(
+                path,
+                name=f"{self.definition.npm_root_package}-{platform}",
+                version=self.version,
+                binary=binary,
+            )
+        self.module.validate_npm_packages(self.directory, self.version, self.client)
+
+    def test_repeats_byte_for_byte(self) -> None:
+        self.module.bind_optional_dependencies(
+            self.package_json, self.version, self.client
+        )
+        once = self.package_json.read_bytes()
+        self.module.bind_optional_dependencies(
+            self.package_json, self.version, self.client
+        )
+        self.assertEqual(self.package_json.read_bytes(), once)
+
+    def test_keeps_every_other_manifest_field(self) -> None:
+        self._write_manifest(
+            name=self.definition.npm_root_package,
+            version=self.version,
+            files=["client.js"],
+            devDependencies={"@napi-rs/cli": "3.8.2"},
+        )
+        self.module.bind_optional_dependencies(
+            self.package_json, self.version, self.client
+        )
+        manifest = self._read_manifest()
+        self.assertEqual(manifest["files"], ["client.js"])
+        self.assertEqual(manifest["devDependencies"], {"@napi-rs/cli": "3.8.2"})
+
+    def test_refuses_a_manifest_at_another_version(self) -> None:
+        self._write_manifest(
+            name=self.definition.npm_root_package,
+            version="9.9.9",
+        )
+        with self.assertRaisesRegex(self.module.ClientRegistryError, "must identify"):
+            self.module.bind_optional_dependencies(
+                self.package_json, self.version, self.client
+            )
+
+    def test_refuses_a_manifest_for_another_client(self) -> None:
+        self._write_manifest(
+            name="@registrystack/evidence-client",
+            version=self.version,
+        )
+        with self.assertRaisesRegex(self.module.ClientRegistryError, "must identify"):
+            self.module.bind_optional_dependencies(
+                self.package_json, self.version, self.client
+            )
+
+    def test_refuses_a_missing_manifest(self) -> None:
+        with self.assertRaises(self.module.ClientRegistryError):
+            self.module.bind_optional_dependencies(
+                self.directory / "absent.json", self.version, self.client
+            )
+
+    def test_command_line_binds_the_manifest(self) -> None:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = self.module.main(
+                [
+                    "bind-optional-deps",
+                    "--package-json",
+                    str(self.package_json),
+                    "--version",
+                    self.version,
+                    "--client",
+                    self.client,
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "bound\n")
+        self.assertEqual(
+            self._read_manifest()["optionalDependencies"], self._expected()
+        )
 
 
 if __name__ == "__main__":

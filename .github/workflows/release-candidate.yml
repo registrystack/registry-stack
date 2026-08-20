@@ -655,6 +655,10 @@ jobs:
                 LICENSE README.md client.js client.d.ts index.js index.d.ts package.json; do
                 cp "${client_dir}/${source}" "${root_stage}/${source}"
               done
+              python3 release/scripts/client_registry.py bind-optional-deps \
+                --package-json "${root_stage}/package.json" \
+                --version "${CLIENT_VERSION}" \
+                --client "${client}"
               (cd "${root_stage}" && npm pack \
                 --ignore-scripts --pack-destination "${smoke}")
               root_package="${smoke}/registrystack-${client}-client-${CLIENT_VERSION}.tgz"
@@ -1066,6 +1070,14 @@ jobs:
               node_client="${GITHUB_WORKSPACE}/crates/registry-${client}-client-node"
               (cd "${node_client}" && npm ci --ignore-scripts)
               test -z "$(find "${node_client}" -maxdepth 1 -name '*.node' -print -quit)"
+              # The tree binds no platform versions, which is what keeps the
+              # `npm ci` above satisfiable once this release publishes. Bind
+              # them here, after the install and before the pack, so the
+              # published root package still resolves its native binary.
+              python3 release/scripts/client_registry.py bind-optional-deps \
+                --package-json "${node_client}/package.json" \
+                --version "${version}" \
+                --client "${client}"
               (cd "${node_client}" && npm pack \
                 --ignore-scripts --pack-destination "${RUNNER_TEMP}")
               root_package="registrystack-${client}-client-${version}.tgz"

@@ -28,10 +28,5 @@
     "@napi-rs/cli": "3.8.2",
     "@types/node": "22.20.1",
     "typescript": "6.0.3"
-  },
-  "optionalDependencies": {
-    "@registrystack/relay-client-darwin-arm64": "0.23.0",
-    "@registrystack/relay-client-linux-arm64-gnu": "0.23.0",
-    "@registrystack/relay-client-linux-x64-gnu": "0.23.0"
   }
 }

@@ -160,6 +160,10 @@ jobs:
               LICENSE README.md client.js client.d.ts index.js index.d.ts package.json; do
               cp "${client_dir}/${source}" "${root_stage}/${source}"
             done
+            python3 release/scripts/client_registry.py bind-optional-deps \
+              --package-json "${root_stage}/package.json" \
+              --version "${CLIENT_VERSION}" \
+              --client "${client}"
             (cd "${root_stage}" && npm pack \
               --ignore-scripts --pack-destination "${smoke}")
             root_package="${smoke}/registrystack-${client}-client-${CLIENT_VERSION}.tgz"
