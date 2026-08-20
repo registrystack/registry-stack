@@ -52,8 +52,15 @@ At runtime, Registry Stack exposes source data through two patterns:
 The two patterns are independent. Evidence Gateway contacts its configured authoritative HTTP
 sources directly. It does not require Registry Relay or inherit Relay authorization. A deployment
 can configure a Relay-protected API as a fixed HTTP source, but Relay remains an ordinary source
-rather than part of the Evidence Gateway product boundary. The retired Solmara workflow is not a
-current integration path.
+rather than part of the Evidence Gateway product boundary. The separate Solmara Lab demo makes that
+choice for some of its requirements: an authority's Evidence Gateway cell reads a named Relay
+lookup as one of its sources, and inherits no Relay authorization from it.
+
+{/* TODO[evidence]: which Solmara Lab requirements read a Relay lookup cannot be anchored from
+this repository. That mapping lives with the deployment configuration in the separate
+registrystack/solmara-lab project, described in the README pinned from src/data/projects.yaml.
+The claim above is weakened to match: some requirements, not a named set. Restore the enumeration
+once that configuration is citable from here. */}
 
 This split matters because it separates the obligation to describe (what a registry declares it can expose
 and under what policy) from the obligation to enforce (what a running service will actually return to an

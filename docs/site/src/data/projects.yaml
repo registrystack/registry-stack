@@ -110,17 +110,27 @@
   name: Solmara Lab
   repo_path: ../solmara-lab
   target_repo_path: ../solmara-lab
-  role: Standalone Registry Stack adopter demo for the fictional Republic of Solmara. Runs a whole country's worth of registry services over generated synthetic data, with purpose-limited Relay APIs per authority, a citizen portal, and a public Visitor's Center.
+  role: Standalone Registry Stack adopter demo for the fictional Republic of Solmara. Runs a whole country's worth of registry services over generated synthetic data, with six authority-owned Evidence Gateway cells that have their own providers, issuers, signing keys, JWKS, and audit sinks, five purpose-limited Relay projects, one lab Mint, a programme portal, and a public Visitor's Center. Some requirements read checkpointed immutable SQLite extracts and others read named Relay lookups, and the programme application composes the signed answers so that no authority decides for another.
   owns:
-    - End-to-end local and hosted demo topologies for Relay, workload identity agents, Postgres, static metadata, scenario services, the citizen portal, and the Visitor's Center.
+    - End-to-end local and hosted demo topologies for the authority Evidence Gateway cells, their Relay projects, Mint, static metadata, scenario services, the programme portal, and the Visitor's Center.
     - Deterministic synthetic data, authority-owned demo configuration, purpose catalogues, and fictional country stories.
+    - The demo publisher lifecycle that mutates a Relay-backed source live and republishes a named immutable extract that only a rebound cell serves.
     - Demo orchestration, smoke checks, browser journeys, hosted deployment wrappers, and release-pin checks.
   does_not_own:
     - Production deployment guidance.
     - Normative API or metadata contracts.
-    - Evidence Gateway deployment or integration.
     - Real product integrations for OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
   source_docs:
     - label: README
-      url: https://github.com/registrystack/solmara-lab/blob/00cd51a2be4a405ef75d337ddcede0f9de134b1f/README.md
+      url: https://github.com/registrystack/solmara-lab/blob/3d5c492ea50c6fdcefd5978df6f036422096421c/README.md
+    - label: Local topology
+      url: https://github.com/registrystack/solmara-lab/blob/3d5c492ea50c6fdcefd5978df6f036422096421c/compose.yaml
+    - label: Evidence cells
+      url: https://github.com/registrystack/solmara-lab/tree/3d5c492ea50c6fdcefd5978df6f036422096421c/evidence/cells
+    - label: Relay projects
+      url: https://github.com/registrystack/solmara-lab/tree/3d5c492ea50c6fdcefd5978df6f036422096421c/relays
+    - label: Relay source publisher
+      url: https://github.com/registrystack/solmara-lab/blob/3d5c492ea50c6fdcefd5978df6f036422096421c/scripts/local-relay-source-publisher.py
+    - label: Extract publisher
+      url: https://github.com/registrystack/solmara-lab/blob/3d5c492ea50c6fdcefd5978df6f036422096421c/scripts/publish-runtime-extracts.py
   rename_status: Standalone replacement for the historical Registry Lab; not part of the Registry Stack monorepo.
