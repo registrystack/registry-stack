@@ -1,0 +1,28 @@
+[package]
+name = "registry-language-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Pure, bounded Evidence authoring analysis for native and browser editors."
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+ls-types.workspace = true
+registry-evidence-authoring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+tree-sitter.workspace = true
+tree-sitter-yaml.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Rhai's hash-map implementation reaches getrandom through ahash. Enabling the target backend makes
+# that transitive dependency compilable; the analysis API itself accepts no random source and never
+# invokes it.
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+[lints]
+workspace = true

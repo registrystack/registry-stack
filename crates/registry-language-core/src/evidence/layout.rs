@@ -20,7 +20,7 @@ use registry_evidence_authoring::{
 
 /// The part one authored file plays in a project.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DocumentRole {
+pub enum DocumentRole {
     Marker,
     OpenApi,
     Question,
@@ -36,7 +36,7 @@ impl DocumentRole {
     /// The largest file the authoring form allows in this role. The ceilings are the authoring
     /// library's, so a document an author's compiler refuses for its size is a document the editor
     /// refuses for the same size.
-    pub(crate) fn max_bytes(self) -> u64 {
+    pub fn max_bytes(self) -> u64 {
         match self {
             Self::Marker => MAX_PROJECT_MARKER_BYTES,
             Self::OpenApi => MAX_OPENAPI_BYTES,
@@ -57,7 +57,7 @@ impl DocumentRole {
     /// selector, source, schema, and fixture a project holds. The editor stops where the compiler
     /// stops and nowhere else: a ceiling only the editor has turns a name the build resolves into
     /// an unresolved reference on screen, which is a diagnostic the author cannot act on.
-    pub(crate) fn max_documents(self) -> Option<usize> {
+    pub fn max_documents(self) -> Option<usize> {
         match self {
             Self::Question | Self::AccessPolicy => Some(MAX_QUESTIONS),
             Self::Marker
@@ -71,7 +71,7 @@ impl DocumentRole {
     }
 
     /// The name this role goes by in a message an author reads.
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Marker => "project marker",
             Self::OpenApi => "OpenAPI description",
@@ -104,7 +104,7 @@ impl DocumentRole {
     /// Their names are another matter, and [`pointed_directory`] is where they are read: the list an
     /// author picks a path from is the files that directory holds, which is a listing and opens
     /// nothing.
-    pub(crate) fn is_indexed(self) -> bool {
+    pub fn is_indexed(self) -> bool {
         match self {
             Self::Marker | Self::Question | Self::Source | Self::Selector | Self::AccessPolicy => {
                 true
@@ -125,7 +125,7 @@ impl DocumentRole {
     /// A schema, a fixture, and a derivation are read by nothing here, so their files answer no.
     /// What a document pointing at one of them needs is that a file sits there, which the watcher
     /// and the pointer's own definition already settle.
-    pub(crate) fn is_read_by_a_build(self) -> bool {
+    pub fn is_read_by_a_build(self) -> bool {
         match self {
             Self::OpenApi => true,
             Self::Marker
@@ -143,7 +143,7 @@ impl DocumentRole {
 /// The project directories that hold `<name>.yaml` documents, each with the role its documents
 /// play. One table serves both the reading of a path and the loader that scans those directories,
 /// so the two can never disagree about which directory means what.
-pub(crate) const YAML_DIRECTORIES: &[(&str, DocumentRole)] = &[
+pub const YAML_DIRECTORIES: &[(&str, DocumentRole)] = &[
     (QUESTIONS_DIRECTORY, DocumentRole::Question),
     (SOURCES_DIRECTORY, DocumentRole::Source),
     (SELECTORS_DIRECTORY, DocumentRole::Selector),
@@ -157,7 +157,7 @@ pub(crate) const YAML_DIRECTORIES: &[(&str, DocumentRole)] = &[
 /// These are the directories a list of the files such a pointer may name is read from. They are the
 /// roles [`DocumentRole::is_indexed`] leaves out, so the loader never visits them and the names in
 /// them would otherwise reach an author only once some document had already written one.
-pub(crate) fn pointed_directory(role: DocumentRole) -> Option<&'static str> {
+pub fn pointed_directory(role: DocumentRole) -> Option<&'static str> {
     match role {
         DocumentRole::Schema => Some(SCHEMAS_DIRECTORY),
         DocumentRole::Fixture => Some(FIXTURES_DIRECTORY),
@@ -184,14 +184,14 @@ pub(crate) fn pointed_directory(role: DocumentRole) -> Option<&'static str> {
 /// a pointer names is defined from the pointer. A directory holding more entries than this offers
 /// fewer of them and says nothing about it: a list nobody bounded is a list a directory of a million
 /// entries gets to build on every keystroke.
-pub(crate) const MAX_POINTED_FILES_OFFERED: usize = MAX_QUESTIONS * MAX_CONCEPTS;
+pub const MAX_POINTED_FILES_OFFERED: usize = MAX_QUESTIONS * MAX_CONCEPTS;
 
 /// The extensions an authored document may carry: `yaml` for the marker, the OpenAPI description,
 /// every directory in [`YAML_DIRECTORIES`], and access policies, and `rhai` for a derivation. This is
 /// the list the watcher asks a client about, so a role the index can be read from cannot exist
 /// without the session being told when such a file changes, which is what keeps a diagnostic from
 /// standing over a project the compiler accepts.
-pub(crate) const AUTHORED_FILE_EXTENSIONS: &[&str] = &["yaml", "rhai"];
+pub const AUTHORED_FILE_EXTENSIONS: &[&str] = &["yaml", "rhai"];
 
 /// Where a source keeps the scripts and schemas its own traffic uses, beside [`SCHEMAS_DIRECTORY`].
 /// The authoring library names the second of the two directories the compiler reads a source's
@@ -201,7 +201,7 @@ const ADAPTERS_DIRECTORY: &str = "adapters";
 /// The project directories the compiler reads a source's own artifacts from. One table serves both
 /// the reading of such a path and the watcher registration that asks a client to report those
 /// files, so the two can never disagree about which directory means what.
-pub(crate) const SOURCE_ARTIFACT_DIRECTORIES: &[&str] = &[ADAPTERS_DIRECTORY, SCHEMAS_DIRECTORY];
+pub const SOURCE_ARTIFACT_DIRECTORIES: &[&str] = &[ADAPTERS_DIRECTORY, SCHEMAS_DIRECTORY];
 
 /// The globs a client is asked to report changes for: one per extension an authored document may
 /// carry, and one per directory a source's artifacts sit in.
@@ -212,7 +212,7 @@ pub(crate) const SOURCE_ARTIFACT_DIRECTORIES: &[&str] = &[ADAPTERS_DIRECTORY, SC
 /// and may carry any extension at all or none, so nothing about its name would cover it and only
 /// the directory does. Each glob's last segment is a single `*`, matching the rule in
 /// [`is_source_artifact`] that such a path is two components and not more.
-pub(crate) fn watched_globs() -> Vec<String> {
+pub fn watched_globs() -> Vec<String> {
     AUTHORED_FILE_EXTENSIONS
         .iter()
         .map(|extension| format!("**/*.{extension}"))
@@ -226,7 +226,7 @@ pub(crate) fn watched_globs() -> Vec<String> {
 
 /// Whether a path is one the compiler reads a source's own artifact from: two ordinary components
 /// whose first is in [`SOURCE_ARTIFACT_DIRECTORIES`], and any extension at all.
-pub(crate) fn is_source_artifact(relative: &Path) -> bool {
+pub fn is_source_artifact(relative: &Path) -> bool {
     let components = relative.components().collect::<Vec<_>>();
     let [Component::Normal(directory), Component::Normal(_)] = components.as_slice() else {
         return false;
@@ -237,7 +237,7 @@ pub(crate) fn is_source_artifact(relative: &Path) -> bool {
 }
 
 /// Where a project keeps its access policies, which sit one directory deeper than the rest.
-pub(crate) fn access_policies_directory(root: &Path) -> PathBuf {
+pub fn access_policies_directory(root: &Path) -> PathBuf {
     root.join(ACCESS_DIRECTORY).join(ACCESS_POLICIES_DIRECTORY)
 }
 
@@ -249,7 +249,7 @@ pub(crate) fn access_policies_directory(root: &Path) -> PathBuf {
 /// bytes afterwards. A dot-prefixed name is tooling state rather than authored input: `.evidence/`
 /// holds the deployment a local run compiles, and reading it back would report a generated file's
 /// problems to the author of the source it was generated from.
-pub(crate) fn document_role(relative: &Path) -> Option<DocumentRole> {
+pub fn document_role(relative: &Path) -> Option<DocumentRole> {
     let names = normal_names(relative)?;
     if names.first() == Some(&SECRETS_DIRECTORY) {
         return None;

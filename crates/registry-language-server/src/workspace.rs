@@ -112,7 +112,7 @@ impl ProjectFamily {
         }
     }
 
-    fn load_documents(self, root: &Path) -> Result<LoadedProjectDocuments> {
+    pub(crate) fn load_documents(self, root: &Path) -> Result<LoadedProjectDocuments> {
         match self {
             Self::RelayV2 => relay_v2::load_project_documents(root),
             Self::Evidence => evidence::load_project_documents(root),

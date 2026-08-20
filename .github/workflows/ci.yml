@@ -967,8 +967,11 @@ jobs:
           xvfb-run -a npm test
           cmp ../../LICENSE LICENSE
 
-      - name: Install Zed extension target
-        run: rustup target add wasm32-wasip2
+      - name: Install editor extension targets
+        run: rustup target add wasm32-unknown-unknown wasm32-wasip2
+
+      - name: Build shared Evidence browser analyzer
+        run: cargo build --locked --release --target wasm32-unknown-unknown -p registry-language-core-wasm
 
       - name: Check Zed extension
         run: |

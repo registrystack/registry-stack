@@ -53,12 +53,12 @@ use std::{
     sync::Arc,
 };
 
+use ls_types::{CompletionItemKind, DiagnosticSeverity, Range};
 use registry_evidence_authoring::{
     marker::PROJECT_MARKER_FILE,
     model::Question,
     validate::{collection_pointers, validate_answer_schema_path},
 };
-use tower_lsp_server::ls_types::{CompletionItemKind, DiagnosticSeverity, Range};
 
 use crate::{
     evidence::{
@@ -74,11 +74,22 @@ use crate::{
     yaml::{ParsedDocument, YamlScalar, YamlValue},
 };
 
-pub(crate) fn build_index(
+#[derive(Clone, Copy, Debug)]
+pub enum OpenApiInput<'a> {
+    Text(&'a str),
+    Missing,
+    Unreadable,
+    TooLarge,
+    NotUtf8,
+}
+
+pub fn build_index(
     root: &Path,
     documents: &BTreeMap<PathBuf, String>,
     parsed: &BTreeMap<PathBuf, ParsedDocument>,
     dropped: &BTreeSet<PathBuf>,
+    openapi: OpenApiInput<'_>,
+    present_artifacts: &BTreeSet<PathBuf>,
 ) -> IndexedProject {
     let marker_path = root.join(PROJECT_MARKER_FILE);
     if dropped.contains(&marker_path) {
@@ -102,6 +113,7 @@ pub(crate) fn build_index(
         offered: Vec::new(),
         operations_published_under_get: BTreeSet::new(),
         derivation_claims: BTreeMap::new(),
+        present_artifacts,
     };
     // Every question is read once, before anything is walked, because two of the things the walk
     // does depend on the answer: what the question itself reports, and whether the source it names
@@ -111,7 +123,27 @@ pub(crate) fn build_index(
     // The one project file the loader leaves on disk, read once for the whole build. Every operation
     // it publishes is defined here, whether or not a question names it, so that `Find references` on
     // an operation answers from the description an author is looking at.
-    let mut description = match Description::read(root) {
+    let openapi_path = root.join(registry_evidence_authoring::layout::OPENAPI_FILE);
+    let description_result = match openapi {
+        OpenApiInput::Text(text) => Description::from_text(&openapi_path, text),
+        OpenApiInput::Missing => Err(super::openapi::missing_description(openapi_path.clone())),
+        OpenApiInput::Unreadable => Err(super::openapi::unavailable_description(
+            openapi_path.clone(),
+            "The required source.openapi.yaml could not be read; check its permissions",
+        )),
+        OpenApiInput::TooLarge => Err(super::openapi::unavailable_description(
+            openapi_path.clone(),
+            format!(
+                "The retained OpenAPI description exceeds its {}-byte limit",
+                registry_evidence_authoring::layout::MAX_OPENAPI_BYTES
+            ),
+        )),
+        OpenApiInput::NotUtf8 => Err(super::openapi::unavailable_description(
+            openapi_path.clone(),
+            "The retained OpenAPI description is not valid UTF-8",
+        )),
+    };
+    let mut description = match description_result {
         Ok(description) => description,
         Err(failure) => {
             return empty_index(vec![IndexedDiagnostic {
@@ -251,6 +283,8 @@ struct IndexBuilder<'a> {
     /// For each derivation file the project spells, the questions that spell it. A file one question
     /// claims is a file no other question may name.
     derivation_claims: BTreeMap<String, BTreeSet<String>>,
+    /// Relative paths the host proved present without supplying their potentially large content.
+    present_artifacts: &'a BTreeSet<PathBuf>,
 }
 
 /// What a field takes, where every name of its kind is not the answer.
@@ -808,7 +842,7 @@ impl IndexBuilder<'_> {
     /// and the outcome the compiler reaches by trying to read the file.
     fn define_pointed_file(&mut self, kind: EvidenceKind, pointer: &YamlScalar, relative: &Path) {
         let target = self.root.join(relative);
-        if !crate::safety::is_safe_authored_file(self.root, &target) {
+        if !self.present_artifacts.contains(relative) {
             return;
         }
 
@@ -951,7 +985,11 @@ impl IndexBuilder<'_> {
         role: DocumentRole,
     ) -> impl Iterator<Item = String> + '_ {
         self.defined_names(kind)
-            .chain(crate::evidence::pointed_files(self.root, role))
+            .chain(self.present_artifacts.iter().filter_map(move |relative| {
+                (document_role(relative) == Some(role))
+                    .then(|| relative.to_str().map(str::to_owned))
+                    .flatten()
+            }))
     }
 
     fn defined_names(&self, kind: EvidenceKind) -> impl Iterator<Item = String> + '_ {

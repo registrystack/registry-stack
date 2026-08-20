@@ -50,6 +50,8 @@ SHARDS = {
     "mint": ("registry-mint",),
     "developer-tools": (
         "registry-cli-docs",
+        "registry-language-core",
+        "registry-language-core-wasm",
         "registry-language-server",
     ),
 }
@@ -507,6 +509,7 @@ def classify(
         complete
         or any(path.startswith("editors/") for path in paths)
         or "registry-language-server" in affected
+        or "registry-language-core-wasm" in affected
     )
     # Reverse dependents, not changed paths: bindings are Cargo path dependents
     # of each SDK, so an SDK or shared HTTP-contract change can move a native

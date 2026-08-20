@@ -31,6 +31,8 @@ members = [
     "crates/registry-relay-v2",
     "crates/registry-relayctl",
     "crates/registry-language-server",
+    "crates/registry-language-core",
+    "crates/registry-language-core-wasm",
 ]
 exclude = [
     "products/platform/fuzz",
@@ -59,6 +61,8 @@ registry-evidence-oid4vci = { path = "crates/registry-evidence-oid4vci", version
 registry-evidence-verifier = { path = "crates/registry-evidence-verifier", version = "0.20.1" }
 registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.20.1" }
 registry-language-server = { path = "crates/registry-language-server", version = "0.20.1" }
+registry-language-core = { path = "crates/registry-language-core", version = "0.20.1" }
+registry-language-core-wasm = { path = "crates/registry-language-core-wasm", version = "0.20.1" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.20.1" }
 registry-mint = { path = "crates/registry-mint", version = "0.20.1" }
 registry-relay-http-contract = { path = "crates/registry-relay-http-contract", version = "0.20.1" }
@@ -111,6 +115,7 @@ ipnet = { version = "2" }
 # already holds in memory, so neither belongs in the dependency graph.
 jsonschema = { version = "0.18", default-features = false, features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
+ls-types = "0.0.6"
 napi = { version = "3.12.0", features = ["async", "serde-json"] }
 napi-build = { version = "2.4.0" }
 napi-derive = { version = "3.6.2" }
@@ -160,6 +165,7 @@ url = { version = "2" }
 utoipa = { version = "5" }
 uuid = { version = "1", features = ["v4"] }
 wiremock = { version = "0.6" }
+wasm-bindgen = { version = "0.2" }
 zeroize = { version = "1", features = ["derive"] }
 
 [profile.dev]

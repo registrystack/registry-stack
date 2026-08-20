@@ -1,0 +1,47 @@
+{
+  "schema": "registry.language.core/v1",
+  "project": {
+    "documents": [
+      {
+        "path": "evidence-project.yaml",
+        "text": "version: 1\nproject: evidence-authoring\n"
+      },
+      {
+        "path": "selectors/person.yaml",
+        "text": "id: person\nfields: {}\n"
+      },
+      {
+        "path": "sources/people.yaml",
+        "text": "transport: http-json\n"
+      },
+      {
+        "path": "questions/check.yaml",
+        "text": "id: check\nquestion: Is the record current?\npurpose: test\nsubject: { role: subject, selector: id, profile: person }\nsource: { ref: people }\nanswers:\n  - { concept: current, id: 'urn:concept:current', type: boolean }\nderivation: derivations/check.rhai\ndisclosure: { allow: [current] }\ngovernance:\n  requirement: 'urn:requirement:check'\n  kind: criterion\n  referenceFrameworks: ['urn:framework:test']\n  evidenceType: 'urn:evidence-type:check'\n  validitySeconds: 60\n  observationTimezone: Etc/UTC\n  fixtures: fixtures/check.yaml\n  disclosureFamilies: ['urn:family:check']\n"
+      }
+    ],
+    "openapiDocument": {
+      "path": "source.openapi.yaml",
+      "text": "openapi: 3.1.0\ninfo: { title: source, version: '1' }\npaths: {}\n"
+    },
+    "presentArtifacts": [
+      "derivations/check.rhai",
+      "fixtures/check.yaml"
+    ]
+  },
+  "definition": {
+    "path": "questions/check.yaml",
+    "position": { "line": 3, "character": 55 }
+  },
+  "references": {
+    "path": "selectors/person.yaml",
+    "position": { "line": 0, "character": 5 }
+  },
+  "completion": {
+    "path": "questions/check.yaml",
+    "position": { "line": 3, "character": 55 }
+  },
+  "hover": {
+    "path": "questions/check.yaml",
+    "position": { "line": 3, "character": 55 }
+  }
+}

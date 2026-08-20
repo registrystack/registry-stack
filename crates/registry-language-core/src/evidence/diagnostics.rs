@@ -9,13 +9,13 @@
 
 use std::path::Path;
 
+use ls_types::{DiagnosticSeverity, Position, Range};
 use registry_evidence_authoring::{
     finding::{FieldPath, FieldStep},
     model::{AccessPolicy, Question},
     parse_project_marker,
     validate::{validate_access_policy, validate_question},
 };
-use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range};
 
 use crate::{
     refs::{bounded_message, IndexedDiagnostic, DOCUMENT_START},
@@ -31,19 +31,19 @@ use crate::{
 /// a question the form has already accepted. A caller that reads the two fields as the compiler does
 /// says nothing about the operation, the selectors, or the facts of a question that is malformed,
 /// which is where the author is already being told what to fix.
-pub(crate) struct QuestionReading {
-    pub(crate) diagnostics: Vec<IndexedDiagnostic>,
-    pub(crate) validated: Option<Question>,
+pub struct QuestionReading {
+    pub diagnostics: Vec<IndexedDiagnostic>,
+    pub validated: Option<Question>,
 }
 
 /// What one reading of an access policy found.
-pub(crate) struct AccessPolicyReading {
-    pub(crate) diagnostics: Vec<IndexedDiagnostic>,
-    pub(crate) validated: Option<AccessPolicy>,
+pub struct AccessPolicyReading {
+    pub diagnostics: Vec<IndexedDiagnostic>,
+    pub validated: Option<AccessPolicy>,
 }
 
 /// Validate a present project marker before any dependent document is walked.
-pub(crate) fn read_project_marker(
+pub fn read_project_marker(
     path: &Path,
     source: &str,
     document: &ParsedDocument,
@@ -56,7 +56,7 @@ pub(crate) fn read_project_marker(
 }
 
 /// Read one access policy with the same closed model and intrinsic checks as the compiler.
-pub(crate) fn read_access_policy(
+pub fn read_access_policy(
     path: &Path,
     source: &str,
     document: &ParsedDocument,
@@ -94,11 +94,7 @@ pub(crate) fn read_access_policy(
 ///
 /// A question the deserializer cannot read is reported once and not validated: the checks take a
 /// `Question`, and a document that is not one has a single problem worth saying out loud.
-pub(crate) fn read_question(
-    path: &Path,
-    source: &str,
-    document: &ParsedDocument,
-) -> QuestionReading {
+pub fn read_question(path: &Path, source: &str, document: &ParsedDocument) -> QuestionReading {
     let question = match serde_norway::from_str::<Question>(source) {
         Ok(question) => question,
         Err(error) => {
@@ -152,7 +148,7 @@ fn finding_diagnostic(
 /// `schema` that is not written yet, and the author needs to be shown the answer it belongs to
 /// rather than the top of the file. `None` means the document holds nothing the walk could stop on,
 /// and the caller reports against the document itself.
-pub(crate) fn range_at_field_path(document: &ParsedDocument, field: &FieldPath) -> Option<Range> {
+pub fn range_at_field_path(document: &ParsedDocument, field: &FieldPath) -> Option<Range> {
     let mut value = &document.value;
     let mut anchor = None;
     for step in field.steps() {

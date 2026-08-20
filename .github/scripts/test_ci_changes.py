@@ -489,6 +489,26 @@ class CiChangesTest(unittest.TestCase):
             )["editors"]
         )
 
+    def test_shared_language_core_changes_run_native_and_browser_editor_checks(self) -> None:
+        core = classify(
+            self.workspace,
+            ("crates/registry-language-core/src/lib.rs",),
+        )
+        self.assertTrue(core["editors"])
+        self.assertIn("registry-language-core", core["rust_packages"])
+        self.assertIn("registry-language-core-wasm", core["rust_packages"])
+        self.assertIn("registry-language-server", core["rust_packages"])
+
+        wasm = classify(
+            self.workspace,
+            ("crates/registry-language-core-wasm/src/lib.rs",),
+        )
+        self.assertTrue(wasm["editors"])
+        self.assertEqual(
+            set(wasm["rust_packages"]),
+            {"registry-language-core-wasm"},
+        )
+
     def test_a_relay_v2_contract_change_runs_its_compiler_editor_and_host_cli(self) -> None:
         outputs = classify(
             self.workspace,
@@ -519,6 +539,11 @@ class CiChangesTest(unittest.TestCase):
         mutated = dev_only_dependency_metadata(
             self.metadata,
             consumer="registry-language-server",
+            dependency="registry-evidence-authoring",
+        )
+        mutated = dev_only_dependency_metadata(
+            mutated,
+            consumer="registry-language-core",
             dependency="registry-evidence-authoring",
         )
 

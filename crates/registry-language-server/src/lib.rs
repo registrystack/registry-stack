@@ -13,6 +13,9 @@ pub use refs::{
     CompletionCandidate, EvidenceKind, HoverText, IndexedDiagnostic, IndexedLocation,
     IndexedSymbol, ProjectIndex, RelayV2Kind, SymbolKind,
 };
+/// The pure Evidence snapshot analyzer used by browser tooling. Native adapters may use this
+/// surface when their input is already a bounded in-memory snapshot.
+pub use registry_language_core as evidence_core;
 pub use server::Backend;
 
 /// Serve the Registry Stack language protocol over standard input and output.

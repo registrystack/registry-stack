@@ -1,0 +1,66 @@
+# The shared editor analyzer is a pure function of its bounded snapshot. These
+# resolved-path lints prevent its own code from acquiring ambient host input or
+# output. `tests/no_io.rs` additionally pins the direct dependency set and
+# checks target-only randomness remains dependency plumbing rather than a call
+# made by this crate.
+cognitive-complexity-threshold = 25
+
+disallowed-types = [
+  { path = "std::fs::File", reason = "opens a file outside the supplied snapshot" },
+  { path = "std::fs::OpenOptions", reason = "opens a file outside the supplied snapshot" },
+  { path = "std::fs::ReadDir", reason = "discovers files outside the supplied snapshot" },
+  { path = "std::net::TcpStream", reason = "opens a network connection" },
+  { path = "std::net::TcpListener", reason = "opens a network listener" },
+  { path = "std::net::UdpSocket", reason = "opens a network socket" },
+  { path = "std::os::unix::net::UnixStream", reason = "opens a host socket" },
+  { path = "std::os::unix::net::UnixListener", reason = "opens a host socket" },
+  { path = "std::os::unix::net::UnixDatagram", reason = "opens a host socket" },
+  { path = "std::process::Command", reason = "starts a host process" },
+  { path = "std::process::Child", reason = "starts a host process" },
+  { path = "std::time::SystemTime", reason = "observes the host clock" },
+  { path = "std::time::Instant", reason = "observes the host clock" },
+  { path = "std::io::Stdin", reason = "reads a host stream" },
+  { path = "std::io::Stdout", reason = "writes a host stream" },
+  { path = "std::io::Stderr", reason = "writes a host stream" },
+]
+
+disallowed-methods = [
+  { path = "std::fs::read", reason = "reads outside the supplied snapshot" },
+  { path = "std::fs::read_to_string", reason = "reads outside the supplied snapshot" },
+  { path = "std::fs::write", reason = "writes host state" },
+  { path = "std::fs::read_dir", reason = "discovers files outside the supplied snapshot" },
+  { path = "std::fs::metadata", reason = "observes host filesystem state" },
+  { path = "std::fs::symlink_metadata", reason = "observes host filesystem state" },
+  { path = "std::fs::canonicalize", reason = "observes host filesystem state" },
+  { path = "std::path::Path::exists", reason = "observes host filesystem state" },
+  { path = "std::path::Path::try_exists", reason = "observes host filesystem state" },
+  { path = "std::path::Path::is_file", reason = "observes host filesystem state" },
+  { path = "std::path::Path::is_dir", reason = "observes host filesystem state" },
+  { path = "std::path::Path::is_symlink", reason = "observes host filesystem state" },
+  { path = "std::path::Path::metadata", reason = "observes host filesystem state" },
+  { path = "std::path::Path::canonicalize", reason = "observes host filesystem state" },
+  { path = "std::env::var", reason = "reads the host environment" },
+  { path = "std::env::var_os", reason = "reads the host environment" },
+  { path = "std::env::vars", reason = "reads the host environment" },
+  { path = "std::env::vars_os", reason = "reads the host environment" },
+  { path = "std::env::args", reason = "reads the host command line" },
+  { path = "std::env::args_os", reason = "reads the host command line" },
+  { path = "std::env::current_dir", reason = "observes host process state" },
+  { path = "std::env::current_exe", reason = "observes host process state" },
+  { path = "std::env::temp_dir", reason = "observes host process state" },
+  { path = "std::io::stdin", reason = "reads a host stream" },
+  { path = "std::io::stdout", reason = "writes a host stream" },
+  { path = "std::io::stderr", reason = "writes a host stream" },
+  { path = "std::process::exit", reason = "changes host process state" },
+  { path = "std::process::abort", reason = "changes host process state" },
+  { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "performs host name resolution" },
+  { path = "std::thread::sleep", reason = "depends on the host clock" },
+]
+
+disallowed-macros = [
+  { path = "std::println", reason = "writes a host stream" },
+  { path = "std::print", reason = "writes a host stream" },
+  { path = "std::eprintln", reason = "writes a host stream" },
+  { path = "std::eprint", reason = "writes a host stream" },
+  { path = "std::dbg", reason = "writes a host stream" },
+]

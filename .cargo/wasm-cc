@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+if [ -n "${REGISTRY_WASM_CLANG:-}" ]; then
+    compiler=$REGISTRY_WASM_CLANG
+elif [ -x /opt/homebrew/opt/llvm/bin/clang ]; then
+    compiler=/opt/homebrew/opt/llvm/bin/clang
+else
+    compiler=clang
+fi
+
+cargo_root=${CARGO_HOME:-}
+if [ -z "$cargo_root" ]; then
+    cargo_path=$(command -v cargo)
+    cargo_root=$(dirname "$(dirname "$cargo_path")")
+fi
+
+# Do not use `set --` to count these matches: `$@` is the compiler argument
+# vector supplied by cc-rs, and replacing it can make a cached build pass while
+# a clean build hands clang only this include directory.
+headers=
+header_matches=0
+for candidate in "$cargo_root"/registry/src/*/tree-sitter-language-0.1.7/wasm/include; do
+    if [ -f "$candidate/stdlib.h" ]; then
+        headers=$candidate
+        header_matches=$((header_matches + 1))
+    fi
+done
+if [ "$header_matches" -ne 1 ]; then
+    echo "the Cargo.lock-pinned tree-sitter-language 0.1.7 Wasm headers are unavailable or ambiguous" >&2
+    exit 1
+fi
+
+exec "$compiler" --target=wasm32-unknown-unknown -DNDEBUG -I"$headers" "$@"

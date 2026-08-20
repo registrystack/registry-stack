@@ -1393,9 +1393,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3239,12 +3241,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-language-core"
+version = "0.20.1"
+dependencies = [
+ "anyhow",
+ "getrandom 0.3.4",
+ "ls-types",
+ "registry-evidence-authoring",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tree-sitter",
+ "tree-sitter-yaml",
+]
+
+[[package]]
+name = "registry-language-core-wasm"
+version = "0.20.1"
+dependencies = [
+ "registry-language-core",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "registry-language-server"
 version = "0.20.1"
 dependencies = [
  "anyhow",
  "futures",
  "registry-evidence-authoring",
+ "registry-language-core",
  "registry-relay-v2",
  "rustix",
  "serde_json",

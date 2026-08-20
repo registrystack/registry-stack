@@ -1,2 +1,8 @@
 [net]
 git-fetch-with-cli = true
+
+[env]
+# tree-sitter and its YAML grammar compile small C runtimes. Apple clang does not ship the wasm32
+# backend, and the grammar build omits tree-sitter-language's freestanding headers. Keep that
+# target-only toolchain choice in one checked wrapper so the documented bare Cargo build works.
+CC_wasm32_unknown_unknown = { value = ".cargo/wasm-cc", relative = true }

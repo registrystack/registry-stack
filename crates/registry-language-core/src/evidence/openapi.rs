@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The project's OpenAPI description, read the way `registry-evidencectl` resolves an operation in
+//! The project's OpenAPI description, analysed the way `registry-evidencectl` resolves an operation in
 //! it.
 //!
 //! A question written in the compact form names no source document. It names an operation of
@@ -35,16 +35,15 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 
+use ls_types::Range;
 use registry_evidence_authoring::{
     layout::{MAX_OPENAPI_BYTES, OPENAPI_FILE},
     openapi::{openapi::Spec, selectable_leaves, types::OperationKey},
 };
 use serde_json::{Map, Value};
-use tower_lsp_server::ls_types::Range;
 
 use crate::{
     refs::DOCUMENT_START,
-    safety::{secure_regular_file, SecureFileRead},
     yaml::{parse_yaml, YamlValue},
 };
 
@@ -76,36 +75,36 @@ const MAX_RETAINED_LEAF_SETS: usize = 32;
 
 /// One operation the description publishes an identifier for.
 #[derive(Debug)]
-pub(crate) struct PublishedOperation {
+pub struct PublishedOperation {
     /// The operation as the compiler names it when it reads the response schema:
     /// `crates/registry-evidencectl/src/authoring.rs:1653-1656` uppercases the method.
-    pub(crate) key: OperationKey,
+    pub key: OperationKey,
     /// Where the `operationId` is written, or the start of the file past [`MAX_POSITION_BYTES`].
-    pub(crate) range: Range,
+    pub range: Range,
     /// The operation's required string path parameters, and `None` when the parameters are not
     /// readable the way `exact_path_selectors` reads them. `None` is not "no parameters": it is
     /// "this editor does not know", and the caller must stay quiet on it.
-    pub(crate) selectors: Option<BTreeSet<String>>,
+    pub selectors: Option<BTreeSet<String>>,
 }
 
 /// One reading of a project's description, and the response leaves asked for during one build.
-pub(crate) struct Description {
+pub struct Description {
     analysis: Arc<Analysis>,
     leaves: BTreeMap<(String, String), Option<Arc<BTreeSet<String>>>>,
 }
 
 /// A required retained description that the compiler cannot read or version-check.
-pub(crate) struct DescriptionFailure {
+pub struct DescriptionFailure {
     path: PathBuf,
     message: String,
 }
 
 impl DescriptionFailure {
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(crate) fn message(&self) -> &str {
+    pub fn message(&self) -> &str {
         &self.message
     }
 }
@@ -119,59 +118,23 @@ struct Analysis {
 }
 
 impl Description {
-    /// The description of the project at `root`, when there is one this module can read.
+    /// Analyse the retained description text supplied by the host adapter.
     ///
     /// An unreadable document or one without a supported OpenAPI version is an error because the
     /// compiler stops there before reading dependent inputs. `Ok(None)` is reserved for later
     /// structural analysis that cannot safely publish operations.
-    pub(crate) fn read(root: &Path) -> Result<Option<Self>, DescriptionFailure> {
-        let path = root.join(OPENAPI_FILE);
-        // The gate every read in this server goes through. A path it refuses and a path it could
-        // not decide are both paths this module does not open.
-        let file =
-            match secure_regular_file(root, &path) {
-                Ok(Some(file)) => file,
-                Ok(None) => return Err(description_failure(
-                    path,
-                    "The required source.openapi.yaml is missing or is not a regular project file",
-                )),
-                Err(_) => {
-                    return Err(description_failure(
-                        path,
-                        "The required source.openapi.yaml could not be read; check its permissions",
-                    ))
-                }
-            };
-        // Both ceilings begin with the descriptor's size before its bytes are read. The bounded
-        // read and the actual byte count still check growth after the descriptor was opened.
-        let index_positions = file.len() <= MAX_POSITION_BYTES;
-        let bytes = match file.read_bounded(MAX_OPENAPI_BYTES) {
-            Ok(SecureFileRead::Bytes(bytes)) => bytes,
-            Ok(SecureFileRead::TooLarge) => {
-                return Err(description_failure(
-                    path,
-                    format!(
+    pub fn from_text(path: &Path, text: &str) -> Result<Option<Self>, DescriptionFailure> {
+        let size = u64::try_from(text.len()).unwrap_or(u64::MAX);
+        if size > MAX_OPENAPI_BYTES {
+            return Err(description_failure(
+                path.to_path_buf(),
+                format!(
                     "The retained OpenAPI description exceeds its {MAX_OPENAPI_BYTES}-byte limit"
                 ),
-                ))
-            }
-            Err(_) => {
-                return Err(description_failure(
-                    path,
-                    "The retained OpenAPI description could not be read; check its permissions",
-                ))
-            }
-        };
-        let index_positions = index_positions
-            && u64::try_from(bytes.len()).is_ok_and(|bytes| bytes <= MAX_POSITION_BYTES);
-        let text = String::from_utf8(bytes).map_err(|_| {
-            description_failure(
-                path.clone(),
-                "The retained OpenAPI description is not valid UTF-8",
-            )
-        })?;
-        let analysis = analysis_for(&path, &text, index_positions)
-            .map_err(|message| description_failure(path, message))?;
+            ));
+        }
+        let analysis = analysis_for(path, text, size <= MAX_POSITION_BYTES)
+            .map_err(|message| description_failure(path.to_path_buf(), message))?;
         Ok(analysis.map(|analysis| Self {
             analysis,
             leaves: BTreeMap::new(),
@@ -179,13 +142,13 @@ impl Description {
     }
 
     /// The file the description was read from, which is where its operations are defined.
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.analysis.path
     }
 
     /// Every operation identifier the description publishes, with the operation carrying it. An
     /// identifier two operations publish appears twice, because that is what makes it ambiguous.
-    pub(crate) fn published(&self) -> impl Iterator<Item = (&str, &PublishedOperation)> {
+    pub fn published(&self) -> impl Iterator<Item = (&str, &PublishedOperation)> {
         self.analysis
             .operations
             .iter()
@@ -197,7 +160,7 @@ impl Description {
     /// Exactly one is the compiler's own condition: `unique_operation` refuses none and refuses two
     /// with the same sentence (`crates/registry-evidencectl/src/authoring.rs:1565-1567`), and it
     /// reads nothing further about the question in either case.
-    pub(crate) fn resolved(&self, operation_id: &str) -> Option<&PublishedOperation> {
+    pub fn resolved(&self, operation_id: &str) -> Option<&PublishedOperation> {
         match self.analysis.operations.get(operation_id)?.as_slice() {
             [operation] => Some(operation),
             _ => None,
@@ -211,7 +174,7 @@ impl Description {
     /// (`crates/registry-evidencectl/src/authoring.rs:1661`), asked the same question about the same
     /// operation. There is no second flattening here and there must never be one: an editor
     /// offering a different set from the compiler's would refuse paths the build accepts.
-    pub(crate) fn selectable(&mut self, key: &OperationKey) -> Option<Arc<BTreeSet<String>>> {
+    pub fn selectable(&mut self, key: &OperationKey) -> Option<Arc<BTreeSet<String>>> {
         let retained = (key.method.clone(), key.path.clone());
         if let Some(leaves) = self.leaves.get(&retained) {
             return leaves.clone();
@@ -266,6 +229,17 @@ fn description_failure(path: PathBuf, message: impl Into<String>) -> Description
         path,
         message: message.into(),
     }
+}
+
+pub fn missing_description(path: PathBuf) -> DescriptionFailure {
+    description_failure(
+        path,
+        "The required source.openapi.yaml is missing or is not a regular project file",
+    )
+}
+
+pub fn unavailable_description(path: PathBuf, message: impl Into<String>) -> DescriptionFailure {
+    description_failure(path, message)
 }
 
 fn analysis_for(

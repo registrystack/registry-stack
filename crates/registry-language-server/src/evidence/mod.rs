@@ -6,10 +6,7 @@
 //! single implementation of the authoring form. The editor reads a project the same way the
 //! compiler does or it tells authors a story their build will contradict.
 
-pub(crate) mod diagnostics;
-pub(crate) mod index;
-pub(crate) mod layout;
-pub(crate) mod openapi;
+pub(crate) use registry_language_core::evidence::layout;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -36,8 +33,96 @@ use crate::{
     },
 };
 
-pub(crate) use index::build_index;
 use layout::{DocumentRole, MAX_POINTED_FILES_OFFERED};
+
+/// Build the shared Evidence semantic index after the native adapter has loaded its bounded text
+/// snapshot and proved existence of non-indexed artifacts.
+pub(crate) fn build_index(
+    root: &Path,
+    documents: &BTreeMap<PathBuf, String>,
+    parsed: &BTreeMap<PathBuf, crate::yaml::ParsedDocument>,
+    dropped: &BTreeSet<PathBuf>,
+) -> crate::refs::IndexedProject {
+    let openapi_path = root.join(OPENAPI_FILE);
+    let openapi = read_openapi(root, &openapi_path);
+    let present_artifacts = present_artifacts(root);
+    registry_language_core::evidence::index::build_index(
+        root,
+        documents,
+        parsed,
+        dropped,
+        openapi.as_core(),
+        &present_artifacts,
+    )
+}
+
+enum NativeOpenApi {
+    Text(String),
+    Missing,
+    Unreadable,
+    TooLarge,
+    NotUtf8,
+}
+
+impl NativeOpenApi {
+    fn as_core(&self) -> registry_language_core::evidence::index::OpenApiInput<'_> {
+        use registry_language_core::evidence::index::OpenApiInput;
+        match self {
+            Self::Text(text) => OpenApiInput::Text(text),
+            Self::Missing => OpenApiInput::Missing,
+            Self::Unreadable => OpenApiInput::Unreadable,
+            Self::TooLarge => OpenApiInput::TooLarge,
+            Self::NotUtf8 => OpenApiInput::NotUtf8,
+        }
+    }
+}
+
+fn read_openapi(root: &Path, path: &Path) -> NativeOpenApi {
+    let file = match secure_regular_file(root, path) {
+        Ok(Some(file)) => file,
+        Ok(None) => return NativeOpenApi::Missing,
+        Err(_) => return NativeOpenApi::Unreadable,
+    };
+    match file.read_bounded(registry_evidence_authoring::layout::MAX_OPENAPI_BYTES) {
+        Ok(SecureFileRead::TooLarge) => NativeOpenApi::TooLarge,
+        Ok(SecureFileRead::Bytes(bytes)) => String::from_utf8(bytes)
+            .map(NativeOpenApi::Text)
+            .unwrap_or(NativeOpenApi::NotUtf8),
+        Err(_) => NativeOpenApi::Unreadable,
+    }
+}
+
+fn present_artifacts(root: &Path) -> BTreeSet<PathBuf> {
+    let mut paths = BTreeSet::new();
+    for role in [
+        DocumentRole::Schema,
+        DocumentRole::Fixture,
+        DocumentRole::Derivation,
+    ] {
+        paths.extend(pointed_files(root, role).into_iter().map(PathBuf::from));
+    }
+    for directory in layout::SOURCE_ARTIFACT_DIRECTORIES {
+        let absolute = root.join(directory);
+        if !secure_directory(root, &absolute).unwrap_or(false) {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&absolute) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            if layout::is_source_artifact(relative)
+                && crate::safety::is_safe_authored_file(root, &path)
+            {
+                paths.insert(relative.to_path_buf());
+            }
+        }
+    }
+    paths
+}
 
 /// The file that marks a directory as an Evidence authoring project.
 pub(crate) const PROJECT_FILE: &str = PROJECT_MARKER_FILE;
