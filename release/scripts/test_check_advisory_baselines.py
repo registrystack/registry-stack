@@ -29,6 +29,11 @@ LIVE_REFERENCE_IMAGE_DIGESTS = {
     "mint": "sha256:94dafa4e93a1864efc1c62ca5e593a5b9f12eddfee71d29aaf4ea68b1f4b5cb5",
 }
 LIVE_REFERENCE_SOURCE_REVISION = "5c4e28578cf3c632faca77bf9d81cd18e95c635f"
+# The date the live exceptions below were reviewed against, stated here rather
+# than derived from the baselines: deriving it from their own reviewed_at values
+# would make the checker's future-dated guard unreachable for the newest
+# exception. Move it forward by hand when the baselines are renewed.
+LIVE_REVIEW_EVALUATION_DATE = "2026-08-20"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "official_candidate",
     "evidence": "official_candidate",
@@ -586,6 +591,16 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
         self.assertIn("ordered OCI rootfs.diff_ids changed", output)
         self.assertIn("runtime.layer_ids/application_layer_ids", output)
         self.assertNotIn("reviewed runtime change", output)
+
+    def test_future_dated_exception_is_invalid(self):
+        reviewed = self.finding()
+        data = self.baseline(reviewed)
+        data["exceptions"][0]["reviewed_at"] = "2026-08-14"
+        baseline = self.load_baseline(data)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(1, self.check(reviewed, baseline))
+        self.assertIn("future-dated exception:", stderr.getvalue())
 
     def test_dynamic_lookup_makes_symbol_absence_unevaluable(self):
         for api in ("dlopen", "dlmopen", "dlsym", "dlvsym"):
@@ -1376,11 +1391,7 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                         normalized.image,
                         synthetic_baseline,
                         self.module.parse_date(
-                            max(
-                                exception["reviewed_at"]
-                                for exception in baseline["exceptions"]
-                            ),
-                            "today",
+                            LIVE_REVIEW_EVALUATION_DATE, "today"
                         ),
                         self.rootfs,
                         live_assertion["reference_image_digest"],
