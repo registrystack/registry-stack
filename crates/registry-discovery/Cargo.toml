@@ -22,6 +22,7 @@ server = [
   "dep:axum",
   "dep:clap",
   "dep:http",
+  "dep:registry-platform-buildinfo",
   "dep:registry-platform-httpsec",
   "dep:serde_yaml_ng",
   "dep:tokio",
@@ -35,6 +36,7 @@ axum = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 registry-discovery-profile.workspace = true
+registry-platform-buildinfo = { workspace = true, optional = true }
 registry-platform-canonical-json.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"], optional = true }
 serde.workspace = true
