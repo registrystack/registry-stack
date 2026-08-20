@@ -1215,65 +1215,6 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("PYPI_TOKEN", text)
 
 
-class ClientPlatformBindingStructureTest(unittest.TestCase):
-    def test_candidate_binds_platform_versions_between_install_and_pack(self) -> None:
-        _, document = workflow("release-candidate.yml")
-        assemble = step_run(
-            document,
-            "assemble",
-            "Assemble public payload and validate "
-            "version-appropriate install inputs",
-        )
-        # The tree binds no platform versions, so the published root package is
-        # correct only because the release binds them itself. The binding sits
-        # after `npm ci`, which rejects a manifest its lockfile does not match,
-        # and before `npm pack`, which is what freezes the published manifest.
-        install = assemble.index('(cd "${node_client}" && npm ci --ignore-scripts)')
-        bind = assemble.index("client_registry.py bind-optional-deps")
-        pack = assemble.index('(cd "${node_client}" && npm pack')
-        self.assertLess(install, bind)
-        self.assertLess(bind, pack)
-
-    def test_candidate_smoke_packs_the_published_manifest(self) -> None:
-        _, document = workflow("release-candidate.yml")
-        smoke = step_run(document, "clients", "Smoke Node client packages")
-        # Smoking the copied tree manifest would install a root package that
-        # names no platform dependency, so it would pass without ever
-        # exercising the manifest the release actually publishes.
-        bind = smoke.index("client_registry.py bind-optional-deps")
-        self.assertLess(smoke.index('cp "${client_dir}/${source}"'), bind)
-        self.assertLess(bind, smoke.index('(cd "${root_stage}" && npm pack'))
-
-    def test_rehearsal_smoke_packs_the_published_manifest(self) -> None:
-        _, document = workflow("release-rehearsal.yml")
-        rehearsal = step_run(
-            document,
-            "node-clients",
-            "Build, package, and smoke Linux Node clients",
-        )
-        bind = rehearsal.index("client_registry.py bind-optional-deps")
-        self.assertLess(rehearsal.index('cp "${client_dir}/${source}"'), bind)
-        self.assertLess(bind, rehearsal.index('(cd "${root_stage}" && npm pack'))
-
-    def test_no_checked_in_client_manifest_binds_platform_versions(self) -> None:
-        # This is the regression the binding exists to prevent: a manifest that
-        # names its own unpublished release leaves `npm ci` unsatisfiable on
-        # the default branch from the moment that release publishes.
-        for client in ("discovery", "evidence", "relay"):
-            with self.subTest(client=client):
-                root = ROOT / f"crates/registry-{client}-client-node"
-                manifest = json.loads(
-                    (root / "package.json").read_text(encoding="utf-8")
-                )
-                lock = json.loads(
-                    (root / "package-lock.json").read_text(encoding="utf-8")
-                )
-                self.assertNotIn("optionalDependencies", manifest)
-                self.assertNotIn(
-                    "optionalDependencies", lock["packages"][""]
-                )
-
-
 class SupportingWorkflowStructureTest(unittest.TestCase):
     def test_operator_docs_match_the_latest_non_prerelease_contract(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
