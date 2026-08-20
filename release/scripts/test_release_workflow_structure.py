@@ -1225,6 +1225,22 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn(".isPrerelease == false", verify)
         self.assertNotIn(".isPrerelease == true", verify)
 
+    def test_advisory_renewal_pulls_the_candidate_before_scanning_it(self) -> None:
+        operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
+        renewal = next(
+            block
+            for block in operations.split("```")
+            if 'syft "${candidate_ref}"' in block
+        )
+        # The renewal commands are run by hand, so they carry the daemon-backed
+        # pull the candidate workflow gets incidentally from running the image.
+        # Without it Syft and Grype leave the target's architecture and os
+        # empty and check-advisory-baselines.py rejects the evidence as not
+        # linux/amd64.
+        pull = renewal.index('docker pull --platform linux/amd64 "${candidate_ref}"')
+        self.assertLess(pull, renewal.index('syft "${candidate_ref}"'))
+        self.assertLess(pull, renewal.index('grype "${candidate_ref}"'))
+
     def test_docs_deploys_main_and_rechecks_latest_docs_release(self) -> None:
         text, document = workflow("docs-pages.yml")
         releases_endpoint = '"repos/${GITHUB_REPOSITORY}/releases?per_page=100"'
