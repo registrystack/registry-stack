@@ -84,6 +84,16 @@ fingerprint" below, and record the reviewed runtime block, exception set,
 owner, and expiry from that evidence. `discovery` is the first image to need
 this since the baselines were introduced.
 
+Enrol the new candidate package in the daily cleanup only after that first
+candidate publishes `ghcr.io/registrystack/<name>-candidate`. The cleanup lists
+exactly the names in `CANDIDATE_PACKAGES` in
+`release/scripts/cleanup-release-candidates.py` and fails closed on a package it
+cannot list, so naming an unpublished package would abort the whole scheduled
+run. Add `discovery-candidate` to that allowlist, with a matching fixture in
+`release/scripts/test_cleanup_release_candidates.py`, as part of the `v0.24.0`
+release. The public `discovery` name is already on the `PUBLIC_PACKAGES`
+denylist, so cleanup can never reach a released image.
+
 ### Provision client registries
 
 Registry Stack v0.22.0 promotes the exact candidate Evidence and Relay client
