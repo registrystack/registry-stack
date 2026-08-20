@@ -11,6 +11,14 @@ fi
 
 version="$1"
 tag="v${version}"
+# The Discovery binary joins the release payload at 0.24.0. A candidate rebuilt
+# for an earlier version must stage exactly the assets its recorded inventory
+# names, so seal-candidate keeps accepting it.
+IFS=. read -r version_major version_minor _version_patch <<<"${version}"
+include_discovery=0
+if ((version_major > 0 || version_minor >= 24)); then
+  include_discovery=1
+fi
 default_builder_image="rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
 if [[ -n "${RELEASE_BUILDER_IMAGE:-}" && "${RELEASE_BUILDER_IMAGE}" != "${default_builder_image}" ]]; then
   printf 'RELEASE_BUILDER_IMAGE must remain pinned to %s\n' "${default_builder_image}" >&2
@@ -48,6 +56,7 @@ docker run --rm \
   --env CARGO_INCREMENTAL=0 \
   --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}" \
   --env HOME=/workspace \
+  --env RELEASE_INCLUDE_DISCOVERY="${include_discovery}" \
   --env RELEASE_TAG="${tag}" \
   --env REGISTRY_RELEASE_TAG="${tag}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
@@ -84,50 +93,49 @@ docker run --rm \
     cp target/release/evidence dist/image-bin/evidence
     cp target/release/mint dist/image-bin/mint
 
-    cargo build --release --locked \
-      -p registry-discovery \
-      --bin discovery
-    cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
-    cp target/release/discovery dist/image-bin/discovery
+    if [[ "${RELEASE_INCLUDE_DISCOVERY}" -eq 1 ]]; then
+      cargo build --release --locked \
+        -p registry-discovery \
+        --bin discovery
+      cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
+      cp target/release/discovery dist/image-bin/discovery
+    fi
   '
 
 printf '%s\n' "${release_builder_image}" > "${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
-chmod 0755 \
-  "${repo_root}/dist/bin/registry-manifest-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/relay-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/relayctl-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/evidence-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/evidencectl-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/mint-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/evidence-oid4vci-${tag}-linux-amd64" \
-  "${repo_root}/dist/bin/discovery-${tag}-linux-amd64" \
-  "${repo_root}/dist/image-bin/discovery" \
-  "${repo_root}/dist/image-bin/evidence" \
-  "${repo_root}/dist/image-bin/mint" \
-  "${repo_root}/dist/image-bin/relay"
+# The staged asset lists follow the same gate as the build above, so a version
+# that predates an asset neither checksums nor chmods a file it never built.
+bin_assets=()
+image_bin_binaries=()
+if [[ "${include_discovery}" -eq 1 ]]; then
+  bin_assets+=("discovery-${tag}-linux-amd64")
+  image_bin_binaries+=(discovery)
+fi
+bin_assets+=(
+  "evidence-${tag}-linux-amd64"
+  "evidencectl-${tag}-linux-amd64"
+  "mint-${tag}-linux-amd64"
+  "evidence-oid4vci-${tag}-linux-amd64"
+  "registry-manifest-${tag}-linux-amd64"
+  "relay-${tag}-linux-amd64"
+  "relayctl-${tag}-linux-amd64"
+)
+image_bin_binaries+=(evidence mint relay)
+
+for asset in "${bin_assets[@]}"; do
+  chmod 0755 "${repo_root}/dist/bin/${asset}"
+done
+for asset in "${image_bin_binaries[@]}"; do
+  chmod 0755 "${repo_root}/dist/image-bin/${asset}"
+done
 
 (
   cd -- "${repo_root}/dist/bin"
-  sha256sum -- \
-    "discovery-${tag}-linux-amd64" \
-    "evidence-${tag}-linux-amd64" \
-    "evidencectl-${tag}-linux-amd64" \
-    "mint-${tag}-linux-amd64" \
-    "evidence-oid4vci-${tag}-linux-amd64" \
-    "registry-manifest-${tag}-linux-amd64" \
-    "relay-${tag}-linux-amd64" \
-    "relayctl-${tag}-linux-amd64" \
-    > SHA256SUMS
+  sha256sum -- "${bin_assets[@]}" > SHA256SUMS
 )
 (
   cd -- "${repo_root}/dist/image-bin"
-  sha256sum -- \
-    RELEASE_BUILDER_IMAGE \
-    discovery \
-    evidence \
-    mint \
-    relay \
-    > SHA256SUMS
+  sha256sum -- RELEASE_BUILDER_IMAGE "${image_bin_binaries[@]}" > SHA256SUMS
 )
 
 printf 'built release binaries for %s with canonical container paths\n' "${tag}"

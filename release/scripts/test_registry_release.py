@@ -1334,6 +1334,50 @@ class RegistryReleaseTest(TestCase):
             ),
         )
 
+    def test_binary_recipe_stages_discovery_only_from_its_first_release(self) -> None:
+        # The recipe runs for every supported version, including a rebuilt
+        # candidate for a version whose recorded inventory predates Discovery.
+        # Run the recipe's own gate rather than a copy of it.
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        start = recipe.index("IFS=. read -r version_major")
+        end = recipe.index("fi\n", recipe.index("include_discovery=1")) + len("fi\n")
+        gate = recipe[start:end]
+
+        def include_discovery(version: str) -> str:
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    "set -euo pipefail\n"
+                    'version="$1"\n'
+                    f"{gate}"
+                    'printf "%s" "${include_discovery}"',
+                    "build-release-binaries",
+                    version,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return completed.stdout
+
+        for version in ("0.19.0", "0.21.0", "0.23.0", "0.23.9"):
+            with self.subTest(version=version):
+                self.assertEqual("0", include_discovery(version))
+        for version in ("0.24.0", "0.24.1", "0.25.0", "1.0.0"):
+            with self.subTest(version=version):
+                self.assertEqual("1", include_discovery(version))
+
+        # The staged asset lists follow the same gate, so an earlier candidate
+        # neither checksums nor chmods an asset the recipe did not build.
+        self.assertIn(
+            'bin_assets+=("discovery-${tag}-linux-amd64")',
+            recipe,
+        )
+        self.assertIn("image_bin_binaries+=(discovery)", recipe)
+
     def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
             encoding="utf-8"
