@@ -69,7 +69,7 @@ jobs:
           PY
           printf '{"spdxVersion":"SPDX-2.3","name":"release-canary"}\n' \
             > canary/bundle-root/registry-stack-${tag}.sbom.spdx.json
-          image_names=(relay evidence mint)
+          image_names=(relay evidence mint discovery)
 
           write_image_reports() {
             local name="$1"
@@ -105,6 +105,7 @@ jobs:
             schema_version:"registry-stack.advisory-verdict.v2",
             verdict:"passed",
             subjects:[
+              "discovery-image",
               "evidence-image",
               "mint-image",
               "relay-image"

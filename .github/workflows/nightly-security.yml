@@ -38,6 +38,7 @@ jobs:
           # the same tree by anyone following the local-run docs, so baking key or
           # credential material into it would leak just as widely.
           release_paths = [
+              Path("release/docker/Dockerfile.discovery"),
               Path("release/docker/Dockerfile.evidence"),
               Path("release/docker/Dockerfile.mint"),
               Path("release/docker/Dockerfile.relay"),

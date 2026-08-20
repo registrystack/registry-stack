@@ -620,7 +620,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             build_calls = [
                 call for call in read_calls(docker_log) if call[:2] == ["buildx", "build"]
             ]
-            self.assertEqual(8, len(build_calls))
+            self.assertEqual(10, len(build_calls))
             dockerfiles = []
             for call in build_calls:
                 self.assertEqual(["buildx", "build"], call[:2])
@@ -645,6 +645,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
 
             self.assertEqual(
                 {
+                    str(ROOT / "release/docker/Dockerfile.discovery"),
                     str(ROOT / "release/docker/Dockerfile.evidence"),
                     str(ROOT / "release/docker/Dockerfile.mint"),
                     str(ROOT / "release/docker/Dockerfile.relay"),
@@ -657,7 +658,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     str(ROOT / "release/docker/Dockerfile.relay")
                 ),
             )
-            for name in ("evidence", "mint"):
+            for name in ("discovery", "evidence", "mint"):
                 self.assertEqual(
                     2,
                     dockerfiles.count(
@@ -674,6 +675,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             }
             self.assertEqual(
                 {
+                    "correct-discovery-first",
                     "correct-evidence-first",
                     "correct-mint-first",
                     "correct-relay-first",
@@ -699,7 +701,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 for call in python_calls
                 if call and call[0].endswith("compare-release-image-layouts.py")
             ]
-            self.assertEqual(4, len(comparisons))
+            self.assertEqual(5, len(comparisons))
             self.assertEqual(1, sum("--rootfs-only" in call for call in comparisons))
 
 
