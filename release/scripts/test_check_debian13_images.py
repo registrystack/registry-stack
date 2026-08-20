@@ -54,6 +54,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
     def test_official_runtime_images_are_required_maintained_surfaces(self) -> None:
         self.assertEqual(
             {
+                Path("release/docker/Dockerfile.discovery"),
                 Path("release/docker/Dockerfile.evidence"),
                 Path("release/docker/Dockerfile.mint"),
                 Path("release/docker/Dockerfile.relay"),
@@ -62,6 +63,7 @@ class ReleaseImagePolicyTests(unittest.TestCase):
         )
         self.assertEqual(
             {
+                Path("release/docker/Dockerfile.discovery"),
                 Path("release/docker/Dockerfile.evidence"),
                 Path("release/docker/Dockerfile.mint"),
             },
@@ -69,16 +71,23 @@ class ReleaseImagePolicyTests(unittest.TestCase):
         )
 
     def test_http_probed_images_bind_fixed_config_and_entrypoint(self) -> None:
+        # Discovery reads no environment variable, so its configuration binding
+        # is the command; the others bind it through the environment.
+        wrong = {
+            "environment": "ENV WRONG_CONFIG=/tmp/config.yaml",
+            "command": 'CMD ["--runtime", "/tmp/runtime.yaml"]',
+        }
         for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items():
-            with self.subTest(relative=relative):
+            key = "environment" if "environment" in contract else "command"
+            with self.subTest(relative=relative, key=key):
                 with tempfile.TemporaryDirectory() as temporary:
                     root = Path(temporary)
                     self.repository_copy(root)
                     dockerfile = root / relative
                     dockerfile.write_text(
                         dockerfile.read_text(encoding="utf-8").replace(
-                            contract["environment"],
-                            "ENV WRONG_CONFIG=/tmp/config.yaml",
+                            contract[key],
+                            wrong[key],
                         ),
                         encoding="utf-8",
                     )
@@ -86,7 +95,38 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                     self.assertTrue(
                         any(
                             str(relative) in failure
-                            and f"fixed {contract['binary']} environment" in failure
+                            and f"fixed {contract['binary']} {key}" in failure
+                            for failure in failures
+                        ),
+                        failures,
+                    )
+
+    def test_image_without_an_environment_contract_declares_no_environment(
+        self,
+    ) -> None:
+        # An unbound ENV would be a second configuration source the contract
+        # does not describe, so declaring no environment must mean carrying none.
+        for relative, contract in POLICY.HTTP_PROBE_DOCKERFILES.items():
+            if "environment" in contract:
+                continue
+            with self.subTest(relative=relative):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    self.repository_copy(root)
+                    dockerfile = root / relative
+                    dockerfile.write_text(
+                        dockerfile.read_text(encoding="utf-8").replace(
+                            contract["entrypoint"],
+                            "ENV SMUGGLED_CONFIG=/tmp/config.yaml\n"
+                            + contract["entrypoint"],
+                        ),
+                        encoding="utf-8",
+                    )
+                    failures = POLICY.check_repository(root)
+                    self.assertTrue(
+                        any(
+                            str(relative) in failure
+                            and "must declare no runtime environment" in failure
                             for failure in failures
                         ),
                         failures,

@@ -83,6 +83,12 @@ docker run --rm \
     cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidence dist/image-bin/evidence
     cp target/release/mint dist/image-bin/mint
+
+    cargo build --release --locked \
+      -p registry-discovery \
+      --bin discovery
+    cp target/release/discovery "dist/bin/discovery-${RELEASE_TAG}-linux-amd64"
+    cp target/release/discovery dist/image-bin/discovery
   '
 
 printf '%s\n' "${release_builder_image}" > "${repo_root}/dist/image-bin/RELEASE_BUILDER_IMAGE"
@@ -94,6 +100,8 @@ chmod 0755 \
   "${repo_root}/dist/bin/evidencectl-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/mint-${tag}-linux-amd64" \
   "${repo_root}/dist/bin/evidence-oid4vci-${tag}-linux-amd64" \
+  "${repo_root}/dist/bin/discovery-${tag}-linux-amd64" \
+  "${repo_root}/dist/image-bin/discovery" \
   "${repo_root}/dist/image-bin/evidence" \
   "${repo_root}/dist/image-bin/mint" \
   "${repo_root}/dist/image-bin/relay"
@@ -101,6 +109,7 @@ chmod 0755 \
 (
   cd -- "${repo_root}/dist/bin"
   sha256sum -- \
+    "discovery-${tag}-linux-amd64" \
     "evidence-${tag}-linux-amd64" \
     "evidencectl-${tag}-linux-amd64" \
     "mint-${tag}-linux-amd64" \
@@ -114,6 +123,7 @@ chmod 0755 \
   cd -- "${repo_root}/dist/image-bin"
   sha256sum -- \
     RELEASE_BUILDER_IMAGE \
+    discovery \
     evidence \
     mint \
     relay \

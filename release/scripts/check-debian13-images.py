@@ -33,6 +33,7 @@ DOCKERFILE_FRONTEND = (
 DISTROLESS_REPOSITORY = DISTROLESS_RUNTIME.split("@", 1)[0]
 
 DOCKERFILES = (
+    Path("release/docker/Dockerfile.discovery"),
     Path("release/docker/Dockerfile.evidence"),
     Path("release/docker/Dockerfile.mint"),
     Path("release/docker/Dockerfile.relay"),
@@ -90,7 +91,15 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/us
 ENTRYPOINT ["/usr/local/bin/relay"]
 CMD ["serve", "--runtime", "/etc/relay/runtime.yaml"]
 """
+# Each entry pins the runtime instructions that bind one HTTP-probed service to
+# its configuration. Discovery reads no environment variable, so it declares no
+# `environment` and binds its runtime file through the command instead.
 HTTP_PROBE_DOCKERFILES = {
+    Path("release/docker/Dockerfile.discovery"): {
+        "binary": "discovery",
+        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/discovery"]',
+        "command": 'CMD ["--runtime", "/etc/registry-discovery/runtime.yaml"]',
+    },
     Path("release/docker/Dockerfile.evidence"): {
         "binary": "evidence",
         "environment": "ENV REGISTRY_EVIDENCE_RUNTIME=/etc/registry-evidence/runtime.yaml",
@@ -398,12 +407,20 @@ def check_repository(root: Path = ROOT) -> list[str]:
             failures,
         )
         for key in ("environment", "entrypoint", "command"):
+            expected = contract.get(key)
+            if expected is None:
+                continue
             require(
                 runtime,
-                contract[key],
+                expected,
                 relative,
                 f"fixed {binary} {key}",
                 failures,
+            )
+        if "environment" not in contract and "\nENV " in f"\n{runtime}":
+            failures.append(
+                f"{relative}: {binary} binds its configuration through the "
+                "command, so its runtime must declare no runtime environment"
             )
         if "HEALTHCHECK" in runtime:
             failures.append(

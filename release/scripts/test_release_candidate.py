@@ -41,7 +41,7 @@ def json_bytes(value: object) -> bytes:
 
 
 def security_evidence_members(
-    image_names: tuple[str, ...] = ("evidence", "mint", "relay"),
+    image_names: tuple[str, ...] = ("discovery", "evidence", "mint", "relay"),
 ) -> dict[str, bytes]:
     refs = {
         name: f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
@@ -346,7 +346,7 @@ class ReleaseCandidateTest(TestCase):
 
     def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
         bundle_root = self.root / "v2-bundle"
-        image_names = ("evidence", "mint", "relay")
+        image_names = ("discovery", "evidence", "mint", "relay")
         evidence_members = security_evidence_members(image_names)
         evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
         payload_inventory = self.module._relay_v2_payload_inventory("1.2.3")
@@ -690,6 +690,13 @@ class ReleaseCandidateTest(TestCase):
             current["registrystack-discovery-client-linux-x64-gnu-0.23.0.tgz"],
         )
 
+    def test_discovery_runtime_payload_begins_with_v0_24_0(self) -> None:
+        historical = self.module._relay_v2_payload_inventory("0.23.0")
+        current = self.module._relay_v2_payload_inventory("0.24.0")
+
+        self.assertNotIn("discovery-v0.23.0-linux-amd64", historical)
+        self.assertEqual("binary", current["discovery-v0.24.0-linux-amd64"])
+
     def test_v2_security_evidence_members_follow_candidate_images(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -729,10 +736,23 @@ class ReleaseCandidateTest(TestCase):
             self.module._candidate_image_names("0.21.0"),
         )
 
+    def test_discovery_runtime_image_joins_the_roster_at_v0_24(self) -> None:
+        for version in ("0.21.0", "0.22.0", "0.23.0"):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    {"evidence", "mint", "relay"},
+                    self.module._candidate_image_names(version),
+                )
+        self.assertEqual(
+            {"discovery", "evidence", "mint", "relay"},
+            self.module._candidate_image_names("0.24.0"),
+        )
+
     def test_image_names_cli_emits_the_version_appropriate_roster(self) -> None:
         cases = (
             ("0.20.2", "relay\n"),
             ("0.21.0", "evidence mint relay\n"),
+            ("0.24.0", "discovery evidence mint relay\n"),
         )
         for version, expected in cases:
             with self.subTest(version=version):
@@ -904,7 +924,7 @@ class ReleaseCandidateTest(TestCase):
         candidate, _, bundle_root, _ = self.make_v2_candidate()
         members = security_evidence_members()
         required = self.module._security_evidence_required_files(
-            self.module.OFFICIAL_RUNTIME_IMAGE_NAMES
+            self.module.DISCOVERY_RUNTIME_IMAGE_NAMES
         )
         for missing in sorted(required):
             with self.subTest(missing=missing):

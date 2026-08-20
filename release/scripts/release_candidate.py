@@ -45,6 +45,8 @@ HISTORICAL_RUNTIME_IMAGE_NAMES = {"relay"}
 OFFICIAL_RUNTIME_IMAGE_NAMES = {"evidence", "mint", "relay"}
 CLIENT_REGISTRY_PACKAGE_MINIMUM_VERSION = (0, 21, 1)
 DISCOVERY_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 23, 0)
+DISCOVERY_RUNTIME_MINIMUM_VERSION = (0, 24, 0)
+DISCOVERY_RUNTIME_IMAGE_NAMES = OFFICIAL_RUNTIME_IMAGE_NAMES | {"discovery"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -105,7 +107,9 @@ def _candidate_image_names(version: str) -> set[str]:
         )
     if parsed < OFFICIAL_RUNTIME_IMAGE_MINIMUM_VERSION:
         return HISTORICAL_RUNTIME_IMAGE_NAMES
-    return OFFICIAL_RUNTIME_IMAGE_NAMES
+    if parsed < DISCOVERY_RUNTIME_MINIMUM_VERSION:
+        return OFFICIAL_RUNTIME_IMAGE_NAMES
+    return DISCOVERY_RUNTIME_IMAGE_NAMES
 
 
 def _version_uses_release_docs(version: tuple[int, int, int]) -> bool:
@@ -200,6 +204,8 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             inventory[
                 f"registrystack-discovery-client-{platform}-{version}.tgz"
             ] = "client-package"
+    if version_tuple >= DISCOVERY_RUNTIME_MINIMUM_VERSION:
+        inventory[f"discovery-{tag}-linux-amd64"] = "binary"
     return inventory
 
 

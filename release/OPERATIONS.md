@@ -34,9 +34,9 @@ container package as private, so publish a clearly non-release bootstrap
 artifact without putting a token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, or mint}"
+package="${PACKAGE:?set PACKAGE to relay, evidence, mint, or discovery}"
 case "${package}" in
-  relay|evidence|mint) ;;
+  relay|evidence|mint|discovery) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -58,10 +58,11 @@ oras push \
 In the organization package settings, change only the selected package to
 public and grant `registrystack/registry-stack` Actions access with Write.
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
-`mint` packages. Verify all three before candidate dispatch:
+`mint` packages, joined by `discovery` from `v0.24.0`. Verify all four before
+candidate dispatch:
 
 ```sh
-for package in relay evidence mint; do
+for package in relay evidence mint discovery; do
   gh api "/orgs/registrystack/packages/container/${package}" \
     --jq '[.name,.package_type,.visibility]'
 done
@@ -71,6 +72,17 @@ Each result must name the requested package and report `container` and
 `public`. Keep each bootstrap version until the first real version is public,
 then remove only that bootstrap version. This is a package-identity setup step,
 not part of later releases.
+
+A new release image also needs its own reviewed advisory baseline at
+`release/security/<name>-advisory-baseline.json` before its first candidate.
+The candidate refuses to run without that file, and the pinned Debian 13
+runtime carries findings that a baseline with no exception cannot clear. Author
+it from a real candidate image, never by copying another service's file: run
+the candidate once to publish the private candidate image, regenerate the
+scanner and rootfs evidence with the procedure in "Renew an image advisory
+fingerprint" below, and record the reviewed runtime block, exception set,
+owner, and expiry from that evidence. `discovery` is the first image to need
+this since the baselines were introduced.
 
 ### Provision client registries
 
@@ -275,7 +287,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=relay # or evidence or mint
+name=relay # or evidence, mint, or discovery
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"

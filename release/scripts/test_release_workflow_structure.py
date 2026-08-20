@@ -330,6 +330,10 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             {"evidence", "mint", "relay"},
             module._candidate_image_names("0.21.0"),
         )
+        self.assertEqual(
+            {"discovery", "evidence", "mint", "relay"},
+            module._candidate_image_names("0.24.0"),
+        )
         self.assertFalse(
             any("registry-notary" in name for name in module.SECURITY_EVIDENCE_REQUIRED_FILES)
         )

@@ -170,6 +170,7 @@ jobs:
               raise SystemExit(f"expected one release manifest for {version}")
           artifacts = matches[0].get("artifacts", {})
           binary_names = {
+              "discovery": "discovery",
               "evidence": "evidence",
               "evidencectl": "evidencectl",
               "evidence-oid4vci": "evidence-oid4vci",

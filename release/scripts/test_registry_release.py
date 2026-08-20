@@ -1191,9 +1191,10 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence mint)",
+            "image_names=(relay evidence mint discovery)",
             "images: $images[0]",
             "scans: $scans[0]",
+            '"discovery-image"',
             '"evidence-image"',
             '"mint-image"',
             '"relay-image"',
@@ -1263,7 +1264,7 @@ class RegistryReleaseTest(TestCase):
             name: (ROOT / f"release/docker/Dockerfile.{name}").read_text(
                 encoding="utf-8"
             )
-            for name in ("evidence", "mint", "relay")
+            for name in ("discovery", "evidence", "mint", "relay")
         }
 
         self.assertIn("-p registry-manifest-cli", binary_recipe)
@@ -1271,7 +1272,9 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("--bin relay", binary_recipe)
         self.assertIn("--no-default-features", binary_recipe)
         self.assertIn("-p registry-relayctl", binary_recipe)
-        for artifact in ("registry-manifest", "relay", "relayctl"):
+        self.assertIn("-p registry-discovery", binary_recipe)
+        self.assertIn("--bin discovery", binary_recipe)
+        for artifact in ("discovery", "registry-manifest", "relay", "relayctl"):
             self.assertIn(
                 f'"dist/bin/{artifact}-${{RELEASE_TAG}}-linux-amd64"',
                 binary_recipe,
@@ -1279,7 +1282,7 @@ class RegistryReleaseTest(TestCase):
         self.assertNotIn("-p registryctl ", binary_recipe)
         self.assertNotIn("-p registry-relay ", binary_recipe)
         self.assertNotIn("registry-relay-rhai-worker", binary_recipe)
-        for name in ("evidence", "mint", "relay"):
+        for name in ("discovery", "evidence", "mint", "relay"):
             self.assertIn(
                 f"cp target/release/{name} dist/image-bin/{name}",
                 binary_recipe,
@@ -1289,8 +1292,47 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        self.assertIn("evidence|mint|relay)", image_recipe)
+        self.assertIn("discovery|evidence|mint|relay)", image_recipe)
         self.assertNotIn("registry-relay)", image_recipe)
+
+    def test_discovery_runtime_artifact_joins_the_inventory_at_v0_24(self) -> None:
+        module = load_registry_release()
+        without_discovery = {
+            name: "0.24.0"
+            for name in (
+                *module.RELAY_V2_ARTIFACT_INVENTORY,
+                "relay-installer",
+                "registry-docs",
+                "relay-client-node",
+                "relay-client-python",
+                "discovery-client-node",
+                "discovery-client-python",
+            )
+        }
+
+        self.assertNotEqual(
+            [], module.artifact_inventory_errors("0.24.0", without_discovery)
+        )
+        self.assertEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.24.0", without_discovery | {"discovery": "0.24.0"}
+            ),
+        )
+        self.assertEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.23.0", {name: "0.23.0" for name in without_discovery}
+            ),
+        )
+        self.assertNotEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.23.0",
+                {name: "0.23.0" for name in without_discovery}
+                | {"discovery": "0.23.0"},
+            ),
+        )
 
     def test_release_packaging_excludes_retired_notary(self) -> None:
         binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
@@ -1325,7 +1367,7 @@ class RegistryReleaseTest(TestCase):
         workflow = (ROOT / ".github/workflows/nightly-security.yml").read_text(
             encoding="utf-8"
         )
-        for name in ("evidence", "mint", "relay"):
+        for name in ("discovery", "evidence", "mint", "relay"):
             self.assertIn(
                 f'Path("release/docker/Dockerfile.{name}")',
                 workflow,
@@ -2379,6 +2421,8 @@ def write_manifest(
     if version_tuple >= (0, 23, 0):
         artifacts["discovery-client-node"] = version
         artifacts["discovery-client-python"] = version
+    if version_tuple >= (0, 24, 0):
+        artifacts["discovery"] = version
     manifest = {
         "stack": {
             "release": "beta-6",
