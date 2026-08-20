@@ -1063,7 +1063,7 @@ def platform_coverage_oidc_isolation_violations(workflow: str | None) -> list[st
         or not upload_steps_text.startswith("      - ")
         or upload_steps_text.count("        uses:") != 2
         or len(upload_steps) != 2
-        or "uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+        or "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
         not in upload_steps[0]
         or "uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f"
         not in upload_steps[1]
