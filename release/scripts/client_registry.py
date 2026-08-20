@@ -95,6 +95,48 @@ def npm_platforms(client: str) -> tuple[tuple[str, str], ...]:
     )
 
 
+def expected_optional_dependencies(client: str, version: str) -> dict[str, str]:
+    definition = client_definition(client)
+    return {
+        f"{definition.npm_root_package}-{platform}": version
+        for platform, _binary in npm_platforms(client)
+    }
+
+
+def bind_optional_dependencies(package_json: Path, version: str, client: str) -> None:
+    """Bind a root manifest to its exact platform packages before it is packed.
+
+    The checked-in manifest cannot carry these versions. At preparation time
+    they name a release that is not published yet, so npm resolves them to
+    placeholder lock entries and `npm ci` stops being satisfiable on the
+    default branch from the moment that release publishes. The published root
+    package must still bind them exactly, so the binding happens here, against
+    the manifest that is about to be packed, and validate_npm_packages proves
+    it landed by reading the packed tarball back.
+    """
+    definition = client_definition(client)
+    try:
+        metadata = json.loads(package_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ClientRegistryError(
+            f"cannot read root manifest {package_json}: {exc}"
+        ) from exc
+    if not isinstance(metadata, dict):
+        raise ClientRegistryError(f"root manifest {package_json} is malformed")
+    if (
+        metadata.get("name") != definition.npm_root_package
+        or metadata.get("version") != version
+    ):
+        raise ClientRegistryError(
+            f"root manifest {package_json} must identify "
+            f"{definition.npm_root_package} at version {version}"
+        )
+    metadata["optionalDependencies"] = expected_optional_dependencies(client, version)
+    package_json.write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
 def npm_tarballs(directory: Path, version: str, client: str) -> list[Path]:
     definition = client_definition(client)
     return [
@@ -169,10 +211,7 @@ def npm_package_metadata(path: Path) -> tuple[dict[str, Any], set[str]]:
 
 def validate_npm_packages(directory: Path, version: str, client: str) -> list[Path]:
     definition = client_definition(client)
-    expected_optional = {
-        f"{definition.npm_root_package}-{platform}": version
-        for platform, _binary in npm_platforms(client)
-    }
+    expected_optional = expected_optional_dependencies(client, version)
     paths = npm_tarballs(directory, version, client)
     for path in paths:
         metadata, names = npm_package_metadata(path)
@@ -375,6 +414,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     validate.add_argument("--directory", type=Path, required=True)
     validate.add_argument("--version", required=True)
     validate.add_argument("--client", choices=sorted(CLIENTS), required=True)
+    bind = subparsers.add_parser("bind-optional-deps")
+    bind.add_argument("--package-json", type=Path, required=True)
+    bind.add_argument("--version", required=True)
+    bind.add_argument("--client", choices=sorted(CLIENTS), required=True)
     npm = subparsers.add_parser("npm-state")
     npm.add_argument("--tarball", type=Path, required=True)
     pypi = subparsers.add_parser("pypi-state")
@@ -390,6 +433,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "validate-dist":
             validate_distribution(args.directory, args.version, args.client)
             print("validated")
+        elif args.command == "bind-optional-deps":
+            bind_optional_dependencies(args.package_json, args.version, args.client)
+            print("bound")
         elif args.command == "npm-state":
             print(npm_registry_state(args.tarball, npm_metadata(args.tarball)))
         elif args.command == "pypi-state":

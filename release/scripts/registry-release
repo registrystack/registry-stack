@@ -1320,21 +1320,20 @@ def validate_client_package_versions(repo: Path, version: str) -> list[Path]:
             "@registrystack/evidence-client",
             "@registrystack/relay-client",
         }:
-            expected_optional = {
-                f"{expected_name}-{platform}": version
-                for platform in (
-                    "darwin-arm64",
-                    "linux-arm64-gnu",
-                    "linux-x64-gnu",
-                )
-            }
-            if (
-                package.get("optionalDependencies") != expected_optional
-                or lock_package.get("optionalDependencies") != expected_optional
+            # The published root package binds the exact platform versions,
+            # and client_registry.py proves that against the packed tarball.
+            # The tree must not carry them: at preparation time they name a
+            # release that is not published yet, so npm records placeholder
+            # lock entries and `npm ci` stops resolving on the default branch
+            # from the moment that release publishes.
+            if any(
+                "optionalDependencies" in surface
+                for surface in (package, lock_package)
             ):
                 raise ReleasePlanError(
                     f"{relative_path(repo, package_path)} and its lockfile must "
-                    "bind the exact platform package versions"
+                    "not bind platform package versions; the release binds them "
+                    "when it packs the root package"
                 )
             for platform in (
                 "darwin-arm64",

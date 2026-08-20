@@ -354,24 +354,6 @@ version = "1.1.0"
                     "packages": {"": {"name": name, "version": "1.1.0"}},
                 },
             )
-            optional_dependencies = {
-                f"{name}-{platform}": "1.1.0"
-                for platform in (
-                    "darwin-arm64",
-                    "linux-arm64-gnu",
-                    "linux-x64-gnu",
-                )
-            }
-            package = json.loads(
-                (client_root / "package.json").read_text(encoding="utf-8")
-            )
-            package["optionalDependencies"] = optional_dependencies
-            write_json(client_root / "package.json", package)
-            lock = json.loads(
-                (client_root / "package-lock.json").read_text(encoding="utf-8")
-            )
-            lock["packages"][""]["optionalDependencies"] = optional_dependencies
-            write_json(client_root / "package-lock.json", lock)
             for platform in (
                 "darwin-arm64",
                 "linux-arm64-gnu",
@@ -687,6 +669,33 @@ version = "1.0.0"
                 )
                 package["version"] = "1.1.0"
                 write_json(platform, package)
+
+    def test_prepare_rejects_checked_in_platform_version_binding(self) -> None:
+        # The release binds these when it packs the root package. Carrying them
+        # in the tree names a version that is unpublished at preparation time,
+        # so npm writes placeholder lock entries and `npm ci` stops resolving
+        # on the default branch from the moment that release publishes.
+        client_root = self.repo.root / "crates/registry-evidence-client-node"
+        optional = {"@registrystack/evidence-client-linux-x64-gnu": "1.1.0"}
+        for relative, holder in (
+            ("package.json", lambda document: document),
+            ("package-lock.json", lambda document: document["packages"][""]),
+        ):
+            with self.subTest(surface=relative):
+                path = client_root / relative
+                original = path.read_text(encoding="utf-8")
+                document = json.loads(original)
+                holder(document)["optionalDependencies"] = optional
+                write_json(path, document)
+
+                result = self.prepare()
+
+                self.assertEqual(1, result.returncode)
+                self.assertIn(
+                    "must not bind platform package versions",
+                    result.stderr,
+                )
+                write(path, original)
 
     def test_prepare_requires_exact_release_archive_lock(self) -> None:
         archive_lock = self.repo.root / "docs/site/src/data/archive-lock.yaml"

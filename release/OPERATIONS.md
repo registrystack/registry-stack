@@ -142,6 +142,15 @@ checks pass. The merge commit is the intended candidate source. The exact
 protected-main revision accepted by `request-candidate` becomes the candidate
 source and future tag target. There is no finalization or closeout PR.
 
+The Node client manifests and their lockfiles deliberately bind no platform
+package versions. Those versions name the release being prepared, which is
+unpublished for as long as the PR is open, so a tree that carries them records
+placeholder lock entries and leaves `npm ci` unsatisfiable on protected `main`
+from the moment the release publishes. The candidate binds them into the root
+manifest it packs, and `client_registry.py validate-dist` proves the published
+root package carries the exact set. The planner rejects a prepared tree that
+binds them.
+
 Before opening the release PR, push the prepared branch and run the read-only
 Ubuntu rehearsal from that branch:
 
