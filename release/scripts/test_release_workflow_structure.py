@@ -772,6 +772,23 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertEqual(text.count("--allow-current-run-in-progress"), 1)
         self.assertIn("--allow-current-run-in-progress", reverify)
 
+    def test_runs_each_candidate_image_before_it_scans_it(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        scan = step_run(
+            document,
+            "assemble",
+            "Verify and scan exact candidate images",
+        )
+        # Syft and Grype fill an image target's architecture and os only from
+        # a daemon-backed provider, and check-advisory-baselines.py rejects
+        # evidence that leaves them empty. Running the image is what puts it
+        # in the daemon, so moving either scan ahead of it fails the gate with
+        # a linux/amd64 message on an image that is amd64.
+        run_image = scan.index('"${candidate_ref}" --version')
+        self.assertIn("docker run --rm", scan[:run_image])
+        self.assertLess(run_image, scan.index('syft "${candidate_ref}"'))
+        self.assertLess(run_image, scan.index("scan_image \\"))
+
 
 class PublicationWorkflowStructureTest(unittest.TestCase):
     def test_is_a_manual_main_workflow_with_recoverable_jobs(self) -> None:
