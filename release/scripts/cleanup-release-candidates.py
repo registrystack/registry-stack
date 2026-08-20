@@ -19,7 +19,8 @@ from typing import Any
 OWNER = "registrystack"
 RETENTION_DAYS = 8
 CANDIDATE_PACKAGES = (
-    "discovery-candidate",
+    # Listing an absent package fails closed, so a candidate name joins this
+    # allowlist with the release that first publishes it.
     "evidence-candidate",
     "mint-candidate",
     "relay-candidate",
