@@ -273,6 +273,7 @@ candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"
 evidence_dir="advisory-renewal-${name}-${run_id}-${run_attempt}"
 mkdir -p "${evidence_dir}/rootfs"
 crane config "${candidate_ref}" > "${evidence_dir}/oci-config.json"
+docker pull --platform linux/amd64 "${candidate_ref}" >/dev/null
 SYFT_FILE_METADATA_SELECTION=all SYFT_FILE_METADATA_DIGESTS=sha256 \
   syft "${candidate_ref}" -o syft-json="${evidence_dir}/syft.json"
 grype "${candidate_ref}" -o json > "${evidence_dir}/grype.json"
@@ -280,6 +281,15 @@ crane export "${candidate_ref}" - | tar --extract --file=- \
   --directory="${evidence_dir}/rootfs" \
   --no-same-owner --no-same-permissions
 ```
+
+The pull is what makes the scan admissible, not a convenience. Syft and Grype
+fill the `architecture` and `os` fields of their image target only from a
+daemon-backed provider. Resolved straight from the registry they leave both
+empty, and `check-advisory-baselines.py` rejects that evidence with
+`grype image target must be linux/amd64`. On an `amd64` candidate the message
+does not mean the architecture is wrong; it means the scan never went through
+the daemon. The candidate workflow satisfies this incidentally, by running the
+image once to record its `--version` before it scans.
 
 Select the matching baseline and confirm its pinned base is still the exact
 prefix of the candidate's authoritative uncompressed DiffIDs:
