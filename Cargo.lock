@@ -3009,6 +3009,7 @@ dependencies = [
  "futures",
  "http",
  "registry-discovery-profile",
+ "registry-platform-buildinfo",
  "registry-platform-canonical-json",
  "registry-platform-httpsec",
  "serde",

@@ -11,7 +11,8 @@ use tracing_subscriber::prelude::*;
 #[derive(Debug, Parser)]
 #[command(
     name = "discovery",
-    about = "Serve one immutable Registry Discovery index"
+    about = "Serve one immutable Registry Discovery index",
+    version = registry_platform_buildinfo::DISPLAY_VERSION
 )]
 struct Arguments {
     #[arg(long, value_name = "FILE")]
