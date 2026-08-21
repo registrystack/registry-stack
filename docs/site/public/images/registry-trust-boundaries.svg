@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry Stack trust boundaries</title>
-  <desc>One request path runs downward from Registry Mint, which issues a short-lived access token, to the caller, to Evidence Gateway, and to Evidence Gateway's configured authoritative HTTP source. Registry Relay has a separate protected-read path to its own registry sources. Dashed rules mark authenticated service edges. Caller to Evidence Gateway carries a bearer token, a declared purpose, a named requirement revision, and selector values, and returns the answer rather than the record. Evidence Gateway source access is fixed by trusted configuration and executed only by the core, one request per evaluation. Registry Mint to Evidence Gateway runs one way: Evidence Gateway verifies tokens as an ordinary resource server and does not depend on Registry Mint. A separate lane runs operator to signing key material to Evidence Gateway to the published key set to the verifier, which pins that key set out of band. The footnote lists the unauthenticated operational and discovery routes at the Evidence Gateway edge.</desc>
+  <desc>One request path runs downward from Registry Mint, which issues a short-lived access token, to the caller, to Evidence Gateway, and to Evidence Gateway's configured authoritative source, which it reaches over a fixed HTTP request or a read-only SQLite extract. Registry Relay has a separate protected-read path to its own registry sources. Dashed rules mark authenticated service edges. Caller to Evidence Gateway carries a bearer token, a declared purpose, a named requirement revision, and selector values, and returns the answer rather than the record. Evidence Gateway source access is one fixed source request per acquisition stage, fixed by trusted configuration and executed only by the core: an HTTP source fixes origin, method, path, headers, authentication, TLS, projection, and redirect and proxy denial, and a statement source fixes one reviewed SQL statement over a local read-only extract with no origin, no credential, and no network hop. Lookup collapses to match, no match, or ambiguous, and raw responses are never logged. Registry Mint to Evidence Gateway runs one way: Evidence Gateway verifies tokens as an ordinary resource server and does not depend on Registry Mint. A separate lane runs operator to signing key material to Evidence Gateway to the published key set to the verifier, which pins that key set out of band. The footnote lists the unauthenticated operational and discovery routes at the Evidence Gateway edge.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">TRUST BOUNDARIES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -33,7 +33,8 @@
   <g fill="#6a6a6a" font-size="9">
     <text x="28" y="159">the client asking the question</text>
     <text x="28" y="279">one bounded question</text>
-    <text x="28" y="397">fixed HTTP source</text>
+    <text x="28" y="384">fixed HTTP request or</text>
+    <text x="28" y="396">read-only SQLite extract</text>
   </g>
 
   <g stroke="#000091" stroke-width="1" fill="none">
@@ -60,8 +61,8 @@
     <text x="124" y="113">short-lived access token</text>
     <text x="124" y="204">bearer token, purpose,</text>
     <text x="124" y="217">revision, selectors</text>
-    <text x="124" y="322">one fixed HTTP request</text>
-    <text x="124" y="335">per evaluation</text>
+    <text x="124" y="322">one fixed source request</text>
+    <text x="124" y="335">per acquisition stage</text>
     <text x="124" y="424">separate product path</text>
   </g>
 
@@ -88,15 +89,16 @@
     <text x="270" y="236">responding. Evidence Gateway runs one OIDC bearer profile, one trusted</text>
     <text x="270" y="249">issuer, one principal claim, and no trust in proxy identity headers.</text>
 
-    <text x="270" y="291">Origin, method, path, headers, credential, TLS, projection, redirect</text>
-    <text x="270" y="304">and proxy denial, and one request per evaluation are fixed by trusted</text>
-    <text x="270" y="317">configuration and executed only by the core. Lookup collapses to</text>
-    <text x="270" y="330">match, no match, or ambiguous; raw responses are never logged.</text>
+    <text x="270" y="291">Trusted configuration fixes each source and only the core executes it. An HTTP</text>
+    <text x="270" y="304">source fixes origin, method, path, headers, authentication, TLS, projection, and</text>
+    <text x="270" y="317">redirect and proxy denial. A statement source fixes one reviewed SQL statement</text>
+    <text x="270" y="330">over a local read-only extract: no origin, no credential, no network hop. Lookup</text>
+    <text x="270" y="343">collapses to match, no match, or ambiguous; raw responses are never logged.</text>
 
     <text x="270" y="372">Evidence Gateway and Relay use independently configured sources.</text>
     <text x="270" y="385">Neither product calls or authorizes the other. Each keeps its own</text>
     <text x="270" y="398">authorization decisions, audit trail, and readiness checks; only</text>
-    <text x="270" y="411">Evidence Gateway holds a source credential.</text>
+    <text x="270" y="411">Evidence Gateway ever holds a source credential.</text>
 
     <text x="270" y="453">Relay owns its own source boundary: one local SQLite file opened</text>
     <text x="270" y="466">read-only, with no origin, no credential, and no outbound request.</text>
