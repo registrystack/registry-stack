@@ -98,7 +98,7 @@ auditing separately.
             the whole tuple, and possession is never authority. Evidence Gateway to its fixed sources
             runs one fixed source request per acquisition stage, fixed by trusted configuration and
             executed only by the core: an HTTP source fixes origin, method, path, headers,
-            credential, TLS, projection, and redirect and proxy denial, and a statement source fixes
+            authentication, TLS, projection, and redirect and proxy denial, and a statement source fixes
             one reviewed SQL statement over a local read-only extract, with no origin, no credential,
             and no network hop. Lookup collapses to match, no match, or ambiguous, and raw responses
             are never logged. Evidence
@@ -444,7 +444,7 @@ through a governed read, and privacy regressions that expose raw subject identif
   `/.well-known/openid-configuration`. The health-check subcommand refuses a URL carrying
   userinfo, a password, a query, or a fragment, disables proxies, and follows no redirect.
   Evidence Gateway's fixed executor closes the same class for its own HTTP sources: origin,
-  method, path authority, headers, credential, TLS, projection, redirect denial, proxy denial,
+  method, path authority, headers, authentication, TLS, projection, redirect denial, proxy denial,
   and a one-request-per-stage ceiling, with scripts controlling request flow only inside that
   host-enforced authority. Evidence Gateway's statement transport closes the class the way Relay
   does, by construction rather than by policy: that transport opens one local extract file and has
