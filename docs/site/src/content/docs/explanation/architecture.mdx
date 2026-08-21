@@ -50,11 +50,11 @@ At runtime, Registry Stack exposes source data through two patterns:
   assertion that carries the answer and not the record. Evidence Gateway implements this runtime surface.
 
 The two patterns are independent. Evidence Gateway reaches its configured authoritative sources
-directly, over one of two coequal transports: a fixed HTTP JSON request to a fixed HTTPS origin, or
-one reviewed SQL statement against a read-only SQLite extract file mounted beside the process. It
-does not require Registry Relay or inherit Relay authorization. A deployment can configure a
-Relay-protected API as a fixed HTTP source, but Relay remains an ordinary source rather than part of
-the Evidence Gateway product boundary.
+directly, over one of two coequal transports: a fixed HTTP JSON request to a fixed origin, which a
+production bundle must state as HTTPS, or one reviewed SQL statement against a read-only SQLite
+extract file mounted beside the process. It does not require Registry Relay or inherit Relay
+authorization. A deployment can configure a Relay-protected API as a fixed HTTP source, but Relay
+remains an ordinary source rather than part of the Evidence Gateway product boundary.
 
 The separate Solmara Lab demo uses both transports. Among its
 [Evidence cell definitions](https://github.com/registrystack/solmara-lab/tree/3d5c492ea50c6fdcefd5978df6f036422096421c/evidence/cells),
@@ -172,10 +172,13 @@ decision.
    request, output validation, assertion construction, signing, and audit; trusted Rhai
    scripts prepare that request and extract typed facts. Caller identity and authorization details
    can authorize or parameterize a request but cannot supply facts. That request reaches either a
-   fixed HTTPS origin configured directly for the authoritative system, or a read-only SQLite extract
-   file that the bundle names by logical profile and the runtime binds to an exact path.
-   {/* Evidence: the closed http-json and sqlite-extract source variants, and the extractProfile
-        logical name, products/evidence/contracts/bundle.schema.yaml (frozen); the runtime binds
+   fixed origin configured directly for the authoritative system, which a production bundle must
+   state as HTTPS and only a local unauthenticated one may state as numeric loopback, or a read-only
+   SQLite extract file that the bundle names by logical profile and the runtime binds to an exact
+   path.
+   {/* Evidence: the closed http-json and sqlite-extract source variants, the baseUrl pattern pair
+        admitting an http numeric-loopback origin only when authentication kind is none, and the
+        extractProfile logical name, products/evidence/contracts/bundle.schema.yaml (frozen); the runtime binds
         each logical name to a process-local path under sourceExtracts,
         products/evidence/contracts/runtime.schema.yaml (frozen). */}
 7. Evidence Gateway returns the assertion as a flattened JWS JSON response (`application/jose+json`) by
