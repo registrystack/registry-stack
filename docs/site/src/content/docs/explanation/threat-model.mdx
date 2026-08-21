@@ -356,7 +356,10 @@ through a governed read, and privacy regressions that expose raw subject identif
   connection string, no secret reference, and no authentication kind, so it is credential-free by
   construction rather than by profile, and a credential that does not exist cannot leak, expire
   unnoticed, or be widened. An Evidence Gateway HTTP source is the case where a source credential
-  does exist, and the bundle names it by logical secret reference rather than writing it inline.
+  does exist, and the bundle names it by logical secret reference rather than writing it inline. The
+  one HTTP source that resolves none is the `none` authentication kind, and it is credential-free by
+  allowance rather than by construction: only a `local` assurance bundle may declare it, only at a
+  canonical numeric-loopback origin, and production and evidence-grade bundles reject that kind.
   {/* Evidence: valid_secret_reference(), crates/registry-relay-v2/src/contract.rs;
        parse_reference(), validate_file_metadata(), and the tests
        references_use_only_the_two_exact_contract_grammars,
@@ -371,7 +374,10 @@ through a governed read, and privacy regressions that expose raw subject identif
        evidence_data_request.transport_absences.reading; the HTTP transport's logical secret
        references, contract registry.evidence.fixed-http-json-source/v1,
        products/evidence/contracts/source-contract.yaml (frozen), key
-       ownership.governed_bundle. */}
+       ownership.governed_bundle; `none` "sends no credential and is admitted only by a `local`
+       assurance bundle at a canonical numeric-loopback origin; production and evidence-grade
+       bundles reject that kind", under `sources.*.authentication.kind` in
+       products/evidence/contracts/bundle.schema.yaml (frozen). */}
 - Token forgery or acceptance of untrusted tokens: A token is trusted only after signature
   verification against the configured issuer JWKS, plus issuer, audience, token type, and
   algorithm checks. The service still owns its route scopes and grants regardless of what the

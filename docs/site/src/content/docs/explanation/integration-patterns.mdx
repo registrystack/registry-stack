@@ -247,7 +247,9 @@ See [Known limitations](../known-limitations/) for the full list of what went wi
 
 Evidence Gateway keeps its own source model, and it is a different one: one fixed source request
 reached over either of two coequal transports, with bounded reviewed Rhai around it.
-An HTTP JSON source states a fixed origin and resolves a compiled credential for it.
+An HTTP JSON source states a fixed origin and resolves a compiled credential for it, except
+under the `none` authentication kind, which only a `local` assurance bundle may declare and
+only at a numeric-loopback origin.
 A statement source states no origin and resolves no credential at all: it runs one reviewed SQL
 statement against a read-only SQLite extract file the runtime mounts beside the process.
 The two products do not share that machinery, and Evidence does not inherit Relay's authorization
@@ -295,9 +297,9 @@ The caller's access token and the source credential serve different boundaries:
   provider or from Registry Mint when there is none. See the
   [Registry Mint reference](../../reference/mint/).
 - Where the authoritative source is an HTTP JSON one, Evidence Gateway holds its own compiled
-  credential for it. The caller never sees it and cannot influence which credential is resolved. A
-  statement source holds no credential at all, because it opens a local read-only extract file and
-  reaches no origin.
+  credential for it, in every bundle a production or evidence-grade deployment may load. The caller
+  never sees it and cannot influence which credential is resolved. A statement source holds no
+  credential at all, because it opens a local read-only extract file and reaches no origin.
   {/* Evidence: Evidence holds no database credential for the statement transport, and there is no
       connection string, secret reference, or authentication kind, `transport_absences` in
       products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
