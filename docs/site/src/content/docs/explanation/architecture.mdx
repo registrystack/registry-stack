@@ -169,17 +169,21 @@ decision.
         opening any other resource, crates/registry-relay-v2/src/startup.rs:96-104. */}
 6. Evidence Gateway evaluates one predefined, versioned requirement per request, aligned with CCCEV through
    its frozen field mapping. Rust owns authentication, authorization, the one fixed bounded source
-   request, output validation, assertion construction, signing, and audit; trusted Rhai
-   scripts prepare that request and extract typed facts. Caller identity and authorization details
-   can authorize or parameterize a request but cannot supply facts. That request reaches either a
-   fixed origin configured directly for the authoritative system, which a production bundle must
-   state as HTTPS and only a local unauthenticated one may state as numeric loopback, or a read-only
-   SQLite extract file that the bundle names by logical profile and the runtime binds to an exact
-   path.
+   request, output validation, assertion construction, signing, and audit; a trusted Rhai script
+   extracts the typed facts, and a second one prepares the request where the source declares one.
+   An HTTP JSON source always declares a preparation script; a statement source usually declares
+   none, because most of its parameters name the authorized selector field they come from and Rust
+   binds those itself. Caller identity and authorization details can authorize or parameterize a
+   request but cannot supply facts. That request reaches either a fixed origin configured directly
+   for the authoritative system, which a production bundle must state as HTTPS and only a local
+   unauthenticated one may state as numeric loopback, or a read-only SQLite extract file that the
+   bundle names by logical profile and the runtime binds to an exact path.
    {/* Evidence: the closed http-json and sqlite-extract source variants, the baseUrl pattern pair
-        admitting an http numeric-loopback origin only when authentication kind is none, and the
-        extractProfile logical name, products/evidence/contracts/bundle.schema.yaml (frozen); the runtime binds
-        each logical name to a process-local path under sourceExtracts,
+        admitting an http numeric-loopback origin only when authentication kind is none, the
+        extractProfile logical name, prepareScript required on fixed-request, and prepareScript
+        stated on a statement source only alongside a prepared parameter,
+        products/evidence/contracts/bundle.schema.yaml (frozen); the runtime binds each logical
+        name to a process-local path under sourceExtracts,
         products/evidence/contracts/runtime.schema.yaml (frozen). */}
 7. Evidence Gateway returns the assertion as a flattened JWS JSON response (`application/jose+json`) by
    default. Where the immutable bundle and the one matched authority grant both permit it, the same
