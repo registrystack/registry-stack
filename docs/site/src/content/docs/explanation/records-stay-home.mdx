@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-evidence
   - registry-relay
-last_reviewed: "2026-08-21"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -57,7 +57,7 @@ answer is one boolean. The register's list of that child's parents never travels
 flowchart LR
     subgraph inst["Institution: data stays here"]
         relaySrc[("Relay source\nread-only SQLite file")]
-        evidenceSrc[("Evidence Gateway source\nauthoritative HTTP API\nor read-only SQLite extract")]
+        evidenceSrc[("Evidence Gateway source\nauthoritative HTTP API")]
         relay["Registry Relay\nprotected read API"]
         evidence["Evidence Gateway\nevaluate · minimize · sign"]
         key>"Signing key\n(private half never leaves)"]
@@ -87,17 +87,9 @@ bounded by the access profile that guards the operation and the disclosure profi
 the response.
 Evidence Gateway answers one predefined requirement about one set of subjects and returns a signed
 assertion; it is the only component that evaluates a requirement, minimizes the result, and
-signs it. It contacts its own configured authoritative source rather than calling Relay, over one
-of two coequal transports: a fixed HTTP JSON request to a fixed origin, or one reviewed SQL
-statement against a read-only SQLite extract file mounted beside the process.
+signs it. It contacts its own configured authoritative HTTP source rather than calling Relay.
 Evidence Gateway is the stronger minimization surface.
 Relay reads are compiled, authorized, and audited, not open data.
-
-{/* Evidence: "A fixed source request reaches its source over one of two coequal transports",
-     products/evidence/CONCEPT.md; contracts registry.evidence.fixed-http-json-source/v1,
-     products/evidence/contracts/source-contract.yaml, and
-     registry.evidence.fixed-sqlite-extract-source/v1,
-     products/evidence/contracts/sqlite-extract-source-contract.yaml (both frozen). */}
 
 The policy boundary remains separate across the two products and their consumers. Relay
 owns its compiled contract and disclosure policy. Evidence Gateway owns evidence authorization and
@@ -172,7 +164,7 @@ partial string reveal (`***`) and a date reduced to year or year-month. Relay si
 responses carry no assertion.
 {/* Evidence: AccessRule is Public | Protected{scope, purpose, authorityRowBinding} and
      AuthorityRowBinding has a claim variant and a principal variant,
-     crates/registry-relay-v2/src/contract.rs; row authority is injected as a bound
+     crates/registry-relay-v2/src/contract.rs:947-976; row authority is injected as a bound
      parameter with an exact-equality COLLATE BINARY predicate, never string concatenation,
      crates/registry-relay-v2/src/sqlite_runtime.rs add_row_authority(). */}
 Evidence Gateway returns the values a requirement declares rather than the source row; keeping that
