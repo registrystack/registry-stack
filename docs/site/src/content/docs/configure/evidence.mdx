@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-21"
+last_reviewed: "2026-08-07"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -106,7 +106,7 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 | `signing` | Fixed ES256 signing, governed active and published public JWK files, revoked service key identifiers, the fixed JWKS path, and assertion validity and clock-skew bounds. |
 | `responseFormats` (optional) | The bundle-wide ceiling on releasable serializations; defaults to signed JWS alone and must always include it. |
 | `selectorProfiles` | Named, bounded scalar field sets a subject role may be looked up by. |
-| `sources` | Named sources: a closed transport tag selects HTTP JSON (base URL, authentication, the fixed request shape) or SQLite extract (extract profile, the fixed statement), plus acquisition posture and the response, extraction, and fact schemas bound to each. |
+| `sources` | Named fixed HTTP JSON sources: transport, base URL, acquisition posture, authentication, the fixed request shape, and the response, extraction, and fact schemas bound to it. |
 | `authorityProfiles` | Named requester-tag gates: which grants (requirement, purpose, audience, subject roles, selector profiles, value origins) a caller carrying those tags holds. |
 | `requirements` | The assertion definitions themselves: id, closed acquisition, purposes, subject roles, reference frameworks, evidence type, validity, derivation script and parameters, output concepts, fixtures, and disclosure-guard family. |
 

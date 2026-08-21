@@ -9,7 +9,7 @@ source_repos:
   - registry-relay
   - registry-evidence
   - registry-mint
-last_reviewed: "2026-08-21"
+last_reviewed: "2026-08-11"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -57,23 +57,15 @@ Each authority keeps custody of its own data and exposes a bounded output; consu
 as a social-protection management information system receive answers and do not become raw-record
 readers.
 
-Which surface fits depends first on what the caller needs back, and then on what the authority
-holds:
+Which surface fits depends on what the authority holds and how it holds it:
 
-- Where the caller needs a governed read over the records themselves, **Registry Relay** serves
-  them as a read-only API, which requires the authoritative data to already sit in a SQLite
-  database or in a SQLite extract the authority can produce. Relay opens that file in place,
-  read-only, and holds no upstream credential because it makes no upstream call.
-- Where the caller needs one signed answer rather than the records, **Evidence Gateway** returns
-  only the values a reviewed requirement declares, and reaches its source over either of two
-  coequal transports. A domain platform with its own API, such as a FHIR server or a DHIS2
-  instance, is read over a fixed HTTP JSON request to a fixed origin. A SQLite extract the
-  authority publishes is read directly, by one reviewed SQL statement against a read-only file
-  mounted beside the process, with no origin, credential, or network hop involved.
-  {/* Evidence: "A fixed source request reaches its source over one of two coequal transports",
-      products/evidence/CONCEPT.md; the statement transport has no origin, no credential, and no
-      network path, `transport_absences` in
-      products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
+- Where the authoritative data already sits in a SQLite database, or the authority can produce a
+  SQLite extract from it, **Registry Relay** serves it as a governed read-only API. Relay opens
+  that file in place, read-only, and holds no upstream credential because it makes no upstream
+  call.
+- Where the authoritative data lives inside a domain platform with its own API, such as a FHIR
+  server or a DHIS2 instance, **Evidence Gateway** reaches it through its own fixed HTTP source
+  contract and returns only the values a reviewed requirement declares.
 
 Civil registration, social protection, agriculture, and education systems each keep their own
 authoritative store either way; neither surface copies the record into a central store.
@@ -154,10 +146,10 @@ Deployment-local facts, including where the database file actually is, stay in `
 never enter the reviewed contract, so the same contract can be reviewed once and deployed in
 staging and production without editing it.
 
-{/* Evidence: the SourceProfile enum declares the two variants Snapshot and LiveReadOnly, and the
-    RelayRuntime struct carries sources, package path, listener, issuer, audit sink, limits, and
-    quotas, and nothing that can add or widen a resource, operation, access profile, or disclosure
-    decision, both in crates/registry-relay-v2/src/contract.rs. */}
+{/* Evidence: crates/registry-relay-v2/src/contract.rs:323-325 declares SourceProfile with the two
+    variants Snapshot and LiveReadOnly; the RelayRuntime schema at :1060-1300 carries sources,
+    package path, listener, issuer, audit sink, limits, and quotas, and nothing that can add or
+    widen a resource, operation, access profile, or disclosure decision. */}
 
 Wire Registry Stack in alongside a domain platform when:
 
@@ -200,10 +192,9 @@ subject evaluation and emits one credential per presented holder key.
 A lookup still resolves to exactly one match, no match, or ambiguity, and Evidence Gateway never
 surfaces or chooses between candidates.
 
-{/* Evidence: the LookupRequestBody and SelectorDefinition structs,
-    crates/registry-relay-v2/src/contract.rs; parse_selectors() refuses a body whose selector
-    count differs from the declared set, crates/registry-relay-v2/src/api.rs;
-    crates/registry-relay-v2/src/identification.rs:832-855
+{/* Evidence: crates/registry-relay-v2/src/contract.rs:1010-1027 declares LookupRequestBody and
+    SelectorDefinition; crates/registry-relay-v2/src/api.rs:2292 refuses a body whose selector
+    count differs from the declared set; crates/registry-relay-v2/src/identification.rs:832-855
     raises classification.context.selector_more_restrictive_than_disclosure as a contextual review
     finding, which is a review signal rather than a hard compile refusal;
     products/evidence/contracts/request.schema.yaml,
@@ -239,50 +230,25 @@ If you are reading an integration guide that describes source scripts, same-orig
 API-key placement for Relay, it describes the retired runtime.
 See [Known limitations](../known-limitations/) for the full list of what went with it.
 
-{/* Evidence: the SourceProfile enum declares exactly Snapshot and LiveReadOnly, and the
-    RelayRuntime struct's RuntimeSource accepts a source only as a path, both in
-    crates/registry-relay-v2/src/contract.rs; the crate holds no HTTP source client. Read-only
-    opening is enforced in crates/registry-platform-sqlite (SQLITE_OPEN_READ_ONLY |
-    SQLITE_OPEN_URI | SQLITE_OPEN_NO_MUTEX in schema.rs:131-133 and statement.rs:494-496). */}
+{/* Evidence: crates/registry-relay-v2/src/contract.rs:323-325 declares SourceProfile as exactly
+    Snapshot and LiveReadOnly; the crate holds no HTTP source client, and the runtime schema at
+    :1060-1300 accepts a source only as a path. Read-only opening is enforced in
+    crates/registry-platform-sqlite (SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_URI |
+    SQLITE_OPEN_NO_MUTEX in schema.rs:131-133 and statement.rs:494-496). */}
 
-Evidence Gateway keeps its own source model, and it is a different one: one fixed source request
-reached over either of two coequal transports, with bounded reviewed Rhai around it.
-An HTTP JSON source states a fixed origin and resolves a compiled credential for it, except
-under the `none` authentication kind, which only a `local` assurance bundle may declare and
-only at a numeric-loopback origin.
-A statement source states no origin and resolves no credential at all: it runs one reviewed SQL
-statement against a read-only SQLite extract file the runtime mounts beside the process.
+Evidence Gateway keeps its own source model, and it is a different one: fixed HTTP sources with
+compiled credentials and bounded reviewed Rhai.
 The two products do not share that machinery, and Evidence does not inherit Relay's authorization
 model.
-The distinction between the two products is not which storage each can reach, because both can read
-a SQLite extract. It is what each does with the source: Relay serves the properties a compiled
-disclosure profile declares, unsigned, and Evidence Gateway returns a signed assertion carrying only
-the values a reviewed requirement declares.
-
-{/* Evidence: "A fixed source request reaches its source over one of two coequal transports",
-    products/evidence/CONCEPT.md; Evidence holds no database credential for the statement
-    transport, and there is no connection string, secret reference, or authentication kind,
-    `transport_absences` in products/evidence/contracts/sqlite-extract-source-contract.yaml
-    (frozen). */}
+When an institution's authoritative data is not in SQLite and cannot reasonably be extracted into
+it, Evidence Gateway is the surface that can reach it.
 
 ## Evidence Gateway with a fixed authoritative source
 
 Use this pattern when an institution wants a minimum-disclosure answer over data in an
-authoritative system. Evidence Gateway reaches that system over one of its two coequal source
-transports, and the reviewed bundle fixes the whole request either way.
-For an HTTP JSON source it fixes the origin, which a production bundle must state as HTTPS, plus
-the path authority, method, authentication, projection, schemas, and bounded scripts.
-For a statement source it fixes the one reviewed SQL statement, the result columns that statement
-declares, the parameter bindings it declares, the schemas, and the bounded scripts, and there is no
-origin, credential, or redirect policy to fix because the transport opens one local extract file.
-The caller cannot select or redirect the source either way.
-
-{/* Evidence: the closed `transport` tag selecting http-json or sqlite-extract, the baseUrl pattern
-    pair admitting an http numeric-loopback origin only when a source's authentication kind is
-    none, and the statement source's one bundle-relative statement file with its declared result
-    columns and parameter bindings, products/evidence/contracts/bundle.schema.yaml (frozen); the
-    statement transport's absent origin, credential, and redirect policy, `transport_absences` in
-    products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
+authoritative system. Evidence Gateway calls that system through its own fixed HTTP source
+contract. The reviewed bundle fixes the origin, path authority, method, authentication,
+projection, schemas, and bounded scripts. The caller cannot select or redirect the source.
 
 Request batches use the same closed sources. Sequential item evaluation is available without extra
 source configuration. An operator can enable the optional `source-batch` capability in both the
@@ -296,13 +262,8 @@ The caller's access token and the source credential serve different boundaries:
 - The caller holds a short-lived access token for Evidence Gateway, from the deployment's identity
   provider or from Registry Mint when there is none. See the
   [Registry Mint reference](../../reference/mint/).
-- Where the authoritative source is an HTTP JSON one, Evidence Gateway holds its own compiled
-  credential for it, in every bundle a production or evidence-grade deployment may load. The caller
-  never sees it and cannot influence which credential is resolved. A statement source holds no
-  credential at all, because it opens a local read-only extract file and reaches no origin.
-  {/* Evidence: Evidence holds no database credential for the statement transport, and there is no
-      connection string, secret reference, or authentication kind, `transport_absences` in
-      products/evidence/contracts/sqlite-extract-source-contract.yaml (frozen). */}
+- Evidence Gateway holds its own compiled credential for the authoritative source. The caller never
+  sees it and cannot influence which credential is resolved.
 
 Registry Relay is not part of this request path. If the institution also operates Relay, it is a
 separate protected-read product with its own source, callers, authorization, and audit trail.

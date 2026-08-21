@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-21"
+last_reviewed: "2026-08-04"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -105,14 +105,9 @@ signed the exact assertion bytes and whether the assertion matches the retained 
 expectations.
 
 Evidence Gateway is separate from Registry Relay. Registry Relay exposes protected, selected records.
-Evidence Gateway contacts its own configured authoritative sources and retains its own authorization,
+Evidence Gateway contacts its own configured authoritative HTTP sources and retains its own authorization,
 derivation, signing, verification, and audit boundaries. Registry Mint is optional supporting
 infrastructure that supplies short-lived caller tokens when a deployment has no identity provider.
-
-{/* Evidence: a fixed source request reaches its source over one of two coequal transports, a fixed
-     HTTP JSON request or one reviewed SQL statement against a read-only SQLite extract,
-     products/evidence/CONCEPT.md; the closed http-json and sqlite-extract source variants under
-     `source` in products/evidence/contracts/bundle.schema.yaml (frozen). */}
 
 ## Next
 
