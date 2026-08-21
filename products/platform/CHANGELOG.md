@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.24.0 - 2026-08-21
+
+- No separately versioned Registry Platform API changes.
+
 ## v0.23.0 - 2026-08-20
 
 - No separately versioned Registry Platform API changes. The shared
