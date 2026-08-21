@@ -19,7 +19,7 @@ workspace = true
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-discovery-client-sdk = { package = "registry-discovery-client", path = "../registry-discovery-client", version = "0.23.0" }
+discovery-client-sdk = { package = "registry-discovery-client", path = "../registry-discovery-client", version = "0.24.0" }
 pyo3.workspace = true
 serde.workspace = true
 serde_json.workspace = true

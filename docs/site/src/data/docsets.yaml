@@ -23,6 +23,28 @@ docsets:
       registry-evidence:
         version: main source (unreleased)
         ref: HEAD
+  - id: v0.24.0
+    label: v0.24.0
+    path: /v/0.24.0/
+    status: archived
+    availability: candidate
+    source: registry-stack-v0.24.0
+    repo_docs_source: monorepo
+    published_at: 2026-08-21
+    description: Registry Stack v0.24.0 beta-35 candidate documentation set.
+    products:
+      registry-stack:
+        version: v0.24.0
+        ref: v0.24.0
+      registry-relay:
+        version: v0.24.0
+        ref: v0.24.0
+      registry-manifest:
+        version: v0.24.0
+        ref: v0.24.0
+      registry-evidence:
+        version: v0.24.0
+        ref: v0.24.0
   - id: v0.23.0
     label: v0.23.0
     path: /v/0.23.0/
