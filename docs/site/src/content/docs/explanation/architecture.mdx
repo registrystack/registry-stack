@@ -10,7 +10,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-08-21"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -33,7 +33,7 @@ The metadata layer (Registry Manifest) compiles and renders discovery artifacts 
 registry exposes, without touching production sources.
 The runtime services layer enforces access against real data. Registry Relay compiles a governed
 registry contract into a fixed set of read-only operations over a read-only SQLite source. Evidence
-Gateway uses its own governed bundle and authoritative HTTP sources to answer bounded questions with
+Gateway uses its own governed bundle and authoritative sources to answer bounded questions with
 signed assertions.
 Registry Platform provides shared Rust primitives consumed by both runtime services.
 Registry Mint is a supporting service rather than a fifth product: it issues the short-lived access
@@ -49,18 +49,25 @@ At runtime, Registry Stack exposes source data through two patterns:
 - Minimum-disclosure assertions: one bounded question about one subject, answered with a signed
   assertion that carries the answer and not the record. Evidence Gateway implements this runtime surface.
 
-The two patterns are independent. Evidence Gateway contacts its configured authoritative HTTP
-sources directly. It does not require Registry Relay or inherit Relay authorization. A deployment
-can configure a Relay-protected API as a fixed HTTP source, but Relay remains an ordinary source
-rather than part of the Evidence Gateway product boundary. The separate Solmara Lab demo makes that
-choice for some of its requirements: an authority's Evidence Gateway cell reads a named Relay
-lookup as one of its sources, and inherits no Relay authorization from it.
+The two patterns are independent. Evidence Gateway reaches its configured authoritative sources
+directly, over one of two coequal transports: a fixed HTTP JSON request to a fixed HTTPS origin, or
+one reviewed SQL statement against a read-only SQLite extract file mounted beside the process. It
+does not require Registry Relay or inherit Relay authorization. A deployment can configure a
+Relay-protected API as a fixed HTTP source, but Relay remains an ordinary source rather than part of
+the Evidence Gateway product boundary.
 
-{/* TODO[evidence]: which Solmara Lab requirements read a Relay lookup cannot be anchored from
-this repository. That mapping lives with the deployment configuration in the separate
-registrystack/solmara-lab project, described in the README pinned from src/data/projects.yaml.
-The claim above is weakened to match: some requirements, not a named set. Restore the enumeration
-once that configuration is citable from here. */}
+The separate Solmara Lab demo uses both transports. Among its
+[Evidence cell definitions](https://github.com/registrystack/solmara-lab/tree/3d5c492ea50c6fdcefd5978df6f036422096421c/evidence/cells),
+the MoSD, NAgDI, and SIPF cells reach a Relay-protected API over a fixed HTTP JSON request, the NIA
+and SRO cells run a reviewed SQL statement against a published extract, and the CRA cell does both.
+A cell that reaches a Relay-protected API inherits no Relay authorization from it.
+
+{/* Evidence: two coequal source transports, products/evidence/CONCEPT.md, "A fixed source request
+     reaches its source over one of two coequal transports"; the closed source variants
+     http-json-source and sqlite-extract-source under `source` in
+     products/evidence/contracts/bundle.schema.yaml (frozen). Solmara Lab transport per cell,
+     the bundle/evidence.yaml file under each directory in evidence/cells at the commit linked
+     above. */}
 
 This split matters because it separates the obligation to describe (what a registry declares it can expose
 and under what policy) from the obligation to enforce (what a running service will actually return to an
@@ -76,8 +83,9 @@ updated policy documents without touching deployment config.
             registry contract and serves protected read-only APIs over a read-only SQLite source.
             Evidence Gateway answers one bounded question about one subject and returns a signed
             assertion carrying the answer and not the record, using its own configured authoritative
-            HTTP sources. Registry Mint is a supporting service issuing the short-lived access tokens
-            Evidence Gateway verifies. The separate Solmara Lab adopter project provides synthetic
+            sources, reached over a fixed HTTP JSON request or one reviewed SQL statement against a
+            read-only SQLite extract. Registry Mint is a supporting service issuing the
+            short-lived access tokens Evidence Gateway verifies. The separate Solmara Lab adopter project provides synthetic
             registry data for demonstrations." />
 </figure>
 
@@ -155,16 +163,21 @@ decision.
    properties a disclosure profile declares. The one runtime file (`runtime.yaml`,
    `kind: RelayRuntime`) binds local paths, the audit sink, secret references, limits, and an optional
    OIDC issuer, and cannot widen anything the package sealed.
-   {/* Evidence: RelayRuntime is a closed deny_unknown_fields schema over server, packagePath,
-        sources, authentication, audit, cursor, limits, quotas, and shutdown only,
-        crates/registry-relay-v2/src/contract.rs:1062-1079; startup verifies the package before
+   {/* Evidence: the RelayRuntime struct is a closed deny_unknown_fields schema over server,
+        packagePath, sources, authentication, audit, cursor, limits, quotas, and shutdown only,
+        crates/registry-relay-v2/src/contract.rs; startup verifies the package before
         opening any other resource, crates/registry-relay-v2/src/startup.rs:96-104. */}
 6. Evidence Gateway evaluates one predefined, versioned requirement per request, aligned with CCCEV through
-   its frozen field mapping. Rust owns authentication, authorization, the one fixed bounded HTTP JSON
-   source request, output validation, assertion construction, signing, and audit; trusted Rhai
+   its frozen field mapping. Rust owns authentication, authorization, the one fixed bounded source
+   request, output validation, assertion construction, signing, and audit; trusted Rhai
    scripts prepare that request and extract typed facts. Caller identity and authorization details
-   can authorize or parameterize a request but cannot supply facts. Its fixed HTTP source is configured
-   directly for the authoritative system.
+   can authorize or parameterize a request but cannot supply facts. That request reaches either a
+   fixed HTTPS origin configured directly for the authoritative system, or a read-only SQLite extract
+   file that the bundle names by logical profile and the runtime binds to an exact path.
+   {/* Evidence: the closed http-json and sqlite-extract source variants, and the extractProfile
+        logical name, products/evidence/contracts/bundle.schema.yaml (frozen); the runtime binds
+        each logical name to a process-local path under sourceExtracts,
+        products/evidence/contracts/runtime.schema.yaml (frozen). */}
 7. Evidence Gateway returns the assertion as a flattened JWS JSON response (`application/jose+json`) by
    default. Where the immutable bundle and the one matched authority grant both permit it, the same
    stateless assertion may instead be serialized as a visibly unsigned JSON envelope or as an SD-JWT

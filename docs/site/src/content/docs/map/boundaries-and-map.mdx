@@ -11,7 +11,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-08-21"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -126,8 +126,8 @@ disclosure profile shapes each response, and what its audit record says. Everyth
 decided before the process starts, sealed into a package, and re-derived and byte-compared at
 startup.
 
-{/* Evidence: RelayRuntime is a closed deny_unknown_fields schema and cannot widen the package,
-     crates/registry-relay-v2/src/contract.rs:1062-1079; startup verifies the package before
+{/* Evidence: the RelayRuntime struct is a closed deny_unknown_fields schema and cannot widen the
+     package, crates/registry-relay-v2/src/contract.rs; startup verifies the package before
      opening any other resource, crates/registry-relay-v2/src/startup.rs:96-104; the runtime
      re-runs the compiler and generator and compares bytes,
      crates/registry-relay-v2/src/package.rs. */}
@@ -142,8 +142,8 @@ It does not own:
   speaks no source protocol, holds no source credential, and makes no outbound call to a source, so
   a CSV, spreadsheet, Parquet, PostgreSQL, or HTTP registry has to be turned into SQLite by
   something else before Relay can serve it.
-  {/* Evidence: SourceProfile has exactly two variants, Snapshot and LiveReadOnly,
-       crates/registry-relay-v2/src/contract.rs:323-325. */}
+  {/* Evidence: the SourceProfile enum has exactly two variants, Snapshot and LiveReadOnly,
+       crates/registry-relay-v2/src/contract.rs. */}
 - Portable metadata schema ownership. The `metadata.yaml` manifest format and its renderers are
   owned by Registry Manifest. Relay does not consume a manifest and does not emit one: its artifact
   generator produces no `registry-manifest.yaml`, and a test holds that.
@@ -175,21 +175,28 @@ response, by selecting fewer fields or filtering on a declared filterable field,
 filter the contract did not declare is a stable 400 rather than a wider read.
 
 {/* Evidence: the closed ProblemCode set includes request.fields_invalid, filter.unknown_field, and
-     filter.invalid_value, crates/registry-relay-v2/src/problem.rs:14-45. */}
+     filter.invalid_value, in the define_problem_codes! set in
+     crates/registry-relay-http-contract/src/lib.rs, which crates/registry-relay-v2/src/problem.rs
+     re-exports. */}
 
 ## Evidence Gateway
 
 Evidence Gateway answers one bounded question about one subject and returns a signed assertion carrying the
 answer rather than the record. It does not own:
 
-- Source access as a general capability. Each evaluation uses one closed acquisition: one fixed,
-  bounded HTTP JSON request, or one fixed search followed after a unique schema-valid match by one
-  fixed fetch. Every stage has a fixed method, a fixed or tagged selector or prior-fact-bound path,
-  fixed non-secret headers, denied redirects, and a client-side response projection. Pagination,
-  transport retry, response-led routing, general multi-source fulfillment, and source-planning scripts
-  are outside the Version 1 contract.
-  {/* Evidence: contract registry.evidence.fixed-http-json-source/v1,
-       products/evidence/contracts/source-contract.yaml (frozen). */}
+- Source access as a general capability. Each evaluation uses one closed acquisition: one fixed
+  bounded request, or one fixed search followed after a unique schema-valid match by one fixed
+  fetch. A source reaches its data over one of two coequal transports. An HTTP JSON stage has a
+  fixed method, a fixed or tagged selector or prior-fact-bound path, fixed non-secret headers,
+  denied redirects, and a client-side response projection. A statement stage runs one reviewed SQL
+  statement, with its declared result columns and parameter bindings, against a read-only SQLite
+  extract file the runtime binds by logical profile, reaching no origin and resolving no credential.
+  Pagination, transport retry, response-led routing, general multi-source fulfillment, and
+  source-planning scripts are outside the Version 1 contract.
+  {/* Evidence: contracts registry.evidence.fixed-http-json-source/v1,
+       products/evidence/contracts/source-contract.yaml, and
+       registry.evidence.fixed-sqlite-extract-source/v1,
+       products/evidence/contracts/sqlite-extract-source-contract.yaml (both frozen). */}
 - Record lookup and identity resolution. The authoritative provider owns lookup. Evidence Gateway accepts
   only `match`, `no_match`, or `ambiguous`, and does not score candidates, choose a provider record,
   or expose counts, near-match hints, or per-field diagnostics.
@@ -250,9 +257,9 @@ Registry Stack product. It does not own:
 - Normative API or metadata contracts. API contracts are owned by the runtime services; metadata
   contracts are owned by Registry Manifest.
   {/* Evidence: src/data/projects.yaml, solmara-lab does_not_own. */}
-- Real product integrations. The services simulate civil, social protection, and health
-  registry patterns but are not real integrations with OpenCRVS, OpenSPP, DHIS2, OpenIMIS,
-  MOSIP, or other systems.
+- Real product integrations. The services simulate civil registration, population, social
+  protection, pension, and agriculture registry patterns but are not real integrations with
+  OpenCRVS, OpenSPP, DHIS2, OpenIMIS, MOSIP, or other systems.
   {/* Evidence: the pinned Solmara Lab README and src/data/projects.yaml. */}
 
 ## Where to look
