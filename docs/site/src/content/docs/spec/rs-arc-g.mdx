@@ -11,7 +11,7 @@ source_repos:
   - registry-evidence
   - registry-mint
   - solmara-lab
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-08-21"
 doc_type: specification
 doc_id: RS-ARC-G
 category: normative
@@ -149,7 +149,7 @@ Relay reads adopter data through the shared bounded read-only SQLite boundary, o
 
 ### Evidence Gateway
 
-Evidence Gateway (`registry-evidence`) is a single-crate Rust service and the `evidence` binary, depending on the portable `registry-evidence-verifier` library for the response formats, the Evidence payload contract, and relying-party verification, so client tooling can verify a signed response without the service. Each evaluation answers one bounded question about one complete subject-role set with one signed assertion that carries the answer and not the record. Its request-batch route groups up to sixteen independent audience-scoped evaluations under one common requirement and purpose, while preserving one independently signed assertion per available item. It loads one reviewed governed bundle and one closed operator runtime file at startup, treats both as immutable for the process lifetime, and holds no application database: it persists no selector, no source payload, no evidence value, and no response body. It authenticates callers with strict OIDC bearer tokens against exactly one trusted issuer, matches exactly one authority path per evaluation, calls the fixed bounded HTTP JSON sources its bundle declares, and releases an assertion as a flattened JWS JSON document by default. Where the bundle and the matched grant both enable it, the same assertion can also be serialized as an SD-JWT VC (`application/dc+sd-jwt`) or as a visibly unsigned envelope for local diagnosis.
+Evidence Gateway (`registry-evidence`) is a single-crate Rust service and the `evidence` binary, depending on the portable `registry-evidence-verifier` library for the response formats, the Evidence payload contract, and relying-party verification, so client tooling can verify a signed response without the service. Each evaluation answers one bounded question about one complete subject-role set with one signed assertion that carries the answer and not the record. Its request-batch route groups up to sixteen independent audience-scoped evaluations under one common requirement and purpose, while preserving one independently signed assertion per available item. It loads one reviewed governed bundle and one closed operator runtime file at startup, treats both as immutable for the process lifetime, and holds no application database: it persists no selector, no source payload, no evidence value, and no response body. It authenticates callers with strict OIDC bearer tokens against exactly one trusted issuer, matches exactly one authority path per evaluation, calls the fixed bounded HTTP JSON or SQLite extract sources its bundle declares, and releases an assertion as a flattened JWS JSON document by default. Where the bundle and the matched grant both enable it, the same assertion can also be serialized as an SD-JWT VC (`application/dc+sd-jwt`) or as a visibly unsigned envelope for local diagnosis.
 
 Evidence Gateway Version 1 supports its declared holder-bound subject-binding mode and bounded issuance envelope, but has no credential lifecycle, no interactive holder-binding ceremony or issuance session, no status list, no revocation, no delegated or federated evaluation between peers, no policy decision point, no replay subsystem, and no worker or document subsystem. It does not depend on Relay, does not consult it, and does not read a metadata manifest. Evidence Gateway may consume a Relay-protected API through its ordinary fixed HTTP source contract, and that consumption grants it none of Relay's authorization model.
 
@@ -293,6 +293,11 @@ This specification is `verified`: it is distilled from published artifacts a rea
      deny-by-default statement authorizer. */}
 {/* Evidence: crates/registry-evidence-oid4vci/src/lib.rs states the three non-negotiable
      properties of the wallet delivery front end. */}
+{/* Evidence: an Evidence Gateway source request reaches its source over one of two coequal
+     transports, contract registry.evidence.fixed-http-json-source/v1 in
+     products/evidence/contracts/source-contract.yaml and contract
+     registry.evidence.fixed-sqlite-extract-source/v1 in
+     products/evidence/contracts/sqlite-extract-source-contract.yaml (both frozen). */}
 
 - The [boundary map](../../map/boundaries-and-map/) records each component's boundaries with their source citations. It is a distillation source for the components (Section 3) and the invariants (Section 5).
 - The [architecture overview](../../explanation/architecture/) gives the narrative data and contract flow that Section 4 makes precise.
