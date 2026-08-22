@@ -35,8 +35,12 @@ has drifted is a merge blocker, not a wart, so check an anchor when you move
 the code it points at. Run `npm run check:evidence-anchors` alone for the fast
 version. Root CI runs it twice: once inside the docs job, and once in a job of
 its own that runs on every pull request, because the anchors cite source all
-over the workspace and the docs job only runs for a changed path it recognizes. A token that resolves to no repository path is read as prose and
-skipped, so naming a file the repo does not own is still fine. Several files in
+over the workspace and the docs job only runs for a changed path it recognizes.
+A bare filename beside a cited path is read as prose when nothing resolves, so
+naming a file the repo does not own, an adopter's `origins.yaml` or a path a
+generated package writes, is still fine. A bare `.rs` sibling is the exception:
+only this repository writes Rust into the stack, so a Rust filename has to
+resolve, and deleting the file one names fails the check. Several files in
 one directory may be cited in the compact brace form,
 `crates/registry-relay-v2/src/{api,startup}.rs`, which is read as one citation
 per entry, so each file it names has to exist on its own. A bare name ending in

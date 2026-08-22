@@ -370,6 +370,24 @@ test('leaves a bare filename the repository does not own out of the path check',
   assert.equal(result.paths, 1);
 });
 
+test('reports a bare sibling Rust file no cited unit holds', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/tests/cli_contract.rs and absent.rs pin the surfaces. */}',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/tests\/absent\.rs, which does not exist/);
+  assert.equal(result.paths, 2);
+});
+
+test('reports a bare Rust filename that opens an anchor and names nothing', (t) => {
+  const root = repository(t);
+  const result = check(root, '{/* Evidence: absent.rs, and crates/demo/src/lib.rs reads it. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /absent\.rs, which does not exist/);
+});
+
 test('resolves a bare child directory against the directory cited before it', (t) => {
   const root = repository(t);
   write(root, 'products/demo/projects/protected-read/README.md', 'It names bounded_read_shape.\n');

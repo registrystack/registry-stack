@@ -62,6 +62,11 @@ const ANCHOR_PATTERN = /\{\/\*\s*Evidence:([\s\S]*?)\*\/\}/g;
 // in the last segment is what says a path named a file, so an extensionless script reads
 // as a directory. The reading is a syntactic one because nothing here opens the repository.
 const NAMES_A_DIRECTORY = /(?:^|\/)[^./]+$/;
+// A bare sibling that names a Rust source file is one the repository owns: an adopter of
+// this stack writes configuration and scripts, never Rust, and a package the runtime
+// generates carries none either. Every other extension a sibling may carry names a file the
+// repository need not hold, so only this one turns a miss into drift.
+const NAMES_RUST_SOURCE = /\.rs$/;
 // A compact list of files that share a directory, `src/{api,startup}.rs`. It is read only
 // where a path segment can start, so a brace group the prose itself writes, `{ claim,
 // allowed }`, stays prose.
@@ -155,6 +160,8 @@ function joinPath(base, tail) {
 // a miss is drift and is reported. A bare sibling filename is only a reading of the
 // prose: when nothing resolves, it names a file the repository does not own (an
 // adopter's configuration file, or a path inside a generated package) and is left alone.
+// A bare Rust filename is the one sibling that is a claim, because only this repository
+// writes Rust into the stack, so a miss there is drift like any other.
 /**
  * @typedef {object} Citation
  * @property {string} form which reading produced it, and so which fallbacks apply
@@ -244,7 +251,7 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
         citation = {
           form: 'sibling',
           candidates: [cited],
-          reportMissing: false,
+          reportMissing: NAMES_RUST_SOURCE.test(cited),
           basename: cited,
           searchRoot: '',
         };
@@ -256,7 +263,7 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
             joinPath(citationRoot(lastCitedPath), cited),
             joinPath(lastCitedPath, cited),
           ],
-          reportMissing: false,
+          reportMissing: NAMES_RUST_SOURCE.test(cited),
           basename: cited,
           // A bare filename may name a file the repository keeps at its root, Cargo.toml
           // or deny.toml, which sits beside no cited path at all. It is tried only after
@@ -268,9 +275,10 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
 
       citation.candidates = [...new Set(citation.candidates)];
       // What follows reads against the path cited last, whichever form carried it: a
-      // continuation moves the anchor on just as a second full path does. A sibling is a
-      // reading of the prose rather than a path claim, so it leaves the anchor where it is.
-      if (citation.reportMissing) {
+      // continuation moves the anchor on just as a second full path does. A sibling names
+      // no directory to read the next citation against, so it leaves the anchor where it
+      // is whether or not the repository has to hold the file it names.
+      if (citation.form !== 'sibling') {
         lastCitedPath = citation.candidates[0];
       }
       previous = citation;
