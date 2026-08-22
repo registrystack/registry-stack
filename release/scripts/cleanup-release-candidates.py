@@ -21,6 +21,7 @@ RETENTION_DAYS = 8
 CANDIDATE_PACKAGES = (
     # Listing an absent package fails closed, so a candidate name joins this
     # allowlist with the release that first publishes it.
+    "discovery-candidate",
     "evidence-candidate",
     "mint-candidate",
     "relay-candidate",

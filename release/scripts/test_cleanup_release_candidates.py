@@ -70,6 +70,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
     def test_apply_deletes_expired_versions_from_all_candidates(self) -> None:
         client = FakeClient(
             {
+                "discovery-candidate": [version(6, "2026-07-03T00:00:00Z")],
                 "evidence-candidate": [version(4, "2026-07-03T00:00:00Z")],
                 "mint-candidate": [version(5, "2026-07-03T00:00:00Z")],
                 "relay-candidate": [version(3, "2026-07-03T00:00:00Z")],
@@ -83,6 +84,7 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         )
         self.assertEqual(
             [
+                ("discovery-candidate", 6),
                 ("evidence-candidate", 4),
                 ("mint-candidate", 5),
                 ("relay-candidate", 3),
