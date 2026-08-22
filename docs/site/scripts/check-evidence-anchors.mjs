@@ -24,10 +24,22 @@ export const PROSE_SYMBOL_ALLOWLIST = new Set([
 // Directories a repository-relative citation may start from.
 const REPOSITORY_ROOTS = ['crates', 'products', 'release', 'docs', 'external', '\\.github'];
 // Directories a continuation citation may start from, resolved against the crate or
-// product root of the most recent full path in the same anchor.
+// product root of the most recently cited path in the same anchor.
 const CONTINUATION_ROOTS = ['src', 'tests', 'examples', 'benches', 'schemas', 'scripts'];
 // Extensions that make a bare token a sibling filename rather than ordinary prose.
-const SOURCE_EXTENSIONS = ['rs', 'mjs', 'md', 'py', 'sh', 'toml', 'yaml', 'yml', 'jsonld', 'json'];
+const SOURCE_EXTENSIONS = [
+  'rs',
+  'mjs',
+  'md',
+  'py',
+  'sh',
+  'rhai',
+  'toml',
+  'yaml',
+  'yml',
+  'jsonld',
+  'json',
+];
 // Extensions read when a symbol has to be looked for inside a cited directory.
 const TEXT_EXTENSIONS = new Set([
   ...SOURCE_EXTENSIONS,
@@ -105,7 +117,7 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
   const citations = [];
   const strippedParts = [];
   let cursor = 0;
-  let lastFullPath;
+  let lastCitedPath;
   let previous;
 
   for (const match of body.matchAll(CITATION_PATTERN)) {
@@ -125,13 +137,15 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
     const token = full ?? continuation ?? sibling;
     const { path, start, end } = splitLineReference(token);
     const trimmed = path.replace(/\/$/, '');
-    const parentOfLastFullPath =
-      lastFullPath === undefined || dirname(lastFullPath) === '.' ? '' : dirname(lastFullPath);
+    // A line suffix the anchor cut short, `:5-`, leaves its hyphen outside the token and
+    // would otherwise read as the single line 5 rather than the range it was meant to be.
+    const malformedLines = start !== undefined && body.startsWith('-', cursor);
+    const parentOfLastCitedPath =
+      lastCitedPath === undefined || dirname(lastCitedPath) === '.' ? '' : dirname(lastCitedPath);
     let citation;
     if (full !== undefined) {
-      lastFullPath = trimmed;
       citation = { form: 'full', candidates: [trimmed], reportMissing: true };
-    } else if (continuation !== undefined && lastFullPath === undefined) {
+    } else if (continuation !== undefined && lastCitedPath === undefined) {
       citation = {
         form: 'continuation',
         candidates: [joinPath(siteRoot, trimmed)],
@@ -141,58 +155,88 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
       citation = {
         form: 'continuation',
         candidates: [
-          joinPath(citationRoot(lastFullPath), trimmed),
-          joinPath(parentOfLastFullPath, trimmed),
+          joinPath(citationRoot(lastCitedPath), trimmed),
+          joinPath(parentOfLastCitedPath, trimmed),
         ],
         reportMissing: true,
       };
-    } else if (lastFullPath === undefined) {
+    } else if (lastCitedPath === undefined) {
       // A sibling filename with no path before it has nothing to sit beside.
       continue;
     } else {
       citation = {
         form: 'sibling',
         candidates: [
-          joinPath(parentOfLastFullPath, trimmed),
-          joinPath(citationRoot(lastFullPath), trimmed),
-          joinPath(lastFullPath, trimmed),
+          joinPath(parentOfLastCitedPath, trimmed),
+          joinPath(citationRoot(lastCitedPath), trimmed),
+          joinPath(lastCitedPath, trimmed),
         ],
         reportMissing: false,
         basename: trimmed,
-        searchRoot: citationRoot(lastFullPath),
+        // A bare filename may name a file the repository keeps at its root, Cargo.toml
+        // or deny.toml, which sits beside no cited path at all. It is tried only after
+        // the search inside the cited unit, so a nearer file always wins.
+        rootCandidate: trimmed,
+        searchRoot: citationRoot(lastCitedPath),
       };
     }
 
     citation.candidates = [...new Set(citation.candidates)];
+    // What follows reads against the path cited last, whichever form carried it: a
+    // continuation moves the anchor on just as a second full path does. A sibling is a
+    // reading of the prose rather than a path claim, so it leaves the anchor where it is.
+    if (citation.reportMissing) {
+      lastCitedPath = citation.candidates[0];
+    }
     previous = citation;
-    citations.push({ ...citation, raw: token, start, end });
+    citations.push({ ...citation, raw: token, start, end, malformedLines });
   }
 
   strippedParts.push(body.slice(cursor));
   return { citations, symbols: extractSymbols(strippedParts.join('')) };
 }
 
+// The four shapes that hold a name apart from the prose around it.
+function carriesSymbolShape(candidate) {
+  return (
+    SCREAMING_SNAKE_CASE.test(candidate) ||
+    SNAKE_CASE.test(candidate) ||
+    UPPER_CAMEL_CASE.test(candidate) ||
+    LOWER_CAMEL_CASE.test(candidate)
+  );
+}
+
 export function extractSymbols(prose) {
   const symbols = [];
-  for (const match of prose.matchAll(WORD_PATTERN)) {
-    const token = match[0];
-    const candidate = token.includes('::') ? token.split('::').at(-1) : token;
-    const qualified = token.includes('::');
+  const record = (candidate) => {
     if (PROSE_SYMBOL_ALLOWLIST.has(candidate)) {
-      continue;
-    }
-    if (
-      !qualified &&
-      !SCREAMING_SNAKE_CASE.test(candidate) &&
-      !SNAKE_CASE.test(candidate) &&
-      !UPPER_CAMEL_CASE.test(candidate) &&
-      !LOWER_CAMEL_CASE.test(candidate)
-    ) {
-      continue;
+      return;
     }
     if (!symbols.includes(candidate)) {
       symbols.push(candidate);
     }
+  };
+
+  for (const match of prose.matchAll(WORD_PATTERN)) {
+    const token = match[0];
+    const segments = token.split('::');
+    const candidate = segments.at(-1);
+    // Every segment of a qualified path names something the repository holds, so a typo
+    // in the module, type, or enum that qualifies the name is drift too. Segments that
+    // carry no symbol shape, `std` and `fs` in std::fs::read, name nothing to look for.
+    for (const qualifier of segments.slice(0, -1)) {
+      if (carriesSymbolShape(qualifier)) {
+        record(qualifier);
+      }
+    }
+    // An anchor spells a function reference with empty parentheses, so an identifier
+    // written that way is a name whatever its case. Parentheses that carry anything,
+    // "the check (see below)", are prose.
+    const spelledAsCall = prose.startsWith('()', match.index + token.length);
+    if (segments.length === 1 && !spelledAsCall && !carriesSymbolShape(candidate)) {
+      continue;
+    }
+    record(candidate);
   }
   return symbols;
 }
@@ -333,6 +377,16 @@ export function checkEvidenceAnchors({
           errors.push(`${at} cites ${escaping}${range}, which leaves the repository`);
           continue;
         }
+        // A cut-short suffix parses as a line the anchor never meant, so it is reported
+        // as the malformed reference it is rather than checked against the file.
+        if (citation.malformedLines) {
+          paths += 1;
+          lineRefs += 1;
+          errors.push(
+            `${at} cites ${citation.raw}-, but a line reference names a line or a first and last line`,
+          );
+          continue;
+        }
         const resolved =
           citation.candidates.find(
             (candidate) => entryKind(resolve(repoRoot, candidate)) !== 'missing',
@@ -340,6 +394,10 @@ export function checkEvidenceAnchors({
           (citation.basename === undefined
             ? undefined
             : uniqueFileNamed(citation.searchRoot, citation.basename)) ??
+          (citation.rootCandidate !== undefined &&
+          entryKind(resolve(repoRoot, citation.rootCandidate)) !== 'missing'
+            ? citation.rootCandidate
+            : undefined) ??
           // A bare line reference that follows a filename the repository does not own
           // still belongs to the last file the anchor resolved.
           (citation.form === 'lines' ? lastResolvedFile : undefined);

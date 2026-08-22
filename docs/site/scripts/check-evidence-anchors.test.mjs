@@ -105,6 +105,23 @@ test('reports a bare line range that ends before it starts', (t) => {
   assert.match(result.errors[0], /ends at or after its start/);
 });
 
+test('reports a line suffix the anchor cut short', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/wide.rs', 'one\ntwo\nthree\nfour\nfive\nsix\n');
+  const result = check(root, '{/* Evidence: crates/demo/src/wide.rs:5- holds it. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/wide\.rs:5-/);
+  assert.match(result.errors[0], /a line or a first and last line/);
+  assert.equal(result.lineRefs, 1);
+});
+
+test('leaves a hyphen the prose carries after a line reference alone', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/wide.rs', 'one\ntwo\nthree\nfour\nfive\nsix\n');
+  const result = check(root, '{/* Evidence: crates/demo/src/wide.rs:5 - the middle of it. */}');
+  assert.deepEqual(result.errors, []);
+});
+
 test('reports a symbol that appears in no cited path', (t) => {
   const root = repository(t);
   const result = check(root, '{/* Evidence: crates/demo/src/lib.rs, absent_test_name. */}');
@@ -163,6 +180,63 @@ test('resolves a bare sibling filename against the directory of the last full pa
   );
   assert.deepEqual(elsewhere.errors, []);
   assert.equal(elsewhere.paths, 2);
+});
+
+test('resolves a bare sibling filename against the most recently cited path', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/handler.rs', 'fn prepares_the_request() {}\n');
+  write(root, 'crates/demo/tests/handler.rs', 'fn covers_the_handler() {}\n');
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs; tests/cli_contract.rs; handler.rs, covers_the_handler. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 3);
+});
+
+test('leaves the anchor where it is when one bare sibling filename follows another', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo holds cli_contract.rs and language_server.rs. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 3);
+});
+
+test('resolves a bare sibling filename against the repository root', (t) => {
+  const root = repository(t);
+  write(root, 'deny.toml', '[bans]\nmultiple_versions = "deny"\n');
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs, and deny.toml, multiple_versions. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 2);
+});
+
+test('prefers a file inside the cited unit over the one at the repository root', (t) => {
+  const root = repository(t);
+  write(root, 'README.md', 'The workspace README names workspace_wide_only.\n');
+  write(root, 'crates/demo/reference/README.md', 'The crate README names crate_local_only.\n');
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs, and README.md, crate_local_only. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 2);
+});
+
+test('reads a bare script filename beside the path it sits with', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/scripts/extract.rhai', 'let extracted = source_value;\n');
+  write(root, 'crates/demo/scripts/prepare.rhai', 'let request_url = source_base;\n');
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/scripts/extract.rhai and prepare.rhai, request_url. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 2);
 });
 
 test('leaves a bare filename the repository does not own out of the path check', (t) => {
@@ -262,6 +336,43 @@ test('takes the last segment of a qualified symbol path', (t) => {
     '{/* Evidence: crates/demo/src/codes.rs, ProblemCode::AuditUnavailable. */}',
   );
   assert.deepEqual(result.errors, []);
+});
+
+test('checks every segment of a qualified symbol path that carries a symbol shape', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/codes.rs', 'pub enum ProblemCode { AuditUnavailable }\n');
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/codes.rs, ProblmCode::AuditUnavailable. */}',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /ProblmCode/);
+  assert.equal(result.symbols, 2);
+});
+
+test('leaves the segments of a qualified path that name no symbol unchecked', () => {
+  assert.deepEqual(extractSymbols('std::fs::read_to_string reads it.'), ['read_to_string']);
+  assert.deepEqual(extractSymbols('ProblemCode::AuditUnavailable is returned.'), [
+    'ProblemCode',
+    'AuditUnavailable',
+  ]);
+});
+
+test('reads an identifier spelled with empty parentheses as a symbol', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/app.rs', 'pub fn router() -> Router {}\n');
+  const passing = check(root, '{/* Evidence: crates/demo/src/app.rs builds router(). */}');
+  assert.deepEqual(passing.errors, []);
+  assert.equal(passing.symbols, 1);
+
+  const failing = check(root, '{/* Evidence: crates/demo/src/app.rs builds routes(). */}');
+  assert.equal(failing.errors.length, 1);
+  assert.match(failing.errors[0], /routes/);
+});
+
+test('leaves a word the prose follows with a parenthesis out of the symbols', () => {
+  assert.deepEqual(extractSymbols('the check (see below) and the note(s) it carries'), []);
+  assert.deepEqual(extractSymbols('router(), prepare()'), ['router', 'prepare']);
 });
 
 test('keeps ordinary prose words out of the symbols a lower camel case name is read from', () => {
