@@ -104,6 +104,12 @@ const CITATION_PATTERN = new RegExp(
   'g',
 );
 const LINE_SUFFIX = /^(?<path>.*?)(?::(?<start>\d+)(?:-(?<end>\d+))?)?$/;
+// What a line reference the citation pattern could not read leaves behind the token it
+// follows: word characters or a hyphen, which a well-formed reference would have carried
+// itself, optionally behind the colon that opens one. A colon the prose writes is followed
+// by a space, and a reference the prose punctuates is followed by the punctuation, so
+// neither leaves anything this reads.
+const UNREAD_LINE_REFERENCE = /^:?[\w-][\w:-]*/;
 const WORD_PATTERN = /[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+|[A-Za-z_][A-Za-z0-9_]*/g;
 // A dotted configuration or wire key path, sources.*.authentication.kind. The word pass reads
 // its segments one by one and keeps only the ones that carry a symbol shape, so this pattern is
@@ -189,7 +195,7 @@ function joinPath(base, tail) {
  * @property {string} [raw] the token as the anchor spelled it
  * @property {number} [start] first line of a line reference
  * @property {number} [end] last line of a line reference
- * @property {boolean} [malformedLines] set when a line suffix was cut short
+ * @property {string} [malformedLines] the part of a line reference the pattern could not read
  * @property {string} [basename] bare filename to search for when no candidate resolves
  * @property {string} [searchRoot] where that search runs, the empty string for the whole tree
  * @property {string} [rootCandidate] the same name as a file kept at the repository root
@@ -220,9 +226,11 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
     const token = full ?? continuation ?? sibling ?? child;
     const { path, start, end } = splitLineReference(token);
     const trimmed = path.replace(/\/$/, '');
-    // A line suffix the anchor cut short, `:5-`, leaves its hyphen outside the token and
-    // would otherwise read as the single line 5 rather than the range it was meant to be.
-    const malformedLines = start !== undefined && body.startsWith('-', cursor);
+    // A line reference the anchor spelled wrong leaves the part the pattern could not read
+    // outside the token: the hyphen of a range cut short in `:5-`, the word run into the
+    // number in `:1foo`, the whole suffix in `:abc`. Each would otherwise be thrown away,
+    // leaving the citation checked as the bare file or as a line the anchor never meant.
+    const malformedLines = UNREAD_LINE_REFERENCE.exec(body.slice(cursor))?.[0];
 
     // A brace list stands for one citation per entry, so each file it names is resolved and
     // counted on its own, and each entry reads against the path the entry before it set.
@@ -544,11 +552,11 @@ export function checkEvidenceAnchors({
         }
         // A cut-short suffix parses as a line the anchor never meant, so it is reported
         // as the malformed reference it is rather than checked against the file.
-        if (citation.malformedLines) {
+        if (citation.malformedLines !== undefined) {
           paths += 1;
           lineRefs += 1;
           errors.push(
-            `${at} cites ${citation.raw}-, but a line reference names a line or a first and last line`,
+            `${at} cites ${citation.raw}${citation.malformedLines}, but a line reference names a line or a first and last line`,
           );
           continue;
         }

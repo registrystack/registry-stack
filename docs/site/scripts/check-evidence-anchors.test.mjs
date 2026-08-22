@@ -168,6 +168,45 @@ test('reports a line suffix the anchor cut short', (t) => {
   assert.equal(result.lineRefs, 1);
 });
 
+test('reports a line reference the anchor spelled with something other than a number', (t) => {
+  const root = repository(t);
+  const result = check(root, '{/* Evidence: crates/demo/src/lib.rs:abc holds it. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/lib\.rs:abc/);
+  assert.match(result.errors[0], /a line or a first and last line/);
+  assert.equal(result.lineRefs, 1);
+});
+
+test('reports a line reference the anchor ran into the word behind it', (t) => {
+  const root = repository(t);
+  const result = check(root, '{/* Evidence: crates/demo/src/lib.rs:1foo holds it. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/lib\.rs:1foo/);
+  assert.match(result.errors[0], /a line or a first and last line/);
+});
+
+test('leaves a colon the prose writes after a cited path alone', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs: it holds verify_source_shape(). */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 1);
+  assert.equal(result.lineRefs, 0);
+});
+
+test('leaves a well-formed line reference the prose punctuates alone', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/wide.rs', 'one\ntwo\nthree\nfour\nfive\nsix\n');
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/wide.rs:1-2, crates/demo/src/wide.rs:3-4; crates/demo/src/wide.rs:5-6. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.lineRefs, 3);
+});
+
 test('leaves a hyphen the prose carries after a line reference alone', (t) => {
   const root = repository(t);
   write(root, 'crates/demo/src/wide.rs', 'one\ntwo\nthree\nfour\nfive\nsix\n');
