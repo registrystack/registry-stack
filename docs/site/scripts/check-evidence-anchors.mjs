@@ -6,7 +6,7 @@
 // present in at least one path the same anchor cites.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -60,6 +60,8 @@ const WORD_PATTERN = /[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+|[A-Za-
 const SCREAMING_SNAKE_CASE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
 const SNAKE_CASE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 const UPPER_CAMEL_CASE = /^(?:[A-Z][a-z0-9]+){2,}$/;
+// A configuration or wire key: the internal capital is what holds it apart from prose.
+const LOWER_CAMEL_CASE = /^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+$/;
 
 export function extractAnchors(text) {
   const anchors = [];
@@ -94,10 +96,10 @@ function joinPath(base, tail) {
 }
 
 // Every citation carries the ordered candidate paths it may resolve to, and whether a
-// candidate is a claim or a guess. A full repository path, and a continuation anchored
-// to one, plainly names a repository path, so a miss is drift and is reported. A bare
-// sibling filename, or a continuation with no full path before it, is only a reading of
-// the prose: when nothing resolves, it names a file the repository does not own (an
+// candidate is a claim or a guess. A full repository path, a continuation anchored to
+// one, and a continuation read against the docs site plainly name a repository path, so
+// a miss is drift and is reported. A bare sibling filename is only a reading of the
+// prose: when nothing resolves, it names a file the repository does not own (an
 // adopter's configuration file, or a path inside a generated package) and is left alone.
 export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
   const citations = [];
@@ -133,7 +135,7 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
       citation = {
         form: 'continuation',
         candidates: [joinPath(siteRoot, trimmed)],
-        reportMissing: false,
+        reportMissing: true,
       };
     } else if (continuation !== undefined) {
       citation = {
@@ -183,7 +185,8 @@ export function extractSymbols(prose) {
       !qualified &&
       !SCREAMING_SNAKE_CASE.test(candidate) &&
       !SNAKE_CASE.test(candidate) &&
-      !UPPER_CAMEL_CASE.test(candidate)
+      !UPPER_CAMEL_CASE.test(candidate) &&
+      !LOWER_CAMEL_CASE.test(candidate)
     ) {
       continue;
     }
@@ -192,6 +195,17 @@ export function extractSymbols(prose) {
     }
   }
   return symbols;
+}
+
+// A citation that climbs above the repository, by a `..` segment or by resolving outside
+// the root, names nothing the documentation can cite, so it is refused before it is read.
+function escapesRepository(repoRoot, path) {
+  if (path.split('/').includes('..')) {
+    return true;
+  }
+  const root = resolve(repoRoot);
+  const absolute = resolve(root, path);
+  return absolute !== root && !absolute.startsWith(`${root}${sep}`);
 }
 
 function entryKind(absolute) {
@@ -308,6 +322,17 @@ export function checkEvidenceAnchors({
           citation.start === undefined
             ? ''
             : `:${citation.start}${citation.end === citation.start ? '' : `-${citation.end}`}`;
+        const escaping = citation.candidates.find((candidate) =>
+          escapesRepository(repoRoot, candidate),
+        );
+        if (escaping !== undefined) {
+          paths += 1;
+          if (range !== '') {
+            lineRefs += 1;
+          }
+          errors.push(`${at} cites ${escaping}${range}, which leaves the repository`);
+          continue;
+        }
         const resolved =
           citation.candidates.find(
             (candidate) => entryKind(resolve(repoRoot, candidate)) !== 'missing',
@@ -347,7 +372,11 @@ export function checkEvidenceAnchors({
           continue;
         }
         const count = lineCount(readText(resolved));
-        if (citation.end > count) {
+        if (citation.start < 1 || citation.end < citation.start) {
+          errors.push(
+            `${at} cites ${resolved}${range}, but a line range starts at line 1 and ends at or after its start`,
+          );
+        } else if (citation.start > count || citation.end > count) {
           errors.push(
             `${at} cites ${resolved}${range}, but the file has ${pluralLines(count)}`,
           );

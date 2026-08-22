@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import {
   checkEvidenceAnchors,
   extractAnchors,
+  extractSymbols,
   parseAnchor,
   parseArguments,
 } from './check-evidence-anchors.mjs';
@@ -56,6 +57,20 @@ test('reports a cited path that does not exist', (t) => {
   assert.match(result.errors[0], /crates\/demo\/src\/absent\.rs/);
 });
 
+test('reports a citation whose path climbs out of the repository', (t) => {
+  const root = repository(t);
+  const outside = resolve(root, '..', 'registry-evidence-anchors-outside.txt');
+  writeFileSync(outside, 'held outside the repository\n');
+  t.after(() => rmSync(outside, { force: true }));
+  const result = check(
+    root,
+    '{/* Evidence: crates/../../registry-evidence-anchors-outside.txt holds it. */}',
+  );
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/\.\.\/\.\.\/registry-evidence-anchors-outside\.txt/);
+  assert.match(result.errors[0], /leaves the repository/);
+});
+
 test('reports a line reference past the end of the file with the real line count', (t) => {
   const root = repository(t);
   const result = check(root, '{/* Evidence: crates/demo/src/lib.rs:40-42 holds it. */}');
@@ -64,11 +79,49 @@ test('reports a line reference past the end of the file with the real line count
   assert.match(result.errors[0], /has 1 line\b/);
 });
 
+test('reports a line reference that starts before the first line', (t) => {
+  const root = repository(t);
+  const result = check(root, '{/* Evidence: crates/demo/src/lib.rs:0 holds it. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/lib\.rs:0/);
+  assert.match(result.errors[0], /starts at line 1/);
+});
+
+test('reports a line range that ends before it starts', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/wide.rs', 'one\ntwo\nthree\nfour\nfive\nsix\n');
+  const result = check(root, '{/* Evidence: crates/demo/src/wide.rs:5-3 holds it. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/wide\.rs:5-3/);
+  assert.match(result.errors[0], /ends at or after its start/);
+});
+
+test('reports a bare line range that ends before it starts', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/wide.rs', 'one\ntwo\nthree\nfour\nfive\nsix\n');
+  const result = check(root, '{/* Evidence: crates/demo/src/wide.rs:1, and :5-3. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /crates\/demo\/src\/wide\.rs:5-3/);
+  assert.match(result.errors[0], /ends at or after its start/);
+});
+
 test('reports a symbol that appears in no cited path', (t) => {
   const root = repository(t);
   const result = check(root, '{/* Evidence: crates/demo/src/lib.rs, absent_test_name. */}');
   assert.equal(result.errors.length, 1);
   assert.match(result.errors[0], /absent_test_name/);
+});
+
+test('checks a lower camel case symbol against the cited paths', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/wire.rs', 'pub struct Body { packageRevision: u32 }\n');
+  const passing = check(root, '{/* Evidence: crates/demo/src/wire.rs carries packageRevision. */}');
+  assert.deepEqual(passing.errors, []);
+  assert.equal(passing.symbols, 1);
+
+  const failing = check(root, '{/* Evidence: crates/demo/src/wire.rs carries packageRevison. */}');
+  assert.equal(failing.errors.length, 1);
+  assert.match(failing.errors[0], /packageRevison/);
 });
 
 test('accepts a symbol that appears in the second of two cited paths', (t) => {
@@ -174,10 +227,15 @@ test('reads a continuation with no full path before it against the docs site', (
   const resolved = check(root, '{/* Evidence: src/data/projects.yaml, does_not_own. */}');
   assert.deepEqual(resolved.errors, []);
   assert.equal(resolved.paths, 1);
+});
 
-  const unresolved = check(root, '{/* Evidence: src/data/absent.yaml, does_not_own. */}');
-  assert.deepEqual(unresolved.errors, []);
-  assert.equal(unresolved.paths, 0);
+test('reports a continuation the docs site does not hold', (t) => {
+  const root = repository(t);
+  const result = check(root, '{/* Evidence: src/data/absent.yaml, does_not_own. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /docs\/site\/src\/data\/absent\.yaml/);
+  assert.match(result.errors[0], /does not exist/);
+  assert.equal(result.paths, 1);
 });
 
 test('counts line-range citations and fails them only under strict line references', (t) => {
@@ -204,6 +262,12 @@ test('takes the last segment of a qualified symbol path', (t) => {
     '{/* Evidence: crates/demo/src/codes.rs, ProblemCode::AuditUnavailable. */}',
   );
   assert.deepEqual(result.errors, []);
+});
+
+test('keeps ordinary prose words out of the symbols a lower camel case name is read from', () => {
+  assert.deepEqual(extractSymbols('the source an evidence deployment reads is packageRevision.'), [
+    'packageRevision',
+  ]);
 });
 
 test('parses the strict line reference flag', () => {
