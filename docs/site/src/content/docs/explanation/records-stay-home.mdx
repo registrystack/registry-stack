@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-evidence
   - registry-relay
-last_reviewed: "2026-08-21"
+last_reviewed: "2026-08-22"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -172,7 +172,8 @@ partial string reveal (`***`) and a date reduced to year or year-month. Relay si
 responses carry no assertion.
 {/* Evidence: AccessRule is Public | Protected{scope, purpose, authorityRowBinding} and
      AuthorityRowBinding has a claim variant and a principal variant,
-     crates/registry-relay-v2/src/contract.rs; row authority is injected as a bound
+     crates/registry-relay-v2/src/contract.rs; the authorityRowBinding key is spelled that way in
+     crates/registry-relayctl/schemas/authoring/registry.schema.json; row authority is injected as a bound
      parameter with an exact-equality COLLATE BINARY predicate, never string concatenation,
      crates/registry-relay-v2/src/sqlite_runtime.rs add_row_authority(). */}
 Evidence Gateway returns the values a requirement declares rather than the source row; keeping that
