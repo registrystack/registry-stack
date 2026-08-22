@@ -893,6 +893,30 @@ jobs:
             rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
             bash /work/docs/site/scripts/check-evidence-tutorials.sh
 
+  evidence-anchors:
+    # The documentation anchors cite source across the whole workspace, so this check
+    # runs on every pull request rather than behind the changed-path classifier: a
+    # rename outside the docs job's allow-list is exactly the drift it exists to catch.
+    # The checker imports only node:fs, node:path, and node:url, so a checkout and a
+    # Node runtime are all it needs; the docs job runs it again inside check:source.
+    name: Evidence anchors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.12.0
+
+      - name: Check documentation anchors against the source tree
+        run: node docs/site/scripts/check-evidence-anchors.mjs
+
   docs:
     name: Docs checks
     needs: changes
@@ -1186,6 +1210,7 @@ jobs:
       - release-tool
       - release-source-proof
       - evidence-tutorials
+      - evidence-anchors
       - docs
       - editor-extensions
       - client-bindings

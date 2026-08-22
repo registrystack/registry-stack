@@ -135,8 +135,9 @@ static-credential mode and no API-key mode; the runtime reads no credential from
 {/* Evidence: AuthenticationRuntime carries only an optional issuer,
      crates/registry-relay-v2/src/contract.rs; validate_runtime_contract requires an issuer
      when the contract has protected access, crates/registry-relay-v2/src/startup.rs;
-     RelayAuthenticator::authorize() admits Public unconditionally and requires a scoped
-     principal for Protected, crates/registry-relay-v2/src/auth.rs. */}
+     RelayAuthenticator::authorize() admits CompiledAccess::Public unconditionally and
+     requires a scoped principal for CompiledAccess::Protected,
+     crates/registry-relay-v2/src/auth.rs. */}
 Evidence Gateway runs one reviewed OIDC bearer profile with exactly one trusted
 issuer and exact audience, token type, and algorithm allowlists, and one configured principal
 claim with no `client_id`, `azp`, header, or request fallback: missing data denies rather than

@@ -94,8 +94,8 @@ every required type. For Registry Relay, the application searches the public sem
 operation family as one correlated tuple, then explicitly selects one record. Discovery preserves the
 complete Evidence resolution context, Relay tuple, catalog revision, and origin provenance.
 
-{/* Evidence: `crates/registry-discovery/src/query.rs`, `Directory::resolve_evidence_types()` and
-    `Directory::search_services()`; `crates/registry-discovery-client/src/selection.rs`,
+{/* Evidence: `crates/registry-discovery/src/query.rs`, the `query::Directory` type with
+    `Directory::resolve_evidence_types()` and `Directory::search_services()`; `crates/registry-discovery-client/src/selection.rs`,
     `EvidenceTypeResolveSelectionExt`, `ServiceSearchSelectionExt::select_evidence()`,
     `ServiceSearchSelectionExt::select_relay()`, and the typed selection fields. */}
 

@@ -8,7 +8,7 @@ source_repos:
   - registry-relay
   - registry-manifest
   - registry-evidence
-last_reviewed: "2026-08-11"
+last_reviewed: "2026-08-22"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -90,10 +90,10 @@ framework.
 | Can other systems interoperate? | Manifest emits standards-shaped metadata; Evidence Gateway publishes a product-level OpenAPI document, and Relay serves an OpenAPI description generated from the deployment's own compiled contract at `GET /openapi.json`; Evidence Gateway can serialize one assertion as an SD-JWT VC under a frozen local profile. | These are scoped adoption claims, not blanket conformance to every named standard. Relay's OpenAPI describes one deployment, so two deployments do not share an API document. The SD-JWT VC profile is a second encoding of one response, and it excludes OpenID for Verifiable Credential Issuance (OID4VCI) in every part. |
 
 {/* Evidence: PurposeConstraint { claim, allowed } and AuthorityRowBinding over a token claim or the
-     token principal, crates/registry-relay-v2/src/contract.rs:966-976, enforced in
-     RelayAuthenticator::authorize(), crates/registry-relay-v2/src/auth.rs:204-257; the closed
-     26-variant ProblemCode set and its PROBLEM_BASE constant,
-     crates/registry-relay-v2/src/problem.rs:14-45; the two fixed transforms are partial-string and
+     token principal, crates/registry-relay-v2/src/contract.rs, enforced in
+     RelayAuthenticator::authorize(), crates/registry-relay-v2/src/auth.rs; the closed 26-entry
+     ProblemCode catalog, where every entry carries its own literal type_uri and Relay has no
+     shared base constant, crates/registry-relay-http-contract/src/lib.rs; the two fixed transforms are partial-string and
      date-precision with year and year-month only; every audit failure maps to
      ProblemCode::AuditUnavailable (503) with no configuration to disable it,
      crates/registry-relay-v2/src/api.rs; the OpenAPI document is generated from the compiled

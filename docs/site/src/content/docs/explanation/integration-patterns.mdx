@@ -154,7 +154,8 @@ Deployment-local facts, including where the database file actually is, stay in `
 never enter the reviewed contract, so the same contract can be reviewed once and deployed in
 staging and production without editing it.
 
-{/* Evidence: the SourceProfile enum declares the two variants Snapshot and LiveReadOnly, and the
+{/* Evidence: the SourceProfile enum declares the two variants SourceProfile::Snapshot and
+    SourceProfile::LiveReadOnly, and the
     RelayRuntime struct carries sources, package path, listener, issuer, audit sink, limits, and
     quotas, and nothing that can add or widen a resource, operation, access profile, or disclosure
     decision, both in crates/registry-relay-v2/src/contract.rs. */}
@@ -239,7 +240,8 @@ If you are reading an integration guide that describes source scripts, same-orig
 API-key placement for Relay, it describes the retired runtime.
 See [Known limitations](../known-limitations/) for the full list of what went with it.
 
-{/* Evidence: the SourceProfile enum declares exactly Snapshot and LiveReadOnly, and the
+{/* Evidence: the SourceProfile enum declares exactly SourceProfile::Snapshot and
+    SourceProfile::LiveReadOnly, and the
     RelayRuntime struct's RuntimeSource accepts a source only as a path, both in
     crates/registry-relay-v2/src/contract.rs; the crate holds no HTTP source client. Read-only
     opening is enforced in crates/registry-platform-sqlite (SQLITE_OPEN_READ_ONLY |

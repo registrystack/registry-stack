@@ -54,7 +54,8 @@ is set by `metadataVisibility.processing`, which is public, operation-bound, or 
 {/* Evidence: ProcessingDescription { id, operationRefs, purpose, recipientClass, legalBasisRef,
      dpvProfileRef, safeguards } with deny_unknown_fields,
      crates/registry-relay-v2/src/contract.rs; MetadataVisibility carries a processing
-     field over the closed Visibility enum Public | OperationBound | OperatorOnly,
+     field over the closed contract::Visibility enum, whose variants are Visibility::Public,
+     Visibility::OperationBound, and Visibility::OperatorOnly,
      crates/registry-relay-v2/src/contract.rs; the compiler requires every
      legalBasisRef and dpvProfileRef to resolve to a governed file it seals,
      crates/registry-relay-v2/src/compiler.rs. */}
