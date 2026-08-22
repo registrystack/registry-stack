@@ -20,27 +20,31 @@ ROOT = Path(__file__).resolve().parents[2]
 CHECKER = Path(__file__).with_name("check-advisory-baselines.py")
 LIVE_BASELINES = (
     ROOT / "products/relay-v2/security/advisory-baseline.json",
+    ROOT / "release/security/discovery-advisory-baseline.json",
     ROOT / "release/security/evidence-advisory-baseline.json",
     ROOT / "release/security/mint-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:bba41cf6d867b319b05282e2e94746cebf6f0bd1dbf7dcc3c1666813f7241847",
-    "evidence": "sha256:8896bc15dd9e16e6c9fff73c1b42f1b953c27f2bc4e3609f6ff567ee60e41979",
-    "mint": "sha256:94dafa4e93a1864efc1c62ca5e593a5b9f12eddfee71d29aaf4ea68b1f4b5cb5",
+    "relay": "sha256:37d5f594a66a7fdb95cf1d5478e8a47a52ffc14c9b1dc5aad0c3ab340fd5e9be",
+    "discovery": "sha256:003c16f68b7231fb43e8c36aa1d549330febf28e6436a617cb9cf3c1ecdb9348",
+    "evidence": "sha256:010205641f5c90449f50f7de7687572b649e70f6c40c78167e8793a3a5ba63e5",
+    "mint": "sha256:f6bbc75354bdfc5740555df576e343052c66375dd979cbf3f75fd48a60c42a40",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "5c4e28578cf3c632faca77bf9d81cd18e95c635f"
+LIVE_REFERENCE_SOURCE_REVISION = "d1a6c7b925faf35dbc5a9f3269991f0d5e722f92"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-08-20"
+LIVE_REVIEW_EVALUATION_DATE = "2026-08-22"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "official_candidate",
+    "discovery": "official_candidate",
     "evidence": "official_candidate",
     "mint": "official_candidate",
 }
 LIVE_EXECUTABLES = {
     "relay": "/usr/local/bin/relay",
+    "discovery": "/usr/local/bin/discovery",
     "evidence": "/usr/local/bin/evidence",
     "mint": "/usr/local/bin/mint",
 }

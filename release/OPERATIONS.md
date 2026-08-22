@@ -327,7 +327,7 @@ prefix of the candidate's authoritative uncompressed DiffIDs:
 
 ```sh
 baseline=products/relay-v2/security/advisory-baseline.json
-# Evidence and Mint use release/security/<name>-advisory-baseline.json.
+# Discovery, Evidence, and Mint use release/security/<name>-advisory-baseline.json.
 jq --slurpfile baseline "${baseline}" -e '
   .rootfs.diff_ids[0:($baseline[0].runtime.layer_ids | length)]
     == $baseline[0].runtime.layer_ids
@@ -394,7 +394,14 @@ These are `.rootfs.diff_ids`, not the compressed digests in a manifest's
    PY
    ```
 
-5. Check the edited baseline against the regenerated candidate evidence, then
+5. Move the live pins in `release/scripts/test_check_advisory_baselines.py`
+   forward by hand: `LIVE_REFERENCE_IMAGE_DIGESTS`,
+   `LIVE_REFERENCE_SOURCE_REVISION`, and `LIVE_REVIEW_EVALUATION_DATE`. That
+   test restates the reviewed evidence instead of reading it back out of the
+   baselines, so a renewal that skips this step fails it. A service renewed for
+   the first time also joins `LIVE_BASELINES`, `LIVE_REFERENCE_PROVENANCE`, and
+   `LIVE_EXECUTABLES`.
+6. Check the edited baseline against the regenerated candidate evidence, then
    rerun the focused advisory tests and candidate workflow. Never invent a
    digest or reuse evidence from a different candidate.
 

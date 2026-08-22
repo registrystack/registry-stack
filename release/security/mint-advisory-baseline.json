@@ -27,7 +27,7 @@
       "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
     ],
     "application_layer_ids": [
-      "sha256:3a58a738ee6e4801e9a00cedd52e516b3c525684569264bf3b1c973cf3217a62",
+      "sha256:87f6c179626b6c3bc64dc1c2e754850958b83442e28caa552753866c7320e692",
       "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
     ],
     "config": {
@@ -45,7 +45,7 @@
       "exposed_ports": ["8081/tcp"],
       "stop_signal": ""
     },
-    "definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337"
+    "definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1"
   },
   "policies": [
     {
@@ -68,8 +68,8 @@
       "severity": "Critical",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.23.0 Linux AMD64 Mint candidate had only fixed-format %lu and %lx sscanf call sites and no effective vulnerable allocating-character scanf path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-08-20",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.24.0 Linux AMD64 Mint candidate had only fixed-format %lu and %lx sscanf call sites and no effective vulnerable allocating-character scanf path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "reviewed_at": "2026-08-22",
       "expires_at": "2026-09-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -86,14 +86,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337",
+      "runtime_definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:94dafa4e93a1864efc1c62ca5e593a5b9f12eddfee71d29aaf4ea68b1f4b5cb5",
-        "reference_source_revision": "5c4e28578cf3c632faca77bf9d81cd18e95c635f",
+        "reference_image_digest": "sha256:f6bbc75354bdfc5740555df576e343052c66375dd979cbf3f75fd48a60c42a40",
+        "reference_source_revision": "d1a6c7b925faf35dbc5a9f3269991f0d5e722f92",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337",
+        "runtime_definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -113,10 +113,10 @@
           },
           {
             "path": "/usr/local/bin/mint",
-            "sha256": "sha256:7ff5d48e0c35337501a4680165e90a6e9ea4f6f25c9106cc88094f62d0a7262d"
+            "sha256": "sha256:628e429a1adad92acc5435e8bc867edb099556fcd2d552550f4a8f019b95a164"
           }
         ],
-        "definition_digest": "sha256:3eaccd4fe9d0dfc43f4ae0756748f32052e68bb8ac7c27599c45280daac0de85"
+        "definition_digest": "sha256:d212a47d35d2f57d2d6081ee3df226faec725735f6b207d1b9087bd03276e4d0"
       }
     },
     {
@@ -126,8 +126,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.23.0 Linux AMD64 Mint candidate had no effective wide-character input path in the reviewed bytes; libc exporting ungetwc is expected. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-08-20",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The official v0.24.0 Linux AMD64 Mint candidate had no effective wide-character input path in the reviewed bytes; libc exporting ungetwc is expected. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "reviewed_at": "2026-08-22",
       "expires_at": "2026-09-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -144,14 +144,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337",
+      "runtime_definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:94dafa4e93a1864efc1c62ca5e593a5b9f12eddfee71d29aaf4ea68b1f4b5cb5",
-        "reference_source_revision": "5c4e28578cf3c632faca77bf9d81cd18e95c635f",
+        "reference_image_digest": "sha256:f6bbc75354bdfc5740555df576e343052c66375dd979cbf3f75fd48a60c42a40",
+        "reference_source_revision": "d1a6c7b925faf35dbc5a9f3269991f0d5e722f92",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337",
+        "runtime_definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -171,10 +171,10 @@
           },
           {
             "path": "/usr/local/bin/mint",
-            "sha256": "sha256:7ff5d48e0c35337501a4680165e90a6e9ea4f6f25c9106cc88094f62d0a7262d"
+            "sha256": "sha256:628e429a1adad92acc5435e8bc867edb099556fcd2d552550f4a8f019b95a164"
           }
         ],
-        "definition_digest": "sha256:3eaccd4fe9d0dfc43f4ae0756748f32052e68bb8ac7c27599c45280daac0de85"
+        "definition_digest": "sha256:d212a47d35d2f57d2d6081ee3df226faec725735f6b207d1b9087bd03276e4d0"
       }
     },
     {
@@ -184,8 +184,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The official v0.23.0 Linux AMD64 Mint candidate had no effective deprecated resolver-printing path in the reviewed bytes. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
-      "reviewed_at": "2026-08-20",
+      "rationale": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed Trixie version. The official v0.24.0 Linux AMD64 Mint candidate had no effective deprecated resolver-printing path in the reviewed bytes: the reviewed binary imports __res_init and none of the deprecated resolver-printing helpers. A candidate must retain the complete ordered reference rootfs layers, the production OCI process contract, and the Syft-bound executable closure digests.",
+      "reviewed_at": "2026-08-22",
       "expires_at": "2026-09-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -202,14 +202,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337",
+      "runtime_definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1",
       "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:94dafa4e93a1864efc1c62ca5e593a5b9f12eddfee71d29aaf4ea68b1f4b5cb5",
-        "reference_source_revision": "5c4e28578cf3c632faca77bf9d81cd18e95c635f",
+        "reference_image_digest": "sha256:f6bbc75354bdfc5740555df576e343052c66375dd979cbf3f75fd48a60c42a40",
+        "reference_source_revision": "d1a6c7b925faf35dbc5a9f3269991f0d5e722f92",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337",
+        "runtime_definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -229,10 +229,10 @@
           },
           {
             "path": "/usr/local/bin/mint",
-            "sha256": "sha256:7ff5d48e0c35337501a4680165e90a6e9ea4f6f25c9106cc88094f62d0a7262d"
+            "sha256": "sha256:628e429a1adad92acc5435e8bc867edb099556fcd2d552550f4a8f019b95a164"
           }
         ],
-        "definition_digest": "sha256:3eaccd4fe9d0dfc43f4ae0756748f32052e68bb8ac7c27599c45280daac0de85"
+        "definition_digest": "sha256:d212a47d35d2f57d2d6081ee3df226faec725735f6b207d1b9087bd03276e4d0"
       }
     },
     {
@@ -242,8 +242,8 @@
       "severity": "High",
       "status": "accepted_risk",
       "owner": "@jeremi",
-      "rationale": "Debian marks the Trixie issue postponed with no fixed Trixie version, and Grype reports it wont-fix. The advisory is an unbounded pending-connection queue in the OpenSSL QUIC server path. The official v0.23.0 Linux AMD64 Mint candidate links no OpenSSL library: the reviewed binary declares only libgcc_s.so.1, libm.so.6, libc.so.6, and the program interpreter as NEEDED, contains no libssl.so.3 or libcrypto.so.3 name to load dynamically, and terminates TLS with rustls and aws-lc-rs rather than OpenSSL. libssl3t64 ships in the pinned distroless base and no image process opens it. A candidate must retain the complete ordered reference rootfs layers, which pin every libssl3t64 byte, the production OCI process contract, and the Syft-bound reviewed file digests.",
-      "reviewed_at": "2026-08-20",
+      "rationale": "Debian marks the Trixie issue postponed with no fixed Trixie version, and Grype reports it wont-fix. The advisory is an unbounded pending-connection queue in the OpenSSL QUIC server path. The official v0.24.0 Linux AMD64 Mint candidate links no OpenSSL library: the reviewed binary declares only libgcc_s.so.1, libm.so.6, libc.so.6, and the program interpreter as NEEDED, contains no libssl.so.3 or libcrypto.so.3 name to load dynamically, and terminates TLS with rustls and aws-lc-rs rather than OpenSSL. libssl3t64 ships in the pinned distroless base and no image process opens it. A candidate must retain the complete ordered reference rootfs layers, which pin every libssl3t64 byte, the production OCI process contract, and the Syft-bound reviewed file digests.",
+      "reviewed_at": "2026-08-22",
       "expires_at": "2026-09-03",
       "invalidation_triggers": [
         "candidate_image_identity_mismatch",
@@ -260,14 +260,14 @@
         "runtime_config_changed",
         "runtime_base_changed"
       ],
-      "runtime_definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337",
+      "runtime_definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1",
       "component_layer_id": "sha256:80bb2aedf42cbf9911cb9073be23406c0e7f799f8083bf13a1cd2d460a25e383",
       "exposure_assertion": {
         "kind": "whole_image_fingerprint_equals",
-        "reference_image_digest": "sha256:94dafa4e93a1864efc1c62ca5e593a5b9f12eddfee71d29aaf4ea68b1f4b5cb5",
-        "reference_source_revision": "5c4e28578cf3c632faca77bf9d81cd18e95c635f",
+        "reference_image_digest": "sha256:f6bbc75354bdfc5740555df576e343052c66375dd979cbf3f75fd48a60c42a40",
+        "reference_source_revision": "d1a6c7b925faf35dbc5a9f3269991f0d5e722f92",
         "reference_provenance": "official_candidate",
-        "runtime_definition_digest": "sha256:9c8c18a72538becb28dab46d8a66259187ceb982272cbd1e6ecc46eae89eb337",
+        "runtime_definition_digest": "sha256:a1e310d9ee685042ed104cf76af34f4c049f22634dc71306de55aeada28962e1",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -287,10 +287,10 @@
           },
           {
             "path": "/usr/local/bin/mint",
-            "sha256": "sha256:7ff5d48e0c35337501a4680165e90a6e9ea4f6f25c9106cc88094f62d0a7262d"
+            "sha256": "sha256:628e429a1adad92acc5435e8bc867edb099556fcd2d552550f4a8f019b95a164"
           }
         ],
-        "definition_digest": "sha256:3eaccd4fe9d0dfc43f4ae0756748f32052e68bb8ac7c27599c45280daac0de85"
+        "definition_digest": "sha256:d212a47d35d2f57d2d6081ee3df226faec725735f6b207d1b9087bd03276e4d0"
       }
     }
   ]
