@@ -346,6 +346,56 @@ test('leaves a bare filename the repository does not own out of the path check',
   assert.equal(result.paths, 1);
 });
 
+test('resolves a bare child directory against the directory cited before it', (t) => {
+  const root = repository(t);
+  write(root, 'products/demo/projects/protected-read/README.md', 'It names bounded_read_shape.\n');
+  const result = check(
+    root,
+    '{/* Evidence: products/demo/projects/ then protected-read/, bounded_read_shape. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 2);
+});
+
+test('reports a bare child directory the cited directory does not hold', (t) => {
+  const root = repository(t);
+  write(root, 'products/demo/projects/protected-read/README.md', 'It names bounded_read_shape.\n');
+  const result = check(root, '{/* Evidence: products/demo/projects/ then renamed-read/. */}');
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /products\/demo\/projects\/renamed-read/);
+});
+
+test('reads one bare child directory against the last, so a chain resolves', (t) => {
+  const root = repository(t);
+  write(root, 'products/demo/projects/protected-read/governed/registry.yaml', 'id: demo\n');
+  const result = check(
+    root,
+    '{/* Evidence: products/demo/projects/ protected-read/ governed/ holds it. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 3);
+});
+
+test('leaves a trailing-slash name that follows a cited file out of the citations', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs writes governed/ and generated/ into the package. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 1);
+});
+
+test('leaves a slash the prose writes out of the citations', (t) => {
+  const root = repository(t);
+  const result = check(
+    root,
+    '{/* Evidence: crates/demo/src/lib.rs decides read and/or write at https://example.org/. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 1);
+});
+
 test('resolves a bare filename that opens an anchor against the repository root', (t) => {
   const root = repository(t);
   write(root, 'deny.toml', '[bans]\nmultiple_versions = "deny"\n');

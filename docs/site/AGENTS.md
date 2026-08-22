@@ -37,7 +37,11 @@ version. A token that resolves to no repository path is read as prose and
 skipped, so naming a file the repo does not own is still fine. Several files in
 one directory may be cited in the compact brace form,
 `crates/registry-relay-v2/src/{api,startup}.rs`, which is read as one citation
-per entry, so each file it names has to exist on its own.
+per entry, so each file it names has to exist on its own. A bare name ending in
+a slash continues the directory cited before it, `deployment-projects/ then
+protected-read-evidence/`, and has to exist under it. After a filename there is
+no directory to continue, so `governed/` beside `package.rs` stays prose: it
+names a directory the package writes, not one the repo holds.
 
 The check reads a symbol by its shape: `snake_case`, `SCREAMING_SNAKE_CASE`,
 `UpperCamelCase`, `lowerCamelCase`, a name spelled with empty parentheses such as

@@ -58,6 +58,10 @@ const SKIPPED_DIRECTORIES = new Set(['target', 'node_modules', '.git', 'dist', '
 const DOCS_SITE_ROOT = 'docs/site';
 
 const ANCHOR_PATTERN = /\{\/\*\s*Evidence:([\s\S]*?)\*\/\}/g;
+// Whether a path named a directory, which is what a bare child citation continues. A dot
+// in the last segment is what says a path named a file, so an extensionless script reads
+// as a directory. The reading is a syntactic one because nothing here opens the repository.
+const NAMES_A_DIRECTORY = /(?:^|\/)[^./]+$/;
 // A compact list of files that share a directory, `src/{api,startup}.rs`. It is read only
 // where a path segment can start, so a brace group the prose itself writes, `{ claim,
 // allowed }`, stays prose.
@@ -70,6 +74,7 @@ const CITATION_PATTERN = new RegExp(
     `(?<full>(?<![\\w/.-])(?:${REPOSITORY_ROOTS.join('|')})${PATH_BODY})`,
     `(?<relative>(?<![\\w/.-])(?:${CONTINUATION_ROOTS.join('|')})${PATH_BODY})`,
     `(?<sibling>(?<![\\w/.-])[A-Za-z0-9_-]+\\.(?:${SOURCE_EXTENSIONS.join('|')})(?![\\w/-])(?::\\d+(?:-\\d+)?)?)`,
+    `(?<child>(?<![\\w/.-])[A-Za-z0-9_-]+/(?![\\w/-]))`,
     `(?<lines>(?<=[\\s(]):\\d+(?:-\\d+)?(?![\\w-]))`,
   ].join('|'),
   'g',
@@ -151,7 +156,7 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
   let previous;
 
   for (const match of body.matchAll(CITATION_PATTERN)) {
-    const { full, relative: continuation, sibling, lines } = match.groups;
+    const { full, relative: continuation, sibling, child, lines } = match.groups;
     strippedParts.push(body.slice(cursor, match.index), ' ');
     cursor = match.index + match[0].length;
 
@@ -164,7 +169,7 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
       continue;
     }
 
-    const token = full ?? continuation ?? sibling;
+    const token = full ?? continuation ?? sibling ?? child;
     const { path, start, end } = splitLineReference(token);
     const trimmed = path.replace(/\/$/, '');
     // A line suffix the anchor cut short, `:5-`, leaves its hyphen outside the token and
@@ -192,6 +197,19 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
             joinPath(citationRoot(lastCitedPath), cited),
             joinPath(parentOfLastCitedPath, cited),
           ],
+          reportMissing: true,
+        };
+      } else if (child !== undefined) {
+        // A bare child names a directory inside the one cited before it, so a rename of
+        // that directory is drift and is reported. After a filename there is no directory
+        // to continue and the name is prose: `governed/` beside package.rs names a
+        // directory the package writes, not one the repository holds.
+        if (lastCitedPath === undefined || !NAMES_A_DIRECTORY.test(lastCitedPath)) {
+          continue;
+        }
+        citation = {
+          form: 'child',
+          candidates: [joinPath(lastCitedPath, cited)],
           reportMissing: true,
         };
       } else if (lastCitedPath === undefined) {
