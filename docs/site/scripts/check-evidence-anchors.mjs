@@ -74,6 +74,13 @@ const SNAKE_CASE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
 const UPPER_CAMEL_CASE = /^(?:[A-Z][a-z0-9]+){2,}$/;
 // A configuration or wire key: the internal capital is what holds it apart from prose.
 const LOWER_CAMEL_CASE = /^[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+$/;
+// An exact wire value spelled in capitals: ES256, RS256, CRS84. Uppercase letters and
+// digits only, with at least two letters and at least one digit. The digit is what holds
+// it apart from an acronym the prose spells in capitals, JSON or HTTP, and the second
+// letter is what holds it apart from a product version word, V1 or V2. Both exclusions
+// are deliberate: those words carry no drift a cited file could disprove, and checking
+// them would report correct anchors.
+const UPPER_CASE_WIRE_VALUE = /^(?=[A-Z0-9]*[0-9])(?=(?:[0-9]*[A-Z]){2})[A-Z0-9]+$/;
 
 export function extractAnchors(text) {
   const anchors = [];
@@ -196,13 +203,14 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
   return { citations, symbols: extractSymbols(strippedParts.join('')) };
 }
 
-// The four shapes that hold a name apart from the prose around it.
+// The five shapes that hold a name apart from the prose around it.
 function carriesSymbolShape(candidate) {
   return (
     SCREAMING_SNAKE_CASE.test(candidate) ||
     SNAKE_CASE.test(candidate) ||
     UPPER_CAMEL_CASE.test(candidate) ||
-    LOWER_CAMEL_CASE.test(candidate)
+    LOWER_CAMEL_CASE.test(candidate) ||
+    UPPER_CASE_WIRE_VALUE.test(candidate)
   );
 }
 

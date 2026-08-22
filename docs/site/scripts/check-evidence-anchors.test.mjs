@@ -156,6 +156,23 @@ test('checks a lower camel case symbol against the cited paths', (t) => {
   assert.match(failing.errors[0], /packageRevison/);
 });
 
+test('checks an all-uppercase wire value against the cited paths', (t) => {
+  const root = repository(t);
+  write(root, 'crates/demo/src/algorithms.rs', 'const ALLOWED: [&str; 2] = ["ES256", "RS256"];\n');
+  const passing = check(root, '{/* Evidence: crates/demo/src/algorithms.rs allows ES256. */}');
+  assert.deepEqual(passing.errors, []);
+  assert.equal(passing.symbols, 1);
+
+  const failing = check(root, '{/* Evidence: crates/demo/src/algorithms.rs allows ES265. */}');
+  assert.equal(failing.errors.length, 1);
+  assert.match(failing.errors[0], /ES265/);
+});
+
+test('leaves a version word and an acronym the prose spells in capitals unchecked', () => {
+  assert.deepEqual(extractSymbols('the V2 registry contract serves JSON over HTTP'), []);
+  assert.deepEqual(extractSymbols('the profile allows ES256 and RS256'), ['ES256', 'RS256']);
+});
+
 test('accepts a symbol that appears in the second of two cited paths', (t) => {
   const root = repository(t);
   const result = check(
