@@ -77,10 +77,6 @@ const SKIPPED_DIRECTORIES = new Set(['target', 'node_modules', '.git', 'dist', '
 const DOCS_SITE_ROOT = 'docs/site';
 
 const ANCHOR_PATTERN = /\{\/\*\s*Evidence:([\s\S]*?)\*\/\}/g;
-// Whether a path named a directory, which is what a bare child citation continues. A dot
-// in the last segment is what says a path named a file, so an extensionless script reads
-// as a directory. The reading is a syntactic one because nothing here opens the repository.
-const NAMES_A_DIRECTORY = /(?:^|\/)[^./]+$/;
 // A bare sibling that names a Rust source file is one the repository owns: an adopter of
 // this stack writes configuration and scripts, never Rust, and a package the runtime
 // generates carries none either. Every other extension a sibling may carry names a file the
@@ -199,6 +195,8 @@ function joinPath(base, tail) {
  * @property {string} [basename] bare filename to search for when no candidate resolves
  * @property {string} [searchRoot] where that search runs, the empty string for the whole tree
  * @property {string} [rootCandidate] the same name as a file kept at the repository root
+ * @property {string} [parentDirectory] the path a bare child continues, which the
+ *   repository has to hold as a directory for the child to name one
  */
 
 export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
@@ -264,14 +262,17 @@ export function parseAnchor(body, { siteRoot = DOCS_SITE_ROOT } = {}) {
         // A bare child names a directory inside the one cited before it, so a rename of
         // that directory is drift and is reported. After a filename there is no directory
         // to continue and the name is prose: `governed/` beside package.rs names a
-        // directory the package writes, not one the repository holds.
-        if (lastCitedPath === undefined || !NAMES_A_DIRECTORY.test(lastCitedPath)) {
+        // directory the package writes, not one the repository holds. Which of the two the
+        // path before it is, is a fact about the repository rather than about the token, so
+        // the parse records that path and the resolution reads its kind.
+        if (lastCitedPath === undefined) {
           continue;
         }
         citation = {
           form: 'child',
           candidates: [joinPath(lastCitedPath, cited)],
           reportMissing: true,
+          parentDirectory: lastCitedPath,
         };
       } else if (lastCitedPath === undefined) {
         // A bare filename that opens an anchor has no path to sit beside, so the
@@ -539,6 +540,16 @@ export function checkEvidenceAnchors({
           citation.start === undefined
             ? ''
             : `:${citation.start}${citation.end === citation.start ? '' : `-${citation.end}`}`;
+        // A bare child continues a directory. Where the path before it is a file, or is
+        // nothing the repository holds at all, the name is prose rather than a citation:
+        // it names a directory that file writes at runtime, not a path the repository
+        // keeps, and an extensionless script is a file like any other.
+        if (
+          citation.parentDirectory !== undefined &&
+          entryKind(resolve(repoRoot, citation.parentDirectory)) !== 'directory'
+        ) {
+          continue;
+        }
         const escaping = citation.candidates.find((candidate) =>
           escapesRepository(repoRoot, candidate),
         );

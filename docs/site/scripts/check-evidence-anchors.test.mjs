@@ -490,6 +490,28 @@ test('reads one bare child directory against the last, so a chain resolves', (t)
   assert.equal(result.paths, 3);
 });
 
+test('reads a trailing-slash name that follows an extensionless file as prose', (t) => {
+  const root = repository(t);
+  write(root, 'release/scripts/registry-release', '#!/usr/bin/env python3\nprint("pack")\n');
+  const result = check(
+    root,
+    '{/* Evidence: release/scripts/registry-release writes output/ and manifests/. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 1);
+});
+
+test('continues a bare child under an extensionless directory the repository holds', (t) => {
+  const root = repository(t);
+  write(root, 'products/demo/projects/protected-read/README.md', 'It names bounded_read_shape.\n');
+  const result = check(
+    root,
+    '{/* Evidence: products/demo/projects then protected-read/, bounded_read_shape. */}',
+  );
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.paths, 2);
+});
+
 test('leaves a trailing-slash name that follows a cited file out of the citations', (t) => {
   const root = repository(t);
   const result = check(
